@@ -171,3 +171,22 @@
         (testing "every writer saw all events before its own"
           (is (every? #(= (dec (:seq %)) (get-in % [:data :seen]))
                       (filter #(= "p" (:type %)) events))))))))
+
+(deftest drafts-may-carry-their-own-stamps-which-are-checked
+  (with-data-dir [dir]
+    (let [t "2026-10-14T12:00:00Z"
+          clock (constantly (Instant/parse "2026-10-14T13:00:00Z"))]
+      (is (= [1 2] (map :seq (log/transact! dir clock (constantly [{:seq 1 :at t :type "x" :actor "a"}
+                                                                   {:seq 2 :at t :type "x" :actor "a"}])))))
+      (is (= t (:at (first (log/read-events dir)))))
+      (testing "a seq that is not the next one is refused"
+        (is (thrown-with-msg? Exception #"expected seq 7"
+                              (log/transact! dir clock (constantly [{:seq 7 :type "x" :actor "a"}])))))
+      (testing "a time before the last recorded one is refused"
+        (is (thrown-with-msg? Exception #"earlier"
+                              (log/transact! dir clock (constantly [{:at "2026-01-01T00:00:00Z" :type "x" :actor "a"}])))))
+      (testing "one append has one recording time"
+        (is (thrown-with-msg? Exception #"share"
+                              (log/transact! dir clock (constantly [{:at "2026-10-14T12:30:00Z" :type "x" :actor "a"}
+                                                                    {:at "2026-10-14T12:40:00Z" :type "x" :actor "a"}])))))
+      (is (= 2 (count (log/read-events dir)))))))

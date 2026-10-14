@@ -153,7 +153,12 @@
   that throws appends nothing.
 
   `clock` returns the current Instant. Recording time never goes backwards:
-  if the clock does, the last recorded time is used instead."
+  if the clock does, the last recorded time is used instead.
+
+  A draft may carry its own :seq and :at, when the decide function needed
+  to know them, for instance to hand out ids. They are checked rather than
+  trusted: the seq must be the one this append gives it, and the time must
+  not be earlier than the last recorded one."
   [data-dir clock decide]
   (when-not (initialized? data-dir)
     (throw (ex-info (str data-dir " is not a relay data directory. Run `relay init` first.")
@@ -171,12 +176,20 @@
                 at (if (and floor (.isBefore now floor)) floor now)
                 start (inc (or (:seq last-event) 0))
                 stamped (vec (map-indexed
-                              (fn [i {:keys [type actor data labels]}]
+                              (fn [i {:keys [type actor data labels] :as draft}]
                                 (when-not (and (string? type) (string? actor))
                                   (throw (ex-info "An event needs a string :type and :actor."
                                                   {:type type :actor actor})))
+                                (when (and (:seq draft) (not= (:seq draft) (+ start i)))
+                                  (throw (ex-info (str "A draft expected seq " (:seq draft)
+                                                       " but would be appended as " (+ start i) ".")
+                                                  {:draft draft})))
+                                (when (and (:at draft) floor
+                                           (.isBefore (Instant/parse (str (:at draft))) floor))
+                                  (throw (ex-info "A draft's time is earlier than the log's last event."
+                                                  {:draft draft})))
                                 {:seq (+ start i)
-                                 :at (str at)
+                                 :at (str (or (some-> (:at draft) str Instant/parse) at))
                                  :type type
                                  :actor actor
                                  :labels (vec (sort (distinct labels)))
@@ -185,7 +198,12 @@
                 ;; Round trip through JSON so the caller gets back exactly
                 ;; what a later read will see.
                 lines (mapv encode stamped)
-                file (str (fs/path (log-dir data-dir) (segment-name at)))]
+                times (set (map :at stamped))
+                _ (when (> (count times) 1)
+                    (throw (ex-info "The events of one append must share a recording time."
+                                    {:times times})))
+                file (str (fs/path (log-dir data-dir)
+                                   (segment-name (Instant/parse (:at (first stamped))))))]
             (append-lines! file (str (str/join "\n" lines) "\n"))
             (mapv #(json/parse-string % true) lines)))))))
 
