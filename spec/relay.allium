@@ -1,0 +1,1991 @@
+-- allium: 3
+-- relay: an operator, a hub and the roles they add.
+--
+-- The record of what happened is an event log, and everything else is the
+-- log folded in order.
+--
+-- Nothing runs between wakes. A dispatcher looks at the roles on every tick
+-- and wakes whoever has memos waiting. All work reaches a role as a memo: a
+-- routine coming due writes one to its owner. A memo stays open until the
+-- role closes it or says they cannot, and a wake that ends with memos still
+-- open has failed for those memos, whatever the harness reported.
+--
+-- There are three ways for work not to get done, and each is handled
+-- differently:
+--
+--   The role cannot do it. They block the memo and it goes to the dead
+--   letter handler at once. Trying again would not help.
+--
+--   The role ran and left it open. The memo is tried again after a wait
+--   that doubles, and is dead-lettered when its attempts run out.
+--
+--   The harness could not run. Its rate limit ran out, it was unreachable,
+--   or it needs someone to sign in. That is the harness's failure, so it
+--   counts against no memo. The harness is paused, and the wake is carried
+--   on from where it stopped.
+--
+-- Beside the memos relay keeps what it knows: facts that hold over a span of
+-- world time and are recorded at a moment of real time, notes and a journal
+-- for each role, and docs.
+--
+-- This file says what relay does and when. It does not say how the log is
+-- stored. The code that decides is the pure function `decide` in core.clj,
+-- and where this file and that code disagree the code is right.
+
+------------------------------------------------------------
+-- Contracts
+------------------------------------------------------------
+
+contract HarnessAdapter {
+    run: (role: Role, prompt: String) -> HarnessReport
+
+    @invariant RunsAsTheRole
+        -- The harness is given the role's standing instructions: the
+        -- shared instructions (AGENTS.md), anything the operator added
+        -- to them, the role's config, and the role's notes. It knows
+        -- which role it is acting as and tells relay so on every tool
+        -- call.
+
+    @invariant OffersOnlyTheRolesTools
+        -- A role has no file access and no shell. All it can do is call
+        -- the tools it has been offered, by name. See the Tools
+        -- contract.
+
+    @invariant ExitCodeIsNotTheVerdict
+        -- A harness can exit cleanly having done nothing. Whether a
+        -- memo was handled is decided by whether the role closed it,
+        -- never by the exit code.
+
+    @invariant SaysHowItEnded
+        -- The report names one outcome: ran, limited, unreachable or
+        -- needs_attention. Only ran means the role got to work. The
+        -- others are the harness's own failures and are told apart
+        -- from a role that ran and did not finish. A limit may say when
+        -- it lifts.
+
+    @invariant AHarnessFailureCountsAgainstNoMemo
+        -- A wake that ended limited, unreachable or needs_attention
+        -- leaves the attempts of its memos as they were, and does not
+        -- count towards the runaway guard.
+
+    @invariant StopsAtTheDeadline
+        -- A run that outlasts the wake timeout is stopped and reported
+        -- as ran and crashed, not as a harness failure.
+
+    @invariant AFailingAdapterStillEndsTheWake
+        -- If the adapter itself throws, the wake is ended as ran and
+        -- crashed. A harness that is not configured is reported as
+        -- needs_attention. A wake that started always ends.
+}
+
+contract NotificationChannel {
+    push: (notification: Notification) -> Boolean
+
+    @invariant FailureIsNotFatal
+        -- A push that fails is recorded as failed and otherwise
+        -- dropped. The thing it announced is already in the log, so
+        -- nothing is lost.
+}
+
+contract Tools {
+    -- A role has no file or shell access. Everything it does is a call to a
+    -- tool, and every call that changes anything goes through the same
+    -- inbound path as that role.
+
+    @invariant ToolsAreNamedAndClassed
+        -- Every tool has a name and one class: read (reads relay data
+        -- or the outside world), write (changes relay data), egress
+        -- (sends data off the machine) or act (changes something
+        -- outside relay). Nothing depends on the class yet.
+
+    @invariant OfferedByGrant
+        -- relay's own tools are offered to every role, except these:
+        -- adding, updating and removing roles need the may_add grant,
+        -- and requeueing dead letters needs the may_add grant or being
+        -- the dead letter handler. The operator can define further
+        -- external tools in the settings and grant them to roles by
+        -- name. A grant to a tool the settings do not define is an
+        -- error in the settings.
+
+    @invariant AnUnofferedToolIsRefused
+        -- A call to a tool the role was not offered is refused,
+        -- whatever the harness let through. So is any call by a role
+        -- that is no longer active.
+
+    @invariant ExternalToolsRunInACleanEnvironment
+        -- An external tool gets the call's arguments on its command
+        -- line and only PATH, HOME, USER, LANG and TMPDIR from the
+        -- environment, so nothing the harness or relay was started
+        -- with, such as credentials, reaches it.
+
+    @invariant KnowledgeToolsReadForTheCaller
+        -- A role reads and writes its own notes and journal. Facts and
+        -- docs are shared by every role.
+}
+
+contract Facts {
+    -- The questions that can be asked of what relay knows. A fact has two
+    -- kinds of time: when it holds in the world (valid_from to valid_to,
+    -- either end open) and when each version of it was recorded (the `at`
+    -- of the event that wrote it).
+
+    holding_at: (as_of: Timestamp, known_at: Timestamp?, topic: String?, search: String?) -> Set<Fact>
+    everything: (known_at: Timestamp?, topic: String?, search: String?) -> Set<Fact>
+
+    @invariant AsOfDefaults
+        -- as_of defaults to known_at when only that is given, and to
+        -- the time of the latest event when neither is. The tool
+        -- defaults it to the current time.
+
+    @invariant HoldingMeansValidAndNotRetracted
+        -- A version holds at a time when it is not retracted, its
+        -- valid_from is open or not after that time, and its valid_to
+        -- is open or after that time. So valid_from is inclusive and
+        -- valid_to is exclusive.
+
+    @invariant AsKnownAtUsesTheLatestVersionRecordedByThen
+        -- Asked as known at T, each fact is the latest version whose
+        -- recording time is not after T, and a fact with no such
+        -- version does not exist yet. With no T, the latest version.
+
+    @invariant EverythingIgnoresValidity
+        -- everything lists every fact recorded by known_at that is
+        -- not retracted, whatever its validity.
+
+    @invariant NoVersionIsEverLost
+        -- Supersession, correction and retraction each add a version.
+        -- None changes or drops an earlier one, so asking what was
+        -- known before still gives the old answer.
+
+    @invariant SupersessionLeavesEarlierAnswersAlone
+        -- The old fact ends where the change begins, so every answer
+        -- about a time before the change is the same as it was before
+        -- the change was recorded. Only times from the change on
+        -- differ.
+
+    @invariant AKnownAtQueryIgnoresLaterEvents
+        -- Asking what was known at T gives the same answer whatever
+        -- was recorded after T, for facts and for docs alike.
+
+    @invariant TopicsAreAHierarchy
+        -- A topic matches itself and the topics under it, written
+        -- with / between levels. household matches household/car and
+        -- not house. Search ignores case and looks in the text.
+}
+
+------------------------------------------------------------
+-- Enumerations
+------------------------------------------------------------
+
+enum CallerKind { operator | dispatcher | role }
+enum HarnessCondition { available | limited | unreachable | needs_attention }
+enum HarnessOutcome { ran | limited | unreachable | needs_attention }
+enum DeadLetterReason { never_closed | blocked | recipient_removed }
+enum NotificationKind {
+    memo_for_operator | work_abandoned | runaway_guard_tripped
+    | harness_needs_attention | harness_unreachable
+}
+enum ToolClass { read | write | egress | act }
+enum FactChange { added | superseded | corrected | retracted }
+
+------------------------------------------------------------
+-- Entities and Variants
+------------------------------------------------------------
+
+entity Event {
+    -- The record. Every change is an event, and the state of relay is
+    -- nothing more than the events folded in order.
+    seq: Integer
+    -- When it was recorded.
+    at: Timestamp
+    actor: Caller
+    -- Reserved. Always empty for now.
+    labels: Set<String>
+}
+
+entity Caller {
+    -- Who is asking. The operator and the dispatcher are not roles.
+    kind: CallerKind
+    role: Role? when kind = role
+
+    is_operator: kind = operator
+    is_dispatcher: kind = dispatcher
+    -- Granted by the operator's settings and by nobody else.
+    may_add: kind = role and role.may_add
+    can_requeue: is_operator or may_add or (kind = role and role.id = config.dead_letter_handler)
+}
+
+entity Tool {
+    name: String
+    class: ToolClass
+    -- The grant needed to be offered it, if any: relay's own tools that
+    -- change the registry or requeue dead letters, and every external tool.
+    needs_grant: may_add | dead_letter_handler | named | none
+}
+
+entity Harness {
+    -- One per named harness in the settings: the program and the limits its
+    -- runs are subject to. Every role on a harness shares its state. It has
+    -- none until the first run that fails; a run's harness is the one its
+    -- role was on when the wake started.
+    name: String
+    condition: HarnessCondition
+    -- The next moment it may be tried. Until then nobody on it is woken
+    -- by the dispatcher.
+    paused_until: Timestamp?
+    -- When it last stopped being available, and how many tries have
+    -- failed since.
+    down_since: Timestamp?
+    failed_tries: Integer
+    operator_told: Boolean
+
+    is_paused: paused_until != null and paused_until > now
+    is_down: paused_until != null or failed_tries > 0 or down_since != null
+}
+
+entity Role {
+    -- Chosen when the role is added: lower case letters, digits and
+    -- hyphens, starting with a letter, at most 40 characters, and never
+    -- operator, dispatcher, relay, all or none. Never reused.
+    id: String
+    title: String
+    -- The role's standing instructions.
+    role_config: String
+    reports_to: Role?
+    -- A harness named in the settings, or the default harness.
+    harness_name: String?
+    model: String?
+    status: active | removed
+    -- Granted by the operator's settings and by nobody else, not by
+    -- anything a role can write.
+    may_add: Boolean
+    -- The wake to carry on from, when the last one was cut short.
+    interrupted_wake: Wake?
+    -- When the operator was last told this role tripped the guard.
+    guard_reported_at: Timestamp?
+
+    inbox: Memo with recipient = this
+    routines: Routine with owner = this
+    wakes: Wake with role = this
+
+    open_memos: inbox where status = unread
+    waiting_memos: inbox where is_waiting
+    running_wakes: wakes where status = running
+    -- Wakes the role got to work in, within the runaway window. A
+    -- conversation counts for nothing, and neither does a wake the harness
+    -- failed, which has its own backoff.
+    recent_wakes: wakes where started_at + config.runaway_window > now
+        and not chat and outcome not in {limited, unreachable, needs_attention}
+
+    -- The one named by harness_name, else the default harness.
+    harness: Harness
+    -- The tools it is offered, by name.
+    offered_tools: Set<Tool>
+    is_running: running_wakes.count > 0
+    has_work: waiting_memos.count > 0
+    is_paused: harness.is_paused
+    is_running_away: recent_wakes.count >= config.runaway_wakes
+
+    transitions status {
+        active -> removed
+        terminal: removed
+    }
+}
+
+entity Memo {
+    -- The event that sent it; its seq is the memo's id.
+    sent_by: Event
+    sender: Caller
+    -- Absent when the memo is to the operator.
+    recipient: Role?
+    -- The name of the routine whose coming due produced the memo.
+    routine: Routine?
+    subject: String
+    body: String
+    sent_at: Timestamp
+    status: unread | read | dead
+    -- What the role says they did, given when they close it.
+    outcome: String when status = read
+    closed_at: Timestamp when status = read
+
+    -- How many wakes have carried this memo and ended with it still
+    -- open, and the earliest moment the next one may carry it.
+    attempts: Integer
+    retry_at: Timestamp?
+    -- Set when a dead run of a routine was replaced by a newer run, so
+    -- that it stays dead.
+    superseded_by: Memo?
+
+    transitions status {
+        unread -> read
+        unread -> dead
+        dead -> unread
+        terminal: read
+    }
+
+    is_for_operator: recipient = null
+    -- A run of a routine that has fired again since.
+    is_replaced_run: routine != null and routine.last_run != this
+    is_backing_off: retry_at != null and retry_at > now
+    is_waiting: status = unread and not is_backing_off
+}
+
+entity Routine {
+    -- A routine is identified by its owner and its name. Its name is
+    -- lower case letters, digits and hyphens, at most 48 characters.
+    owner: Role
+    name: String
+    -- Stored in a canonical form: "every 30m", "every 2h", "every 1d",
+    -- "daily 07:30", "weekly mon 09:00" or "once 2026-10-08 09:00".
+    schedule: String
+    instructions: String
+    -- The moment the schedule is measured from: when the routine was
+    -- written, then each time it fires.
+    baseline: Timestamp
+    -- The memo the routine last fired. It survives the routine being
+    -- written again.
+    last_run: Memo?
+    status: active | retired | removed
+
+    transitions status {
+        active -> retired
+        active -> removed
+        retired -> active
+        removed -> active
+    }
+
+    -- black box: the first moment strictly after the baseline that the
+    -- schedule calls for, in the operator's time zone, or null if there
+    -- is none.
+    next_due_at: next_occurrence(schedule, baseline)
+    is_due: next_due_at != null and next_due_at <= now
+    has_open_run: last_run != null and last_run.status = unread
+    -- black box: true for a "once" schedule.
+    is_one_off: runs_once(schedule)
+}
+
+entity Wake {
+    -- The id is the seq of the event that started it.
+    role: Role
+    memos: Set<Memo>
+    note: String?
+    started_at: Timestamp
+    harness_name: String
+    -- The process running the wake, to tell whether it is still there.
+    pid: Integer?
+    pid_start: Timestamp?
+    -- True for a conversation with the operator. It holds the role like a
+    -- wake but carries no memos.
+    chat: Boolean
+    status: running | ended
+    ended_at: Timestamp when status = ended
+    outcome: HarnessOutcome when status = ended
+    -- True when the run errored or was stopped at the deadline. Recorded
+    -- for whoever reads the history; it decides nothing.
+    crashed: Boolean when status = ended
+    said: String?
+    -- When a rate limit lifts, if the harness said.
+    resets_at: Timestamp?
+    -- The earlier wake this one carries on from, if any.
+    resumes: Wake?
+
+    transitions status {
+        running -> ended
+        terminal: ended
+    }
+}
+
+entity DeadLetter {
+    -- The id is the seq of the event that dead-lettered the memo.
+    memo: Memo
+    reason: DeadLetterReason
+    -- The role's own words when they blocked it.
+    explanation: String?
+    -- The end of the last transcript, when the memo was never closed.
+    transcript_tail: String?
+    attempts: Integer
+    created_at: Timestamp
+    status: open | requeued | superseded
+
+    transitions status {
+        open -> requeued
+        open -> superseded
+        terminal: requeued, superseded
+    }
+}
+
+entity Notification {
+    -- The id is the seq of the event that recorded it.
+    kind: NotificationKind
+    title: String
+    body: String
+    about: Role?
+    harness: Harness?
+    memo: Memo?
+    dead_letter: DeadLetter?
+    created_at: Timestamp
+    delivery: pending | delivered | failed
+
+    transitions delivery {
+        pending -> delivered
+        pending -> failed
+        terminal: delivered, failed
+    }
+
+    is_stranded: delivery = pending and created_at + config.stranded_after < now
+}
+
+entity Fact {
+    -- The id is the seq of the event that created it.
+    -- The fact this one replaced, when the world changed. Retracting this
+    -- fact leaves the link and restores the old one.
+    supersedes: Fact?
+    versions: FactVersion with fact = this
+
+    -- The latest version; what the record says now.
+    current: versions.latest
+    is_retracted: current.change = retracted
+    is_superseded: current.superseded_by != null
+}
+
+entity FactVersion {
+    fact: Fact
+    -- The seq of the event that wrote this version.
+    seq: Integer
+    recorded_at: Timestamp
+    actor: Caller
+    change: FactChange
+    topic: String?
+    text: String
+    -- When it holds in the world. Either end may be open.
+    valid_from: Timestamp?
+    valid_to: Timestamp?
+    -- Required for a correction or retraction.
+    why: String? when change in {corrected, retracted}
+    superseded_by: Fact?
+}
+
+entity Note {
+    -- A role's note: named, and shown in the role's prompt at every wake.
+    owner: Role
+    name: String
+    text: String
+    written_at: Timestamp
+}
+
+entity JournalEntry {
+    -- Append only. The id is the seq of the event that wrote it.
+    owner: Role
+    text: String
+    at: Timestamp
+}
+
+entity Doc {
+    -- Longer shared content, by path.
+    path: String
+    versions: DocVersion with doc = this
+
+    -- The latest version; a removal is a version too.
+    current: versions.latest
+    is_present: not current.removed
+}
+
+entity DocVersion {
+    doc: Doc
+    -- The seq of the event that wrote this version.
+    seq: Integer
+    at: Timestamp
+    actor: Caller
+    content: String when not removed
+    removed: Boolean
+}
+
+------------------------------------------------------------
+-- Config
+------------------------------------------------------------
+
+config {
+    wake_timeout: Duration = 30.minutes
+
+    -- Retrying a memo. The wait doubles after each failed attempt,
+    -- starting at retry_base and never exceeding retry_ceiling.
+    max_attempts: Integer = 8
+    retry_base: Duration = 1.minute
+    retry_ceiling: Duration = 1.hour
+
+    -- How long a harness stays paused when a run hit the limit without
+    -- saying when it resets. The next wake after that finds out.
+    limit_probe_interval: Duration = 15.minutes
+
+    -- How long an unreachable harness is waited out before the operator
+    -- is told.
+    outage_patience: Duration = 2.hours
+
+    -- The role that is told about dead letters and decides what to do
+    -- with them. When it is absent, or is not an active role, dead
+    -- letters go to the operator.
+    dead_letter_handler: String = "hub"
+
+    -- The harness a role runs on when it names none.
+    default_harness: String = "pi"
+
+    -- A last resort against a role stuck in a loop. It is set far above
+    -- ordinary use and is not meant to ration it.
+    runaway_wakes: Integer = 30
+    runaway_window: Duration = 1.hour
+
+    -- How long a notification may sit unpushed before the tick pushes it
+    -- again. Fixed in the dispatcher, not a setting.
+    stranded_after: Duration = 2.minutes
+
+    -- Limits on what is written.
+    max_subject_length: Integer = 200
+    max_fact_length: Integer = 2000
+    max_note_length: Integer = 4000
+    max_journal_entry_length: Integer = 20000
+    max_doc_length: Integer = 500000
+}
+
+------------------------------------------------------------
+-- Rules
+------------------------------------------------------------
+
+-- The registry
+
+rule AddRole {
+    when: RoleAddRequested(caller, id, title?, role_config, reports_to?, harness?, model?)
+
+    requires: caller.is_operator or caller.may_add
+    requires: is_usable_id(id)   -- black box: the id pattern above
+    -- ids are never reused: a removed role keeps its id.
+    requires: not exists Role{id: id}
+    requires: role_config != ""
+    requires: harness = null or is_configured_harness(harness)   -- black box: named in the settings
+
+    -- A role added by a role reports to it, unless told otherwise. One
+    -- added by the operator reports to nobody unless told.
+    let manager = reports_to ?? default_manager(caller)   -- black box: the caller if it is a role, else nobody
+    requires: manager = null or manager.status = active
+
+    ensures: Role.created(
+        id: id,
+        title: title ?? id,
+        role_config: role_config,
+        reports_to: manager,
+        harness_name: harness,
+        model: model,
+        status: active,
+        may_add: false
+    )
+}
+
+rule UpdateRole {
+    when: RoleUpdateRequested(caller, role, title?, role_config?, reports_to?, harness?, model?)
+
+    requires: caller.is_operator or caller.may_add
+    requires: role.status = active
+    requires: caller.role != role
+    requires: title != null or role_config != null or reports_to != null
+        or harness != null or model != null
+    requires: role_config = null or role_config != ""
+    requires: harness = null or is_configured_harness(harness)
+    requires: reports_to = null or reports_to?.status = active
+
+    ensures:
+        role.title = title ?? role.title
+        role.role_config = role_config ?? role.role_config
+        role.reports_to = reports_to ?? role.reports_to
+        role.harness_name = harness ?? role.harness_name
+        role.model = model ?? role.model
+
+    @guidance
+        -- A role cannot change itself, so it cannot widen its own
+        -- standing instructions.
+}
+
+rule RemoveRole {
+    when: RoleRemoveRequested(caller, role)
+
+    requires: caller.is_operator or caller.may_add
+    requires: role.status = active
+    requires: caller.role != role
+    requires: not role.is_running
+
+    ensures: role.status = removed
+
+    -- Its routines stop.
+    ensures:
+        for routine in role.routines where status = active:
+            routine.status = removed
+
+    -- Its open memos are dead-lettered, so the work is not lost.
+    ensures:
+        for memo in role.open_memos:
+            MemoDeadLettered(memo: memo, reason: recipient_removed)
+
+    @guidance
+        -- A role that is running now cannot be removed; remove it once
+        -- it stops. A removed role can no longer act, and its id is
+        -- never given out again. If the removed role was the dead letter
+        -- handler, its own dead letters go to the operator.
+}
+
+-- Memos
+
+rule SendMemo {
+    when: MemoSendRequested(caller, recipient, subject, body)
+
+    requires: recipient.status = active
+    requires: subject != ""
+    requires: not has_newline(subject)   -- black box
+    requires: subject.length <= config.max_subject_length
+    requires: body != ""
+
+    ensures: Memo.created(
+        sender: caller,
+        recipient: recipient,
+        subject: subject,
+        body: body,
+        sent_at: now,
+        status: unread,
+        attempts: 0
+    )
+
+    @guidance
+        -- Anyone may send, the dispatcher included. Subject and body
+        -- are trimmed and must not be blank.
+}
+
+rule SendMemoToOperator {
+    when: MemoToOperatorSendRequested(caller, subject, body)
+
+    requires: subject != ""
+    requires: not has_newline(subject)
+    requires: subject.length <= config.max_subject_length
+    requires: body != ""
+
+    ensures: Memo.created(
+        sender: caller,
+        recipient: null,
+        subject: subject,
+        body: body,
+        sent_at: now,
+        status: unread,
+        attempts: 0
+    )
+
+    @guidance
+        -- The operator is addressed by the name "operator", which no
+        -- role can have.
+}
+
+rule NotifyOperatorOfMemo {
+    when: memo: Memo.created
+
+    requires: memo.is_for_operator
+
+    ensures: Notification.created(
+        kind: memo_for_operator,
+        title: memo.subject,
+        body: memo.body,
+        memo: memo,
+        created_at: now,
+        delivery: pending
+    )
+
+    @guidance
+        -- A memo to the operator is the only way anything reaches them
+        -- from a role, and it always notifies, once. The notification
+        -- carries the subject as its title and the body as its text.
+}
+
+rule CloseMemo {
+    when: MemoCloseRequested(caller, memo, outcome)
+
+    requires: memo.status = unread
+    -- The recipient closes it, and so can the operator, whoever it is for.
+    requires: caller.is_operator or (caller.role != null and caller.role = memo.recipient)
+    requires: outcome != ""
+
+    ensures:
+        memo.status = read
+        memo.outcome = outcome
+        memo.closed_at = now
+        memo.retry_at = null
+
+    @guidance
+        -- The operator closes their own memos once dealt with, so their
+        -- inbox only ever holds what is waiting. Closing is how a role
+        -- says "I did this". It can happen during a wake or in a
+        -- conversation, and it stands even if the wake it happened in
+        -- later crashes.
+}
+
+rule BlockMemo {
+    when: MemoBlockRequested(caller, memo, explanation)
+
+    requires: caller.role != null and caller.role.status = active
+    requires: memo.status = unread
+    requires: memo.recipient = caller.role
+    requires: explanation != ""
+
+    ensures: MemoDeadLettered(memo: memo, reason: blocked, explanation: explanation)
+
+    @guidance
+        -- Blocking is how a role says "I cannot do this". It skips the
+        -- retries, since trying again would not help. The operator
+        -- cannot block, having nobody to pass it to.
+}
+
+rule DeadLetterMemo {
+    when: MemoDeadLettered(memo, reason, explanation?, transcript_tail?, wake?)
+
+    ensures: memo.status = dead
+    ensures: memo.retry_at = null
+    ensures: DeadLetter.created(
+        memo: memo,
+        reason: reason,
+        explanation: explanation,
+        transcript_tail: transcript_tail,
+        attempts: memo.attempts,
+        created_at: now,
+        status: open
+    )
+}
+
+rule EscalateToHandler {
+    when: letter: DeadLetter.created
+
+    let handler = Role{id: config.dead_letter_handler}
+
+    requires: exists handler and handler.status = active
+    requires: letter.memo.recipient != handler
+
+    ensures: Memo.created(
+        sender: dispatcher,
+        recipient: handler,
+        subject: "Dead letter: " + dead_letter_title(letter),   -- black box: see guidance
+        body: dead_letter_report(letter),                       -- black box: see guidance
+        sent_at: now,
+        status: unread,
+        attempts: 0
+    )
+
+    @guidance
+        -- The report says whose memo it was and who sent it, gives the
+        -- reason (the role's explanation if they blocked it, the number
+        -- of wakes if they never closed it, or that the recipient was
+        -- removed), tells the handler to work out why and either fix
+        -- the cause and requeue the memo or take it to the operator,
+        -- and quotes the memo and the end of the last transcript.
+}
+
+rule EscalateToOperator {
+    when: letter: DeadLetter.created
+
+    let handler = Role{id: config.dead_letter_handler}
+
+    requires: not exists handler or handler.status != active or letter.memo.recipient = handler
+
+    ensures: Notification.created(
+        kind: work_abandoned,
+        title: dead_letter_title(letter),
+        body: dead_letter_report(letter),
+        about: letter.memo.recipient,
+        dead_letter: letter,
+        created_at: now,
+        delivery: pending
+    )
+
+    @guidance
+        -- When the handler's own work is dead-lettered, or there is no
+        -- handler, there is nobody left to escalate to but the
+        -- operator.
+}
+
+rule RequeueMemos {
+    when: RetryRequested(caller, role)
+
+    requires: caller.can_requeue
+    requires: role.status = active
+
+    for memo in role.inbox:
+        requires: memo.status = dead
+        requires: memo.superseded_by = null
+        requires: not memo.is_replaced_run
+        ensures:
+            memo.status = unread
+            memo.attempts = 0
+            memo.retry_at = null
+
+    @guidance
+        -- The operator, the dead letter handler and roles granted
+        -- may_add can do this. The memo comes back with a clean slate.
+}
+
+rule SupersedeReplacedRuns {
+    when: RetryRequested(caller, role)
+
+    requires: caller.can_requeue
+    requires: role.status = active
+
+    -- A dead routine run that a newer run of the same routine has
+    -- replaced is not brought back, or the routine would have two open
+    -- runs. It stays dead, marked as superseded.
+    for memo in role.inbox:
+        requires: memo.status = dead
+        requires: memo.superseded_by = null
+        requires: memo.is_replaced_run
+        ensures: memo.superseded_by = memo.routine.last_run
+}
+
+rule CloseRequeuedLetters {
+    when: RetryRequested(caller, role)
+
+    requires: caller.can_requeue
+    requires: role.status = active
+
+    for letter in DeadLetters where memo.recipient = role:
+        requires: letter.status = open
+        requires: letter.memo.status = dead
+        requires: not letter.memo.is_replaced_run
+        ensures: letter.status = requeued
+}
+
+rule CloseSupersededLetters {
+    when: RetryRequested(caller, role)
+
+    requires: caller.can_requeue
+    requires: role.status = active
+
+    for letter in DeadLetters where memo.recipient = role:
+        requires: letter.status = open
+        requires: letter.memo.status = dead
+        requires: letter.memo.is_replaced_run
+        ensures: letter.status = superseded
+}
+
+-- Routines
+
+rule WriteRoutine {
+    when: RoutineWriteRequested(caller, owner, name, schedule, instructions)
+
+    -- A role writes its own routines. The operator names the role.
+    requires: owner.status = active
+    requires: caller.is_operator or caller.role = owner
+    requires: is_usable_routine_name(name)   -- black box: the name pattern above
+    requires: parses_as_schedule(schedule)    -- black box: the five forms above
+    requires: instructions != ""
+
+    requires: not exists Routine{owner: owner, name: name}
+
+    ensures: Routine.created(
+        owner: owner,
+        name: name,
+        schedule: canonical_schedule(schedule),
+        instructions: instructions,
+        baseline: now,
+        status: active
+    )
+
+    @guidance
+        -- Anything that is not a schedule is refused when it is
+        -- written, not left to never come due.
+}
+
+rule RewriteRoutine {
+    when: RoutineWriteRequested(caller, owner, name, schedule, instructions)
+
+    let routine = Routine{owner: owner, name: name}
+
+    requires: exists routine
+    requires: routine.status = active
+    requires: owner.status = active
+    requires: caller.is_operator or caller.role = owner
+    requires: parses_as_schedule(schedule)
+    requires: instructions != ""
+
+    ensures:
+        routine.schedule = canonical_schedule(schedule)
+        routine.instructions = instructions
+        routine.baseline = now
+
+    @guidance
+        -- Writing a routine again replaces it and restarts its clock,
+        -- also if it had retired or been removed. Its last run is kept,
+        -- so a run that is still open still holds back the next one.
+}
+
+rule ReviveRoutine {
+    when: RoutineWriteRequested(caller, owner, name, schedule, instructions)
+
+    let routine = Routine{owner: owner, name: name}
+
+    requires: exists routine
+    requires: routine.status = retired or routine.status = removed
+    requires: owner.status = active
+    requires: caller.is_operator or caller.role = owner
+    requires: parses_as_schedule(schedule)
+    requires: instructions != ""
+
+    ensures:
+        routine.schedule = canonical_schedule(schedule)
+        routine.instructions = instructions
+        routine.baseline = now
+        routine.status = active
+
+    @guidance
+        -- A routine that retired or was removed comes back when it is
+        -- written again, with its clock restarted. Its last run is
+        -- kept, so a run still open still holds back the next one.
+}
+
+rule RemoveRoutine {
+    when: RoutineRemoveRequested(caller, routine)
+
+    requires: caller.is_operator or caller.role = routine.owner
+    requires: routine.status = active
+
+    ensures: routine.status = removed
+}
+
+rule FireRoutines {
+    when: DispatcherTicks(lost_wakes)
+
+    for routine in Routines where owner.status = active and status = active and is_due and not has_open_run:
+        ensures:
+            let run = Memo.created(
+                sender: dispatcher,
+                recipient: routine.owner,
+                routine: routine,
+                subject: routine.name,
+                body: routine.instructions,
+                sent_at: now,
+                status: unread,
+                attempts: 0
+            )
+            routine.baseline = now
+            routine.last_run = run
+
+    @guidance
+        -- A routine is a memo its owner sends themselves on a
+        -- schedule, so it is retried, blocked and dead-lettered like any
+        -- other memo. While its last run is still open it does not fire
+        -- again; it stays due and fires once that run is closed or
+        -- abandoned. A run missed while nothing was ticking is due once,
+        -- not once per missed slot, because the baseline moves to the
+        -- moment it fires.
+}
+
+rule RetireOneOffRoutine {
+    when: memo: Memo.created
+
+    let routine = memo.routine
+
+    requires: routine != null
+    requires: routine.is_one_off
+
+    ensures: routine.status = retired
+}
+
+-- Waking
+
+rule WakeOnTick {
+    when: DispatcherTicks(lost_wakes)
+
+    for role in Roles where status = active and has_work and not is_running and not is_paused and not is_running_away:
+        ensures: DispatchedWakeSpawned(role: role)
+
+    @guidance
+        -- The tick then starts each wake in its own process, so a slow
+        -- role holds up neither the others nor the next tick. A memo
+        -- waiting out a retry delay is left out. Nobody is woken while
+        -- their harness is paused.
+}
+
+rule StartDispatchedWake {
+    when: DispatchedWakeSpawned(role, pid, pid_start)
+
+    -- The state is looked at again when the spawned process gets
+    -- there, so anything that changed since the tick refuses the wake.
+    requires: role.status = active
+    requires: not role.is_running
+    requires: not role.is_paused
+    requires: not role.is_running_away
+    requires: role.waiting_memos.count > 0
+
+    ensures: Wake.created(
+        role: role,
+        memos: role.waiting_memos,
+        resumes: role.interrupted_wake,
+        harness_name: role.harness.name,
+        pid: pid,
+        pid_start: pid_start,
+        chat: false,
+        started_at: now,
+        status: running
+    )
+    ensures: role.interrupted_wake = null
+
+    @guidance
+        -- A dispatched wake carries only the memos that are not
+        -- backing off. If nothing is waiting any more, nothing is
+        -- recorded.
+}
+
+rule StartRequestedWake {
+    when: WakeRequested(caller, role, note?, pid, pid_start)
+
+    requires: caller.is_operator or caller.is_dispatcher
+    requires: role.status = active
+    requires: not role.is_running
+    requires: role.open_memos.count > 0 or (note != null and note != "")
+
+    ensures: Wake.created(
+        role: role,
+        memos: role.open_memos,
+        note: note,
+        resumes: role.interrupted_wake,
+        harness_name: role.harness.name,
+        pid: pid,
+        pid_start: pid_start,
+        chat: false,
+        started_at: now,
+        status: running
+    )
+    ensures: role.interrupted_wake = null
+
+    @guidance
+        -- A wake asked for by hand carries every open memo, including
+        -- those backing off, and ignores the runaway guard and a paused
+        -- harness, so it doubles as a way to try a harness early. In
+        -- every other way it is an ordinary wake. With no open memos and
+        -- no note it records nothing.
+}
+
+rule OpenConversation {
+    when: ConversationRequested(caller, role, note?, pid, pid_start)
+
+    requires: caller.is_operator
+    requires: role.status = active
+    requires: not role.is_running
+
+    ensures: Wake.created(
+        role: role,
+        memos: {},
+        note: note,
+        harness_name: role.harness.name,
+        pid: pid,
+        pid_start: pid_start,
+        chat: true,
+        started_at: now,
+        status: running
+    )
+
+    @guidance
+        -- A conversation with the operator holds the role like a wake,
+        -- so no wake runs alongside it, but it carries no memos: what
+        -- the role does with them there is up to the conversation, and
+        -- nothing counts against them when it ends. It does not resume
+        -- an interrupted wake and leaves it to be resumed later.
+}
+
+rule RunWake {
+    when: wake: Wake.created
+
+    ensures: HarnessStarted(wake: wake)
+
+    @guidance
+        -- The prompt tells the role who they are and what time it is,
+        -- then gives each memo in full with its sender and how many
+        -- earlier wakes left it open, and the note if there is one. A
+        -- wake that resumes another continues that wake's session where
+        -- the harness can and is told it was cut short. A conversation
+        -- runs on the operator's terminal instead of headless.
+}
+
+rule EndWake {
+    when: WakeReported(wake, outcome, exit?, crashed, session?, said?, transcript?, resets_at?)
+
+    requires: wake.status = running
+
+    ensures:
+        wake.status = ended
+        wake.ended_at = now
+        wake.outcome = outcome
+        wake.crashed = crashed
+        wake.said = said
+        wake.resets_at = resets_at
+
+    @guidance
+        -- Only the dispatcher ends wakes. Wakes end by the harness
+        -- reporting, by the tick finding the process gone, or, for a
+        -- conversation, when the terminal session ends.
+}
+
+rule InterruptedWakeIsKept {
+    when: wake: Wake.status transitions_to ended
+
+    requires: wake.outcome != ran
+    requires: not wake.chat
+
+    ensures: wake.role.interrupted_wake = wake
+
+    @guidance
+        -- The next ordinary wake of the role carries on from this one.
+        -- A conversation cut short is not resumed.
+}
+
+rule HarnessRecovers {
+    when: wake: Wake.status transitions_to ended
+
+    let harness = Harness{name: wake.harness_name}
+
+    requires: wake.outcome = ran
+    requires: harness.is_down
+
+    ensures:
+        harness.condition = available
+        harness.paused_until = null
+        harness.down_since = null
+        harness.failed_tries = 0
+        harness.operator_told = false
+
+    @guidance
+        -- Any run in which the role got to work shows the harness is
+        -- fine, whatever became of the memos. Recovering records
+        -- nothing when the harness was not down.
+}
+
+rule HarnessLimited {
+    when: wake: Wake.status transitions_to ended
+
+    let harness = Harness{name: wake.harness_name}
+
+    requires: wake.outcome = limited
+    requires: wake.resets_at != null and wake.resets_at > now
+
+    ensures:
+        harness.condition = limited
+        harness.paused_until = wake.resets_at
+        harness.down_since = harness.down_since ?? now
+}
+
+rule HarnessLimitedWithoutAReset {
+    when: wake: Wake.status transitions_to ended
+
+    let harness = Harness{name: wake.harness_name}
+
+    requires: wake.outcome = limited
+    requires: wake.resets_at = null or wake.resets_at <= now
+
+    ensures:
+        harness.condition = limited
+        harness.paused_until = now + config.limit_probe_interval
+        harness.down_since = harness.down_since ?? now
+
+    @guidance
+        -- Known to end, and usually known when. Nobody is told: the
+        -- limit resets by itself and the work carries on. The count of
+        -- failed tries is left as it was. A reset time that is not
+        -- later than now is ignored and the probe interval is used.
+}
+
+rule HarnessUnreachable {
+    when: wake: Wake.status transitions_to ended
+
+    let harness = Harness{name: wake.harness_name}
+    let tries = harness.failed_tries + 1
+
+    requires: wake.outcome = unreachable
+
+    ensures:
+        harness.condition = unreachable
+        harness.failed_tries = tries
+        harness.paused_until = now + retry_delay(tries)   -- black box: the same doubling wait as a memo
+        harness.down_since = harness.down_since ?? now
+
+    @guidance
+        -- Expected to pass, but nobody knows when, so the harness is
+        -- tried again at growing intervals for as long as it takes.
+}
+
+rule HarnessNeedsAttention {
+    when: wake: Wake.status transitions_to ended
+
+    let harness = Harness{name: wake.harness_name}
+    let tries = harness.failed_tries + 1
+
+    requires: wake.outcome = needs_attention
+
+    ensures:
+        harness.condition = needs_attention
+        harness.failed_tries = tries
+        harness.paused_until = now + retry_delay(tries)
+        harness.down_since = harness.down_since ?? now
+
+    @guidance
+        -- It will not pass until a person fixes it, such as signing
+        -- in again. It is still tried at growing intervals, which is
+        -- how the fix is noticed.
+}
+
+rule TellOperatorHarnessNeedsThem {
+    when: wake: Wake.status transitions_to ended
+
+    let harness = Harness{name: wake.harness_name}
+
+    requires: wake.outcome = needs_attention
+    requires: not harness.operator_told
+
+    ensures: Notification.created(
+        kind: harness_needs_attention,
+        title: harness.name + " needs you before relay can work",
+        body: needs_attention_text(wake),   -- black box: what it said, and that nothing was dropped
+        harness: harness,
+        created_at: now,
+        delivery: pending
+    )
+    ensures: harness.operator_told = true
+
+    @guidance
+        -- At once, and once per outage: the flag is cleared only when
+        -- a run gets to work.
+}
+
+rule TellOperatorOfLongOutage {
+    when: DispatcherTicks(lost_wakes)
+
+    for harness in Harnesses where condition = unreachable and not operator_told and down_since != null and down_since + config.outage_patience <= now:
+        ensures: Notification.created(
+            kind: harness_unreachable,
+            title: harness.name + " has been unreachable since " + harness.down_since,
+            body: "Every role on it is on hold and nothing has been dropped.",
+            harness: harness,
+            created_at: now,
+            delivery: pending
+        )
+        ensures: harness.operator_told = true
+
+    @guidance
+        -- One notification per outage. Reported by the tick, not by the
+        -- failing wake, so it takes the first tick after the patience
+        -- has run out.
+}
+
+-- Retrying and giving up
+
+rule RetryMemoLater {
+    when: wake: Wake.status transitions_to ended
+
+    requires: wake.outcome = ran   -- the harness's failures fail no memo
+
+    for memo in wake.memos:
+        let attempt = memo.attempts + 1
+
+        requires: memo.status = unread
+        requires: attempt < config.max_attempts
+
+        ensures:
+            memo.attempts = attempt
+            memo.retry_at = now + retry_delay(attempt)   -- black box: see guidance
+
+    @guidance
+        -- A memo the wake carried and left open has failed once more,
+        -- however the harness exited, and a wake the tick found lost
+        -- counts too. retry_delay is retry_base doubled for each attempt
+        -- after the first, and never more than retry_ceiling. Nobody is
+        -- told: a failure that will be retried does not need anyone.
+        -- A conversation carries no memos, so it counts against nothing.
+}
+
+rule AbandonMemo {
+    when: wake: Wake.status transitions_to ended
+
+    requires: wake.outcome = ran
+
+    for memo in wake.memos:
+        let attempt = memo.attempts + 1
+
+        requires: memo.status = unread
+        requires: attempt >= config.max_attempts
+
+        ensures: memo.attempts = attempt
+        ensures: memo.retry_at = null
+        ensures: MemoDeadLettered(
+            memo: memo,
+            reason: never_closed,
+            transcript_tail: wake.said,
+            wake: wake
+        )
+}
+
+rule EndLostWakes {
+    when: DispatcherTicks(lost_wakes)
+
+    for wake in lost_wakes where status = running:
+        ensures: WakeReported(
+            wake: wake,
+            outcome: ran,
+            crashed: true,
+            said: "The process running this wake disappeared."
+        )
+
+    @guidance
+        -- A wake whose process is gone (found by pid and the time
+        -- the process started, so that a later process that was given
+        -- the same pid does not count) ended without saying how. It
+        -- counts against its memos like a crash, so a memo that kills
+        -- its runner every time is still dead-lettered in the end.
+}
+
+rule TripRunawayGuard {
+    when: DispatcherTicks(lost_wakes)
+
+    for role in Roles where status = active and has_work and not is_running and is_running_away:
+        requires:
+            role.guard_reported_at = null
+            or role.guard_reported_at + config.runaway_window <= now
+
+        ensures:
+            role.guard_reported_at = now
+            Notification.created(
+                kind: runaway_guard_tripped,
+                title: role.id + " was stopped by the runaway guard",
+                body: "Its work is waiting and nothing was dropped.",
+                about: role,
+                created_at: now,
+                delivery: pending
+            )
+
+    @guidance
+        -- The role is not woken by the dispatcher again until the
+        -- window has room. Their work waits; none of it is dropped. The
+        -- operator is told once per window.
+}
+
+-- Notifications
+
+rule PushNotification {
+    when: notification: Notification.created
+    ensures: NotificationPushed(notification: notification)
+
+    @guidance
+        -- Notifications are recorded first, as part of the same append
+        -- as whatever caused them, and pushed after it.
+}
+
+rule RepushStranded {
+    when: DispatcherTicks(lost_wakes)
+
+    for notification in Notifications where is_stranded:
+        ensures: NotificationPushed(notification: notification)
+
+    @guidance
+        -- A notification left pending for over two minutes was
+        -- recorded by a process that stopped before pushing it. A
+        -- failed one is not pushed again: its failure is the record.
+}
+
+rule NotificationDelivered {
+    when: PushSucceeded(notification)
+
+    ensures: notification.delivery = delivered
+}
+
+rule NotificationFailed {
+    when: PushFailed(notification, error)
+
+    ensures: notification.delivery = failed
+}
+
+-- Tools
+
+rule RunTool {
+    when: ToolCallRequested(caller, tool, arguments)
+
+    requires: caller.role != null and caller.role.status = active
+    requires: tool in caller.role.offered_tools
+
+    ensures: ToolRan(role: caller.role, tool: tool, arguments: arguments)
+
+    @guidance
+        -- What a tool does is the command it stands for, decided in the
+        -- ordinary way with the role as the caller. A refusal comes back
+        -- to the role as text, so it can read why and adjust.
+}
+
+-- Knowledge: facts
+
+rule AddFact {
+    when: FactAddRequested(caller, topic?, text, valid_from?, valid_to?)
+
+    requires: topic = null or is_usable_topic(topic)   -- black box: lower case words joined by hyphens, / between levels, at most 100 characters
+    requires: text != ""
+    requires: text.length <= config.max_fact_length
+    requires: valid_from = null or valid_to = null or valid_to > valid_from
+
+    ensures:
+        let fact = Fact.created()
+        FactVersion.created(
+            fact: fact,
+            change: added,
+            recorded_at: now,
+            actor: caller,
+            topic: topic,
+            text: text,
+            valid_from: valid_from,
+            valid_to: valid_to
+        )
+
+    @guidance
+        -- Times are an ISO instant, a date or a date and time in the
+        -- operator's time zone. A date is midnight. Anything else is
+        -- refused.
+}
+
+rule SupersedeFact {
+    when: FactSupersedeRequested(caller, fact, topic?, text, valid_from?, valid_to?)
+
+    let old = fact.current
+    -- The change begins now unless said otherwise.
+    let from = valid_from ?? now
+
+    requires: not fact.is_retracted
+    requires: not fact.is_superseded
+    requires: topic = null or is_usable_topic(topic)
+    requires: old.valid_from = null or from > old.valid_from
+    requires: old.valid_to = null or from <= old.valid_to
+    requires: text != ""
+    requires: text.length <= config.max_fact_length
+    requires: valid_to = null or valid_to > from
+
+    ensures:
+        -- The new state of affairs is a new fact.
+        let successor = Fact.created(supersedes: fact)
+        FactVersion.created(
+            fact: successor,
+            change: added,
+            recorded_at: now,
+            actor: caller,
+            topic: topic ?? old.topic,
+            text: text,
+            valid_from: from,
+            valid_to: valid_to
+        )
+        -- The old fact gets a new version that ends where the change begins.
+        FactVersion.created(
+            fact: fact,
+            change: superseded,
+            recorded_at: now,
+            actor: caller,
+            topic: old.topic,
+            text: old.text,
+            valid_from: old.valid_from,
+            valid_to: from,
+            superseded_by: successor
+        )
+
+    @guidance
+        -- The world changed. Use correct when the record was wrong. A
+        -- fact is superseded once; supersede the newest one. The change
+        -- must come after the fact began to hold (if it was wrong from
+        -- the start, correct it) and not after it had already stopped
+        -- (add a new fact instead). A change at the moment the fact
+        -- stopped is allowed.
+}
+
+rule CorrectFact {
+    when: FactCorrectRequested(caller, fact, why, topic?, text?, valid_from?, valid_to?)
+
+    let cur = fact.current
+    -- "open" clears a bound; a bound not given is unchanged.
+    let new_from = corrected_bound(valid_from, cur.valid_from)   -- black box: open gives null, nothing gives the current
+    let new_to = corrected_bound(valid_to, cur.valid_to)
+
+    requires: not fact.is_retracted
+    requires: why != ""
+    requires: new_from = null or new_to = null or new_to > new_from
+    -- A blank text or topic means unchanged.
+    requires: topic = null or topic = "" or is_usable_topic(topic)
+    requires: text = null or text?.length <= config.max_fact_length
+    -- It must change something.
+    requires: (topic ?? cur.topic) != cur.topic or (text ?? cur.text) != cur.text
+        or new_from != cur.valid_from or new_to != cur.valid_to
+
+    ensures: FactVersion.created(
+        fact: fact,
+        change: corrected,
+        recorded_at: now,
+        actor: caller,
+        topic: topic ?? cur.topic,
+        text: text ?? cur.text,
+        valid_from: new_from,
+        valid_to: new_to,
+        why: why,
+        superseded_by: cur.superseded_by
+    )
+
+    @guidance
+        -- The record was wrong, not the world. This writes a new
+        -- version of the same fact, so asking what was known before
+        -- the correction still gives the old answer.
+}
+
+rule RetractFact {
+    when: FactRetractRequested(caller, fact, why)
+
+    let cur = fact.current
+
+    requires: not fact.is_retracted
+    requires: why != ""
+    -- In the middle of a chain of changes, restoring the fact it replaced
+    -- would leave that fact and its successor's both holding.
+    requires: fact.supersedes = null or cur.superseded_by = null
+
+    ensures: FactVersion.created(
+        fact: fact,
+        change: retracted,
+        recorded_at: now,
+        actor: caller,
+        topic: cur.topic,
+        text: cur.text,
+        valid_from: cur.valid_from,
+        valid_to: cur.valid_to,
+        why: why,
+        superseded_by: cur.superseded_by
+    )
+
+    @guidance
+        -- A retraction is a correction saying the fact was never true.
+        -- The fact is kept and answers for what relay knew before, and
+        -- no longer holds, or appears in any listing, after.
+}
+
+rule RetractionUndoesItsChange {
+    when: version: FactVersion.created
+
+    let gone = version.fact
+    let old = gone.supersedes
+
+    requires: version.change = retracted
+    requires: old != null
+    requires: old.current.superseded_by = gone
+
+    -- The change never happened, so the fact it replaced is put back as
+    -- it was before the supersession, own end included.
+    ensures: FactVersion.created(
+        fact: old,
+        change: corrected,
+        recorded_at: now,
+        actor: version.actor,
+        topic: old.current.topic,
+        text: old.current.text,
+        valid_from: old.current.valid_from,
+        valid_to: version_before_supersession(old, gone).valid_to,   -- black box
+        why: "The fact that superseded it was retracted.",
+        superseded_by: null
+    )
+
+    @guidance
+        -- Retracting a fact that superseded another restores the old
+        -- one, as one event with the retraction. Only the fact it
+        -- directly replaced is restored. What relay knew before the
+        -- retraction is still answered as it was.
+}
+
+-- Knowledge: notes, journal, docs
+
+rule WriteNote {
+    when: NoteWriteRequested(caller, owner, name, text)
+
+    -- A role writes its own notes. The operator names the role. The
+    -- dispatcher has none.
+    requires: owner.status = active
+    requires: caller.is_operator or caller.role = owner
+    requires: is_usable_note_name(name)   -- black box: lower case letters, digits and hyphens, at most 48 characters
+    requires: text != ""
+    requires: text.length <= config.max_note_length
+    requires: not exists Note{owner: owner, name: name}
+
+    ensures: Note.created(owner: owner, name: name, text: text, written_at: now)
+}
+
+rule RewriteNote {
+    when: NoteWriteRequested(caller, owner, name, text)
+
+    let note = Note{owner: owner, name: name}
+
+    requires: exists note
+    requires: owner.status = active
+    requires: caller.is_operator or caller.role = owner
+    requires: text != ""
+    requires: text.length <= config.max_note_length
+    -- Writing the same text again records nothing.
+    requires: text != note.text
+
+    ensures:
+        note.text = text
+        note.written_at = now
+
+    @guidance
+        -- Writing a note replaces it. Notes go into the prompt of every
+        -- wake of their role, which is why they are short. Longer
+        -- content belongs in a doc.
+}
+
+rule RemoveNote {
+    when: NoteRemoveRequested(caller, owner, name)
+
+    requires: owner.status = active
+    requires: caller.is_operator or caller.role = owner
+    requires: exists Note{owner: owner, name: name}
+
+    ensures: not exists Note{owner: owner, name: name}
+}
+
+rule WriteJournal {
+    when: JournalWriteRequested(caller, owner, text)
+
+    requires: owner.status = active
+    requires: caller.is_operator or caller.role = owner
+    requires: text != ""
+    requires: text.length <= config.max_journal_entry_length
+
+    ensures: JournalEntry.created(owner: owner, text: text, at: now)
+
+    @guidance
+        -- Append only. Entries are never changed or removed. Reading
+        -- gives the latest few, oldest first.
+}
+
+rule PutNewDoc {
+    when: DocPutRequested(caller, path, content)
+
+    requires: is_usable_doc_path(path)   -- black box: lower case names of letters, digits, dots, hyphens and underscores joined by /, at most 200 characters
+    requires: content != ""
+    requires: content.length <= config.max_doc_length
+    requires: not exists Doc{path: path}
+    -- A path that would be both a file and a folder is refused.
+    requires: not doc_clash(path)   -- black box: an existing doc sits inside path/ or at a parent folder of path
+
+    ensures:
+        let doc = Doc.created(path: path)
+        DocVersion.created(
+            doc: doc,
+            at: now,
+            actor: caller,
+            content: content,
+            removed: false
+        )
+}
+
+rule PutDoc {
+    when: DocPutRequested(caller, path, content)
+
+    let doc = Doc{path: path}
+
+    requires: exists doc
+    requires: content != ""
+    requires: content.length <= config.max_doc_length
+    requires: not doc_clash(path)
+    -- Putting the content a doc already has records nothing. A removed
+    -- doc has none, so putting it again brings it back.
+    requires: not doc.is_present or doc.current.content != content
+
+    ensures: DocVersion.created(
+        doc: doc,
+        at: now,
+        actor: caller,
+        content: content,
+        removed: false
+    )
+
+    @guidance
+        -- Every version is kept, written by whoever put it. The clash
+        -- check ignores removed docs.
+}
+
+rule RemoveDoc {
+    when: DocRemoveRequested(caller, doc)
+
+    requires: doc.is_present
+
+    ensures: DocVersion.created(
+        doc: doc,
+        at: now,
+        actor: caller,
+        removed: true
+    )
+
+    @guidance
+        -- Removal is a version too, so the history is kept. The doc
+        -- disappears from the list, and as known before the removal it
+        -- is still there.
+}
+
+------------------------------------------------------------
+-- Invariants
+------------------------------------------------------------
+
+invariant TheLogIsGapless {
+    -- seq starts at 1 and each event follows the one before.
+    for event in Events:
+        event.seq = 1 or exists Event{seq: event.seq - 1}
+}
+
+invariant TimeNeverDecreases {
+    for a in Events:
+        for b in Events:
+            b.seq = a.seq + 1 implies b.at >= a.at
+}
+
+invariant NoLabelsForNow {
+    for event in Events:
+        event.labels.count = 0
+}
+
+invariant OneWakeAtATime {
+    -- A conversation counts as a wake here: it holds the role too.
+    for role in Roles:
+        role.running_wakes.count <= 1
+}
+
+invariant AWakeOnlyCarriesItsOwnRolesMemos {
+    for wake in Wakes:
+        wake.memos.all(m => m.recipient = wake.role)
+}
+
+invariant AConversationCarriesNoMemos {
+    for wake in Wakes where chat:
+        wake.memos.count = 0
+}
+
+invariant ARoutineHasAtMostOneOpenRun {
+    for routine in Routines:
+        (Memos where routine = routine and status = unread).count <= 1
+}
+
+invariant AttemptsStayWithinTheLimit {
+    for memo in Memos:
+        memo.attempts <= config.max_attempts
+}
+
+invariant AnOpenDeadLetterHasADeadMemo {
+    for letter in DeadLetters where status = open:
+        letter.memo.status = dead
+}
+
+invariant ASupersededMemoStaysDead {
+    for memo in Memos where superseded_by != null:
+        memo.status = dead
+}
+
+invariant ADeadLetterNotifiesTheOperatorAtMostOnce {
+    -- Each dead letter is passed on exactly once: as a memo to the
+    -- handler, or as one notification to the operator, never both.
+    for letter in DeadLetters:
+        (Notifications where dead_letter = letter).count <= 1
+}
+
+invariant EveryMemoToTheOperatorNotifiesOnce {
+    for memo in Memos where recipient = null:
+        (Notifications where memo = memo).count = 1
+}
+
+invariant OnlyMemosToTheOperatorNotifyAsMemos {
+    for notification in Notifications where kind = memo_for_operator:
+        notification.memo.recipient = null
+}
+
+invariant OnlyActiveRolesRun {
+    for wake in Wakes where status = running:
+        wake.role.status = active
+}
+
+invariant RoleIdsAreUnique {
+    for a in Roles:
+        for b in Roles:
+            a != b implies a.id != b.id
+}
+
+invariant EveryFactHasItsFirstVersion {
+    -- Versions are only ever added, never changed or dropped. See the
+    -- Facts contract.
+    for fact in Facts:
+        fact.versions.count >= 1
+}
+
+invariant ValidityIsInOrder {
+    for version in FactVersions:
+        version.valid_from = null or version.valid_to = null or version.valid_to > version.valid_from
+}
+
+invariant SupersessionLinksRunBothWays {
+    -- Until the successor is retracted, which puts the old fact back.
+    for fact in Facts where supersedes != null:
+        fact.is_retracted or fact.supersedes.versions.any(v => v.superseded_by = fact)
+}
+
+invariant EveryDocHasAVersion {
+    for doc in Docs:
+        doc.versions.count >= 1
+}
+
+invariant NoDocIsBothFileAndFolder {
+    for a in Docs where is_present:
+        for b in Docs where is_present:
+            a != b implies not is_inside(a.path, b.path)   -- black box: a is under b as a folder
+}
+
+------------------------------------------------------------
+-- Actor Declarations
+------------------------------------------------------------
+
+actor Operator {
+    identified_by: Caller where kind = operator
+}
+
+actor Dispatcher {
+    identified_by: Caller where kind = dispatcher
+}
+
+actor RoleActor {
+    identified_by: Caller where kind = role
+}
+
+------------------------------------------------------------
+-- Surfaces
+------------------------------------------------------------
+
+surface Inbound {
+    facing caller: Caller
+
+    provides:
+        RoleAddRequested(caller, id, title?, role_config, reports_to?, harness?, model?)
+            when caller.is_operator or caller.may_add
+        RoleUpdateRequested(caller, role, title?, role_config?, reports_to?, harness?, model?)
+            when caller.is_operator or caller.may_add
+        RoleRemoveRequested(caller, role)
+            when caller.is_operator or caller.may_add
+        MemoSendRequested(caller, recipient, subject, body)
+        MemoToOperatorSendRequested(caller, subject, body)
+        MemoCloseRequested(caller, memo, outcome)
+        MemoBlockRequested(caller, memo, explanation)
+            when caller.kind = role
+        RetryRequested(caller, role)
+            when caller.can_requeue
+        RoutineWriteRequested(caller, owner, name, schedule, instructions)
+            when caller.is_operator or caller.kind = role
+        RoutineRemoveRequested(caller, routine)
+            when caller.is_operator or caller.kind = role
+        WakeRequested(caller, role, note?, pid, pid_start)
+            when caller.is_operator or caller.is_dispatcher
+        ConversationRequested(caller, role, note?, pid, pid_start)
+            when caller.is_operator
+        FactAddRequested(caller, topic?, text, valid_from?, valid_to?)
+        FactSupersedeRequested(caller, fact, topic?, text, valid_from?, valid_to?)
+        FactCorrectRequested(caller, fact, why, topic?, text?, valid_from?, valid_to?)
+        FactRetractRequested(caller, fact, why)
+        NoteWriteRequested(caller, owner, name, text)
+        NoteRemoveRequested(caller, owner, name)
+        JournalWriteRequested(caller, owner, text)
+        DocPutRequested(caller, path, content)
+        DocRemoveRequested(caller, doc)
+        ToolCallRequested(caller, tool, arguments)
+            when caller.kind = role
+
+    @guarantee EveryWriteGoesThroughOneInboundPath
+        -- Whoever asks, whether the operator at the command line, a role
+        -- through a tool, or the dispatcher, a change is a command
+        -- submitted here. It is decided against the current state and
+        -- appended in one step under the log's lock, so two writers can
+        -- never both act on a state that one of them has already
+        -- changed. A command that is refused writes nothing. Anything
+        -- that depends on the clock or the settings is worked out when
+        -- the command is decided and written into the events, so
+        -- replaying the log never consults either.
+
+    @guarantee TimeNeverGoesBackwards
+        -- An event is recorded no earlier than the one before it. If
+        -- the clock reads earlier than the last event, the last
+        -- event's time is used.
+
+    @guarantee EntityIdsAreTheSeqOfTheirCreatingEvent
+        -- Memo 42 is the memo that event 42 sent. Role ids are
+        -- chosen; every other id is a seq.
+
+    @guarantee CallerIsNeverGuessed
+        -- A command run by a harness acts as the role that harness was
+        -- started for: the harness sets the role on every tool call,
+        -- and a command run with it set acts as that role and nothing
+        -- more, so it can never act as the operator. A command run by
+        -- anyone else acts as the operator. The caller must be the
+        -- operator, the dispatcher or an active role.
+
+    @guarantee ReplayNeedsOnlyTheLog
+        -- The state can always be rebuilt from the log. A log with an
+        -- event type this version does not know is refused rather
+        -- than read wrongly.
+}
+
+surface Clock {
+    provides:
+        DispatcherTicks(lost_wakes)
+
+    @guidance
+        -- Something outside relay ticks the dispatcher about once a
+        -- minute. A tick ends wakes whose process is gone, fires due
+        -- routines, trips the runaway guard, reports outages that
+        -- outlasted the patience, pushes notifications left stranded,
+        -- and then starts a wake for each role with work waiting.
+        -- The first four are one event append in this order; rules are
+        -- not ordered here, but a later step sees an earlier step's
+        -- events.
+}
+
+surface HarnessBoundary {
+    provides:
+        WakeReported(wake, outcome, exit?, crashed, session?, said?, transcript?, resets_at?)
+        DispatchedWakeSpawned(role, pid, pid_start)
+
+    contracts:
+        demands HarnessAdapter
+}
+
+surface NotificationBoundary {
+    provides:
+        PushSucceeded(notification)
+        PushFailed(notification, error)
+
+    contracts:
+        demands NotificationChannel
+
+    @guarantee NothingElseReachesThem
+        -- The operator is told things only through notifications.
+        -- They never have to look anywhere to find out whether the
+        -- roles need them.
+}
+
+surface TheRecord {
+    exposes:
+        Events
+
+    @guidance
+        -- Every change is an event. Anyone may read the log; only the
+        -- inbound path appends to it.
+}
+
+surface RoleTools {
+    facing caller: Caller
+
+    contracts:
+        demands Tools
+        demands Facts
+}
+
+------------------------------------------------------------
+-- Open Questions
+------------------------------------------------------------
+
+open question "Closing a memo proves the role dealt with it, not that they dealt with it well. Who reviews outcomes, and how often?"
