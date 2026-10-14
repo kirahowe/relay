@@ -16,7 +16,7 @@ data is wherever `--data` or `RELAY_DATA` points.
 A role is an id, a title and its own standing instructions. Between
 wakes nothing runs. `relay tick`, run by launchd once a minute, fires any
 routine that has come due, then wakes every role with an open memo, each in
-its own process. A wake runs the role's harness (pi on the Anthropic API)
+its own process. A wake runs the role's harness ([agentloop](../agentloop) on the Anthropic API)
 with the shared instructions in `resources/AGENTS.md`, the role's own
 instructions, what it has been granted and its notes as the system prompt, and the memos it was woken for as the
 prompt.
@@ -72,9 +72,12 @@ every role's system prompt.
 
 ## Setup
 
-relay needs [babashka](https://babashka.org) and Node.js on macOS.
+relay needs [babashka](https://babashka.org) on macOS, and agentloop, which
+is written in Go.
 
-1. Install the pinned pi: `npm ci`.
+1. Build agentloop: `make -C ../agentloop build`. relay finds the binary
+   at `../agentloop/bin/agentloop`. To keep it elsewhere, put `agentloop`
+   on your PATH or set `:bin` in the harness settings.
 2. Choose a data directory and initialize it:
 
    ```sh
@@ -124,6 +127,15 @@ relay needs [babashka](https://babashka.org) and Node.js on macOS.
 7. To give roles Apple Reminders, build `tools/rem` (see its README) and
    grant it in `relay.edn`.
 
+The harness settings in `relay.edn` are `:kind :agentloop`, `:model`,
+`:effort`, `:provider` (`"anthropic"` by default, or `"openai"`),
+`:base-url`, `:bin`, and the key as either `:api-key-command` or
+`:api-key-env`. `:retry` sets how agentloop retries a failed model call,
+for example `{:retries 2 :backoff-seconds 2 :max-wait-seconds 30}`. A rate
+limit that outlasts the longest wait pauses the harness until it lifts.
+The key goes to agentloop alone. Tools get only the environment relay
+names for them.
+
 Talk to a role with `relay chat <role>`. `relay status` shows roles, open
 work, harnesses and recent wakes, and `relay help` lists every command.
 
@@ -134,7 +146,7 @@ bb test          # every test; pass namespaces to run only those
 bb soak 5000     # the model-based property, many more times
 ```
 
-The tests never call the real API. The pi tests run real pi against a
+The tests never call the real API. The agentloop tests run the real binary against a
 mock Anthropic server in `test/relay/mock_anthropic.clj`.
 
 `relay.core` holds the rules as two pure functions. `evolve` folds an

@@ -1,62 +1,83 @@
-(ns relay.pi-test
-  "The pi harness: reading its output back, and whole wakes with the real pi
-  against a stand-in for the Anthropic API. The stand-in plays the model: it
-  reads the inbox through relay's tool, closes every memo it finds, and
-  says it is done."
+(ns relay.agentloop-test
+  "The agentloop harness: reading an outcome back, and whole wakes with the
+  real agentloop binary against a stand-in for the Anthropic API. The
+  stand-in plays the model: it reads the inbox through relay's tool, closes
+  every memo it finds, and says it is done."
   (:require [babashka.fs :as fs]
             [cheshire.core :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [relay.core :as core]
             [relay.dispatch :as dispatch]
-            [relay.harness.pi :as pi]
+            [relay.harness.agentloop :as agentloop]
             [relay.inbound :as inbound]
             [relay.log :as log]
-            [relay.mock-anthropic :as mock])
+            [relay.mock-anthropic :as mock]
+            [relay.tools :as tools])
   (:import (java.time Instant)))
 
 (def now (Instant/parse "2026-10-14T12:00:00Z"))
 
-(defn- run-of [stop error & {:as more}]
-  (merge {:events [{:type "session" :id "s-1"}
-                   {:type "agent_end" :messages [{:role "user" :content []}
-                                                 (cond-> {:role "assistant" :stopReason stop
-                                                          :content [{:type "text" :text "All done."}]}
-                                                   error (assoc :errorMessage error))]}]
-          :exit 0 :stderr "" :now now}
+(defn- ended [reason & {:as more}]
+  (merge {:type "outcome" :reason reason :text "All done." :turns 2
+          :usage {:input_tokens 10 :output_tokens 5}}
          more))
 
+(defn- classify [outcome & {:as more}]
+  (agentloop/classify (merge {:outcome outcome :exit 0 :stderr "" :session "s-1" :now now} more)))
+
+(defn- model-error [kind & {:as more}]
+  (ended "model_error" :text "" :error (merge {:kind kind :status 500 :message "It failed."} more)))
+
 (deftest reading-how-a-run-ended
-  (testing "a finished run, whatever the exit code says"
-    (is (= ["ran" "s-1" "All done." false]
-           ((juxt :outcome :session :said :crashed) (pi/classify (run-of "stop" nil))))))
-  (testing "the errors pi reports, verbatim from pi 0.73.1"
-    (is (= "limited" (:outcome (pi/classify (run-of "error" "429 {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"This request would exceed your organization's rate limit.\"}}")))))
-    (is (= "unreachable" (:outcome (pi/classify (run-of "error" "529 {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}")))))
-    (is (= "needs-attention" (:outcome (pi/classify (run-of "error" "401 {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"invalid x-api-key\"}}")))))
-    (is (= "needs-attention" (:outcome (pi/classify (run-of "error" "400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API.\"}}")))))
-    (is (= "unreachable" (:outcome (pi/classify (run-of "error" "Connection error: fetch failed"))))))
-  (testing "a bad request is the run's own failure"
-    (is (= ["ran" true] ((juxt :outcome :crashed) (pi/classify (run-of "error" "400 {\"error\":{\"message\":\"prompt is too long\"}}"))))))
-  (testing "a rate limit's reset comes from the headers relay's extension logged"
-    (let [log (str (json/generate-string {:status 529 :headers {}}) "\n"
-                   (json/generate-string {:status 429 :headers {"anthropic-ratelimit-requests-reset" "2026-10-14T12:01:00Z"
-                                                                "anthropic-ratelimit-tokens-reset" "2026-10-14T12:30:00Z"
-                                                                "retry-after" "60"}}))]
-      (is (= "2026-10-14T12:30:00Z" (:resets-at (pi/classify (run-of "error" "429 x" :provider-log log))))))
-    (is (= "2026-10-14T12:02:00Z"
-           (:resets-at (pi/classify (run-of "error" "429 x"
-                                            :provider-log (json/generate-string {:status 429 :headers {"Retry-After" "120"}}))))))
-    (is (nil? (:resets-at (pi/classify (run-of "error" "429 x"))))))
+  (testing "runs that got to work, whatever stopped them"
+    (doseq [reason ["completed" "max_tokens" "limit" "held"]]
+      (is (= ["ran" "s-1" "All done." false]
+             ((juxt :outcome :session :said :crashed) (classify (ended reason))))
+          reason)))
+  (testing "a refusal is the run's own failure"
+    (is (= ["ran" true] ((juxt :outcome :crashed) (classify (ended "refused"))))))
+  (testing "a cancel is the wake deadline"
+    (is (= ["ran" true "Stopped at the wake deadline."]
+           ((juxt :outcome :crashed :said) (classify (ended "canceled"))))))
+  (testing "model errors, by kind"
+    (is (= "unreachable" (:outcome (classify (model-error "overloaded" :status 529)))))
+    (is (= "unreachable" (:outcome (classify (model-error "unreachable" :status 0)))))
+    (doseq [kind ["unauthorized" "billing" "not_found"]]
+      (is (= "needs-attention" (:outcome (classify (model-error kind :status 401)))) kind))
+    (is (= ["ran" true] ((juxt :outcome :crashed) (classify (model-error "invalid_request" :status 400)))))
+    (is (= "It failed." (:said (classify (model-error "overloaded"))))))
+  (testing "a rate limit resumes when the provider says, else when to retry"
+    (is (= "2026-10-14T12:30:00Z"
+           (:resets-at (classify (model-error "rate_limited" :status 429
+                                              :resets_at "2026-10-14T12:30:00Z"
+                                              :retry_after "2026-10-14T12:01:00Z")))))
+    (is (= "2026-10-14T12:01:00Z"
+           (:resets-at (classify (model-error "rate_limited" :resets_at "2026-10-14T11:00:00Z"
+                                              :retry_after "2026-10-14T12:01:00Z")))))
+    (is (= ["limited" nil]
+           ((juxt :outcome :resets-at) (classify (model-error "rate_limited" :status 429))))))
   (testing "a run that never got going"
-    (is (= "needs-attention" (:outcome (pi/classify {:events [] :exit 1 :now now
-                                                     :stderr "No API key found for anthropic."}))))
-    (is (= "needs-attention" (:outcome (pi/classify {:events [] :exit 1 :now now :stderr "node: not found"}))))
-    (is (= "unreachable" (:outcome (pi/classify {:events [{:type "session" :id "s"}] :exit 1 :now now :stderr ""})))))
+    (is (= "needs-attention" (:outcome (classify nil :exit 1 :stderr "agentloop: bad request"))))
+    (is (str/includes? (:said (classify nil :exit 1 :stderr "agentloop: bad request")) "did not start")))
   (testing "the deadline"
-    (is (= ["ran" true] ((juxt :outcome :crashed) (pi/classify {:events [] :exit "timeout" :now now :stderr ""}))))))
+    (is (= ["ran" true] ((juxt :outcome :crashed) (classify nil :exit "timeout"))))))
+
+(deftest reading-the-outcome-line
+  (let [text (str (json/generate-string {:seq 1 :type "run_started"}) "\n"
+                  "not json\n"
+                  (json/generate-string (ended "completed" :text "first")) "\n"
+                  (json/generate-string (ended "held" :text "last")) "\n")]
+    (is (= "last" (:text (agentloop/parse-outcome text))))
+    (is (nil? (agentloop/parse-outcome "")))))
 
 ;; --- whole wakes against the stand-in
+
+(def bin
+  "The agentloop binary the tests run: on PATH, or built in the sibling checkout."
+  (or (some-> (fs/which "agentloop") str)
+      (let [sibling (fs/absolutize "../agentloop/bin/agentloop")]
+        (when (fs/executable? sibling) (str sibling)))))
 
 (def relay-bin (str (fs/absolutize "bin/relay")))
 (def ^:dynamic *dir* nil)
@@ -81,17 +102,18 @@
 (defn- write-config! [harness]
   (spit (str *dir* "/data/relay.edn")
         (pr-str {:timezone "UTC"
-                 :default-harness :pi
-                 :harnesses {:pi (merge {:kind :pi :base-url (:url *mock*)
-                                         :api-key-command ["echo" "sk-test-key"]
-                                         :effort "high"}
-                                        harness)}
+                 :default-harness :agentloop
+                 :harnesses {:agentloop (merge {:kind :agentloop :bin bin :base-url (:url *mock*)
+                                                :api-key-command ["echo" "sk-test-key"]
+                                                :effort "high"
+                                                :retry {:retries 0}}
+                                               harness)}
                  :tools {"printenv" {:class :read :description "Print the environment." :command ["env"]}}
                  :grants {"clerk" {:tools ["printenv"]}}
                  :notify {:kind :none}})))
 
 (defn- with-mock [responder f]
-  (let [dir (str (fs/create-temp-dir {:prefix "relay-pi-test"}))
+  (let [dir (str (fs/create-temp-dir {:prefix "relay-agentloop-test"}))
         m (mock/start! responder)
         before (System/getProperty "relay.bin")]
     (System/setProperty "relay.bin" relay-bin)
@@ -114,11 +136,10 @@
 
 (defn- state [] (inbound/current-state *sys*))
 
-(def pi-installed? (fs/exists? "node_modules/.bin/pi"))
 
-(deftest a-real-pi-wake-closes-memos-through-relays-tools
-  (if-not pi-installed?
-    (println "SKIPPED: pi is not installed; run npm ci")
+(deftest a-real-wake-closes-memos-through-relays-tools
+  (if-not bin
+    (println "SKIPPED: agentloop is not built; run make -C ../agentloop build")
     (with-mock closes-everything
       (fn []
         (let [a (memo! "File the invoices")
@@ -136,13 +157,12 @@
                      "journal_write" "docs" "doc_get" "doc_history" "doc_put" "doc_remove"
                      "printenv"}
                    (set (map :name (:tools first-req)))))
-            ;; pi drops additionalProperties on the way out. relay reads only
-            ;; the arguments it knows and ignores the rest.
-            (is (= {:type "object" :properties {:memo {:type "integer" :description "The memo's number, as shown in the inbox."}
-                                                :outcome {:type "string"}}
-                    :required ["memo" "outcome"]}
-                   (select-keys (:input_schema (first (filter #(= "memo_close" (:name %)) (:tools first-req))))
-                                [:type :properties :required]))))
+            (let [json-round-trip #(json/parse-string (json/generate-string %) true)
+                  manifest (tools/manifest (:config *sys*) "clerk")]
+              (is (= (into {} (map (juxt :name (comp json-round-trip :parameters))) manifest)
+                     (into {} (map (juxt :name :input_schema)) (:tools first-req))))
+              (is (some #(contains? (:input_schema %) :additionalProperties) (:tools first-req))
+                  "additionalProperties reaches the API intact")))
           (testing "the system prompt is relay's: the shared instructions and the role's own"
             (let [system (str/join (map :text (:system first-req)))]
               (is (str/includes? system "File things. Be brief."))
@@ -162,7 +182,7 @@
             (is (fs/exists? (get-in (state) [:wakes (:wake result) :transcript])))))))))
 
 (deftest credentials-never-reach-a-tool
-  (when pi-installed?
+  (when bin
     (with-mock (fn [body]
                  (if (empty? (mock/last-tool-results body))
                    {:tool-uses [{:name "printenv" :input {:args []}}]}
@@ -176,7 +196,7 @@
           (is (not (str/includes? env-text "ANTHROPIC"))))))))
 
 (deftest a-tool-the-role-was-not-granted-is-refused-to-the-model
-  (when pi-installed?
+  (when bin
     (with-mock (fn [body]
                  (if (empty? (mock/last-tool-results body))
                    {:tool-uses [{:name "role_add" :input {:id "x" :title "X" :instructions "c"}}]}
@@ -189,7 +209,7 @@
           (is (nil? (core/role (state) "x"))))))))
 
 (deftest a-rate-limit-pauses-the-harness-until-the-reported-reset
-  (when pi-installed?
+  (when bin
     (let [reset (str (.plusSeconds (Instant/now) 5400))]
       (with-mock (fn [_] {:status 429 :type "rate_limit_error" :message "Rate limited."
                           :headers {"anthropic-ratelimit-tokens-reset" reset "retry-after" "5"}})
@@ -197,11 +217,11 @@
           (let [id (memo! "File this")
                 result (dispatch/wake! *sys* "clerk" {})]
             (is (= "limited" (:outcome result)))
-            (is (= (Instant/parse reset) (core/paused-until (state) "pi" (Instant/now))))
+            (is (= (Instant/parse reset) (core/paused-until (state) "agentloop" (Instant/now))))
             (is (zero? (:attempts (core/memo (state) id))))))))))
 
-(deftest an-interrupted-wake-resumes-its-pi-session
-  (when pi-installed?
+(deftest an-interrupted-wake-resumes-its-session
+  (when bin
     (let [calls (atom 0)]
       (with-mock (fn [body]
                    (if (= 1 (swap! calls inc))
@@ -220,10 +240,14 @@
               (testing "the second run carried on the first run's conversation"
                 (is (= session (get-in (state) [:wakes (:wake second-wake) :session])))
                 (is (str/includes? (json/generate-string (:messages resumed-req)) "cut short"))
-                (is (>= (count (filter #(= "user" (:role %)) (:messages resumed-req))) 2))))))))))
+                ;; The adapter merges the two user turns into one message.
+                (is (>= (count (for [m (:messages resumed-req) :when (= "user" (:role m))
+                                     c (:content m) :when (= "text" (:type c))]
+                                 c))
+                        2))))))))))
 
 (deftest no-key-means-no-run
-  (when pi-installed?
+  (when bin
     (with-mock closes-everything
       (fn []
         (write-config! {:api-key-command ["false"]})

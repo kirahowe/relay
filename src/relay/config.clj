@@ -20,7 +20,7 @@
 
 (def defaults
   {:timezone nil                     ; nil means the system zone
-   :default-harness :pi
+   :default-harness :agentloop
    :harnesses {}
    :notify {}
    :dead-letter-handler "hub"

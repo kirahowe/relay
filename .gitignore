@@ -2,5 +2,4 @@
 .clj-kondo/.cache/
 .lsp/
 .nrepl-port
-node_modules/
 tools/rem/rem

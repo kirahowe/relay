@@ -527,7 +527,7 @@ config {
     dead_letter_handler: String = "hub"
 
     -- The harness a role runs on when it names none.
-    default_harness: String = "pi"
+    default_harness: String = "agentloop"
 
     -- A last resort against a role stuck in a loop. It is set far above
     -- ordinary use and is not meant to ration it.

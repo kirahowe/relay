@@ -12,7 +12,7 @@
 (def t0 (Instant/parse "2026-10-14T12:00:00Z"))
 
 (def cfg (config/resolve-config {:timezone "America/Toronto"
-                                 :harnesses {:pi {}}
+                                 :harnesses {:agentloop {}}
                                  :max-attempts 3
                                  :runaway-wakes 6
                                  :grants {"hub" {:may-add true}}}))
@@ -193,7 +193,7 @@
     (testing "the memo has not failed"
       (is (zero? (:attempts (core/memo (:state w) id)))))
     (testing "the harness is paused until the reset the run reported"
-      (is (= resets (core/paused-until (:state w) "pi" (:now w))))
+      (is (= resets (core/paused-until (:state w) "agentloop" (:now w))))
       (is (empty? (core/roles-to-wake (:state w) cfg (:now w))))
       (is (= :paused (:rejected (run w "dispatcher" :wake/start {:role "clerk" :dispatched true})))))
     (testing "however often it happens, it never becomes a dead letter"
@@ -207,13 +207,13 @@
         (is (some? interrupted))
         (is (= interrupted (:resumes running)))
         (let [w (run w "dispatcher" :wake/end {:wake (:id running) :outcome "ran"})]
-          (is (nil? (core/paused-until (:state w) "pi" (:now w))))
+          (is (nil? (core/paused-until (:state w) "agentloop" (:now w))))
           (is (nil? (:interrupted-wake (core/role (:state w) "clerk")))))))))
 
 (deftest a-limit-with-no-reset-is-probed-again-soon
   (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "File" :body "b"})
               (wake "clerk" {:outcome "limited"}))]
-    (is (= (.plusSeconds t0 900) (core/paused-until (:state w) "pi" (:now w))))))
+    (is (= (.plusSeconds t0 900) (core/paused-until (:state w) "agentloop" (:now w))))))
 
 (deftest a-harness-that-needs-a-person-says-so-once
   (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "File" :body "b"}))
@@ -224,13 +224,13 @@
 
 (deftest an-unreachable-harness-is-waited-out-quietly-then-reported-once
   (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "File" :body "b"}))
-        step (fn [w] (let [until (core/paused-until (:state w) "pi" (:now w))
+        step (fn [w] (let [until (core/paused-until (:state w) "agentloop" (:now w))
                            w (if until (assoc w :now until) w)]
                        (-> w (wake "clerk" {:outcome "unreachable"}) (run "dispatcher" :tick {}))))
         w (nth (iterate step w) 6)]
     (testing "the waits double"
-      (is (= 6 (get-in (:state w) [:harnesses "pi" :failed-tries])))
-      (is (= (.plusSeconds (:now w) 1920) (core/paused-until (:state w) "pi" (:now w)))))
+      (is (= 6 (get-in (:state w) [:harnesses "agentloop" :failed-tries])))
+      (is (= (.plusSeconds (:now w) 1920) (core/paused-until (:state w) "agentloop" (:now w)))))
     (testing "failed wakes do not trip the runaway guard"
       (is (empty? (filter #{"runaway-guard-tripped"} (notifications w)))))
     (testing "not told within the patience, told once after it"
