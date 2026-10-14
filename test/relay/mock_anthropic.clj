@@ -5,6 +5,8 @@
 
     {:text \"...\"}                               a plain reply
     {:tool-uses [{:name n :input {...}}] :text t}  a reply that calls tools
+    {:stop-reason \"refusal\"}                     a reply that ends the way named
+    {:delay-ms n}                                  any reply, after a wait
     {:status 429 :type \"rate_limit_error\" :message m :headers {...}}
                                                    an API error"
   (:require [cheshire.core :as json]
@@ -14,7 +16,7 @@
   (apply str (for [e events]
                (str "event: " (:type e) "\ndata: " (json/generate-string e) "\n\n"))))
 
-(defn- message-events [model {:keys [text tool-uses]}]
+(defn- message-events [model {:keys [text tool-uses stop-reason]}]
   (let [blocks (concat (when text [{:kind :text :text text}])
                        (map-indexed (fn [i t] (assoc t :kind :tool :id (str "toolu_" (System/nanoTime) "_" i)))
                                     tool-uses))]
@@ -36,7 +38,7 @@
                    :delta {:type "input_json_delta" :partial_json (json/generate-string (:input b))}}
                   {:type "content_block_stop" :index i}]))
              blocks))
-     [{:type "message_delta" :delta {:stop_reason (if (seq tool-uses) "tool_use" "end_turn")
+     [{:type "message_delta" :delta {:stop_reason (or stop-reason (if (seq tool-uses) "tool_use" "end_turn"))
                                      :stop_sequence nil}
        :usage {:output_tokens 5}}
       {:type "message_stop"}])))
@@ -44,7 +46,8 @@
 (defn- respond [requests responder req]
   (let [body (json/parse-string (slurp (:body req)) true)
         _ (swap! requests conj {:uri (:uri req) :headers (:headers req) :body body})
-        {:keys [status type message headers] :as reply} (responder body)]
+        {:keys [status type message headers delay-ms] :as reply} (responder body)
+        _ (when delay-ms (try (Thread/sleep (long delay-ms)) (catch InterruptedException _ nil)))]
     (if status
       {:status status
        :headers (merge {"Content-Type" "application/json" "request-id" "req_mock"} headers)

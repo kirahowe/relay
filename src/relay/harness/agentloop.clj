@@ -12,7 +12,10 @@
                  ;; or :api-key-env \"ANTHROPIC_API_KEY\", read from relay's environment
                  :base-url \"https://...\"      ; the provider's own API by default
                  :bin \"/path/to/agentloop\"
-                 :retry {:retries 2 :backoff-seconds 2 :max-wait-seconds 30}}}
+                 :retry {:retries 2 :backoff-seconds 2 :max-wait-seconds 30}
+                 ;; stops a run that loops; a run that hits one ends as
+                 ;; having run, with its memos still open
+                 :limits {:max-turns 200 :max-tool-calls 400 :max-tokens 2000000}}}
 
   The binary is found in this order: :bin, then `agentloop` on PATH, then
   `../agentloop/bin/agentloop` beside this repository (what `make -C
@@ -90,8 +93,11 @@
   "How a run ended. Pure: takes the parsed outcome line (nil when there was
   none), the exit code, stderr, the session id and the time."
   [{:keys [outcome exit stderr session now]}]
-  (let [{:keys [reason text error]} outcome
-        said (harness/tail (or (not-empty text) (:message error) "") 8)
+  (let [{:keys [reason text error]} (when (map? outcome) outcome)
+        error (when (map? error) error)
+        ;; Whatever the outcome line held, only strings are shown to a person.
+        said-from (fn [x] (when (and (string? x) (not (str/blank? x))) x))
+        said (harness/tail (or (said-from text) (said-from (:message error)) "") 8)
         report (fn [result & {:as more}]
                  (merge {:outcome result :exit exit :session session :said said
                          :crashed (= "timeout" exit)}
@@ -99,7 +105,10 @@
     (cond
       (= "timeout" exit) (report "ran" :said "Stopped at the wake deadline.")
       (nil? outcome) (report "needs-attention"
-                             :said (str "agentloop did not start. " (harness/tail stderr 5)))
+                             :said (str (if (and (number? exit) (> exit 128))
+                                          (str "agentloop was killed (exit " exit ") before it finished. ")
+                                          "agentloop did not start. ")
+                                        (harness/tail stderr 5)))
       :else
       (case reason
         ("completed" "max_tokens" "limit" "held") (report "ran")
@@ -124,7 +133,8 @@
 (defn request-json
   "The request agentloop reads. `prompt` is nil for an interactive session."
   [{:keys [harness model system-prompt prompt tools env session-dir timeout-ms]} id work]
-  (let [{:keys [provider effort base-url retry]} harness
+  (let [{:keys [provider effort base-url retry limits]} harness
+        limit-keys {:max-turns :max_turns :max-tool-calls :max_tool_calls :max-tokens :max_tokens}
         retry-keys {:retries :retries :backoff-seconds :backoff_seconds
                     :max-wait-seconds :max_wait_seconds}]
     (cond-> {:provider (or provider default-provider)
@@ -140,6 +150,7 @@
       base-url (assoc :base_url base-url)
       prompt (assoc :prompt prompt)
       timeout-ms (assoc :timeout_seconds (max 1 (- (quot timeout-ms 1000) 10)))
+      (seq limits) (assoc :limits (into {} (keep (fn [[k v]] (when-let [k2 (limit-keys k)] [k2 v])) limits)))
       (seq retry) (assoc :retry (into {} (keep (fn [[k v]] (when-let [k2 (retry-keys k)] [k2 v])) retry))))))
 
 (defn- prepare!
