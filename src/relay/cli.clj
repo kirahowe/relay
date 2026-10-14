@@ -7,6 +7,7 @@
             [relay.config :as config]
             [relay.core :as core]
             [relay.dispatch :as dispatch]
+            [relay.export :as export]
             [relay.inbound :as inbound]
             [relay.log :as log]
             [relay.tools :as tools])
@@ -37,6 +38,16 @@ Every command needs the data directory, from --data <dir> or RELAY_DATA.
   relay wake <role> [--note <text>]   run a role now, ignoring retry delays
   relay chat <role>                   talk with a role in this terminal
   relay tick                          one dispatcher pass (launchd runs this)
+  relay facts [<topic>] [--search <s>] [--as-of <t>] [--known-at <t>] [--all]
+                                      what relay knows; times as for facts
+  relay fact <id>                     every version of a fact
+  relay notes <role>                  a role's notes
+  relay journal <role> [-n <count>]   a role's latest journal entries
+  relay docs                          the docs
+  relay doc <path> [--version <n>] [--history]
+                                      read a doc, or list its versions
+  relay put <path>                    write a doc from stdin
+  relay export <dir>                  write a read-only snapshot of the knowledge
   relay log [--tail <n>] [--json]     the events, newest last
   relay tool <name>                   run a role's tool call (harnesses use this)")
 
@@ -133,11 +144,18 @@ Every command needs the data directory, from --data <dir> or RELAY_DATA.
         (println (or ok error))
         (if error 1 0)))))
 
+(defn- tool-output
+  "Runs one of relay's own read tools as the operator and prints its text."
+  [sys tool-name args]
+  (println ((get-in tools/builtin [tool-name :run]) sys core/operator args))
+  0)
+
 (def ^:private spec
   {:alias {:s :subject :m :message :n :tail}
    :coerce {:subject :string :message :string :title :string :reports-to :string
             :harness :string :model :string :schedule :string :note :string
-            :tail :long :data :string}})
+            :tail :long :data :string :search :string :as-of :string :known-at :string
+            :version :long}})
 
 (defn run
   "Runs one command and returns the exit code."
@@ -225,6 +243,34 @@ Every command needs the data directory, from --data <dir> or RELAY_DATA.
                        (or (dispatch/chat! sys r) 0))
               "tick" (do (operator-only! "run the dispatcher")
                          (dispatch/tick! sys)
+                         0)
+              "facts" (tool-output sys "facts" {:topic (first more) :search (:search opts)
+                                                :as_of (:as-of opts) :known_at (:known-at opts)
+                                                :all (:all opts)})
+              "fact" (tool-output sys "fact_history" {:fact (some-> (first more) parse-long)})
+              "notes" (let [[r] more]
+                        (when-not r (fail! "usage: relay notes <role>"))
+                        (doseq [{:keys [name text written-at]} (core/notes (inbound/current-state sys) r)]
+                          (println (str "## " name "  (" (local written-at zone) ")\n\n" text "\n")))
+                        0)
+              "journal" (let [[r] more]
+                          (when-not r (fail! "usage: relay journal <role> [-n <count>]"))
+                          (tool-output sys "journal" {:owner r :limit (:tail opts)}))
+              "docs" (tool-output sys "docs" {})
+              "doc" (let [[path] more]
+                      (when-not path (fail! "usage: relay doc <path> [--version <n>] [--history]"))
+                      (if (:history opts)
+                        (tool-output sys "doc_history" {:path path})
+                        (tool-output sys "doc_get" {:path path :version (:version opts)})))
+              "put" (let [[path] more
+                          events (submit! sys :doc/put {:path path :content (stdin-text)})]
+                      (println (if (seq events) (str "Wrote " path ", version " (:seq (first events)))
+                                   (str path " already says that.")))
+                      0)
+              "export" (let [[dir] more]
+                         (operator-only! "export")
+                         (when-not dir (fail! "usage: relay export <dir>"))
+                         (println "Wrote" (export/export! sys dir) "files to" dir)
                          0)
               "log" (do (show-log sys opts) 0)
               "tool" (run-tool sys (first more))

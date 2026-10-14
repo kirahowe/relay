@@ -9,10 +9,13 @@
   Which tools a role is offered depends on its grants, and a call to a tool
   the role was not offered is refused, whatever the harness let through."
   (:require [babashka.process :as p]
+            [clojure.set :as set]
             [clojure.string :as str]
             [relay.config :as config]
             [relay.core :as core]
-            [relay.inbound :as inbound]))
+            [relay.inbound :as inbound])
+  (:import (java.time Instant LocalTime)
+           (java.time.format DateTimeFormatter)))
 
 (defn- obj [props & required]
   {:type "object" :properties props :required (vec required) :additionalProperties false})
@@ -33,6 +36,63 @@
 
 (defn- created-memo [events]
   (:seq (first (filter #(= "memo/sent" (:type %)) events))))
+
+(def ^:private flag {:type "boolean"})
+(def ^:private fact-id {:type "integer" :description "The fact's number."})
+(def ^:private world-time
+  {:type "string" :description "A date (2026-10-14), a local date and time (2026-10-14 09:00), or an ISO instant."})
+
+(defn- local-time
+  "A time in the operator's zone, as a bare date when it is midnight."
+  [config ^Instant t]
+  (when t
+    (let [z (.atZone t (config/zone config))]
+      (if (= LocalTime/MIDNIGHT (.toLocalTime z))
+        (str (.toLocalDate z))
+        (.format z (DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm"))))))
+
+(defn- validity [config {:keys [valid-from valid-to]}]
+  (let [t #(local-time config %)]
+    (cond (and valid-from valid-to) (str "from " (t valid-from) " until " (t valid-to))
+          valid-from (str "from " (t valid-from))
+          valid-to (str "until " (t valid-to))
+          :else "with no known start or end")))
+
+(defn- fmt-fact [config {:keys [id topic text supersedes superseded-by] :as f}]
+  (str "Fact " id (when topic (str " [" topic "]")) ", holds " (validity config f)
+       (when supersedes (str ", replacing fact " supersedes))
+       (when superseded-by (str ", superseded by fact " superseded-by))
+       "\n  " text))
+
+(defn- fmt-version [config {:keys [change recorded-at actor why superseded-by] :as v}]
+  (str (local-time config recorded-at) " by " actor ": "
+       (case change
+         :added "recorded"
+         :superseded (str "superseded by fact " superseded-by)
+         :corrected (str "corrected, because " why)
+         :retracted (str "retracted, because " why))
+       (when-not (#{:superseded :retracted} change)
+         (str "\n  holds " (validity config v) (when (:topic v) (str " [" (:topic v) "]"))
+              "\n  " (:text v)))))
+
+(defn- times
+  "A query's world and recording times from a call's arguments."
+  [{:keys [config clock]} {:keys [as_of known_at]}]
+  {:as-of (or (core/world-time config as_of "as_of") (clock))
+   :known-at (core/world-time config known_at "known_at")})
+
+(defn- own
+  "Whose data a read is about: the caller's, or for the operator, the role named."
+  [actor {:keys [owner]}]
+  (if (= core/operator actor) owner actor))
+
+(defn- fact-args [args]
+  (-> args
+      (select-keys [:fact :topic :text :why :retract :valid_from :valid_to])
+      (set/rename-keys {:valid_from :valid-from :valid_to :valid-to})))
+
+(defn- new-fact [events]
+  (:seq (first (filter #(#{"fact/added" "fact/superseded"} (:type %)) events))))
 
 (def builtin
   "relay's own tools, by name."
@@ -107,6 +167,157 @@
     :run (fn [sys actor args]
            (submit sys actor :routine/remove args)
            (str "Removed routine " (:name args) "."))}
+
+   "facts"
+   {:class :read
+    :description (str "Look up facts: what relay knows about the world. By default, the facts that"
+                      " hold now. Narrow by `topic` (a topic includes those under it) or `search`"
+                      " (words in the text). `as_of` asks what held at another time; `known_at`"
+                      " asks what relay had recorded by then; `all` lists every fact, past and"
+                      " future too.")
+    :parameters (obj {:topic text :search text :as_of world-time :known_at world-time :all flag})
+    :run (fn [{:keys [config] :as sys} _ args]
+           (let [found (core/facts (inbound/current-state sys)
+                                   (merge (times sys args) (select-keys args [:topic :search :all])))]
+             (if (empty? found)
+               "No facts match."
+               (str/join "\n" (map #(fmt-fact config %) found)))))}
+
+   "fact_history"
+   {:class :read
+    :description "Every recorded version of a fact: when it was recorded, changed or corrected, by whom and why."
+    :parameters (obj {:fact fact-id} "fact")
+    :run (fn [{:keys [config] :as sys} _ {:keys [fact]}]
+           (let [f (core/fact (inbound/current-state sys) fact)]
+             (if-not f
+               (throw (ex-info (str "There is no fact " fact ".") {}))
+               (str "Fact " fact (when (:supersedes f) (str ", which replaced fact " (:supersedes f))) "\n"
+                    (str/join "\n" (map #(str "- " (fmt-version config %)) (:versions f)))))))}
+
+   "fact_add"
+   {:class :write
+    :description (str "Record a fact: one thing that is true in the world, in a sentence or two that"
+                      " stand on their own. Give `valid_from` when you know when it started to hold,"
+                      " and `valid_to` when you know it will stop. A topic groups facts, such as"
+                      " household/car.")
+    :parameters (obj {:text text :topic text :valid_from world-time :valid_to world-time} "text")
+    :run (fn [sys actor args]
+           (str "Recorded fact " (new-fact (submit sys actor :fact/add (fact-args args))) "."))}
+
+   "fact_supersede"
+   {:class :write
+    :description (str "The world changed: fact `fact` stopped holding at `valid_from` (default now)"
+                      " and `text` holds instead. The old fact is kept, ending there. Use this for"
+                      " a change, and fact_correct for a mistake.")
+    :parameters (obj {:fact fact-id :text text :valid_from world-time :valid_to world-time :topic text}
+                     "fact" "text")
+    :run (fn [sys actor args]
+           (str "Fact " (:fact args) " is superseded by fact "
+                (new-fact (submit sys actor :fact/supersede (fact-args args))) "."))}
+
+   "fact_correct"
+   {:class :write
+    :description (str "The record was wrong: fix a fact's text, topic or times, saying why. Give only"
+                      " what changes; `open` for a time removes that bound. With `retract`, the fact"
+                      " was never true, and a change it recorded is undone. The earlier record is kept"
+                      " and still answers for what relay knew before.")
+    :parameters (obj {:fact fact-id :why text :text text :topic text :valid_from world-time
+                      :valid_to world-time :retract flag}
+                     "fact" "why")
+    :run (fn [sys actor args]
+           (submit sys actor :fact/correct (fact-args args))
+           (str (if (:retract args) "Retracted" "Corrected") " fact " (:fact args) "."))}
+
+   "note_write"
+   {:class :write
+    :description (str "Write one of your notes: your memory between wakes. Your notes are shown to you"
+                      " at the start of every wake, so keep them short and current. Writing a note"
+                      " replaces it.")
+    :parameters (obj {:name {:type "string" :description "Lower case letters, digits and hyphens."}
+                      :text text}
+                     "name" "text")
+    :run (fn [sys actor args]
+           (submit sys actor :note/write (select-keys args [:owner :name :text]))
+           (str "Note " (:name args) " is written."))}
+
+   "note_remove"
+   {:class :write
+    :description "Remove one of your notes once it no longer helps."
+    :parameters (obj {:name text} "name")
+    :run (fn [sys actor args]
+           (submit sys actor :note/remove (select-keys args [:owner :name]))
+           (str "Removed note " (:name args) "."))}
+
+   "journal"
+   {:class :read
+    :description "Read your latest journal entries, oldest first."
+    :parameters (obj {:limit {:type "integer" :description "How many, 10 by default."}})
+    :run (fn [{:keys [config] :as sys} actor args]
+           (let [entries (core/journal (inbound/current-state sys) (own actor args) (or (:limit args) 10))]
+             (if (empty? entries)
+               "The journal is empty."
+               (str/join "\n\n" (for [{:keys [at text]} entries]
+                                   (str (local-time config at) "\n" text))))))}
+
+   "journal_write"
+   {:class :write
+    :description "Add an entry to your journal: what you did and learned, for later. Entries are never changed."
+    :parameters (obj {:text text} "text")
+    :run (fn [sys actor args]
+           (submit sys actor :journal/write (select-keys args [:owner :text]))
+           "Written.")}
+
+   "docs"
+   {:class :read
+    :description "List the docs: longer shared content that is really a file, by path."
+    :parameters (obj {})
+    :run (fn [{:keys [config] :as sys} _ _]
+           (let [ds (core/docs (inbound/current-state sys) nil)]
+             (if (empty? ds)
+               "There are no docs."
+               (str/join "\n" (for [{:keys [path at actor content]} ds]
+                                (str path " (" (count content) " characters, last written "
+                                     (local-time config at) " by " actor ")"))))))}
+
+   "doc_get"
+   {:class :read
+    :description "Read a doc, the latest version unless you give one from its history."
+    :parameters (obj {:path text :version {:type "integer"}} "path")
+    :run (fn [sys _ {:keys [path version]}]
+           (let [v (core/doc-version (inbound/current-state sys) path {:version version})]
+             (cond (nil? v) (throw (ex-info (str "There is no doc at " path
+                                                 (when version (str " with version " version)) ".") {}))
+                   (:removed v) (throw (ex-info (str path " was removed in version " (:seq v) ".") {}))
+                   :else (:content v))))}
+
+   "doc_history"
+   {:class :read
+    :description "The versions of a doc: when each was written and by whom."
+    :parameters (obj {:path text} "path")
+    :run (fn [{:keys [config] :as sys} _ {:keys [path]}]
+           (let [vs (get-in (inbound/current-state sys) [:docs path :versions])]
+             (if (empty? vs)
+               (throw (ex-info (str "There is no doc at " path ".") {}))
+               (str/join "\n" (for [{:keys [seq at actor content removed]} vs]
+                                (str "version " seq ", " (local-time config at) " by " actor
+                                     (if removed ": removed" (str ", " (count content) " characters"))))))))}
+
+   "doc_put"
+   {:class :write
+    :description "Write a doc, replacing its content. Every version is kept. Paths are like household/insurance.md."
+    :parameters (obj {:path text :content text} "path" "content")
+    :run (fn [sys actor args]
+           (if-let [v (:seq (first (submit sys actor :doc/put (select-keys args [:path :content]))))]
+             (str "Wrote " (:path args) ", version " v ".")
+             (str (:path args) " already says that.")))}
+
+   "doc_remove"
+   {:class :write
+    :description "Remove a doc. Its history is kept."
+    :parameters (obj {:path text} "path")
+    :run (fn [sys actor args]
+           (submit sys actor :doc/remove (select-keys args [:path]))
+           (str "Removed " (:path args) "."))}
 
    "role_add"
    {:class :write
@@ -195,9 +406,11 @@
       (nil? tool)
       {:error (str "You have no tool called " tool-name ".")}
       :else
-      (let [args (cond-> (or args {})
-                   ;; A model sometimes quotes a number.
-                   (string? (:memo args)) (update :memo #(or (parse-long (str/trim %)) %)))]
+      (let [args (reduce (fn [args k]
+                           ;; A model sometimes quotes a number.
+                           (cond-> args
+                             (string? (get args k)) (update k #(or (parse-long (str/trim %)) %))))
+                         (or args {}) [:memo :fact :version :limit])]
         (try {:ok ((:run tool) sys role-id args)}
              (catch Exception e
                {:error (or (ex-message e) (str (class e)))}))))))

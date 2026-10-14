@@ -226,3 +226,19 @@
                                         relay-bin "tick")]
         (is (= 1 exit))
         (is (str/includes? err "Only the operator"))))))
+
+(deftest knowledge-goes-through-the-tools-and-notes-reach-the-next-wake
+  (let [run (fn [tool args]
+              (p/shell {:out :string :err :string :continue true :in (json/generate-string args)
+                        :extra-env {"RELAY_DATA" (str *dir* "/data") "RELAY_ROLE" "clerk"}}
+                       relay-bin "tool" tool))]
+    (is (str/starts-with? (:out (run "fact_add" {:text "The cabinet key is in the drawer."
+                                                 :topic "office" :valid_from "2026-01-01"}))
+                          "Recorded fact"))
+    (is (str/includes? (:out (run "facts" {:topic "office"})) "The cabinet key is in the drawer."))
+    (is (= 1 (:exit (run "fact_correct" {:fact 999 :why "x" :text "y"}))))
+    (is (zero? (:exit (run "note_write" {:name "keys" :text "Ask before moving the key."}))))
+    (let [state (state)
+          request (dispatch/wake-request *sys* state {:id 1 :role "clerk" :memos [] :harness "fake"})]
+      (is (str/includes? (:system-prompt request) "## keys\n\nAsk before moving the key."))
+      (is (some #{"fact_add" "doc_put" "journal_write"} (map :name (:tools request)))))))

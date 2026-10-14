@@ -73,7 +73,8 @@
      :role role-row
      :model (or (:model role-row) (get-in config [:harnesses (keyword harness) :model]))
      :system-prompt (prompt/instructions {:shared (shared-instructions)
-                                          :operator-additions (operator-additions data-dir)}
+                                          :operator-additions (operator-additions data-dir)
+                                          :notes (core/notes state role)}
                                          role-row)
      :prompt (prompt/wake {:role role-row
                            :memos (map #(core/memo state %) memos)

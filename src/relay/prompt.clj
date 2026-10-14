@@ -8,10 +8,19 @@
 (defn- local [^Instant at ^ZoneId zone]
   (.format (.atZone at zone) (DateTimeFormatter/ofPattern "EEE d MMM yyyy, HH:mm")))
 
+(defn- fmt-notes [notes]
+  (str "\n# Your notes\n\n"
+       (if (empty? notes)
+         "You have no notes yet. Keep what you need to remember between wakes with `note_write`.\n"
+         (str "Your memory from earlier wakes, as you left it. Keep it current with `note_write`"
+              " and `note_remove`.\n"
+              (str/join (for [{:keys [name text]} notes]
+                          (str "\n## " name "\n\n" (str/trim text) "\n")))))))
+
 (defn instructions
   "The system prompt for a role: the shared instructions, the operator's own
-  additions if there are any, and the role's config."
-  [{:keys [shared operator-additions]} {:keys [id title config]}]
+  additions if there are any, the role's config and its notes."
+  [{:keys [shared operator-additions notes]} {:keys [id title config]}]
   (str (str/trim shared) "\n\n"
        (when-not (str/blank? operator-additions)
          (str "---\n\n" (str/trim operator-additions) "\n\n"))
@@ -19,7 +28,8 @@
        "Your id is `" id "` and your title is " title ". Your config, set by the operator"
        " or the hub, follows. You cannot change it; if it is wrong or too narrow,"
        " send a memo to whoever you report to.\n\n"
-       (str/trim config) "\n"))
+       (str/trim config) "\n"
+       (fmt-notes notes)))
 
 (defn- fmt-memo [zone {:keys [id from subject body sent-at attempts routine]}]
   (str "\n## Memo " id ": " subject "\n\n"
