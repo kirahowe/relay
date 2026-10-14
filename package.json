@@ -1,0 +1,8 @@
+{
+  "name": "relay-harness",
+  "private": true,
+  "description": "The pinned pi harness relay runs roles with. Install with npm ci.",
+  "dependencies": {
+    "@mariozechner/pi-coding-agent": "0.73.1"
+  }
+}

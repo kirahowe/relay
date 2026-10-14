@@ -153,7 +153,11 @@
     :parameters (obj {:args {:type "array" :items {:type "string"}
                              :description "Command line arguments."}})
     :run (fn [_ _ {:keys [args]}]
-           (let [{:keys [exit out err]} (apply p/shell {:out :string :err :string :continue true :in ""}
+           ;; A clean environment: nothing the harness or relay was started
+           ;; with, such as credentials, reaches an external command.
+           (let [{:keys [exit out err]} (apply p/shell {:out :string :err :string :continue true :in ""
+                                                        :env (select-keys (into {} (System/getenv))
+                                                                          ["PATH" "HOME" "USER" "LANG" "TMPDIR"])}
                                                (into (vec command) (map str args)))]
              (if (zero? exit)
                out

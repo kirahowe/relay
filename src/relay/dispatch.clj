@@ -10,6 +10,7 @@
             [relay.config :as config]
             [relay.core :as core]
             [relay.harness :as harness]
+            [relay.harness.pi]
             [relay.inbound :as inbound]
             [relay.prompt :as prompt]
             [relay.tools :as tools])
