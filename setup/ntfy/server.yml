@@ -1,0 +1,17 @@
+# ntfy server for relay's notifications. It listens on loopback only; put
+# HTTPS in front of it for the phone, for example with `tailscale serve`,
+# and set base-url to the address the phone uses.
+base-url: "https://your-mac.example:8443"
+listen-http: "127.0.0.1:2586"
+behind-proxy: true
+
+# Messages are kept so a phone that was offline catches up when it reconnects.
+cache-file: "/path/to/ntfy/cache.db"
+cache-duration: "168h"
+
+# iOS only delivers instantly through Apple's push service. With this set,
+# ntfy.sh is sent a hash of the topic and no message content; the phone
+# then fetches the message from this server.
+upstream-base-url: "https://ntfy.sh"
+
+web-root: disable

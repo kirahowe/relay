@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Keeps the ntfy server running. Replace @NTFY@, @NTFYCONFIG@ and @LOGS@
+     with absolute paths; see the README. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>relay.ntfy</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@NTFY@</string>
+    <string>serve</string>
+    <string>--config</string>
+    <string>@NTFYCONFIG@</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>@LOGS@/ntfy.log</string>
+  <key>StandardErrorPath</key>
+  <string>@LOGS@/ntfy.log</string>
+</dict>
+</plist>

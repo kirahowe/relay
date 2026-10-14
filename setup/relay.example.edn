@@ -1,0 +1,30 @@
+;; relay's settings. Copy this to <data dir>/relay.edn and edit it. Only the
+;; operator edits this file; no role has a tool that can read it.
+{:timezone "America/New_York"          ; omit to use the system zone
+
+ :default-harness :pi
+ :harnesses
+ {:pi {:kind :pi
+       :model "claude-opus-5-5"
+       :effort "medium"                 ; low, medium, high, xhigh or max
+       ;; The Anthropic API key, from the login keychain. Store it with
+       ;;   security add-generic-password -a "$USER" -s relay-anthropic -w
+       :api-key-command ["security" "find-generic-password" "-s" "relay-anthropic" "-w"]}}
+
+ ;; Where notifications go. See setup/ntfy/server.yml for the server.
+ :notify {:kind :ntfy :url "http://127.0.0.1:2586" :topic "relay"}
+
+ ;; The role that is sent dead letters to sort out.
+ :dead-letter-handler "hub"
+
+ ;; Tools beyond relay's own, each an external command given the call's
+ ;; arguments after its own. Every tool has a class: :read, :write,
+ ;; :egress or :act.
+ :tools
+ {"rem" {:class :act
+         :description "Apple Reminders. Run with [\"help\"] for the commands."
+         :command ["/path/to/relay/tools/rem/rem"]}}
+
+ ;; What each role is granted beyond relay's own tools.
+ :grants
+ {"hub" {:may-add true :tools ["rem"]}}}
