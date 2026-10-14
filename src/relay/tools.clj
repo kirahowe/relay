@@ -322,8 +322,8 @@
    "role_add"
    {:class :write
     :grant :may-add
-    :description "Add a role. The config is its standing instructions: what it is for, what it may decide alone, and when to ask."
-    :parameters (obj {:id text :title text :config text} "id" "title" "config")
+    :description "Add a role. Its instructions say what it is for, what it may decide alone, and when to ask. What it may use is granted by the operator, not written here."
+    :parameters (obj {:id text :title text :instructions text} "id" "title" "instructions")
     :run (fn [sys actor args]
            (submit sys actor :role/add args)
            (str "Added " (:id args) "."))}
@@ -331,8 +331,8 @@
    "role_update"
    {:class :write
     :grant :may-add
-    :description "Change another role's title or config."
-    :parameters (obj {:id text :title text :config text} "id")
+    :description "Change another role's title or instructions."
+    :parameters (obj {:id text :title text :instructions text} "id")
     :run (fn [sys actor args]
            (submit sys actor :role/update args)
            (str "Updated " (:id args) "."))}
@@ -387,6 +387,29 @@
                                             (config/may-add? config role-id))))]
     (merge (into {} (filter #(holds? (:grant (val %))) builtin))
            (into {} (map external-tool (select-keys (:tools config) tools))))))
+
+(defn grants-summary
+  "What a role is granted, in a few sentences for its prompt, so it knows
+  what it can and cannot do without trying."
+  [config role-id]
+  (let [offered (offered config role-id)
+        external (sort (keys (select-keys (:tools config) (:tools (config/grants config role-id)))))]
+    (str/join "\n"
+              (cond-> []
+                (contains? offered "role_add")
+                (conj "You may add, change and remove other roles, with `role_add`, `role_update` and `role_remove`.")
+                (= role-id (:dead-letter-handler config))
+                (conj "Work that other roles could not finish comes to you as dead letters.")
+                (contains? offered "dead_letters_retry")
+                (conj "You can put a role's dead letters back in its inbox with `dead_letters_retry`.")
+                :always
+                (conj (if (seq external)
+                        (str "Beyond relay's own tools, the operator has granted you: "
+                             (str/join ", " (map #(str "`" % "`") external)) ".")
+                        "You have relay's own tools and nothing beyond them."))
+                :always
+                (conj (str "Only the operator grants tools and powers. If your work needs one you lack,"
+                           " ask whoever you report to, or the operator if you report to nobody."))))))
 
 (defn manifest
   "What a harness needs to present the tools: names, descriptions and

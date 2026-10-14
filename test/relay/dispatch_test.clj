@@ -65,8 +65,8 @@
       (binding [*dir* dir]
         (write-config! {})
         (binding [*sys* (system)]
-          (inbound/submit! *sys* {:type :role/add :actor "operator" :args {:id "hub" :title "Hub" :config "Run relay."}})
-          (inbound/submit! *sys* {:type :role/add :actor "operator" :args {:id "clerk" :title "Clerk" :config "File things."}})
+          (inbound/submit! *sys* {:type :role/add :actor "operator" :args {:id "hub" :title "Hub" :instructions "Run relay."}})
+          (inbound/submit! *sys* {:type :role/add :actor "operator" :args {:id "clerk" :title "Clerk" :instructions "File things."}})
           (plan! close-everything 0)
           (try (run-test)
                (finally
@@ -218,8 +218,8 @@
       (is (= 1 exit))
       (is (str/includes? out "no tool called echo")))
     (testing "registry tools need the grant"
-      (is (= 1 (:exit (run "clerk" "role_add" {:id "x" :title "X" :config "c"}))))
-      (is (zero? (:exit (run "hub" "role_add" {:id "x" :title "X" :config "c"})))))
+      (is (= 1 (:exit (run "clerk" "role_add" {:id "x" :title "X" :instructions "c"}))))
+      (is (zero? (:exit (run "hub" "role_add" {:id "x" :title "X" :instructions "c"})))))
     (testing "a role cannot act as anyone else, even the operator"
       (let [{:keys [exit err]} (p/shell {:out :string :err :string :continue true :in ""
                                          :extra-env {"RELAY_DATA" (str *dir* "/data") "RELAY_ROLE" "clerk"}}
@@ -241,4 +241,9 @@
     (let [state (state)
           request (dispatch/wake-request *sys* state {:id 1 :role "clerk" :memos [] :harness "fake"})]
       (is (str/includes? (:system-prompt request) "## keys\n\nAsk before moving the key."))
-      (is (some #{"fact_add" "doc_put" "journal_write"} (map :name (:tools request)))))))
+      (is (some #{"fact_add" "doc_put" "journal_write"} (map :name (:tools request))))
+      (testing "and a role is told what it is granted"
+        (is (str/includes? (:system-prompt request) "relay's own tools and nothing beyond them"))
+        (let [hub (dispatch/wake-request *sys* state {:id 1 :role "hub" :memos [] :harness "fake"})]
+          (is (str/includes? (:system-prompt hub) "`role_add`"))
+          (is (str/includes? (:system-prompt hub) "comes to you as dead letters")))))))

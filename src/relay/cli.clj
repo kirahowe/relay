@@ -26,9 +26,9 @@ Every command needs the data directory, from --data <dir> or RELAY_DATA.
   relay close <memo> -m <outcome>     close a memo
   relay roles                         the registry
   relay add <id> [--title <t>] [--reports-to <id>] [--harness <h>] [--model <m>]
-                                      add a role; its config on stdin
-  relay update <id> [--title <t>] [--harness <h>] [--model <m>] [--config]
-                                      change a role; --config reads stdin
+                                      add a role; its instructions on stdin
+  relay update <id> [--title <t>] [--harness <h>] [--model <m>] [--instructions]
+                                      change a role; --instructions reads stdin
   relay remove <id>                   remove a role
   relay routines [<role>]             list routines
   relay routine <role> <name> --schedule <s>
@@ -199,14 +199,14 @@ Every command needs the data directory, from --data <dir> or RELAY_DATA.
               "add" (let [[id] more]
                       (submit! sys :role/add {:id id :title (:title opts) :reports-to (:reports-to opts)
                                               :harness (:harness opts) :model (:model opts)
-                                              :config (stdin-text)})
+                                              :instructions (stdin-text)})
                       (println "Added" id)
                       0)
               "update" (let [[id] more]
                          (submit! sys :role/update
                                   (cond-> (select-keys opts [:title :harness :model :reports-to])
                                     true (assoc :id id)
-                                    (:config opts) (assoc :config (stdin-text))))
+                                    (:instructions opts) (assoc :instructions (stdin-text))))
                          (println "Updated" id)
                          0)
               "remove" (let [[id] more]

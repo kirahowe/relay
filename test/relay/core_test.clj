@@ -38,8 +38,8 @@
 
 (defn- seed []
   (-> (world)
-      (run "operator" :role/add {:id "hub" :title "Hub" :config "Run relay."})
-      (run "operator" :role/add {:id "clerk" :title "Clerk" :config "File things."})))
+      (run "operator" :role/add {:id "hub" :title "Hub" :instructions "Run relay."})
+      (run "operator" :role/add {:id "clerk" :title "Clerk" :instructions "File things."})))
 
 (defn- memos-to [w to] (core/unread-memos (:state w) to))
 (defn- last-memo-id [w] (:id (last (vals (:memos (:state w))))))
@@ -281,17 +281,17 @@
 (deftest the-registry
   (let [w (seed)]
     (testing "only the operator and roles granted :may-add change it"
-      (is (= :forbidden (:rejected (run w "clerk" :role/add {:id "x" :config "c"}))))
-      (is (nil? (:rejected (run w "hub" :role/add {:id "x" :config "c"})))))
+      (is (= :forbidden (:rejected (run w "clerk" :role/add {:id "x" :instructions "c"}))))
+      (is (nil? (:rejected (run w "hub" :role/add {:id "x" :instructions "c"})))))
     (testing "a role added by a role reports to it"
-      (is (= "hub" (:reports-to (core/role (:state (run w "hub" :role/add {:id "x" :config "c"})) "x")))))
+      (is (= "hub" (:reports-to (core/role (:state (run w "hub" :role/add {:id "x" :instructions "c"})) "x")))))
     (testing "ids are checked and never reused"
-      (is (= :invalid (:rejected (run w "operator" :role/add {:id "Bad Id" :config "c"}))))
-      (is (= :invalid (:rejected (run w "operator" :role/add {:id "operator" :config "c"}))))
+      (is (= :invalid (:rejected (run w "operator" :role/add {:id "Bad Id" :instructions "c"}))))
+      (is (= :invalid (:rejected (run w "operator" :role/add {:id "operator" :instructions "c"}))))
       (let [w (run w "operator" :role/remove {:id "clerk"})]
-        (is (= :conflict (:rejected (run w "operator" :role/add {:id "clerk" :config "c"}))))))
+        (is (= :conflict (:rejected (run w "operator" :role/add {:id "clerk" :instructions "c"}))))))
     (testing "nobody changes or removes themselves"
-      (is (= :forbidden (:rejected (run w "hub" :role/update {:id "hub" :config "More power."}))))
+      (is (= :forbidden (:rejected (run w "hub" :role/update {:id "hub" :instructions "More power."}))))
       (is (= :forbidden (:rejected (run w "hub" :role/remove {:id "hub"})))))
     (testing "removing a role dead-letters its open memos and retires its routines"
       (let [w (-> w
@@ -364,7 +364,7 @@
       :close (let [[actor n] args] (run w actor :memo/close {:memo (nth-or ids n) :outcome "done"}))
       :block (let [[actor n] args] (run w actor :memo/block {:memo (nth-or ids n) :explanation "can't"}))
       :retry (let [[actor r] args] (run w actor :memo/retry {:role r}))
-      :add (let [[actor id] args] (run w actor :role/add {:id id :config "c"}))
+      :add (let [[actor id] args] (run w actor :role/add {:id id :instructions "c"}))
       :remove (let [[actor id] args] (run w actor :role/remove {:id id}))
       :routine (let [[owner n s] args]
                  (run w owner :routine/write {:name n :schedule s :instructions "i"}))
@@ -532,8 +532,8 @@
 (defspec the-rules-hold-under-any-sequence-of-commands 1000
   (prop/for-all [steps (gen/vector gen-step 1 80)]
     (let [start (-> (world)
-                    (run "operator" :role/add {:id "hub" :config "c"})
-                    (run "operator" :role/add {:id "clerk" :config "c"}))
+                    (run "operator" :role/add {:id "hub" :instructions "c"})
+                    (run "operator" :role/add {:id "clerk" :instructions "c"}))
           [final problems] (reduce (fn [[w problems] s]
                                      (let [w' (step w s)]
                                        [w' (into problems (check-step w w'))]))

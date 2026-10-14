@@ -42,7 +42,7 @@ contract HarnessAdapter {
     @invariant RunsAsTheRole
         -- The harness is given the role's standing instructions: the
         -- shared instructions (AGENTS.md), anything the operator added
-        -- to them, the role's config, and the role's notes. It knows
+        -- to them, the role's own instructions, and the role's notes. It knows
         -- which role it is acting as and tells relay so on every tool
         -- call.
 
@@ -250,7 +250,7 @@ entity Role {
     id: String
     title: String
     -- The role's standing instructions.
-    role_config: String
+    instructions: String
     reports_to: Role?
     -- A harness named in the settings, or the default harness.
     harness_name: String?
@@ -553,13 +553,13 @@ config {
 -- The registry
 
 rule AddRole {
-    when: RoleAddRequested(caller, id, title?, role_config, reports_to?, harness?, model?)
+    when: RoleAddRequested(caller, id, title?, instructions, reports_to?, harness?, model?)
 
     requires: caller.is_operator or caller.may_add
     requires: is_usable_id(id)   -- black box: the id pattern above
     -- ids are never reused: a removed role keeps its id.
     requires: not exists Role{id: id}
-    requires: role_config != ""
+    requires: instructions != ""
     requires: harness = null or is_configured_harness(harness)   -- black box: named in the settings
 
     -- A role added by a role reports to it, unless told otherwise. One
@@ -570,7 +570,7 @@ rule AddRole {
     ensures: Role.created(
         id: id,
         title: title ?? id,
-        role_config: role_config,
+        instructions: instructions,
         reports_to: manager,
         harness_name: harness,
         model: model,
@@ -580,20 +580,20 @@ rule AddRole {
 }
 
 rule UpdateRole {
-    when: RoleUpdateRequested(caller, role, title?, role_config?, reports_to?, harness?, model?)
+    when: RoleUpdateRequested(caller, role, title?, instructions?, reports_to?, harness?, model?)
 
     requires: caller.is_operator or caller.may_add
     requires: role.status = active
     requires: caller.role != role
-    requires: title != null or role_config != null or reports_to != null
+    requires: title != null or instructions != null or reports_to != null
         or harness != null or model != null
-    requires: role_config = null or role_config != ""
+    requires: instructions = null or instructions != ""
     requires: harness = null or is_configured_harness(harness)
     requires: reports_to = null or reports_to?.status = active
 
     ensures:
         role.title = title ?? role.title
-        role.role_config = role_config ?? role.role_config
+        role.instructions = instructions ?? role.instructions
         role.reports_to = reports_to ?? role.reports_to
         role.harness_name = harness ?? role.harness_name
         role.model = model ?? role.model
@@ -1862,9 +1862,9 @@ surface Inbound {
     facing caller: Caller
 
     provides:
-        RoleAddRequested(caller, id, title?, role_config, reports_to?, harness?, model?)
+        RoleAddRequested(caller, id, title?, instructions, reports_to?, harness?, model?)
             when caller.is_operator or caller.may_add
-        RoleUpdateRequested(caller, role, title?, role_config?, reports_to?, harness?, model?)
+        RoleUpdateRequested(caller, role, title?, instructions?, reports_to?, harness?, model?)
             when caller.is_operator or caller.may_add
         RoleRemoveRequested(caller, role)
             when caller.is_operator or caller.may_add

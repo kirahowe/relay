@@ -19,16 +19,19 @@
 
 (defn instructions
   "The system prompt for a role: the shared instructions, the operator's own
-  additions if there are any, the role's config and its notes."
-  [{:keys [shared operator-additions notes]} {:keys [id title config]}]
+  additions if there are any, the role's own instructions, what it is
+  granted, and its notes."
+  [{:keys [shared operator-additions notes granted]} {:keys [id title instructions]}]
   (str (str/trim shared) "\n\n"
        (when-not (str/blank? operator-additions)
          (str "---\n\n" (str/trim operator-additions) "\n\n"))
        "---\n\n# Your role\n\n"
-       "Your id is `" id "` and your title is " title ". Your config, set by the operator"
-       " or the hub, follows. You cannot change it; if it is wrong or too narrow,"
-       " send a memo to whoever you report to.\n\n"
-       (str/trim config) "\n"
+       "Your id is `" id "` and your title is " title ". Your own instructions, set by the"
+       " operator or the hub, follow. You cannot change them; if they are wrong or too"
+       " narrow, send a memo to whoever you report to.\n\n"
+       (str/trim instructions) "\n"
+       (when-not (str/blank? granted)
+         (str "\n# What you are granted\n\n" granted "\n"))
        (fmt-notes notes)))
 
 (defn- fmt-memo [zone {:keys [id from subject body sent-at attempts routine]}]

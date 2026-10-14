@@ -6,8 +6,8 @@
 
 (defn- seed []
   (-> (world)
-      (run "operator" :role/add {:id "hub" :title "Hub" :config "Run relay."})
-      (run "operator" :role/add {:id "clerk" :title "Clerk" :config "File things."})))
+      (run "operator" :role/add {:id "hub" :title "Hub" :instructions "Run relay."})
+      (run "operator" :role/add {:id "clerk" :title "Clerk" :instructions "File things."})))
 
 (defn- created [w] (:seq (last (:last w))))
 (defn- texts [w q] (mapv :text (core/facts (:state w) q)))

@@ -238,14 +238,14 @@
 (defn replay [events] (reduce evolve empty-state events))
 
 (defmethod evolve* "role/added" [state {:keys [at data]}]
-  (let [{:keys [id title config reports-to harness model]} data]
-    (assoc-in state [:roles id] {:id id :title title :config config :reports-to reports-to
+  (let [{:keys [id title instructions reports-to harness model]} data]
+    (assoc-in state [:roles id] {:id id :title title :instructions instructions :reports-to reports-to
                                  :harness harness :model model :status :active
                                  :added-at (inst at)})))
 
 (defmethod evolve* "role/updated" [state {:keys [data]}]
   (update-in state [:roles (:id data)] merge
-             (select-keys data [:title :config :reports-to :harness :model])))
+             (select-keys data [:title :instructions :reports-to :harness :model])))
 
 (defmethod evolve* "role/removed" [state {:keys [at data]}]
   (update-in state [:roles (:id data)] assoc :status :removed :removed-at (inst at)))
@@ -541,16 +541,16 @@
       (reject! (str "No harness called " harness " is configured.")))
     (emit tx "role/added" {:id id
                            :title (if (blank? title) id (str/trim title))
-                           :config (require-text (:config args) "A role's config")
+                           :instructions (require-text (:instructions args) "A role's instructions")
                            :reports-to reports-to :harness harness :model model})))
 
 (defmethod decide* :role/update [{:keys [state config actor] :as tx} {{:keys [id] :as args} :args}]
   (authorize-registry! tx)
   (active-role! state id)
-  (when (= id actor) (reject! :forbidden "A role may not change its own config."))
-  (let [changes (select-keys args [:title :config :reports-to :harness :model])]
+  (when (= id actor) (reject! :forbidden "A role may not change its own instructions."))
+  (let [changes (select-keys args [:title :instructions :reports-to :harness :model])]
     (when (empty? changes) (reject! "Nothing to change."))
-    (when (contains? changes :config) (require-text (:config changes) "A role's config"))
+    (when (contains? changes :instructions) (require-text (:instructions changes) "A role's instructions"))
     (when-let [h (:harness changes)]
       (when-not (contains? (:harnesses config) (keyword h))
         (reject! (str "No harness called " h " is configured."))))

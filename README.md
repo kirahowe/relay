@@ -13,12 +13,12 @@ data is wherever `--data` or `RELAY_DATA` points.
 
 ## How it works
 
-A role is an id, a title and a config: its standing instructions. Between
+A role is an id, a title and its own standing instructions. Between
 wakes nothing runs. `relay tick`, run by launchd once a minute, fires any
 routine that has come due, then wakes every role with an open memo, each in
 its own process. A wake runs the role's harness (pi on the Anthropic API)
-with the shared instructions in `resources/AGENTS.md`, the role's config
-and its notes as the system prompt, and the memos it was woken for as the
+with the shared instructions in `resources/AGENTS.md`, the role's own
+instructions, what it has been granted and its notes as the system prompt, and the memos it was woken for as the
 prompt.
 
 A role has no files and no shell. It works only through tools, each one a
@@ -92,10 +92,10 @@ relay needs [babashka](https://babashka.org) and Node.js on macOS.
    ```sh
    security add-generic-password -a "$USER" -s relay-anthropic -w
    ```
-4. Add the hub. Its config comes from stdin:
+4. Add the hub. Its instructions come from stdin:
 
    ```sh
-   bin/relay add hub --title "Hub" < hub-config.md
+   bin/relay add hub --title "Hub" < hub.md
    ```
 5. Install the dispatcher's launchd job. Fill in the template's paths and
    load it:

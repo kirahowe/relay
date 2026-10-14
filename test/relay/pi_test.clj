@@ -101,7 +101,7 @@
         (write-config! {})
         (binding [*sys* (inbound/system (str dir "/data"))]
           (inbound/submit! *sys* {:type :role/add :actor "operator"
-                                  :args {:id "clerk" :title "Clerk" :config "File things. Be brief."}})
+                                  :args {:id "clerk" :title "Clerk" :instructions "File things. Be brief."}})
           (f)))
       (finally
         ((:stop m))
@@ -143,7 +143,7 @@
                     :required ["memo" "outcome"]}
                    (select-keys (:input_schema (first (filter #(= "memo_close" (:name %)) (:tools first-req))))
                                 [:type :properties :required]))))
-          (testing "the system prompt is relay's: the shared instructions and the role's config"
+          (testing "the system prompt is relay's: the shared instructions and the role's own"
             (let [system (str/join (map :text (:system first-req)))]
               (is (str/includes? system "File things. Be brief."))
               (is (str/includes? system "Your id is `clerk`"))))
@@ -179,7 +179,7 @@
   (when pi-installed?
     (with-mock (fn [body]
                  (if (empty? (mock/last-tool-results body))
-                   {:tool-uses [{:name "role_add" :input {:id "x" :title "X" :config "c"}}]}
+                   {:tool-uses [{:name "role_add" :input {:id "x" :title "X" :instructions "c"}}]}
                    {:text "Oh well."}))
       (fn []
         (memo! "Grow")
