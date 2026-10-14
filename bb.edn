@@ -1,0 +1,7 @@
+{:paths ["src" "resources"]
+ :deps {org.clojure/test.check {:mvn/version "1.1.1"}}
+ :tasks
+ {test {:doc "Run the tests. Pass namespace names to run only those."
+        :extra-paths ["test"]
+        :requires ([relay.test-runner :as runner])
+        :task (runner/run! *command-line-args*)}}}
