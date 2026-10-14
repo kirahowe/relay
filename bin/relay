@@ -1,0 +1,14 @@
+#!/usr/bin/env bb
+;; The relay command. Run `relay help` for usage.
+
+(require '[babashka.classpath :as cp]
+         '[babashka.fs :as fs])
+
+(let [script (fs/real-path *file*)
+      root (fs/parent (fs/parent script))]
+  (System/setProperty "relay.bin" (str script))
+  (cp/add-classpath (str (fs/path root "src") ":" (fs/path root "resources"))))
+
+(require '[relay.cli :as cli])
+
+(apply cli/-main *command-line-args*)
