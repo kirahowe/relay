@@ -238,6 +238,19 @@
       (let [w (-> w (advance 7200) (run "dispatcher" :tick {}) (advance 60) (run "dispatcher" :tick {}))]
         (is (= ["harness-unreachable"] (notifications w)))))))
 
+(deftest a-conversation-holds-the-role-but-carries-no-memos
+  (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "a" :body "b"}))
+        id (last-memo-id w)
+        w (run w "operator" :wake/start {:role "clerk" :chat true})
+        chat (core/running-wake (:state w) "clerk")]
+    (is (= [] (:memos chat)))
+    (is (= :busy (:rejected (run w "dispatcher" :wake/start {:role "clerk" :dispatched true}))))
+    (is (= :forbidden (:rejected (run (seed) "dispatcher" :wake/start {:role "clerk" :chat true}))))
+    (let [w (run w "dispatcher" :wake/end {:wake (:id chat) :outcome "unreachable"})]
+      (is (zero? (:attempts (core/memo (:state w) id))))
+      (is (nil? (:interrupted-wake (core/role (:state w) "clerk")))
+          "a conversation cut short is not resumed by the next wake"))))
+
 (deftest one-wake-at-a-time
   (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "a" :body "b"})
               (run "dispatcher" :wake/start {:role "clerk"}))]
@@ -318,7 +331,9 @@
                   (gen/frequency [[6 (gen/return "ran")] [1 (gen/return "limited")]
                                   [1 (gen/return "unreachable")] [1 (gen/return "needs-attention")]])
                   (gen/vector gen/nat 0 3) gen/boolean)]
-    [1 (gen/tuple (gen/return :start-only) (gen/elements role-pool))]]))
+    [1 (gen/tuple (gen/return :start-only) (gen/elements role-pool))]
+    [1 (gen/tuple (gen/return :chat) (gen/elements role-pool)
+                  (gen/elements ["ran" "limited" "unreachable" "needs-attention"]))]]))
 
 (defn- nth-or [coll n] (when (seq coll) (nth coll (mod n (count coll)))))
 
@@ -340,6 +355,12 @@
                   running (keep #(when (= :running (:status %)) (:id %)) (vals (:wakes (:state w))))]
               (run w "dispatcher" :tick {:lost-wakes (if lose? running [])}))
       :start-only (run w "dispatcher" :wake/start {:role (first args) :dispatched true})
+      :chat (let [[r outcome] args
+                  w (run w "operator" :wake/start {:role r :chat true})
+                  chat (core/running-wake (:state w) r)]
+              (if (and chat (:chat chat))
+                (run w "dispatcher" :wake/end {:wake (:id chat) :outcome outcome})
+                w))
       :burst (let [[r n] args]
                (reduce (fn [w _]
                          (let [w (-> (run w "operator" :memo/send {:to r :subject "burst" :body "b"})
@@ -415,6 +436,11 @@
                                   batch))]
       (doseq [e batch :when (= "memo/attempt-failed" (:type e))]
         (when (failed-wakes (get-in e [:data :wake])) (fail! [:harness-failure-counted e]))))
+    ;; A conversation carries no memos and no attempt is counted against one.
+    (doseq [w wakes :when (:chat w)]
+      (when (seq (:memos w)) (fail! [:chat-with-memos (:id w)])))
+    (doseq [e batch :when (= "memo/attempt-failed" (:type e))]
+      (when (get-in s [:wakes (get-in e [:data :wake]) :chat]) (fail! [:chat-counted e])))
     ;; Every memo to the operator notifies, once.
     (doseq [e batch :when (and (= "memo/sent" (:type e)) (= "operator" (get-in e [:data :to])))]
       (when-not (= 1 (count (filter #(and (= "notification/created" (:type %))

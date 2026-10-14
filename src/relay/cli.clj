@@ -35,6 +35,7 @@ Every command needs the data directory, from --data <dir> or RELAY_DATA.
   relay unroutine <role> <name>       remove a routine
   relay retry <role>                  requeue a role's dead-lettered memos
   relay wake <role> [--note <text>]   run a role now, ignoring retry delays
+  relay chat <role>                   talk with a role in this terminal
   relay tick                          one dispatcher pass (launchd runs this)
   relay log [--tail <n>] [--json]     the events, newest last
   relay tool <name>                   run a role's tool call (harnesses use this)")
@@ -218,6 +219,10 @@ Every command needs the data directory, from --data <dir> or RELAY_DATA.
                                                          :dispatched (:dispatched opts)})]
                        (println (name (:result result)) (pr-str (dissoc result :result)))
                        (if (#{:ran :idle} (:result result)) 0 1))
+              "chat" (let [[r] more]
+                       (operator-only! "open a conversation")
+                       (when-not r (fail! "usage: relay chat <role>"))
+                       (or (dispatch/chat! sys r) 0))
               "tick" (do (operator-only! "run the dispatcher")
                          (dispatch/tick! sys)
                          0)

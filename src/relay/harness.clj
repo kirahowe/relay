@@ -41,6 +41,16 @@
 (defmethod run! :default [request]
   (throw (ex-info (str "No harness kind " (pr-str (get-in request [:harness :kind])) ".") {})))
 
+(defmulti chat!
+  "Runs an interactive session on the terminal with the same request, less
+  the prompt: the operator talks to the role directly. Returns the exit
+  code."
+  (fn [request] (get-in request [:harness :kind])))
+
+(defmethod chat! :default [request]
+  (throw (ex-info (str "The " (pr-str (get-in request [:harness :kind]))
+                       " harness has no interactive mode.") {})))
+
 (defn base-env
   "A minimal environment for a harness: enough to find programs and a home,
   and nothing inherited from whoever started relay, such as an enclosing

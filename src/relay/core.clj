@@ -100,7 +100,7 @@
   does not count towards the guard."
   [state role-id config ^Instant now]
   (let [since (.minus now (Duration/ofMinutes (:runaway-window-minutes config)))]
-    (filter #(and (= role-id (:role %)) (after? (:started-at %) since)
+    (filter #(and (= role-id (:role %)) (after? (:started-at %) since) (not (:chat %))
                   (not (#{"limited" "unreachable" "needs-attention"} (:outcome %))))
             (vals (:wakes state)))))
 
@@ -236,13 +236,13 @@
                :status (if one-off :retired :active))))
 
 (defmethod evolve* "wake/started" [state {:keys [seq at data]}]
-  (let [{:keys [role memos note resumes harness pid pid-start]} data]
-    (-> state
-        (assoc-in [:wakes seq] {:id seq :role role :memos (vec memos) :note note
-                                :resumes resumes :harness harness :pid pid
-                                :pid-start pid-start :started-at (inst at)
-                                :status :running})
-        (assoc-in [:roles role :interrupted-wake] nil))))
+  (let [{:keys [role memos note resumes harness pid pid-start chat]} data]
+    (cond-> (assoc-in state [:wakes seq] {:id seq :role role :memos (vec memos) :note note
+                                          :resumes resumes :harness harness :pid pid
+                                          :pid-start pid-start :started-at (inst at)
+                                          :status :running :chat (boolean chat)})
+      ;; A conversation leaves an interrupted wake to be resumed later.
+      (not chat) (assoc-in [:roles role :interrupted-wake] nil))))
 
 (defmethod evolve* "wake/ended" [state {:keys [at data]}]
   (let [{:keys [wake outcome exit crashed session said transcript]} data
@@ -251,7 +251,8 @@
                        :status :ended :ended-at (inst at) :outcome outcome :exit exit
                        :crashed (boolean crashed) :session session :said said
                        :transcript transcript)
-      (not= "ran" outcome) (assoc-in [:roles role-id :interrupted-wake] wake))))
+      (and (not= "ran" outcome) (not (get-in state [:wakes wake :chat])))
+      (assoc-in [:roles role-id :interrupted-wake] wake))))
 
 (defmethod evolve* "harness/paused" [state {:keys [data]}]
   (let [{:keys [harness reason until failed-tries down-since]} data]
@@ -512,7 +513,7 @@
     (reject! :forbidden "Only the dispatcher does that.")))
 
 (defmethod decide* :wake/start [{:keys [state config now actor] :as tx}
-                                {{role-id :role :keys [note dispatched pid pid-start]} :args}]
+                                {{role-id :role :keys [note dispatched chat pid pid-start]} :args}]
   (when-not (#{dispatcher operator} actor)
     (reject! :forbidden "Only the operator or the dispatcher wakes a role."))
   (active-role! state role-id)
@@ -522,12 +523,19 @@
       (when (paused-until state harness now) (reject! :paused (str harness " is paused.")))
       (when (running-away? state role-id config now)
         (reject! :runaway (str role-id " has been stopped by the runaway guard."))))
-    (let [memos (if dispatched (waiting-memos state role-id now) (unread-memos state role-id))]
-      (if (and (empty? memos) (blank? note))
+    ;; A conversation with the operator holds the role like a wake, so no
+    ;; wake runs alongside it, but it carries no memos: what the role does
+    ;; with them there is up to the conversation, and nothing counts against
+    ;; them when it ends.
+    (when (and chat (not= operator actor))
+      (reject! :forbidden "Only the operator can open a conversation."))
+    (let [memos (cond chat [] dispatched (waiting-memos state role-id now) :else (unread-memos state role-id))]
+      (if (and (empty? memos) (blank? note) (not chat))
         tx
-        (emit tx "wake/started" {:role role-id :memos (mapv :id memos) :note note
-                                 :resumes (:interrupted-wake (role state role-id))
-                                 :harness harness :pid pid :pid-start pid-start})))))
+        (emit tx "wake/started" (cond-> {:role role-id :memos (mapv :id memos) :note note
+                                         :resumes (when-not chat (:interrupted-wake (role state role-id)))
+                                         :harness harness :pid pid :pid-start pid-start}
+                                  chat (assoc :chat true)))))))
 
 (defn- settle-memos
   "Deals with each memo a wake carried that is still open. The role never

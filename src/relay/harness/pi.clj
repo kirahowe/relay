@@ -77,11 +77,13 @@
         (json/generate-string {:quietStartup true})))
 
 (defn command
-  "The command line for one run."
+  "The command line for one run, or for an interactive session when there is
+  no prompt."
   [{:keys [harness model system-prompt prompt tools session-dir resume]}]
   (let [model (or model (:model harness) default-model)]
-    (vec (concat [(pi-bin harness) "--mode" "json" "-p"
-                  "--provider" (or (:provider harness) "anthropic")
+    (vec (concat [(pi-bin harness)]
+                 (when prompt ["--mode" "json" "-p"])
+                 ["--provider" (or (:provider harness) "anthropic")
                   "--model" model
                   "--no-builtin-tools" "-ne" "-e" (extension-path)
                   "--tools" (str/join "," (map :name tools))
@@ -89,7 +91,7 @@
                   "--system-prompt" system-prompt
                   "--session-dir" (str session-dir)]
                  (when resume ["--session" resume])
-                 [prompt]))))
+                 (when prompt [prompt])))))
 
 ;; --- reading a run back
 
@@ -171,38 +173,52 @@
       (nil? session) (report "needs-attention" :said (str "pi did not start. " (harness/tail stderr 5)))
       :else (report "unreachable" :said (harness/tail (str stderr) 5)))))
 
+(def ^:private no-key
+  "No API key: set :api-key-command or :api-key-env for the pi harness in relay.edn.")
+
+(defn- prepare!
+  "Sets up a run directory for pi and returns the model, the working
+  directory and the environment to run it in, or nil when there is no key."
+  [{:keys [harness run-dir tools env session-dir] :as request}]
+  (when-let [key (api-key harness)]
+    (let [file #(str (fs/path run-dir %))
+          model (or (:model request) (:model harness) default-model)
+          agent-dir (file "pi-agent")
+          work (file "work")]
+      (write-agent-dir! agent-dir {:model model :base-url (:base-url harness)})
+      (spit (file "tools.json") (json/generate-string tools))
+      (fs/create-dirs session-dir)
+      (fs/create-dirs work)
+      {:model model
+       :work work
+       :env (merge env
+                   {"PI_CODING_AGENT_DIR" agent-dir
+                    "PI_OFFLINE" "1"
+                    "PI_TELEMETRY" "0"
+                    "ANTHROPIC_API_KEY" key
+                    "RELAY_TOOLS_FILE" (file "tools.json")
+                    "RELAY_PROVIDER_LOG" (file "provider.log")}
+                   (when (adaptive-models model)
+                     (cond-> {"RELAY_PI_THINKING" "adaptive"}
+                       (:effort harness) (assoc "RELAY_PI_EFFORT" (:effort harness)))))})))
+
 (defmethod harness/run! :pi
-  [{:keys [harness run-dir tools env timeout-ms] :as request}]
-  (let [file #(str (fs/path run-dir %))
-        key (api-key harness)
-        model (or (:model request) (:model harness) default-model)]
-    (if-not key
-      {:outcome "needs-attention" :exit nil :crashed false
-       :said "No API key: set :api-key-command or :api-key-env for the pi harness in relay.edn."}
-      (let [agent-dir (file "pi-agent")
-            _ (write-agent-dir! agent-dir {:model model :base-url (:base-url harness)})
-            _ (spit (file "tools.json") (json/generate-string tools))
-            _ (fs/create-dirs (:session-dir request))
-            work (file "work")
-            _ (fs/create-dirs work)
-            out (file "transcript.jsonl")
-            provider-log (file "provider.log")
-            exit (harness/run-process!
-                  (command (assoc request :model model))
-                  {:dir work :out-file out :timeout-ms timeout-ms
-                   :env (merge env
-                               {"PI_CODING_AGENT_DIR" agent-dir
-                                "PI_OFFLINE" "1"
-                                "PI_TELEMETRY" "0"
-                                "ANTHROPIC_API_KEY" key
-                                "RELAY_TOOLS_FILE" (file "tools.json")
-                                "RELAY_PROVIDER_LOG" provider-log}
-                               (when (adaptive-models model)
-                                 (cond-> {"RELAY_PI_THINKING" "adaptive"}
-                                   (:effort harness) (assoc "RELAY_PI_EFFORT" (:effort harness)))))})]
-        (assoc (classify {:events (parse-events (slurp out))
-                          :exit exit
-                          :stderr (slurp (str out ".err"))
-                          :provider-log (when (fs/exists? provider-log) (slurp provider-log))
-                          :now (Instant/now)})
-               :transcript out)))))
+  [{:keys [run-dir timeout-ms] :as request}]
+  (if-let [{:keys [model work env]} (prepare! request)]
+    (let [out (str (fs/path run-dir "transcript.jsonl"))
+          provider-log (str (fs/path run-dir "provider.log"))
+          exit (harness/run-process! (command (assoc request :model model))
+                                     {:dir work :out-file out :timeout-ms timeout-ms :env env})]
+      (assoc (classify {:events (parse-events (slurp out))
+                        :exit exit
+                        :stderr (slurp (str out ".err"))
+                        :provider-log (when (fs/exists? provider-log) (slurp provider-log))
+                        :now (Instant/now)})
+             :transcript out))
+    {:outcome "needs-attention" :exit nil :crashed false :said no-key}))
+
+(defmethod harness/chat! :pi [request]
+  (if-let [{:keys [model work env]} (prepare! (dissoc request :prompt))]
+    (:exit (apply p/shell {:dir work :env env :continue true}
+                  (command (assoc request :model model :prompt nil))))
+    (throw (ex-info no-key {}))))

@@ -140,6 +140,32 @@
            :left-open (count (filter #(= :unread (:status (core/memo state %)))
                                      (get-in state [:wakes wake-id :memos])))})))))
 
+(def ^:private conversation-note
+  "The operator has opened a conversation with you. Talk with them directly;
+  use your tools as you would in a wake.")
+
+(defn chat!
+  "Opens an interactive session as a role on this terminal. It holds the role
+  like a wake, so no wake runs alongside it, and carries no memos. Returns
+  the harness's exit code."
+  [sys role-id]
+  (let [started (inbound/submit! sys {:type :wake/start :actor core/operator
+                                      :args (merge {:role role-id :chat true
+                                                    :note conversation-note}
+                                                   (current-process))})
+        wake-id (:seq (first started))
+        state (inbound/current-state sys)
+        request (wake-request sys state (get-in state [:wakes wake-id]))
+        exit (try
+               (if (:harness request)
+                 (harness/chat! (update request :system-prompt str "\n\n" conversation-note "\n"))
+                 (throw (ex-info (str "relay.edn has no harness called " (:harness-name request) ".") {})))
+               (finally
+                 (inbound/submit! sys {:type :wake/end :actor core/dispatcher
+                                       :args {:wake wake-id :outcome "ran" :exit nil :crashed false
+                                              :said "Conversation ended."}})))]
+    exit))
+
 ;; --- the tick
 
 (def ^:private stale-after (Duration/ofMinutes 2))
