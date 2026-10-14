@@ -38,6 +38,7 @@
                :cost {:input input :output output :cacheRead (/ input 10.0) :cacheWrite (* input 1.25)}}])))
 
 (def default-model "claude-opus-5-5")
+(def default-effort "medium")
 
 (defn- repo-root []
   (some-> (System/getProperty "relay.bin") fs/real-path fs/parent fs/parent str))
@@ -199,8 +200,8 @@
                     "RELAY_TOOLS_FILE" (file "tools.json")
                     "RELAY_PROVIDER_LOG" (file "provider.log")}
                    (when (adaptive-models model)
-                     (cond-> {"RELAY_PI_THINKING" "adaptive"}
-                       (:effort harness) (assoc "RELAY_PI_EFFORT" (:effort harness)))))})))
+                     {"RELAY_PI_THINKING" "adaptive"
+                      "RELAY_PI_EFFORT" (or (:effort harness) default-effort)}))})))
 
 (defmethod harness/run! :pi
   [{:keys [run-dir timeout-ms] :as request}]
