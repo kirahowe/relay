@@ -15,7 +15,7 @@
   (:require [clojure.string :as str]
             [relay.config :as config]
             [relay.schedule :as schedule])
-  (:import (java.time Duration Instant)))
+  (:import (java.time Duration Instant LocalDate LocalDateTime)))
 
 (def operator "operator")
 (def dispatcher "dispatcher")
@@ -28,7 +28,8 @@
 
 (def empty-state
   {:roles {} :memos {} :routines {} :wakes {} :dead-letters {} :harnesses {}
-   :notifications {} :guards {} :next-seq 1 :last-at nil})
+   :notifications {} :guards {} :facts {} :notes {} :journals {} :docs {}
+   :next-seq 1 :last-at nil})
 
 (defn inst ^Instant [s] (some-> s str Instant/parse))
 
@@ -139,6 +140,84 @@
                         (not (paused-until state (harness-of state config id) now))
                         (not (running-away? state id config now)))]
          id)))
+
+;; knowledge
+;;
+;; A fact has two kinds of time. Its validity, valid-from and valid-to, says
+;; when it holds in the world; either end may be open. Each version of it
+;; also has the time it was recorded, the `at` of the event that wrote it.
+;; A change in the world supersedes a fact: the old one gets a new version
+;; that ends where the change begins, and the new state of affairs is a new
+;; fact. A correction says the record was wrong: it writes a new version of
+;; the same fact, so asking what was known before the correction still
+;; gives the old answer. No version is ever dropped.
+
+(defn fact [state id] (get-in state [:facts id]))
+
+(defn- not-after? [^Instant a ^Instant b] (not (after? a b)))
+
+(defn fact-as-known
+  "The fact as it was recorded at `known-at`, or nil if it had not been
+  recorded yet. With no `known-at`, as it is recorded now."
+  [{:keys [versions] :as f} known-at]
+  (when-let [v (if known-at
+                 (last (take-while #(not-after? (:recorded-at %) known-at) versions))
+                 (peek versions))]
+    (merge (select-keys f [:id :supersedes]) v)))
+
+(defn holds-at?
+  "Whether a version of a fact says it holds at world time `as-of`."
+  [{:keys [valid-from valid-to retracted]} as-of]
+  (and (not retracted)
+       (or (nil? valid-from) (not-after? valid-from as-of))
+       (or (nil? valid-to) (after? valid-to as-of))))
+
+(defn under-topic? [topic t]
+  (or (nil? topic) (= topic t) (and t (str/starts-with? t (str topic "/")))))
+
+(defn facts
+  "The facts holding at world time :as-of, as recorded at :known-at, by id.
+  With :all, every fact recorded by then and not retracted, whatever its
+  validity. :topic keeps that topic and the topics under it; :search keeps
+  facts whose text contains it, ignoring case."
+  [state {:keys [as-of known-at topic search all]}]
+  (let [as-of (or as-of known-at (:last-at state))
+        needle (some-> search str/lower-case)]
+    (->> (vals (:facts state))
+         (keep #(fact-as-known % known-at))
+         (filter #(and (if all (not (:retracted %)) (holds-at? % as-of))
+                       (under-topic? topic (:topic %))
+                       (or (nil? needle) (str/includes? (str/lower-case (:text %)) needle))))
+         (sort-by :id)
+         vec)))
+
+(defn notes [state owner] (vec (sort-by :name (vals (get-in state [:notes owner])))))
+
+(defn journal
+  "A role's journal entries, oldest first, the last `limit` of them if given."
+  [state owner limit]
+  (let [entries (get-in state [:journals owner] [])]
+    (if limit (vec (take-last limit entries)) entries)))
+
+(defn doc-version
+  "A doc's version: the one written by event `version` if given, else the
+  latest recorded at `known-at`, else the latest. Nil when there is none,
+  and a removal is a version too."
+  [state path {:keys [version known-at]}]
+  (let [versions (get-in state [:docs path :versions])]
+    (cond
+      version (first (filter #(= version (:seq %)) versions))
+      known-at (last (take-while #(not-after? (:at %) known-at) versions))
+      :else (peek versions))))
+
+(defn docs
+  "The docs that exist, as recorded at `known-at` if given, by path."
+  [state known-at]
+  (->> (keys (:docs state))
+       (keep #(doc-version state % {:known-at known-at}))
+       (remove :removed)
+       (sort-by :path)
+       vec))
 
 ;; --- evolve
 
@@ -278,6 +357,58 @@
 (defmethod evolve* "notification/failed" [state {:keys [data]}]
   (update-in state [:notifications (:notification data)] assoc
              :delivery :failed :error (:error data)))
+
+(defn- fact-version [{:keys [seq at actor labels]} change {:keys [topic text valid-from valid-to]}]
+  {:seq seq :recorded-at (inst at) :actor actor :change change :labels labels
+   :topic topic :text text :valid-from (inst valid-from) :valid-to (inst valid-to)})
+
+(defn- add-version [state id version]
+  (update-in state [:facts id :versions] (fnil conj []) version))
+
+(defmethod evolve* "fact/added" [state {:keys [seq data] :as event}]
+  (-> state
+      (assoc-in [:facts seq] {:id seq :supersedes nil})
+      (add-version seq (fact-version event :added data))))
+
+(defmethod evolve* "fact/superseded" [state {:keys [seq data] :as event}]
+  (let [old (:fact data)
+        ended (assoc (dissoc (peek (get-in state [:facts old :versions])) :why)
+                     :seq seq :recorded-at (inst (:at event)) :actor (:actor event)
+                     :change :superseded :labels (:labels event)
+                     :valid-to (inst (:valid-from data)) :superseded-by seq)]
+    (-> state
+        (add-version old ended)
+        (assoc-in [:facts seq] {:id seq :supersedes old})
+        (add-version seq (fact-version event :added (dissoc data :fact))))))
+
+(defmethod evolve* "fact/corrected" [state {:keys [data] :as event}]
+  (let [{:keys [fact retracted why superseded-by]} data]
+    (add-version state fact (cond-> (assoc (fact-version event (if retracted :retracted :corrected) data)
+                                           :why why :superseded-by superseded-by)
+                              retracted (assoc :retracted true)))))
+
+(defmethod evolve* "note/written" [state {:keys [at data]}]
+  (let [{:keys [owner name text]} data]
+    (assoc-in state [:notes owner name] {:owner owner :name name :text text :written-at (inst at)})))
+
+(defmethod evolve* "note/removed" [state {:keys [data]}]
+  (update-in state [:notes (:owner data)] dissoc (:name data)))
+
+(defmethod evolve* "journal/written" [state {:keys [seq at data]}]
+  (update-in state [:journals (:owner data)] (fnil conj [])
+             {:id seq :owner (:owner data) :text (:text data) :at (inst at)}))
+
+(defn- add-doc-version [state {:keys [seq at actor labels]} path more]
+  (update-in state [:docs path]
+             (fn [d] (update (assoc d :path path) :versions (fnil conj [])
+                             (merge {:seq seq :path path :at (inst at) :actor actor :labels labels}
+                                    more)))))
+
+(defmethod evolve* "doc/put" [state {:keys [data] :as event}]
+  (add-doc-version state event (:path data) {:content (:content data)}))
+
+(defmethod evolve* "doc/removed" [state {:keys [data] :as event}]
+  (add-doc-version state event (:path data) {:removed true}))
 
 ;; --- decide
 
@@ -481,13 +612,18 @@
 
 (def ^:private routine-name-pattern #"[a-z0-9][a-z0-9-]{0,47}")
 
-(defn- routine-owner [{:keys [state actor]} owner]
+(defn- owner-for
+  "Whose routines, notes or journal a command is about: the calling role's
+  own, or for the operator, the role named."
+  [{:keys [state actor]} owner what]
   (let [owner (if (= operator actor) owner actor)]
     (when-not (and owner (active-role? state owner))
       (reject! :forbidden (if (= operator actor)
-                            "Name the role the routine belongs to."
-                            "Only a role can have routines.")))
+                            (str "Name the role the " what " belongs to.")
+                            (str "Only a role has " what "s."))))
     owner))
+
+(defn- routine-owner [tx owner] (owner-for tx owner "routine"))
 
 (defmethod decide* :routine/write [tx {{:keys [owner name schedule instructions]} :args}]
   (let [owner (routine-owner tx owner)]
@@ -679,3 +815,175 @@
   (dispatcher-only! tx)
   (when-not (get-in state [:notifications notification]) (reject! :not-found "No such notification."))
   (emit tx "notification/failed" {:notification notification :error (str error)}))
+
+;; knowledge
+
+(defn world-time
+  "A time in the world, as an Instant: an ISO instant, or a date, or a date
+  and time, in the operator's zone. Nil for nothing."
+  ^Instant [config s what]
+  (when-not (blank? s)
+    (let [s (str/trim s)
+          zone (config/zone config)
+          attempt (fn [f] (try (f) (catch Exception _ nil)))]
+      (or (attempt #(Instant/parse s))
+          (attempt #(.toInstant (.atZone (LocalDateTime/parse (str/replace s " " "T")) zone)))
+          (attempt #(.toInstant (.atStartOfDay (LocalDate/parse s) zone)))
+          (reject! (str what " is not a time relay understands: " (pr-str s) ". Use 2026-10-14, "
+                        "2026-10-14 09:00 or 2026-10-14T13:00:00Z."))))))
+
+(def ^:private topic-pattern #"[a-z0-9][a-z0-9-]*(/[a-z0-9][a-z0-9-]*)*")
+
+(defn- fact-topic [topic]
+  (when-not (blank? topic)
+    (let [t (str/trim topic)]
+      (when-not (and (<= (count t) 100) (re-matches topic-pattern t))
+        (reject! (str "A topic is lower case words joined by hyphens, with / between levels,"
+                      " such as household/car. " (pr-str t) " is not one.")))
+      t)))
+
+(defn- fact-text [s]
+  (let [t (require-text s "A fact")]
+    (when (> (count t) 2000) (reject! "A fact is at most 2000 characters. Put longer content in a doc."))
+    t))
+
+(defn- validity!
+  "Checks a fact's validity and returns it as strings for an event."
+  [from to]
+  (when (and from to (not (after? to from)))
+    (reject! "A fact's valid-to must come after its valid-from."))
+  {:valid-from (some-> from str) :valid-to (some-> to str)})
+
+(defn- known-fact! [state id]
+  (let [f (fact state id)]
+    (when-not f (reject! :not-found (str "There is no fact " id ".")))
+    (let [v (fact-as-known f nil)]
+      (when (:retracted v) (reject! :invalid (str "Fact " id " was retracted.")))
+      v)))
+
+(defmethod decide* :fact/add [{:keys [config] :as tx} {{:keys [topic text valid-from valid-to]} :args}]
+  (emit tx "fact/added" (merge {:topic (fact-topic topic) :text (fact-text text)}
+                               (validity! (world-time config valid-from "valid-from")
+                                          (world-time config valid-to "valid-to")))))
+
+(defmethod decide* :fact/supersede [{:keys [state config now] :as tx}
+                                    {{:keys [fact topic text valid-from valid-to]} :args}]
+  (let [old (known-fact! state fact)
+        from (or (world-time config valid-from "valid-from") now)]
+    (when-let [by (:superseded-by old)]
+      (reject! :conflict (str "Fact " fact " was already superseded by fact " by "; supersede that one.")))
+    (when (and (:valid-from old) (not (after? from (:valid-from old))))
+      (reject! (str "The change must come after fact " fact " began to hold, at " (:valid-from old)
+                    ". If the fact was wrong from the start, correct it instead.")))
+    (when (and (:valid-to old) (after? from (:valid-to old)))
+      (reject! (str "Fact " fact " had already stopped holding at " (:valid-to old)
+                    "; add a new fact instead.")))
+    (emit tx "fact/superseded"
+          (merge {:fact fact
+                  :topic (if (blank? topic) (:topic old) (fact-topic topic))
+                  :text (fact-text text)}
+                 (validity! from (world-time config valid-to "valid-to"))))))
+
+(defn- bound
+  "A validity bound for a correction: unchanged when not given, open for
+  \"open\", and otherwise the time given."
+  [config given current what]
+  (cond (blank? given) current
+        (= "open" (str/trim given)) nil
+        :else (world-time config given what)))
+
+(defn- reopen-superseded
+  "When a fact that superseded another is retracted, the change never
+  happened, so the fact it replaced is put back as it was before."
+  [{:keys [state] :as tx} retracted-id old-id]
+  (let [versions (get-in state [:facts old-id :versions])
+        current (peek versions)
+        before (last (take-while #(not= retracted-id (:superseded-by %)) versions))]
+    (if (and before (= retracted-id (:superseded-by current)))
+      (emit tx "fact/corrected"
+            (merge (select-keys current [:topic :text])
+                   {:fact old-id :superseded-by nil
+                    :valid-from (some-> (:valid-from current) str)
+                    :valid-to (some-> (:valid-to before) str)
+                    :why (str "Fact " retracted-id ", which superseded it, was retracted.")}))
+      tx)))
+
+(defmethod decide* :fact/correct [{:keys [state config] :as tx}
+                                  {{:keys [fact topic text valid-from valid-to retract why]} :args}]
+  (let [cur (known-fact! state fact)
+        why (require-text why "Saying why the record was wrong")]
+    (when (and retract (:supersedes cur) (:superseded-by cur))
+      ;; In the middle of a chain of changes, putting back the fact it
+      ;; replaced would leave that fact and its successor's both holding.
+      (reject! (str "Fact " fact " replaced fact " (:supersedes cur) " and was itself superseded by fact "
+                    (:superseded-by cur) ", so retracting it would leave two facts holding at once."
+                    " Correct the facts' text or times instead.")))
+    (if retract
+      (as-> tx tx
+        (emit tx "fact/corrected" (merge (select-keys cur [:topic :text])
+                                         {:fact fact :retracted true :why why
+                                          :superseded-by (:superseded-by cur)}
+                                         (validity! (:valid-from cur) (:valid-to cur))))
+        (if-let [old (:supersedes cur)] (reopen-superseded tx fact old) tx))
+      (let [corrected (merge {:topic (if (blank? topic) (:topic cur) (fact-topic topic))
+                              :text (if (blank? text) (:text cur) (fact-text text))}
+                             (validity! (bound config valid-from (:valid-from cur) "valid-from")
+                                        (bound config valid-to (:valid-to cur) "valid-to")))]
+        (when (= corrected (merge (select-keys cur [:topic :text])
+                                  (validity! (:valid-from cur) (:valid-to cur))))
+          (reject! "That correction changes nothing."))
+        (emit tx "fact/corrected" (assoc corrected :fact fact :why why
+                                         :superseded-by (:superseded-by cur)))))))
+
+(def ^:private note-name-pattern #"[a-z0-9][a-z0-9-]{0,47}")
+
+(defmethod decide* :note/write [tx {{:keys [owner name text]} :args}]
+  (let [owner (owner-for tx owner "note")
+        text (require-text text "A note")]
+    (when-not (and (string? name) (re-matches note-name-pattern name))
+      (reject! "A note's name is lower case letters, digits and hyphens."))
+    (when (> (count text) 4000)
+      (reject! "A note is at most 4000 characters, since notes go into every wake. Put more in a doc."))
+    (if (= text (get-in (:state tx) [:notes owner name :text]))
+      tx
+      (emit tx "note/written" {:owner owner :name name :text text}))))
+
+(defmethod decide* :note/remove [{:keys [state] :as tx} {{:keys [owner name]} :args}]
+  (let [owner (owner-for tx owner "note")]
+    (when-not (get-in state [:notes owner name])
+      (reject! :not-found (str owner " has no note called " name ".")))
+    (emit tx "note/removed" {:owner owner :name name})))
+
+(defmethod decide* :journal/write [tx {{:keys [owner text]} :args}]
+  (let [owner (owner-for tx owner "journal")
+        text (require-text text "A journal entry")]
+    (when (> (count text) 20000) (reject! "A journal entry is at most 20000 characters."))
+    (emit tx "journal/written" {:owner owner :text text})))
+
+(def ^:private doc-path-pattern #"[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)*")
+
+(defn- doc-path [path]
+  (let [p (some-> path str/trim)]
+    (when-not (and p (<= (count p) 200) (re-matches doc-path-pattern p))
+      (reject! (str "A doc's path is lower case names of letters, digits, dots, hyphens and"
+                    " underscores, joined by /, such as household/insurance.md.")))
+    p))
+
+(defmethod decide* :doc/put [{:keys [state] :as tx} {{:keys [path content]} :args}]
+  (let [path (doc-path path)]
+    (when (blank? content) (reject! "A doc's content must not be empty. To remove a doc, remove it."))
+    (when (> (count content) 500000) (reject! "A doc is at most 500000 characters."))
+    (when-let [clash (first (filter #(or (str/starts-with? (:path %) (str path "/"))
+                                         (str/starts-with? path (str (:path %) "/")))
+                                    (docs state nil)))]
+      (reject! :conflict (str path " would sit where " (:path clash) " is, as a file and a"
+                              " folder at once. Choose another path.")))
+    (if (= content (:content (doc-version state path {})))
+      tx
+      (emit tx "doc/put" {:path path :content content}))))
+
+(defmethod decide* :doc/remove [{:keys [state] :as tx} {{:keys [path]} :args}]
+  (let [path (doc-path path)
+        v (doc-version state path {})]
+    (when (or (nil? v) (:removed v)) (reject! :not-found (str "There is no doc at " path ".")))
+    (emit tx "doc/removed" {:path path})))

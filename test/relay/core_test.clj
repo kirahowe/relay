@@ -309,6 +309,12 @@
 (def role-pool ["hub" "clerk" "scribe" "courier"])
 (def actors (into ["operator" "dispatcher"] role-pool))
 
+(def world-times [nil "2026-09-01" "2026-10-14" "2026-10-15 09:00" "2026-11-01" "2027-01-01"])
+
+(def as-of-samples
+  (mapv #(Instant/parse %) ["2026-08-01T00:00:00Z" "2026-09-15T00:00:00Z" "2026-10-14T12:00:00Z"
+                            "2026-10-20T00:00:00Z" "2026-12-01T00:00:00Z" "2027-06-01T00:00:00Z"]))
+
 (def gen-step
   (gen/frequency
    [[3 (gen/tuple (gen/return :advance) (gen/elements [1 30 60 600 3600 7200 86400]))]
@@ -333,7 +339,19 @@
                   (gen/vector gen/nat 0 3) gen/boolean)]
     [1 (gen/tuple (gen/return :start-only) (gen/elements role-pool))]
     [1 (gen/tuple (gen/return :chat) (gen/elements role-pool)
-                  (gen/elements ["ran" "limited" "unreachable" "needs-attention"]))]]))
+                  (gen/elements ["ran" "limited" "unreachable" "needs-attention"]))]
+    ;; Knowledge. World times are dates either side of the start, so that
+    ;; changes and corrections land before, between and after each other.
+    [3 (gen/tuple (gen/return :fact-add) (gen/elements actors) (gen/elements [nil "home" "home/car" "work"])
+                  (gen/elements world-times) (gen/elements world-times))]
+    [3 (gen/tuple (gen/return :fact-supersede) (gen/elements actors) gen/nat (gen/elements world-times))]
+    [3 (gen/tuple (gen/return :fact-correct) (gen/elements actors) gen/nat
+                  (gen/elements [:text :retract :from :to :open]) (gen/elements world-times))]
+    [3 (gen/tuple (gen/return :note) (gen/elements actors) (gen/elements role-pool)
+                  (gen/elements ["a" "b"]) (gen/elements ["x" "y" nil]))]
+    [1 (gen/tuple (gen/return :journal) (gen/elements actors) (gen/elements role-pool))]
+    [2 (gen/tuple (gen/return :doc) (gen/elements actors) (gen/elements ["a.md" "dir/b.md"])
+                  (gen/elements ["one" "two" nil]))]]))
 
 (defn- nth-or [coll n] (when (seq coll) (nth coll (mod n (count coll)))))
 
@@ -361,6 +379,32 @@
               (if (and chat (:chat chat))
                 (run w "dispatcher" :wake/end {:wake (:id chat) :outcome outcome})
                 w))
+      :fact-add (let [[actor topic from to] args]
+                  (run w actor :fact/add {:topic topic :text (str "f" (count (:events w)))
+                                          :valid-from from :valid-to to}))
+      :fact-supersede (let [[actor n from] args]
+                        (run w actor :fact/supersede {:fact (nth-or (sort (keys (:facts (:state w)))) n)
+                                                      :text (str "f" (count (:events w))) :valid-from from}))
+      :fact-correct (let [[actor n how t] args
+                          id (nth-or (sort (keys (:facts (:state w)))) n)]
+                      (run w actor :fact/correct
+                           (merge {:fact id :why "wrong"}
+                                  (case how
+                                    :text {:text (str "c" (count (:events w)))}
+                                    :retract {:retract true}
+                                    :from {:valid-from t}
+                                    :to {:valid-to t}
+                                    :open {:valid-from "open" :valid-to "open"}))))
+      :note (let [[actor owner n text] args]
+              (if text
+                (run w actor :note/write {:owner owner :name n :text text})
+                (run w actor :note/remove {:owner owner :name n})))
+      :journal (let [[actor owner] args]
+                 (run w actor :journal/write {:owner owner :text "entry"}))
+      :doc (let [[actor path content] args]
+             (if content
+               (run w actor :doc/put {:path path :content content})
+               (run w actor :doc/remove {:path path})))
       :burst (let [[r n] args]
                (reduce (fn [w _]
                          (let [w (-> (run w "operator" :memo/send {:to r :subject "burst" :body "b"})
@@ -453,6 +497,29 @@
     ;; Memos go to the operator or a role that exists.
     (doseq [m memos]
       (when-not (or (= "operator" (:to m)) (core/role s (:to m))) (fail! [:memo-to-nobody m])))
+    ;; Nothing known is ever lost: facts, docs and journals only gain versions.
+    (doseq [[k path] [[:facts :versions] [:docs :versions]]
+            [id before-row] (get-in before [:state k])
+            :let [old (get before-row path)
+                  new (get-in s [k id path])]]
+      (when-not (= old (take (count old) new)) (fail! [:lost-version k id])))
+    (doseq [[owner entries] (:journals (:state before))]
+      (when-not (= entries (take (count entries) (get-in s [:journals owner])))
+        (fail! [:lost-journal owner])))
+    ;; Every version of a fact has its validity in order, and supersession
+    ;; links run both ways.
+    (doseq [{:keys [id versions]} (vals (:facts s))
+            {:keys [valid-from valid-to superseded-by]} versions]
+      (when (and valid-from valid-to (not (.isAfter ^Instant valid-to valid-from)))
+        (fail! [:validity-order id]))
+      (when (and superseded-by (not= id (:supersedes (core/fact s superseded-by))))
+        (fail! [:dangling-supersession id superseded-by])))
+    ;; A change in the world leaves every answer about times before it alone.
+    (doseq [e batch :when (= "fact/superseded" (:type e))
+            :let [change (Instant/parse (get-in e [:data :valid-from]))
+                  view (fn [state a] (map (juxt :id :topic :text) (core/facts state {:as-of a})))]
+            a as-of-samples :when (.isBefore ^Instant a change)]
+      (when (not= (view (:state before) a) (view s a)) (fail! [:change-rewrote-the-past (:seq e) a])))
     ;; seq is gapless and ids are seqs.
     (when (not= (:next-seq s) (inc (count (:events after)))) (fail! [:seq]))
     ;; A rejected command changed nothing.
@@ -474,4 +541,16 @@
                                    steps)]
       (and (empty? problems)
            (testing "replaying the log from JSON rebuilds exactly the same state"
-             (= (:state final) (core/replay (json-round-trip (:events final)))))))))
+             (= (:state final) (core/replay (json-round-trip (:events final)))))
+           (testing "asking what was known at T ignores everything recorded after T"
+             (every? (fn [e]
+                       (let [t (Instant/parse (:at e))
+                             then (core/replay (take-while #(not (.isAfter (Instant/parse (:at %)) t))
+                                                           (:events final)))]
+                         (and (= (core/docs (:state final) t) (core/docs then t))
+                              (every? #(= (core/facts (:state final) {:as-of % :known-at t})
+                                          (core/facts then {:as-of % :known-at t}))
+                                      as-of-samples)
+                              (= (core/facts (:state final) {:all true :known-at t})
+                                 (core/facts then {:all true :known-at t})))))
+                     (take-nth 7 (:events final))))))))
