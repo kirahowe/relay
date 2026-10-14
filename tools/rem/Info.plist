@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>relay.tools.rem</string>
+	<key>CFBundleName</key>
+	<string>rem</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>rem reads and updates your reminders on request from relay.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>rem reads and updates your reminders on request from relay.</string>
+</dict>
+</plist>
