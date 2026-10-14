@@ -164,6 +164,23 @@
     (is (= :retired (:status (core/routine (:state w) "clerk" "remind"))))
     (is (= 1 (count (memos-to w "clerk"))))))
 
+(deftest a-dead-routine-run-replaced-by-a-newer-one-is-not-requeued
+  ;; Found by the model: requeueing an old run of a routine that has fired
+  ;; again since gave the routine two open runs.
+  (let [w (-> (seed)
+              (run "clerk" :routine/write {:name "sweep" :schedule "every 10m" :instructions "i"})
+              (advance 600) (run "dispatcher" :tick {}))
+        old (:id (first (memos-to w "clerk")))
+        w (-> w (wake "clerk" {}) (advance 600) (wake "clerk" {}) (advance 600) (wake "clerk" {})
+              (run "dispatcher" :tick {}))
+        newer (:id (first (memos-to w "clerk")))
+        w (run w "operator" :memo/retry {:role "clerk"})]
+    (is (not= old newer))
+    (is (= [newer] (map :id (memos-to w "clerk"))))
+    (is (= newer (:superseded-by (core/memo (:state w) old))))
+    (is (empty? (core/dead-memos (:state w) "clerk")))
+    (is (every? #(not= :open (:status %)) (vals (:dead-letters (:state w)))))))
+
 (deftest a-routine-needs-a-schedule-relay-understands
   (is (= :invalid (:rejected (run (seed) "clerk" :routine/write {:name "x" :schedule "daily 25:00"
                                                                  :instructions "i"})))))
@@ -377,6 +394,9 @@
             :let [was (:status (core/memo (:state before) (:id m)))]
             :when (and was (not= was (:status m)))]
       (when-not (legal-transitions [was (:status m)]) (fail! [:transition (:id m) was (:status m)])))
+    ;; A memo once superseded stays dead.
+    (doseq [m memos :when (:superseded-by m)]
+      (when-not (= :dead (:status m)) (fail! [:superseded-revived (:id m)])))
     ;; An open dead letter's memo is dead.
     (doseq [l (vals (:dead-letters s)) :when (= :open (:status l))]
       (when-not (= :dead (:status (core/memo s (:memo l)))) (fail! [:open-letter-live-memo l])))
@@ -416,7 +436,7 @@
 (defn- json-round-trip [events]
   (mapv #(json/parse-string (json/generate-string %) true) events))
 
-(defspec the-rules-hold-under-any-sequence-of-commands 300
+(defspec the-rules-hold-under-any-sequence-of-commands 1000
   (prop/for-all [steps (gen/vector gen-step 1 80)]
     (let [start (-> (world)
                     (run "operator" :role/add {:id "hub" :config "c"})

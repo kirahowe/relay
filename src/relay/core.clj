@@ -69,9 +69,11 @@
        (sort-by :id)
        vec))
 
-(defn dead-memos [state to]
+(defn dead-memos
+  "Dead memos still waiting on someone to requeue them."
+  [state to]
   (->> (vals (:memos state))
-       (filter #(and (= to (:to %)) (= :dead (:status %))))
+       (filter #(and (= to (:to %)) (= :dead (:status %)) (not (:superseded-by %))))
        (sort-by :id)
        vec))
 
@@ -106,6 +108,12 @@
   (>= (count (recent-wakes state role-id config now)) (:runaway-wakes config)))
 
 (defn routine [state owner name] (get-in state [:routines owner name]))
+
+(defn routine-of-memo
+  "The routine a memo was a run of: memos carry the routine's name, and a
+  routine belongs to the memo's recipient."
+  [state owner routine-name]
+  (routine state owner routine-name))
 
 (defn active-routines [state owner]
   (->> (vals (get-in state [:routines owner]))
@@ -196,6 +204,18 @@
                   (into {} (map (fn [[k l]]
                                   [k (if (and (= id (:memo l)) (= :open (:status l)))
                                        (assoc l :status :requeued)
+                                       l)]))
+                        letters))))))
+
+(defmethod evolve* "memo/superseded" [state {:keys [data]}]
+  (let [id (:memo data)]
+    (-> state
+        (assoc-in [:memos id :superseded-by] (:by data))
+        (update :dead-letters
+                (fn [letters]
+                  (into {} (map (fn [[k l]]
+                                  [k (if (and (= id (:memo l)) (= :open (:status l)))
+                                       (assoc l :status :superseded)
                                        l)]))
                         letters))))))
 
@@ -446,7 +466,14 @@
                 (config/may-add? config actor))
     (reject! :forbidden (str actor " may not requeue dead letters.")))
   (active-role! state role)
-  (reduce (fn [tx m] (emit tx "memo/requeued" {:memo (:id m)}))
+  ;; A routine's run that has since been replaced by a newer run of the same
+  ;; routine is not brought back, or the routine would have two open runs.
+  ;; It is marked superseded instead, which closes its dead letter.
+  (reduce (fn [tx {:keys [id routine]}]
+            (let [latest (when routine (:last-memo (routine-of-memo state role routine)))]
+              (if (and routine latest (not= latest id))
+                (emit tx "memo/superseded" {:memo id :by latest})
+                (emit tx "memo/requeued" {:memo id}))))
           tx (dead-memos state role)))
 
 ;; routines
