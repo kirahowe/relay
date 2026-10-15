@@ -415,7 +415,9 @@ contaminated, for text you copied from somewhere you do not trust.")
             ;; Everything printed may hold text a role wrote, so nothing
             ;; that could drive the terminal is printed raw. relay tool's
             ;; output is a JSON envelope for the harness, not a terminal.
-            (if (= "tool" cmd)
+            (if (or (= "tool" cmd) (and (= "log" cmd) (:json opts)))
+              ;; JSON escaped by its encoder, not by visible, which would
+              ;; break it.
               result
               (cond-> result
                 (:out result) (update :out #(mapv text/visible %))

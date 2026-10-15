@@ -3,6 +3,7 @@
   form that cannot drive the terminal, hide what it says, or be followed
   with a tap."
   (:require [babashka.fs :as fs]
+            [cheshire.core :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [clojure.test.check.clojure-test :refer [defspec]]
@@ -120,3 +121,20 @@
           (is (not (str/includes? out "https://evil")) (str/join " " args))
           (is (not (str/includes? out "evil.example")) (str/join " " args))
           (is (not (str/includes? out "evil。com")) (str/join " " args)))))))
+
+
+(defspec the-json-log-always-parses-and-is-plain-ascii 25
+  (prop/for-all [t gen-text]
+    (with-data
+      (fn [data]
+        (let [sys (inbound/system data)
+              s (str "x" t)]
+          (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "clerk" :title s :instructions s}})
+          (inbound/submit! sys {:type :journal/write :actor "clerk" :labels ["contaminated"] :args {:text (str s " https://evil.example")}})
+          (let [lines (:out (cli/execute ["--data" data "log" "--json"]))]
+            (every? (fn [line]
+                      (or (and (map? (json/parse-string line))
+                               (every? #(< 31 % 127) (iterator-seq (.iterator (.codePoints ^String line))))
+                               (not (str/includes? line "https://evil")))
+                          false))
+                    lines)))))))

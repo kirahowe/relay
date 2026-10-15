@@ -103,9 +103,15 @@
   (for [e (if tail (take-last tail events) events)
         :let [tainted? (text/contaminated? (:labels e))]]
     (if json
-      ;; Still JSON: a contaminated event's strings are defanged in place.
-      (json/generate-string (cond-> e tainted? (update :data #(clojure.walk/postwalk
-                                                               (fn [x] (if (string? x) (text/defang x) x)) %))))
+      ;; Still JSON, and plain ASCII: every other code point is written as
+      ;; \uXXXX by the encoder, so nothing can drive the terminal and
+      ;; every line still parses. A contaminated event's strings are
+      ;; defanged in place.
+      ;; The encoder leaves DEL as it is, the one ASCII control it does.
+      (-> (json/generate-string (cond-> e tainted? (update :data #(clojure.walk/postwalk
+                                                                   (fn [x] (if (string? x) (text/defang x) x)) %)))
+                                {:escape-non-ascii true})
+          (str/replace "\u007f" "\\u007f"))
       (text/for-operator (:labels e)
                          (format "%5d %s %-22s %-12s %s" (:seq e) (:at e) (:type e) (:actor e)
                                  (let [s (pr-str (:data e))] (subs s 0 (min 120 (count s)))))))))
