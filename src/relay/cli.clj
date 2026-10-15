@@ -19,7 +19,7 @@
   "relay: a relay of agent roles, with an append-only log as the record.
 
 Every command needs the data directory, from --data <dir> or from the file
-~/.config/relay/config.edn, which holds a map such as {:data \"~/Sync/relay\"}.
+~/.config/relay/config.edn, which holds a map such as {:data \"~/relay-data\"}.
 
   relay init                          make the directory a relay data directory
   relay status                        roles, open work, harnesses, recent wakes
@@ -84,7 +84,7 @@ Every command needs the data directory, from --data <dir> or from the file
       (not (str/blank? (:data opts))) (:data opts)
       (and (string? configured) (not (str/blank? configured))) (expand-home configured)
       :else (fail! (str "Which data directory? Pass --data <dir>, or set :data in " file
-                        ", for example {:data \"~/Sync/relay\"}.")))))
+                        ", for example {:data \"~/relay-data\"}.")))))
 
 (defn- stdin-text []
   (if (System/console) "" (slurp *in*)))

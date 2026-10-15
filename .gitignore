@@ -3,3 +3,5 @@
 .lsp/
 .nrepl-port
 tools/rem/rem
+.jj/
+.clj-kondo/

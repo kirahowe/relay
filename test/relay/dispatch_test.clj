@@ -224,9 +224,9 @@
       (let [e (try (resolve {}) (catch clojure.lang.ExceptionInfo e e))]
         (is (str/includes? (ex-message e) "--data <dir>"))
         (is (str/includes? (ex-message e) file))))
-    (spit file (pr-str {:data "~/Sync/relay"}))
+    (spit file (pr-str {:data "~/relay-data"}))
     (testing "the config file, with ~ expanded"
-      (is (= (str home "/Sync/relay") (resolve {}))))
+      (is (= (str home "/relay-data") (resolve {}))))
     (testing "--data wins"
       (is (= "/elsewhere" (resolve {:data "/elsewhere"}))))
     (spit file (pr-str {:data "/abs/data"}))
