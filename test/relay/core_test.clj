@@ -47,7 +47,7 @@
 (defn- wake
   "Starts a wake of a role and ends it with this outcome, closing the memos
   in `closes` in between."
-  [w role-id {:keys [outcome closes dispatched resets-at] :or {outcome "ran"}}]
+  [w role-id {:keys [outcome closes dispatched resets-at cut-short] :or {outcome "ran"}}]
   (let [w (run w "dispatcher" :wake/start {:role role-id :dispatched dispatched})
         wake-id (some-> (core/running-wake (:state w) role-id) :id)]
     (if-not wake-id
@@ -55,11 +55,31 @@
       (as-> w w
         (reduce (fn [w m] (run w role-id :memo/close {:memo m :outcome "Done."})) w closes)
         (run w "dispatcher" :wake/end {:wake wake-id :outcome outcome :exit 0
+                                       :crashed (boolean cut-short) :cut-short cut-short
                                        :resets-at resets-at :said "the end"})))))
 
 (defn- notifications [w] (map :kind (sort-by :id (vals (:notifications (:state w))))))
 
 ;; --- examples
+
+(deftest a-wake-cut-short-at-its-deadline-is-kept-and-resumed
+  (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "s" :body "b"}))
+        id (last-memo-id w)
+        w (wake w "clerk" {:outcome "ran" :cut-short true :dispatched true})
+        cut (core/role (:state w) "clerk")
+        ended (last (sort-by :id (vals (:wakes (:state w)))))]
+    (is (true? (:cut-short ended)))
+    (is (= (:id ended) (:interrupted-wake cut)))
+    (testing "it still counts as having run"
+      (is (= 1 (:attempts (core/memo (:state w) id)))))
+    (testing "an ordinary run that finishes is not kept"
+      (let [w (wake (advance w 7200) "clerk" {:outcome "ran" :dispatched true})]
+        (is (nil? (:interrupted-wake (core/role (:state w) "clerk"))))))
+    (testing "a conversation cut short is not kept"
+      (let [w (-> w (run "operator" :wake/start {:role "clerk" :chat true}))
+            chat (core/running-wake (:state w) "clerk")
+            w (run w "dispatcher" :wake/end {:wake (:id chat) :outcome "ran" :cut-short true})]
+        (is (not= (:id chat) (:interrupted-wake (core/role (:state w) "clerk"))))))))
 
 (deftest a-memo-is-closed-only-by-its-recipient
   (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "File this" :body "Please."}))
@@ -336,7 +356,7 @@
     [6 (gen/tuple (gen/return :wake) (gen/elements role-pool) gen/boolean
                   (gen/frequency [[6 (gen/return "ran")] [1 (gen/return "limited")]
                                   [1 (gen/return "unreachable")] [1 (gen/return "needs-attention")]])
-                  (gen/vector gen/nat 0 3) gen/boolean)]
+                  (gen/vector gen/nat 0 3) gen/boolean gen/boolean)]
     [1 (gen/tuple (gen/return :start-only) (gen/elements role-pool))]
     [1 (gen/tuple (gen/return :chat) (gen/elements role-pool)
                   (gen/elements ["ran" "limited" "unreachable" "needs-attention"]))]
@@ -415,7 +435,7 @@
                              true (advance 61)
                              true (run "dispatcher" :tick {}))))
                        w (range n)))
-      :wake (let [[r dispatched outcome closes resets?] args
+      :wake (let [[r dispatched outcome closes resets? cut-short] args
                   w (run w "dispatcher" :wake/start {:role r :dispatched dispatched})
                   wake-row (core/running-wake (:state w) r)]
               (if-not wake-row
@@ -426,6 +446,7 @@
                           w closes)
                   (run w "dispatcher" :wake/end
                        {:wake (:id wake-row) :outcome outcome :exit 0 :said "said"
+                        :crashed cut-short :cut-short cut-short
                         :resets-at (when resets? (str (.plusSeconds ^Instant (:now w) 1800)))})))))))
 
 (def legal-transitions
@@ -447,6 +468,17 @@
     ;; A wake carries only its own role's memos.
     (doseq [{:keys [role memos]} wakes, m memos]
       (when (not= role (:to (core/memo s m))) (fail! [:foreign-memo role m])))
+    ;; The wake that ended last is kept to be resumed when the harness
+    ;; failed it or it was cut short at the deadline, unless it was a
+    ;; conversation or another wake started after it.
+    (let [ended (last (filter #(= "wake/ended" (:type %)) batch))
+          started-after (some #(= "wake/started" (:type %))
+                              (rest (drop-while #(not (identical? ended %)) batch)))
+          w (when ended (get-in s [:wakes (get-in ended [:data :wake])]))]
+      (when (and w (not started-after) (not (:chat w)))
+        (let [kept? (boolean (or (not= "ran" (:outcome w)) (:cut-short w)))
+              held (:interrupted-wake (core/role s (:role w)))]
+          (when-not (= kept? (= (:id w) held)) (fail! [:interrupted-wake (:id w) kept? held])))))
     ;; A routine has at most one open run.
     (doseq [[owner rs] (:routines s), [n _] rs]
       (when (> (count (filter #(and (= owner (:to %)) (= n (:routine %)) (= :unread (:status %))) memos)) 1)

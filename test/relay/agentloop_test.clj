@@ -40,6 +40,12 @@
   (testing "a cancel is the wake deadline"
     (is (= ["ran" true "Stopped at the wake deadline."]
            ((juxt :outcome :crashed :said) (classify (ended "canceled"))))))
+  (testing "only a stop at the deadline is cut short"
+    (is (true? (:cut-short (classify (ended "canceled")))))
+    (is (true? (:cut-short (classify nil :exit "timeout"))))
+    (doseq [o [(ended "completed") (ended "refused") (model-error "overloaded")
+               (model-error "invalid_request") nil]]
+      (is (false? (:cut-short (classify o :exit 0))) (pr-str o))))
   (testing "model errors, by kind"
     (is (= "unreachable" (:outcome (classify (model-error "overloaded" :status 529)))))
     (is (= "unreachable" (:outcome (classify (model-error "unreachable" :status 0)))))
@@ -255,3 +261,11 @@
           (memo! "x")
           (is (= "needs-attention" (:outcome (dispatch/wake! *sys* "clerk" {}))))
           (is (empty? @(:requests *mock*))))))))
+
+(deftest the-request-carries-a-per-call-tool-timeout
+  (let [req (fn [harness]
+              (agentloop/request-json {:harness harness :system-prompt "s" :prompt "p" :tools []
+                                       :env {} :session-dir "/tmp/s"}
+                                      "id" "/tmp/work"))]
+    (is (= 300 (:tool_timeout_seconds (req {}))))
+    (is (= 45 (:tool_timeout_seconds (req {:tool-timeout-seconds 45}))))))

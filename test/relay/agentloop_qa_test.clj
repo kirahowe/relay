@@ -397,10 +397,21 @@
             (is (= "ran" (:outcome first-wake)))
             (is (true? (:crashed wake)))
             (is (= "Stopped at the wake deadline." (:said wake)))
-            (is (= 1 (:attempts (memo id))))
+            (is (= 1 (:attempts (memo id))) "it counted as having run")
+            (is (true? (:cut-short wake)))
+            (is (= (:wake first-wake) (:interrupted-wake (core/role (state) "clerk"))))
             (reset! slow? false)
-            (let [second-wake (dispatch/wake! *sys* "clerk" {})]
+            (let [second-wake (dispatch/wake! *sys* "clerk" {})
+                  request-of #(json/parse-string
+                               (slurp (str *dir* "/data/runs/clerk/" (:wake %) "/request.json")) true)
+                  resumed-req (:body (second @(:requests *mock*)))]
               (is (= "ran" (:outcome second-wake)))
+              (testing "the next wake resumes the same session"
+                (is (= (:session wake) (get-in (state) [:wakes (:wake second-wake) :session])))
+                (is (= (:session (request-of first-wake)) (:session (request-of second-wake))))
+                (is (str/includes? (json/generate-string (:messages resumed-req)) "Slow one"))
+                (is (str/includes? (json/generate-string (:messages resumed-req)) "cut short"))
+                (is (nil? (:interrupted-wake (core/role (state) "clerk")))))
               (is (= :read (:status (memo id))))
               (is (= 1 (count (filter #(and (= "memo/closed" (:type %)) (= id (get-in % [:data :memo])))
                                       (events))))

@@ -70,7 +70,9 @@ contract HarnessAdapter {
 
     @invariant StopsAtTheDeadline
         -- A run that outlasts the wake timeout is stopped and reported
-        -- as ran and crashed, not as a harness failure.
+        -- as ran and crashed, not as a harness failure. The report
+        -- says it was cut short, so the next wake can pick up where
+        -- it left off.
 
     @invariant AFailingAdapterStillEndsTheWake
         -- If the adapter itself throws, the wake is ended as ran and
@@ -383,6 +385,9 @@ entity Wake {
     -- True when the run errored or was stopped at the deadline. Recorded
     -- for whoever reads the history; it decides nothing.
     crashed: Boolean when status = ended
+    -- True when the harness stopped the run at the wake deadline. Such a
+    -- wake still counts as having run, and is kept to be resumed.
+    cut_short: Boolean when status = ended
     said: String?
     -- When a rate limit lifts, if the harness said.
     resets_at: Timestamp?
@@ -1105,7 +1110,7 @@ rule RunWake {
 }
 
 rule EndWake {
-    when: WakeReported(wake, outcome, exit?, crashed, session?, said?, transcript?, resets_at?)
+    when: WakeReported(wake, outcome, exit?, crashed, cut_short, session?, said?, transcript?, resets_at?)
 
     requires: wake.status = running
 
@@ -1114,6 +1119,7 @@ rule EndWake {
         wake.ended_at = now
         wake.outcome = outcome
         wake.crashed = crashed
+        wake.cut_short = cut_short
         wake.said = said
         wake.resets_at = resets_at
 
@@ -1126,13 +1132,15 @@ rule EndWake {
 rule InterruptedWakeIsKept {
     when: wake: Wake.status transitions_to ended
 
-    requires: wake.outcome != ran
+    requires: wake.outcome != ran or wake.cut_short
     requires: not wake.chat
 
     ensures: wake.role.interrupted_wake = wake
 
     @guidance
         -- The next ordinary wake of the role carries on from this one.
+        -- A wake cut short at its deadline still ran, so its memos are
+        -- settled as for any wake that ran.
         -- A conversation cut short is not resumed.
 }
 
@@ -1328,6 +1336,7 @@ rule EndLostWakes {
             wake: wake,
             outcome: ran,
             crashed: true,
+            cut_short: false,
             said: "The process running this wake disappeared."
         )
 
@@ -1946,7 +1955,7 @@ surface Clock {
 
 surface HarnessBoundary {
     provides:
-        WakeReported(wake, outcome, exit?, crashed, session?, said?, transcript?, resets_at?)
+        WakeReported(wake, outcome, exit?, crashed, cut_short, session?, said?, transcript?, resets_at?)
         DispatchedWakeSpawned(role, pid, pid_start)
 
     contracts:

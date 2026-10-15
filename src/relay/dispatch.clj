@@ -103,7 +103,7 @@
       {:outcome "needs-attention" :exit nil :crashed false
        :said (str "relay.edn has no harness called " (:harness-name request) ".")})
     (catch Exception e
-      {:outcome "ran" :exit nil :crashed true
+      {:outcome "ran" :exit nil :crashed true :cut-short false
        :said (str "The harness adapter failed: " (or (ex-message e) (class e)))})))
 
 (defn wake!
@@ -129,7 +129,7 @@
             state (inbound/current-state sys)
             report (run-harness (wake-request sys state (get-in state [:wakes wake-id])))]
         (inbound/submit! sys {:type :wake/end :actor core/dispatcher
-                              :args (-> (select-keys report [:outcome :exit :crashed :session
+                              :args (-> (select-keys report [:outcome :exit :crashed :cut-short :session
                                                              :said :resets-at])
                                         (update :exit #(if (number? %) % (some-> % str)))
                                         (update :resets-at #(some-> % str))

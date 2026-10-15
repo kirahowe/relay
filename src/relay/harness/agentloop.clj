@@ -15,7 +15,14 @@
                  :retry {:retries 2 :backoff-seconds 2 :max-wait-seconds 30}
                  ;; stops a run that loops; a run that hits one ends as
                  ;; having run, with its memos still open
-                 :limits {:max-turns 200 :max-tool-calls 400 :max-tokens 2000000}}}
+                 :limits {:max-turns 200 :max-tool-calls 400 :max-tokens 2000000}
+                 ;; stops one tool call that hangs, so it cannot eat the
+                 ;; whole wake; the default is 300
+                 :tool-timeout-seconds 300}}
+
+  A run stopped at the wake deadline, by agentloop (reason \"canceled\") or
+  by relay killing it (exit \"timeout\"), is reported as :cut-short, so the
+  next wake resumes its session.
 
   The binary is found in this order: :bin, then `agentloop` on PATH, then
   `../agentloop/bin/agentloop` beside this repository (what `make -C
@@ -40,6 +47,7 @@
 (def default-model "claude-opus-5-5")
 (def default-effort "medium")
 (def default-provider "anthropic")
+(def default-tool-timeout-seconds 300)
 
 (defn- repo-root []
   (some-> (System/getProperty "relay.bin") fs/real-path fs/parent fs/parent str))
@@ -100,7 +108,8 @@
         said (harness/tail (or (said-from text) (said-from (:message error)) "") 8)
         report (fn [result & {:as more}]
                  (merge {:outcome result :exit exit :session session :said said
-                         :crashed (= "timeout" exit)}
+                         :crashed (= "timeout" exit)
+                         :cut-short (or (= "timeout" exit) (= "canceled" reason))}
                         more))]
     (cond
       (= "timeout" exit) (report "ran" :said "Stopped at the wake deadline.")
@@ -133,7 +142,7 @@
 (defn request-json
   "The request agentloop reads. `prompt` is nil for an interactive session."
   [{:keys [harness model system-prompt prompt tools env session-dir timeout-ms]} id work]
-  (let [{:keys [provider effort base-url retry limits]} harness
+  (let [{:keys [provider effort base-url retry limits tool-timeout-seconds]} harness
         limit-keys {:max-turns :max_turns :max-tool-calls :max_tool_calls :max-tokens :max_tokens}
         retry-keys {:retries :retries :backoff-seconds :backoff_seconds
                     :max-wait-seconds :max_wait_seconds}]
@@ -146,7 +155,8 @@
              :tools (mapv #(select-keys % [:name :description :parameters]) tools)
              :tool_command [(or (get env "RELAY_BIN") (System/getProperty "relay.bin") "relay") "tool"]
              :tool_env (harness/base-env env)
-             :tool_dir (str work)}
+             :tool_dir (str work)
+             :tool_timeout_seconds (or tool-timeout-seconds default-tool-timeout-seconds)}
       base-url (assoc :base_url base-url)
       prompt (assoc :prompt prompt)
       timeout-ms (assoc :timeout_seconds (max 1 (- (quot timeout-ms 1000) 10)))

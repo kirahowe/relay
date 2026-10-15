@@ -9,6 +9,8 @@
               :effort "medium"          ; low, medium, high, xhigh or max
               ;; :bin "/path/to/agentloop"   ; default: PATH, then ../agentloop/bin
               ;; :retry {:retries 2 :backoff-seconds 2 :max-wait-seconds 30}
+              ;; Stops one hung tool call from eating the whole wake.
+              ;; :tool-timeout-seconds 300
               ;; The Anthropic API key, from the login keychain. Store it with
               ;;   security add-generic-password -a "$USER" -s relay-anthropic -w
               :api-key-command ["security" "find-generic-password" "-s" "relay-anthropic" "-w"]}}

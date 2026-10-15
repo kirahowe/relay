@@ -24,6 +24,9 @@
                  harness itself could not run. Those count against no memo.
     :exit        the exit code, or \"timeout\"
     :crashed     true when the run errored or was stopped at the deadline
+    :cut-short   true when the harness stopped the run at the wake deadline.
+                 The wake is kept, and the next ordinary wake resumes its
+                 session. It still counts as having run.
     :session     the session id, so an interrupted wake can be resumed
     :said        the last thing the harness said, for a person to read
     :resets-at   when a rate limit lifts, if the harness said
