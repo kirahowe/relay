@@ -111,7 +111,7 @@
     (is (= "Filed it." (:outcome (core/memo (state) id))))
     (is (= "operator" (:closed-by (core/memo (state) id))) "the stand-in closes it as the operator")
     (testing "the harness was given the prompt, and its transcript is kept"
-      (is (str/includes? (slurp (str *dir* "/prompt")) "Memo 3: File this"))
+      (is (str/includes? (slurp (str *dir* "/prompt")) "Memo 4: File this"))
       (is (fs/exists? (get-in (state) [:wakes (:wake result) :transcript]))))))
 
 (deftest the-script-harness-gets-one-argument-a-json-file-and-a-clean-environment
@@ -402,7 +402,7 @@
       (let [{:keys [request]} @seen]
         (is (not (contains? request :prompt)))
         (is (str/includes? (:system-prompt request) "The operator has opened a conversation with you."))
-        (is (= (str (fs/path *dir* "data" "runs" "clerk" "conversations")) (:session-dir request)))
+        (is (= (str (fs/path *dir* "data" "runs" "clerk" "conversations-labelled")) (:session-dir request)))
         (is (= [relay-bin "tool" "--data" (str (fs/absolutize (str *dir* "/data"))) "--role" "clerk"]
                (:tool-command request)))))
     (testing "building the request wrote nothing: the harness makes its own directories"

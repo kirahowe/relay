@@ -336,7 +336,7 @@
   (let [h (.orElse (java.lang.ProcessHandle/of pid) nil)]
     (boolean (and h (.isAlive h)))))
 
-(defn- session-file [id] (str (data) "/runs/clerk/conversations/" id ".jsonl"))
+(defn- session-file [id] (str (data) "/runs/clerk/conversations-labelled/" id ".jsonl"))
 
 (defn- every-line-json? [c]
   (every? #(and (map? %) (= "2.0" (get % "jsonrpc"))) @(:messages c)))

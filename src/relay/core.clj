@@ -454,15 +454,46 @@
                        " (event " (:seq event) "). Upgrade relay before reading this log.")
                   {:event event})))
 
-(defn evolve [state {:keys [seq at labels] :as event}]
+(def legacy-labels
+  "What anything a role or the dispatcher wrote before relay kept labels
+  is taken to have seen: no record says otherwise, so everything."
+  [contaminated-label private-label])
+
+(defn- with-legacy-labels
+  "An event written before the log's labels/enabled marker, by anyone but
+  the operator, carries legacy-labels: relay did not record what it had
+  seen. The operator can trust what they have read."
+  [{:keys [legacy-before]} {:keys [seq actor] :as event}]
+  (if (and legacy-before (< seq legacy-before) (not= operator actor))
+    (update event :labels union legacy-labels)
+    event))
+
+(defn evolve [state {:keys [seq at] :as event}]
   (when-not (= seq (:next-seq state))
     (throw (ex-info (str "Event " seq " is out of order; expected " (:next-seq state) ".")
                     {:event event})))
+  (let [{:keys [labels] :as event} (with-legacy-labels state event)]
   (-> (evolve* state event)
       (update :seen-labels union labels)
-      (assoc :next-seq (inc seq) :last-at (inst at))))
+      (assoc :next-seq (inc seq) :last-at (inst at)))))
 
-(defn replay [events] (reduce evolve empty-state events))
+(defmethod evolve* "labels/enabled" [state {:keys [seq]}]
+  (update state :labels-enabled-at #(or % seq)))
+
+(defn replay
+  "The state the events fold to. The events before the log's first
+  labels/enabled marker, if it has one, were written before relay kept
+  labels (with-legacy-labels)."
+  [events]
+  (let [marker (some #(when (= "labels/enabled" (:type %)) (:seq %)) events)]
+    (reduce evolve (cond-> empty-state marker (assoc :legacy-before marker)) events)))
+
+(defn needs-labels-marker?
+  "Whether a log has no labels/enabled marker yet. This relay writes one
+  into every log it opens: first thing in a new log, and after the old
+  events in a log from before relay kept labels."
+  [state]
+  (nil? (:labels-enabled-at state)))
 
 (defmethod evolve* "role/added" [state {:keys [seq at data labels]}]
   (let [{:keys [id title instructions reports-to harness model]} data]
@@ -1019,11 +1050,15 @@
     (when (and chat (not= operator actor))
       (reject! :forbidden "Only the operator can open a conversation."))
     (let [memos (cond chat [] dispatched (waiting-memos state config role-id now) :else (deliverable-memos state config role-id))
+          ;; A session from before relay kept labels is never carried on:
+          ;; the policy could not know what it had seen.
+          interrupted (let [w (:interrupted-wake (role state role-id))]
+                        (when-not (and w (:labels-enabled-at state) (< w (:labels-enabled-at state))) w))
           resolves (when-not chat (mapv :id (pending-resolutions state role-id)))]
       (if (and (empty? memos) (blank? note) (not chat) (empty? resolves))
         tx
         (emit tx "wake/started" (cond-> {:role role-id :memos (mapv :id memos) :note note
-                                         :resumes (when-not chat (:interrupted-wake (role state role-id)))
+                                         :resumes (when-not chat interrupted)
                                          :harness harness :pid pid :pid-start pid-start}
                                   chat (assoc :chat true)
                                   (seq resolves) (assoc :resolves resolves)))))))
@@ -1261,6 +1296,14 @@
                      (when (and permission refused) "and relay refused it.")
                      (when (and permission (not refused)) "and relay could not tell which, so it went unanswered."))
                 :role role :labels (id-labels state role)))))
+
+(defmethod decide* :labels/enable [{:keys [state] :as tx} _]
+  ;; Marks where labels begin, the first time this relay opens a log
+  ;; written before it kept them.
+  (dispatcher-only! tx)
+  (if (needs-labels-marker? state)
+    (emit tx "labels/enabled" {})
+    tx))
 
 ;; holds
 

@@ -282,6 +282,8 @@ entity Event {
     session_labels: Set<Label>
     -- The labels of whatever text it copies or quotes.
     copied_labels: Set<Label>
+    -- Written before the log's labels/enabled marker.
+    before_labels: Boolean
 }
 
 entity Caller {
@@ -2186,6 +2188,16 @@ invariant TimeNeverDecreases {
     for a in Events:
         for b in Events:
             b.seq = a.seq + 1 implies b.at >= a.at
+}
+
+invariant WhatCameBeforeLabelsSawEverything {
+    -- relay writes a labels/enabled marker into every log it opens: first
+    -- thing in a new log, after the old events in one from before relay
+    -- kept labels. Anything written before the marker by anyone but the
+    -- operator is read as private and contaminated, since nothing says
+    -- what it had seen, and no session from before it is carried on.
+    for event in Events where before_labels and not actor.is_operator:
+        includes_all(event.labels, all_labels())   -- black box: private and contaminated
 }
 
 invariant ARoleCallCarriesItsSessionsLabels {

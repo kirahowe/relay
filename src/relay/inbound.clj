@@ -14,14 +14,26 @@
             [relay.notify :as notify])
   (:import (java.time Instant)))
 
+(declare submit-quietly!)
+
+(defn- mark-labels!
+  "Marks a log written before relay kept labels, once, so that everything
+  in it before now is treated as having seen everything."
+  [sys]
+  (when (and (log/initialized? (:data-dir sys))
+             (core/needs-labels-marker? (core/replay (log/read-events (:data-dir sys)))))
+    (submit-quietly! sys {:type :labels/enable :actor core/dispatcher :args {}})))
+
 (defn system
-  "A system for a data directory, with its config and the real clock."
+  "A system for a data directory, with its config and the real clock. A
+  log from before relay kept labels is marked the first time it is opened."
   ([data-dir] (system data-dir {}))
   ([data-dir overrides]
-   (merge {:data-dir data-dir
-           :config (config/load-config data-dir)
-           :clock #(Instant/now)}
-          overrides)))
+   (doto (merge {:data-dir data-dir
+                 :config (config/load-config data-dir)
+                 :clock #(Instant/now)}
+                overrides)
+     (mark-labels!))))
 
 (defn current-state [{:keys [data-dir]}]
   (core/replay (log/read-events data-dir)))

@@ -186,7 +186,7 @@
             (is (= "sk-test-key" (get-in (first @(:requests *mock*)) [:headers "x-api-key"]))))
           (testing "the model saw the tool results"
             (is (= 3 (count requests)))
-            (is (= ["Closed memo 2." "Closed memo 3."]
+            (is (= ["Closed memo 3." "Closed memo 4."]
                    (sort (map :text (mock/last-tool-results (last requests)))))))
           (testing "the transcript is kept with the wake"
             (is (fs/exists? (get-in (state) [:wakes (:wake result) :transcript])))))))))

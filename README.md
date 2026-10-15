@@ -135,6 +135,13 @@ change is withheld. `relay fact revert <fact> <version>` and `relay doc
 revert <path> <version>` put an earlier version back, and `relay fact
 add` and `relay fact correct` let the operator write facts directly.
 
+A log written before relay kept labels is marked the first time this
+relay opens it. Everything roles and the dispatcher wrote before the
+mark counts as private and contaminated, since nothing says what it had
+seen; the operator's own writing does not. Trust what you have read to
+clear it. No wake or conversation session from before the mark is
+carried on: the next wake starts afresh.
+
 `relay trust <kind> <ref>` clears `contaminated`
 from something the operator has read and vouches for. It never clears
 `private`. `--untrusted` on `relay memo`, `put`, `add`, `update` and

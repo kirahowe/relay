@@ -243,7 +243,9 @@
   (-> (wake-request sys state wake inputs)
       (update :system-prompt str "\n\n" conversation-note "\n")
       (dissoc :prompt)
-      (assoc :session-dir (str (fs/path data-dir "runs" (:role wake) "conversations")))))
+      ;; A directory of its own, kept apart from any conversation from
+      ;; before relay kept labels, so a client cannot load one of those.
+      (assoc :session-dir (str (fs/path data-dir "runs" (:role wake) "conversations-labelled")))))
 
 (defn conversation-end-args
   "The :wake/end args for a conversation, from what the code that ran it

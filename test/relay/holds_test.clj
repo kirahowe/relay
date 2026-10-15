@@ -369,3 +369,48 @@
           (binding [cli/*tty* (tty (atom "") typed-code)]
             (relay data "doc" "revert" "a.md" (str v)))
           (is (= "Clean." (:content (core/doc-version (state) "a.md" {})))))))))
+
+(deftest a-log-from-before-labels-counts-everything-a-role-wrote-as-contaminated
+  (with-data
+    (fn [data]
+      ;; A legacy log: events written with no labels at all.
+      (let [w (-> {:state core/empty-state :now t0}
+                  (run "operator" :role/add {:id "clerk" :title "Clerk" :instructions "x"})
+                  (run "operator" :role/add {:id "hub" :title "Hub" :instructions "x"}))
+            events (atom [])
+            step (fn [w actor type args]
+                   (let [[s es] (core/run-command (:state w) {:type type :actor actor :args args} {:now t0 :config cfg})]
+                     (swap! events into es)
+                     (assoc w :state s)))
+            w (reduce (fn [w [a t args]] (step w a t args))
+                      {:state core/empty-state}
+                      [["operator" :role/add {:id "clerk" :title "Clerk" :instructions "x"}]
+                       ["clerk" :doc/put {:path "web.md" :content "From the web."}]
+                       ["operator" :doc/put {:path "mine.md" :content "Mine."}]
+                       ["clerk" :fact/add {:text "A fact."}]
+                       ["operator" :wake/start {:role "clerk" :note "Go."}]])
+            wake (core/running-wake (:state w) "clerk")
+            w (step w "dispatcher" :wake/end {:wake (:id wake) :outcome "limited" :session "old-session"})]
+        (log/transact! data (constantly t0) (fn [_] (mapv #(-> % (dissoc :seq :at) (assoc :labels [])) @events)))
+        (is (every? #(= [] (:labels %)) (log/read-events data)))
+        (let [sys (inbound/system data)
+              state (inbound/current-state sys)
+              marker (:labels-enabled-at state)]
+          (is (= (inc (count @events)) marker) "the first open marks where labels begin")
+          (is (= ["contaminated" "private"] (:labels (core/doc-version state "web.md" {})))
+              "a role's text from before is taken to have seen everything")
+          (is (= [] (:labels (core/doc-version state "mine.md" {}))) "the operator's is not")
+          (is (= ["contaminated" "private"] (:labels (core/fact-as-known (first (vals (:facts state))) nil))))
+          (testing "a second open adds nothing"
+            (inbound/system data)
+            (is (= marker (:labels-enabled-at (inbound/current-state sys))))
+            (is (= 1 (count (filter #(= "labels/enabled" (:type %)) (log/read-events data))))))
+          (testing "the session from before is not carried on"
+            (is (some? (:interrupted-wake (core/role state "clerk"))))
+            (inbound/submit! sys {:type :wake/start :actor "operator" :args {:role "clerk" :note "Again."}})
+            (is (nil? (:resumes (core/running-wake (inbound/current-state sys) "clerk")))))
+          (testing "the operator can trust what they have read"
+            (let [v (core/trusted-version (inbound/current-state sys) "doc" "web.md")]
+              (inbound/submit! sys {:type :label/trust :actor "operator"
+                                    :args {:kind "doc" :ref "web.md" :version (:version v) :sha256 (core/sha256 (:text v))}})
+              (is (= ["private"] (:labels (core/doc-version (inbound/current-state sys) "web.md" {})))))))))))
