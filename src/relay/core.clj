@@ -588,10 +588,10 @@
 (defmethod evolve* "harness/recovered" [state {:keys [data]}]
   (assoc-in state [:harnesses (:harness data)] {:condition "available" :failed-tries 0}))
 
-(defmethod evolve* "notification/created" [state {:keys [seq at data]}]
+(defmethod evolve* "notification/created" [state {:keys [seq at data labels]}]
   (let [{:keys [kind harness role]} data]
     (cond-> (assoc-in state [:notifications seq] (assoc data :id seq :created-at (inst at)
-                                                        :delivery :pending))
+                                                        :delivery :pending :labels (union labels)))
       (#{"harness-needs-attention" "harness-unreachable"} kind)
       (assoc-in [:harnesses harness :operator-told] true)
       (= "runaway-guard-tripped" kind)

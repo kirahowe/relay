@@ -13,6 +13,7 @@
             [relay.log :as log]
             [relay.render :as render]
             [relay.setup :as setup]
+            [relay.text :as text]
             [relay.tools :as tools]))
 
 (def usage
@@ -182,20 +183,6 @@ contaminated, for text you copied from somewhere you do not trust.")
   (let [rng (java.security.SecureRandom.)]
     (apply str (repeatedly 4 #(nth code-chars (.nextInt rng (count code-chars)))))))
 
-(defn visible
-  "Text with control and format characters (escape sequences, bidi
-  overrides) shown as \\uXXXX, so what a role wrote cannot rewrite the
-  terminal while the operator reads it."
-  [s]
-  (apply str (map (fn [c]
-                    (let [t (Character/getType (int c))]
-                      (if (and (not (#{\newline \tab} c))
-                               (or (= t Character/CONTROL) (= t Character/FORMAT)
-                                   (= t Character/SURROGATE) (= t Character/PRIVATE_USE)))
-                        (format "\\u%04x" (int c))
-                        (str c))))
-                  (str s))))
-
 (defn- confirm!
   "Shows `lines` on the terminal and asks for a fresh code to be typed back.
   Throws, changing nothing, when there is no terminal or the code is wrong."
@@ -204,7 +191,7 @@ contaminated, for text you copied from somewhere you do not trust.")
                                (catch Exception _
                                  (fail! (str "relay " verb " asks you to confirm on a terminal, and there is none."))))
         code (confirmation-code)]
-    (say (str (str/join "\n" (map visible lines)) "\n\nType " code " to " verb ": "))
+    (say (str (str/join "\n" (map text/visible lines)) "\n\nType " code " to " verb ": "))
     (when-not (= code (some-> (ask) str/trim str/upper-case))
       (fail! "That is not the code. Nothing was changed."))))
 
@@ -339,11 +326,19 @@ contaminated, for text you copied from somewhere you do not trust.")
       (result 0 usage)
       (do (when (and (= "tool" cmd) (or (str/blank? (:role opts)) (str/blank? (:data opts))))
             (fail! "usage: relay tool --data <dir> --role <role> <tool name>"))
-          (let [dir (data-dir opts)]
-            (if (= "init" cmd)
-              (init! dir)
-              (binding [*untrusted* (if (:untrusted opts) [core/contaminated-label] [])]
-                (command (inbound/system dir) dir cmd more opts))))))))
+          (let [dir (data-dir opts)
+                result (if (= "init" cmd)
+                         (init! dir)
+                         (binding [*untrusted* (if (:untrusted opts) [core/contaminated-label] [])]
+                           (command (inbound/system dir) dir cmd more opts)))]
+            ;; Everything printed may hold text a role wrote, so nothing
+            ;; that could drive the terminal is printed raw. relay tool's
+            ;; output is a JSON envelope for the harness, not a terminal.
+            (if (= "tool" cmd)
+              result
+              (cond-> result
+                (:out result) (update :out #(mapv text/visible %))
+                (:err result) (update :err #(mapv text/visible %)))))))))
 
 (defn run
   "Runs one command line, prints what it says, and returns the exit code."
@@ -356,6 +351,6 @@ contaminated, for text you copied from somewhere you do not trust.")
 (defn -main [& args]
   (let [code (try (run args)
                   (catch clojure.lang.ExceptionInfo e
-                    (binding [*out* *err*] (println (ex-message e)))
+                    (binding [*out* *err*] (println (text/visible (ex-message e))))
                     (if (or (core/rejection e) (:relay/usage (ex-data e))) 1 2)))]
     (System/exit code)))

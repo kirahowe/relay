@@ -54,8 +54,8 @@
 (defn deliver!
   "Pushes one notification and records how it went. A failed push is
   recorded and otherwise dropped: the thing it announced is in the log."
-  [{:keys [config] :as sys} {:keys [seq data]}]
-  (let [result (try (notify/push! (:notify config) data)
+  [{:keys [config] :as sys} {:keys [seq data labels]}]
+  (let [result (try (notify/push! (:notify config) (assoc data :labels (or labels (:labels data))))
                     {:ok true}
                     (catch Exception e {:error (or (ex-message e) (str (class e)))}))]
     (try

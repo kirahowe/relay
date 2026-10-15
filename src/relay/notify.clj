@@ -12,7 +12,8 @@
   (:require [babashka.http-client :as http]
             [babashka.process :as p]
             [cheshire.core :as json]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [relay.text :as text]))
 
 (def ntfy-message-limit
   ;; ntfy rejects messages over 4096 bytes; the whole text is in the log.
@@ -40,7 +41,11 @@
 
 (defn push!
   "Sends one notification ({:title :body}). Throws when it could not be sent."
-  [{:keys [kind url topic command] :as settings} {:keys [title body]}]
+  [{:keys [kind url topic command] :as settings} {:keys [labels] :as notification}]
+  ;; The operator may tap what arrives, so text from a contaminated source
+  ;; is marked and its URLs broken, and nothing in it can hide itself.
+  (let [title (text/for-operator labels (:title notification))
+        body (text/for-operator labels (:body notification))]
   (case kind
     ;; Published as JSON so that a non-ASCII title is not sent in a header.
     :ntfy (let [tok (token settings)
@@ -63,4 +68,4 @@
                     (format "display notification %s with title %s"
                             (json/generate-string (clip body 240))
                             (json/generate-string (str title))))
-    :none nil))
+    :none nil)))

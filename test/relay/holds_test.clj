@@ -176,7 +176,7 @@
             (is (str/includes? @shown "post"))
             (is (not (str/includes? @shown "\u001b")) "escape sequences are shown, not sent")
             (is (not (str/includes? @shown "‮")))
-            (is (str/includes? (str/lower-case @shown) "\\u001b"))
+            (is (str/includes? (str/lower-case @shown) "u001b"))
             (is (= :open (status)))))
         (testing "the code typed back on the terminal approves it"
           (let [shown (atom "")]

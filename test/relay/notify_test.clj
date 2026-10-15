@@ -50,3 +50,15 @@
     (is (str/includes? (problem (assoc ntfy :token-command "cat /x")) ":token-command"))
     (is (str/includes? (problem (assoc ntfy :token-file "")) ":token-file"))
     (is (str/includes? (problem (assoc ntfy :token-file "/x" :token-command ["cat"])) "not both"))))
+
+(deftest a-contaminated-notification-is-marked-and-cannot-be-followed
+  (with-ntfy
+    (fn [url seen]
+      (notify/push! {:kind :ntfy :url url :topic "t"}
+                    {:title "Open https://evil.example" :body "Go to www.evil.example/x ‮now"
+                     :labels ["contaminated"]})
+      (notify/push! {:kind :ntfy :url url :topic "t"} {:title "Fine" :body "https://ok.example" :labels []})
+      (let [[bad ok] (map :body @seen)]
+        (is (= "[contaminated] Open hxxps://evil[.]example" (:title bad)))
+        (is (= "[contaminated] Go to www[.]evil[.]example/x \\u{202e}now" (:message bad)))
+        (is (= "https://ok.example" (:message ok)))))))

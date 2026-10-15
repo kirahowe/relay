@@ -3,7 +3,8 @@
   show and returns lines of text, which relay.cli prints."
   (:require [cheshire.core :as json]
             [clojure.string :as str]
-            [relay.core :as core])
+            [relay.core :as core]
+            [relay.text :as text])
   (:import (java.time Instant ZoneId)
            (java.time.format DateTimeFormatter)))
 
@@ -13,12 +14,13 @@
   (when at (.format (.atZone at ^ZoneId zone) (DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm"))))
 
 (defn memo
-  "One memo, as the operator's inbox shows it."
-  [zone {:keys [id from subject body sent-at]}]
-  [(str "\n[" id "] " subject)
+  "One memo, as the operator's inbox shows it. One from a contaminated
+  source is marked and its URLs broken."
+  [zone {:keys [id from subject body sent-at labels]}]
+  [(str "\n[" id "] " (text/for-operator labels subject))
    (str "    from " from ", " (local sent-at zone))
    ""
-   (str/replace (str body) #"(?m)^" "    ")])
+   (str/replace (text/for-operator labels (str body)) #"(?m)^" "    ")])
 
 (defn inbox [zone memos]
   (if (empty? memos)
