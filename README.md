@@ -16,7 +16,7 @@ data is wherever `--data` or the config file points.
 A role is an id, a title and its own standing instructions. Between
 wakes nothing runs. `relay tick`, run by launchd once a minute, fires any
 routine that has come due, then wakes every role with an open memo, each in
-its own process. A wake runs the role's harness ([agentloop](../agentloop) on the Anthropic API)
+its own process. A wake runs the role's harness ([agentloop](https://github.com/kirahowe/agentloop) on the Anthropic API)
 with the shared instructions in `resources/AGENTS.md`, the role's own
 instructions, what it has been granted and its notes as the system prompt, and the memos it was woken for as the
 prompt.
@@ -75,9 +75,10 @@ every role's system prompt.
 relay needs [babashka](https://babashka.org) on macOS, and agentloop, which
 is written in Go.
 
-1. Build agentloop: `make -C ../agentloop build`. relay finds the binary
-   at `../agentloop/bin/agentloop`. To keep it elsewhere, put `agentloop`
-   on your PATH or set `:bin` in the harness settings.
+1. Clone [agentloop](https://github.com/kirahowe/agentloop) next to this
+   repository and build it: `make -C ../agentloop build`. relay finds the
+   binary at `../agentloop/bin/agentloop`. To keep it elsewhere, put
+   `agentloop` on your PATH or set `:bin` in the harness settings.
 2. Choose a data directory and initialize it:
 
    ```sh
@@ -164,3 +165,7 @@ event into the state. `decide` turns a command into events or refuses it.
 Every write goes through `relay.inbound`, which decides and appends under
 the log's lock. The model test in `test/relay/core_test.clj` drives random
 sequences of every command and checks the rules after each step.
+
+## License
+
+MIT
