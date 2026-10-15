@@ -279,7 +279,7 @@
                                           (wake-inputs sys))]
         (when-not (:harness request)
           (throw (ex-info (str "relay.edn has no harness called " (:harness-name request) ".") {})))
-        (vreset! report (f request)))
+        (vreset! report (f (assoc request :wake-id wake-id))))
       (catch Exception e
         (vreset! report {:crashed true :said (or (ex-message e) (str (class e)))})
         (throw e))
@@ -332,25 +332,70 @@
   (when (and (instance? java.io.PrintStream out) (.checkError ^java.io.PrintStream out))
     (throw (java.io.IOException. "the output stream failed"))))
 
+(def line-limit
+  "How long a line relay will hold back to read whole before passing it
+  on unread. Far longer than any ACP message relay looks at: a permission
+  request carries one tool call's input."
+  (* 8 1024 1024))
+
 (defn- pump!
-  "Copies from `in` to `out` chunk by chunk, flushing each, and passes each
-  complete line to (tap line). Once a write fails, calls (on-write-failed)
-  and keeps reading, so the writer on the far side of `in` is never
-  blocked, but writes nothing more. Returns at the end of `in`, after
-  tapping any last unfinished line."
-  [^java.io.InputStream in out tap on-write-failed]
-  (let [buf (byte-array 65536)]
-    (loop [rest acp/no-rest writing? true]
+  "Copies from `in` to `out`, flushing each write, and passes each complete
+  line to (tap line). Once a write fails, calls (on-write-failed) and keeps
+  reading, so the writer on the far side of `in` is never blocked, but
+  writes nothing more. Returns at the end of `in`, after tapping any last
+  unfinished line.
+
+  Without `screen`, bytes are copied chunk by chunk as they come. With it,
+  they are copied line by line, and (screen line) decides each: :pass
+  copies it, nil drops it, and a string is written in its place. A line
+  longer than `limit` is copied unscreened as it comes. Writes to `out`
+  are made holding a lock on it, so another thread may write whole lines
+  to it too."
+  [^java.io.InputStream in out tap on-write-failed & [{:keys [screen limit] :or {limit line-limit}}]]
+  (let [buf (byte-array 65536)
+        failed? (atom false)
+        write! (fn [^bytes bs n]
+                 (when-not @failed?
+                   (try (locking out (write-chunk! out bs n))
+                        (catch java.io.IOException _ (reset! failed? true) (on-write-failed)))))]
+    (loop [pending acp/no-rest raw? false]
       (let [n (try (.read in buf) (catch java.io.IOException _ -1))]
         (if (neg? n)
-          (let [last-bytes (acp/left-over rest)]
-            (when (pos? (alength last-bytes)) (tap (acp/text last-bytes))))
-          (let [writing? (and writing?
-                              (try (write-chunk! out buf n) true
-                                   (catch java.io.IOException _ (on-write-failed) false)))
-                [rest lines] (acp/split rest (java.util.Arrays/copyOf buf n))]
-            (doseq [line lines] (tap (acp/text line)))
-            (recur rest writing?)))))))
+          (let [last-bytes (acp/left-over pending)]
+            (when (pos? (alength last-bytes))
+              (when screen (write! last-bytes (alength last-bytes)))
+              (tap (acp/text last-bytes))))
+          (let [chunk (java.util.Arrays/copyOf buf n)
+                [rest' lines] (acp/split pending chunk)]
+            (if-not screen
+              (do (write! chunk n)
+                  (doseq [line lines] (tap (acp/text line)))
+                  (recur rest' false))
+              (let [;; In raw mode, the line being passed on unread ends at
+                    ;; the first newline of this chunk.
+                    nl (if raw? (let [i (.indexOf (String. chunk java.nio.charset.StandardCharsets/ISO_8859_1) 10)]
+                                  (when (>= i 0) i))
+                           nil)
+                    _ (when raw? (write! chunk (if nl (inc nl) n)))
+                    [lines raw?] (cond (not raw?) [lines false]
+                                       nl [(rest lines) false]
+                                       :else [[] true])]
+                (doseq [^bytes line lines
+                        :let [text (acp/text line)
+                              decision (screen text)]]
+                  (tap text)
+                  (cond
+                    (= :pass decision) (let [bs (byte-array (inc (alength line)))]
+                                         (System/arraycopy line 0 bs 0 (alength line))
+                                         (aset-byte bs (alength line) (byte 10))
+                                         (write! bs (alength bs)))
+                    (string? decision) (let [bs (.getBytes (str decision "\n") java.nio.charset.StandardCharsets/UTF_8)]
+                                         (write! bs (alength bs)))
+                    :else nil))
+                (let [left (acp/left-over rest')]
+                  (if (and (not raw?) (> (alength left) limit))
+                    (do (write! left (alength left)) (recur acp/no-rest true))
+                    (recur (if raw? acp/no-rest rest') raw?)))))))))))
 
 (defn- tracer
   "A function that writes one line of traffic to the trace file as JSON,
@@ -373,8 +418,19 @@
   to the trace file when there is one. The agent's stdin is closed when
   the client's input ends, when writing to the client fails, or when `stop`
   is delivered; an agent still running after `grace-ms` is killed by its
-  pid, with its descendants. Returns {:exit :observed}."
-  [{:keys [argv dir env]} {:keys [in out trace stop grace-ms] :or {grace-ms stop-grace-ms}}]
+  pid, with its descendants. Returns {:exit :observed}.
+
+  The one exception to copying unchanged is the agent's
+  session/request_permission. With :approvals, it goes to the client, and
+  the client's answer goes back only if it picks an option the agent
+  offered (or cancels); anything else is replaced by a refusal, and a
+  request still open when the client goes away is refused. Without
+  :approvals, the client never sees it: relay refuses it. Each request
+  and each answer is passed to (on-permission :asked req) and
+  (on-permission :answered req {:outcome :by}), :by being client or
+  relay."
+  [{:keys [argv dir env]} {:keys [in out trace stop grace-ms approvals on-permission line-limit]
+                           :or {grace-ms stop-grace-ms on-permission (fn [& _]) line-limit line-limit}}]
   (let [proc (p/process (vec argv) (cond-> {:err :inherit} dir (assoc :dir (str dir)) env (assoc :env env)))
         ^Process jp (:proc proc)
         ^java.io.OutputStream agent-in (:in proc)
@@ -394,10 +450,49 @@
                                                   [(.orElse h nil)])]
                                (doseq [^java.lang.ProcessHandle x (remove nil? family)]
                                  (.destroyForcibly x)))))))
+        outstanding (atom {})
+        client-gone (atom false)
+        refuse! (fn [req]
+                  (let [bs (.getBytes (str (json/generate-string (acp/refusal req)) "\n")
+                                      java.nio.charset.StandardCharsets/UTF_8)]
+                    (try (locking agent-in (write-chunk! agent-in bs (alength bs)))
+                         (catch java.io.IOException _ nil))
+                    (on-permission :answered req {:outcome (if (some #(= "reject_once" (get % "kind")) (:options req))
+                                                             "reject_once" "cancelled")
+                                                  :by "relay"})))
+        from-agent (fn [line]
+                     (if-let [req (acp/permission-request line)]
+                       (do (on-permission :asked req)
+                           (if (and approvals (not @client-gone))
+                             (do (swap! outstanding assoc (:id req) req)
+                                 ;; The client may have gone in the meantime.
+                                 (when (and @client-gone (get @outstanding (:id req)))
+                                   (swap! outstanding dissoc (:id req))
+                                   (refuse! req))
+                                 :pass)
+                             (do (refuse! req) nil)))
+                       :pass))
+        from-client (fn [line]
+                      (if-let [[req answer] (some (fn [req] (when-let [a (acp/answer-of req line)] [req a]))
+                                                  (vals @outstanding))]
+                        (do (swap! outstanding dissoc (:id req))
+                            (on-permission :answered req {:outcome (:outcome answer) :by "client"})
+                            (if (:valid answer) :pass (json/generate-string (acp/refusal req))))
+                        :pass))
         to-agent (spawn (fn []
-                          (pump! in agent-in (tap :client) #(deliver stop :agent-gone))
+                          ;; Line by line, so a refusal relay writes to the agent
+                          ;; never lands inside one of the client's messages.
+                          (pump! in agent-in (tap :client) #(deliver stop :agent-gone)
+                                 {:screen from-client :limit line-limit})
+                          ;; A request the client never answered is refused,
+                          ;; and so is any asked from now on.
+                          (reset! client-gone true)
+                          (doseq [req (vals @outstanding)]
+                            (swap! outstanding dissoc (:id req))
+                            (refuse! req))
                           (deliver stop :client-gone)))
-        to-client (spawn (fn [] (pump! (:out proc) out (tap :agent) #(deliver stop :client-gone))))
+        to-client (spawn (fn [] (pump! (:out proc) out (tap :agent) #(deliver stop :client-gone)
+                                       {:screen from-agent :limit line-limit})))
         exit (.waitFor jp)]
     ;; The agent's stdout ends with it, unless something it started holds
     ;; the pipe open; that cannot keep relay waiting for long.
@@ -405,6 +500,20 @@
     (deliver stop ::done)
     (deref stopper 1000 nil)
     {:exit exit :observed @observed}))
+
+(defn- permission-recorder
+  "Records a conversation's permission requests and their answers in the
+  log. A record that fails is dropped: the conversation goes on."
+  [sys wake-id]
+  (fn [kind {:keys [session call tool input labels]} & [{:keys [outcome by]}]]
+    (try
+      (inbound/submit! sys {:type (if (= :asked kind) :permission/asked :permission/answered)
+                            :actor core/dispatcher
+                            :args {:wake wake-id :session session :call call :tool tool
+                                   :input-sha256 (core/sha256 (json/generate-string input))
+                                   :labels labels :outcome outcome :by by}})
+      (catch Exception e
+        (binding [*out* *err*] (println "relay could not record a permission request:" (ex-message e)))))))
 
 (defn acp!
   "Opens a conversation with a role for an ACP client on stdin and stdout,
@@ -417,7 +526,7 @@
 
   Options: :trace, a file to append both directions of the traffic to; :in
   and :out, the client's streams (stdin and stdout by default)."
-  [sys role-id {:keys [trace in out] :or {in System/in out System/out}}]
+  [sys role-id {:keys [trace in out approvals] :or {in System/in out System/out}}]
   (binding [*out* *err*]
     (let [stop (promise)]
       (try
@@ -428,7 +537,8 @@
                      (let [{:keys [problem] :as command} (harness/acp-command request)]
                        (when problem (throw (ex-info problem {})))
                        (let [{:keys [exit observed]}
-                             (proxy! command {:in in :out out :trace trace :stop stop})]
+                             (proxy! command {:in in :out out :trace trace :stop stop :approvals approvals
+                                              :on-permission (permission-recorder sys (:wake-id request))})]
                          (acp/report observed exit))))))]
           (if (integer? exit) exit 1))
         (catch Exception e
@@ -440,9 +550,10 @@
 (defn chat-argv
   "The command `relay chat` runs: the chat client, given relay's own `acp`
   command for the role as its agent, with the data directory when one was
-  named."
+  named. The client is the operator's terminal, so it may answer
+  permission requests: --approvals."
   [client relay role data]
-  (vec (concat client ["--" relay "acp" role] (when data ["--data" data]))))
+  (vec (concat client ["--" relay "acp" role "--approvals"] (when data ["--data" data]))))
 
 (defn chat!
   "Talks with a role on this terminal by running the chat client (the

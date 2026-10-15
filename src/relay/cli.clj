@@ -42,9 +42,12 @@ Every command needs the data directory, from --data <dir> or from the file
   relay chat <role>                   talk with a role in this terminal, through
                                       the chat client (acp-tui unless relay.edn
                                       names another with :chat-client)
-  relay acp <role> [--trace <file>]   talk with a role from an ACP client, which
+  relay acp <role> [--trace <file>] [--approvals]
+                                      talk with a role from an ACP client, which
                                       runs this as its agent command; --trace
-                                      appends the traffic to <file> as JSON lines
+                                      appends the traffic to <file> as JSON lines;
+                                      --approvals lets the client answer held tool
+                                      calls, which relay otherwise refuses
   relay tick                          one dispatcher pass (launchd runs this)
   relay facts [<topic>] [--search <s>] [--as-of <t>] [--known-at <t>] [--all]
                                       what relay knows; times as for facts
@@ -216,7 +219,7 @@ contaminated, for text you copied from somewhere you do not trust.")
    :coerce {:subject :string :message :string :title :string :reports-to :string
             :harness :string :model :string :schedule :string :note :string
             :tail :long :data :string :search :string :as-of :string :known-at :string
-            :version :long :role :string :trace :string :untrusted :boolean}})
+            :version :long :role :string :trace :string :untrusted :boolean :approvals :boolean}})
 
 (defn- command
   "Runs one command with the data directory's system. Returns {:exit :out},
@@ -269,7 +272,7 @@ contaminated, for text you copied from somewhere you do not trust.")
                (result (dispatch/chat! sys r {:data (when (:data opts) (str (fs/absolutize dir)))})))
       "acp" (let [[r] more]
               (when-not r (fail! "usage: relay acp <role> [--trace <file>]"))
-              (result (dispatch/acp! sys r {:trace (:trace opts)})))
+              (result (dispatch/acp! sys r {:trace (:trace opts) :approvals (:approvals opts)})))
       "tick" (do (dispatch/tick! sys) (result 0))
       "facts" (tool-output sys "facts" {:topic (first more) :search (:search opts)
                                         :as_of (:as-of opts) :known_at (:known-at opts)

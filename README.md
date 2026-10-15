@@ -274,6 +274,16 @@ anything.
 `--trace <file>` appends every line in both directions to `<file>`, one
 JSON object per line, with `from` set to `client` or `agent`.
 
+When agentloop holds a tool call in a conversation, it asks the client
+with `session/request_permission`. relay passes that request on only when
+`relay acp` was started with `--approvals`, which `relay chat` does,
+since its client is the operator's terminal. The client's answer goes
+back only if it picks an option the agent offered, or cancels; anything
+else, and a request still open when the client goes away, is a refusal.
+Without `--approvals` (an editor, say), relay refuses the call itself and
+notifies the operator. Each request and its answer are recorded in the
+log with the role, session, tool and a digest of the input.
+
 ## Development
 
 ```sh

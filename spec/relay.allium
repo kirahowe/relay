@@ -236,7 +236,7 @@ enum DeadLetterReason { never_closed | blocked | recipient_removed }
 enum NotificationKind {
     memo_for_operator | work_abandoned | runaway_guard_tripped
     | harness_needs_attention | harness_unreachable
-    | hold_opened | memo_quarantined
+    | hold_opened | memo_quarantined | permission_refused
 }
 enum ToolClass { read | write | egress | act }
 enum Label { private | contaminated }
@@ -1443,6 +1443,47 @@ rule ResolveHold {
         -- there, never on stdin, so no harness or pipe can decide.
 }
 
+rule AskTheClient {
+    when: PermissionRequested(wake, call, tool, input_sha256, approvals)
+
+    requires: wake.chat
+    requires: approvals
+
+    ensures: PermissionRecorded(wake: wake, call: call, tool: tool, input_sha256: input_sha256)
+
+    @guidance
+        -- In a conversation agentloop asks the ACP client about a held
+        -- call. relay acp passes the request on only when it was started
+        -- with --approvals, as relay chat starts it for the operator's
+        -- terminal. The client's answer goes back only if it picks an
+        -- option the agent offered, or cancels; anything else, and a
+        -- request still open when the client goes, is a refusal. The
+        -- request and the answer are both recorded.
+}
+
+rule RefuseForAClientWithoutApprovals {
+    when: PermissionRequested(wake, call, tool, input_sha256, approvals)
+
+    requires: wake.chat
+    requires: not approvals
+
+    ensures: PermissionRecorded(wake: wake, call: call, tool: tool, input_sha256: input_sha256)
+    ensures: PermissionAnswered(wake: wake, call: call, outcome: "reject_once", by: "relay")
+    ensures: Notification.created(
+        kind: permission_refused,
+        title: permission_title(wake, tool),   -- black box: who was refused what
+        body: permission_note(wake),           -- black box: how to decide such calls
+        about: wake.role,
+        created_at: now,
+        delivery: pending
+    )
+
+    @guidance
+        -- A client such as an editor was not started to show the
+        -- operator a held call, so relay refuses it without passing it
+        -- on, and tells the operator.
+}
+
 rule DenyHoldsOfRemovedRole {
     when: role: Role.status transitions_to removed
 
@@ -2335,6 +2376,14 @@ surface HarnessBoundary {
 
     contracts:
         demands HarnessAdapter
+}
+
+surface ConversationBoundary {
+    provides:
+        PermissionRequested(wake, call, tool, input_sha256, approvals)
+
+    @guidance
+        -- relay acp sees the agent's session/request_permission go by.
 }
 
 surface NotificationBoundary {

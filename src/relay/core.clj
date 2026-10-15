@@ -580,6 +580,16 @@
                :status (if (= "allow" verdict) :allowed :denied) :reason reason
                :resolved-at (inst at) :resolved-by actor)))
 
+(defmethod evolve* "permission/asked" [state {:keys [seq data]}]
+  (assoc-in state [:permissions seq] (assoc data :id seq)))
+
+(defmethod evolve* "permission/answered" [state {:keys [data]}]
+  (let [asked (->> (vals (:permissions state))
+                   (filter #(and (= (:wake data) (:wake %)) (= (:call data) (:call %)) (nil? (:outcome %))))
+                   (sort-by :id) last)]
+    (cond-> state
+      asked (update-in [:permissions (:id asked)] assoc :outcome (:outcome data) :by (:by data)))))
+
 (defmethod evolve* "hold/requeued" [state {:keys [data]}]
   (update-in state [:holds (:hold data)] dissoc :delivered))
 
@@ -1166,6 +1176,41 @@
     (when-not (and (= version (:version v)) (= digest (sha256 (:text v))))
       (reject! :conflict (str "The " kind " " ref " changed since you read it. Nothing was trusted; look again.")))
     (emit tx "label/trusted" {:kind kind :ref (str ref) :version version})))
+
+;; permission requests in a conversation
+;;
+;; agentloop asks the ACP client about a held call itself. relay acp
+;; records each request and its answer, so the log says who allowed what.
+
+(defn- permission-labels
+  "The labels of a permission request's text: the session's as agentloop
+  sent them, or with none valid, every label the session could hold."
+  [{:keys [state config]} role labels]
+  (if (and (sequential? labels) (seq labels) (every? label-names labels))
+    (union labels)
+    (session-labels-bound state config role)))
+
+(defmethod decide* :permission/asked [{:keys [state] :as tx} {{:keys [wake session call tool input-sha256 labels]} :args}]
+  (dispatcher-only! tx)
+  (let [role (get-in state [:wakes wake :role])]
+    (when-not (get-in state [:wakes wake :chat]) (reject! "Only a conversation asks its client."))
+    (emit tx "permission/asked" {:wake wake :role role :session session :call call :tool tool
+                                 :input-sha256 input-sha256}
+          (permission-labels tx role labels))))
+
+(defmethod decide* :permission/answered [{:keys [state] :as tx} {{:keys [wake session call tool outcome by labels]} :args}]
+  (dispatcher-only! tx)
+  (let [role (get-in state [:wakes wake :role])]
+    (when-not (get-in state [:wakes wake :chat]) (reject! "Only a conversation asks its client."))
+    (cond-> (emit tx "permission/answered" {:wake wake :role role :session session :call call
+                                            :outcome outcome :by by}
+                  (permission-labels tx role labels))
+      ;; relay refused it for a client that cannot ask the operator.
+      (= "relay" by)
+      (notify "permission-refused" (str role " was refused a call to " tool " in a conversation")
+              (str "Its ACP client was not started with --approvals, so relay refused the call"
+                   " for it. To decide such calls yourself, talk with " role " through relay chat.")
+              :role role :labels (union (id-labels state role) (permission-labels tx role labels))))))
 
 ;; holds
 

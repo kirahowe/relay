@@ -412,7 +412,7 @@
     (let [argv (dispatch/chat-argv client relay role data)
           [before [_ & agent]] (split-with #(not= "--" %) argv)]
       (and (= client before)
-           (= (concat [relay "acp" role] (when data ["--data" data])) agent)))))
+           (= (concat [relay "acp" role "--approvals"] (when data ["--data" data])) agent)))))
 
 (deftest chat-runs-the-client-with-relay-acp-after-the-double-dash
   (let [result (tc/quick-check 300 chat-gives-the-client-relay-acp-as-its-agent)]

@@ -165,3 +165,53 @@
                 (when-let [kind (or acp-kind (class-kinds (some-> class name)))]
                   [tool-name kind])))
         manifest))
+
+;; --- permission requests
+
+(defn permission-request
+  "An agent's session/request_permission, as relay keeps track of it, or
+  nil for any other line: its id, session, tool call, the tool's name and
+  input, the options offered, and the session's labels if the agent sent
+  them."
+  [line]
+  (let [msg (when (string? line) (parse line))]
+    (when (and (map? msg) (= "session/request_permission" (get msg "method")) (contains? msg "id"))
+      (let [params (get msg "params")
+            call (when (map? params) (get params "toolCall"))
+            options (when (map? params) (get params "options"))]
+        {:id (get msg "id")
+         :session (when (map? params) (get params "sessionId"))
+         :call (when (map? call) (get call "toolCallId"))
+         :tool (when (map? call) (or (get call "name") (get call "title")))
+         :input (when (map? call) (get call "rawInput"))
+         :labels (let [ls (when (map? call) (get-in call ["_meta" "agentloop/labels"]))]
+                   (when (sequential? ls) (vec ls)))
+         :options (vec (filter map? (when (sequential? options) options)))}))))
+
+(defn- option-of-kind [{:keys [options]} kind]
+  (some #(when (= kind (get % "kind")) (get % "optionId")) options))
+
+(defn refusal
+  "The answer that refuses a permission request: its reject_once option,
+  or cancelled when it offers none."
+  [{:keys [id] :as req}]
+  {"jsonrpc" "2.0" "id" id
+   "result" {"outcome" (if-let [opt (option-of-kind req "reject_once")]
+                         {"outcome" "selected" "optionId" opt}
+                         {"outcome" "cancelled"})}})
+
+(defn answer-of
+  "What a client's line says about an outstanding permission request: nil
+  when the line is not an answer to it, else {:outcome kind :valid bool}.
+  An answer is valid only when it selects an option the agent offered or
+  cancels; anything else counts as a refusal."
+  [req line]
+  (let [msg (when (string? line) (parse line))]
+    (when (and (map? msg) (not (contains? msg "method")) (contains? msg "id") (= (:id req) (get msg "id")))
+      (let [outcome (get-in msg ["result" "outcome"])
+            chosen (when (and (map? outcome) (= "selected" (get outcome "outcome")))
+                     (some #(when (= (get outcome "optionId") (get % "optionId")) %) (:options req)))]
+        (cond
+          chosen {:outcome (get chosen "kind") :valid true}
+          (and (map? outcome) (= "cancelled" (get outcome "outcome"))) {:outcome "cancelled" :valid true}
+          :else {:outcome "reject_once" :valid false})))))

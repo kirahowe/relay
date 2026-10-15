@@ -106,7 +106,10 @@
         ;; waits for its stdin to close.
         result (deref (future (dispatch/proxy! {:argv ["sh" "-c" "head -c 1000000 /dev/zero; cat >/dev/null"]}
                                                {:in (java.io.PipedInputStream. (java.io.PipedOutputStream.))
-                                                :out failing}))
+                                                :out failing
+                                                ;; A line past the limit goes on unread, so
+                                                ;; the failed write is noticed.
+                                                :line-limit 65536}))
                       20000 :hung)]
     (is (not= :hung result))
     (is (= 0 (:exit result)))))
@@ -278,8 +281,8 @@
 (defn- start-relay! [& extra]
   (client/start! (concat [relay-bin "acp" "clerk" "--data" (data)] extra) {:dir *dir*}))
 
-(defn- start-relay-answering! [permit]
-  (client/start! [relay-bin "acp" "clerk" "--data" (data)] {:dir *dir* ::client/permit permit}))
+(defn- start-relay-answering! [permit & extra]
+  (client/start! (concat [relay-bin "acp" "clerk" "--data" (data)] extra) {:dir *dir* ::client/permit permit}))
 
 (defn- agentloop-pids
   "The agentloop processes under a relay process."
@@ -493,7 +496,8 @@
               seen (json/parse-string (slurp (str *dir* "/seen.json")) true)]
           (is (= 0 exit) (str out err))
           (testing "the client gets relay acp for the role, with the data directory"
-            (is (= ["--" relay-bin "acp" "clerk" "--data" (str (fs/absolutize (data)))] argv)))
+            (is (= ["--" relay-bin "acp" "clerk" "--approvals" "--data" (str (fs/absolutize (data)))] argv)
+                "and lets it answer permission requests, since it is the operator's terminal"))
           (testing "the conversation went through"
             (is (= "end_turn" (:stop seen)) (pr-str seen))
             (is (= "You said: true" (apply str (for [u (:updates seen)
@@ -571,7 +575,7 @@
       (with-world {} reads-fetches-posts
         (fn []
           (inbound/submit! *sys* {:type :fact/add :actor "operator" :args {:text "The safe code is 1234."}})
-          (let [c (start-relay-answering! (client/choose kind))
+          (let [c (start-relay-answering! (client/choose kind) "--approvals")
                 sid (client/handshake! c *dir*)
                 resp (client/request! c "session/prompt" (client/prompt-params sid "Go."))
                 asked (client/await! c #(= "session/request_permission" (get % "method")) 1000)]
@@ -587,4 +591,81 @@
                         (client/updates c))))
             (client/close-input! c)
             (is (= 0 (client/wait! c 20000)))
-            (is (empty? (core/open-holds (state))) "a conversation's holds are not relay's")))))))
+            (is (empty? (core/open-holds (state))) "a conversation's holds are not relay's")
+            (testing "relay recorded the request and the client's answer"
+              (let [[p] (vals (:permissions (state)))]
+                (is (= ["post" kind "client"] ((juxt :tool :outcome :by) p)) (pr-str p))
+                (is (string? (:input-sha256 p)))))))))))
+
+(deftest without-approvals-relay-refuses-for-the-client
+  (when bin
+    (with-world {} reads-fetches-posts
+      (fn []
+        (inbound/submit! *sys* {:type :fact/add :actor "operator" :args {:text "The safe code is 1234."}})
+        (let [c (start-relay-answering! (client/choose "allow_once"))
+              sid (client/handshake! c *dir*)
+              resp (client/request! c "session/prompt" (client/prompt-params sid "Go."))]
+          (is (= "end_turn" (get-in resp ["result" "stopReason"])) (pr-str resp))
+          (is (nil? (client/await! c #(= "session/request_permission" (get % "method")) 200))
+              "the client, which would have allowed it, never saw the request")
+          (is (= "" (posted)) "and the call never ran")
+          (client/close-input! c)
+          (is (= 0 (client/wait! c 20000)))
+          (let [[p] (vals (:permissions (state)))]
+            (is (= ["post" "reject_once" "relay"] ((juxt :tool :outcome :by) p)) (pr-str p)))
+          (is (some #(= "permission-refused" (:kind %)) (vals (:notifications (state))))
+              "and the operator is told"))))))
+
+(deftest a-forged-answer-is-a-refusal
+  (when bin
+    (with-world {} reads-fetches-posts
+      (fn []
+        (inbound/submit! *sys* {:type :fact/add :actor "operator" :args {:text "The safe code is 1234."}})
+        (let [c (start-relay-answering! (fn [_] {:outcome "selected" :optionId "allow_always"}) "--approvals")
+              sid (client/handshake! c *dir*)]
+          (client/request! c "session/prompt" (client/prompt-params sid "Go."))
+          (is (= "" (posted)) "an option the agent never offered allows nothing")
+          (client/close-input! c)
+          (client/wait! c 20000)
+          (let [[p] (vals (:permissions (state)))]
+            (is (= ["reject_once" "client"] ((juxt :outcome :by) p)) (pr-str p))))))))
+
+(deftest a-client-that-goes-away-refuses-what-it-was-asked
+  (doseq [approvals [true false]]
+    (let [dir (fs/create-temp-dir {:prefix "relay-perm"})
+          got (str dir "/got")
+          request (json/generate-string {:jsonrpc "2.0" :id 7 :method "session/request_permission"
+                                         :params {:sessionId "s" :toolCall {:toolCallId "t" :title "post"}
+                                                  :options [{:optionId "yes" :kind "allow_once"}
+                                                            {:optionId "no" :kind "reject_once"}]}})
+          seen (atom [])
+          client-out (java.io.PipedOutputStream.)
+          client-in (java.io.PipedInputStream. client-out)
+          run (future (dispatch/proxy! {:argv ["sh" "-c" (str "echo '" request "'; read line; echo \"$line\" > " got)]}
+                                       {:in client-in
+                                        :out (ByteArrayOutputStream.)
+                                        :approvals approvals
+                                        :on-permission (fn [& args] (swap! seen conj args))}))
+          ;; The client goes away once it has been asked.
+          _ (loop [n 0] (when (and (< n 200) (empty? @seen)) (Thread/sleep 10) (recur (inc n))))
+          _ (.close client-out)
+          {:keys [exit]} (deref run 10000 {:exit :hung})]
+      (is (= 0 exit))
+      (is (= {"jsonrpc" "2.0" "id" 7 "result" {"outcome" {"outcome" "selected" "optionId" "no"}}}
+             (json/parse-string (slurp got))) (str "approvals " approvals))
+      (is (= [:asked :answered] (map first @seen)))
+      (is (= {:outcome "reject_once" :by "relay"} (nth (second @seen) 2)))
+      (fs/delete-tree dir))))
+
+(deftest answers-are-checked-against-the-request
+  (let [req (acp/permission-request
+             (json/generate-string {:jsonrpc "2.0" :id 3 :method "session/request_permission"
+                                    :params {:options [{:optionId "a" :kind "allow_once"} {:optionId "r" :kind "reject_once"}]}}))
+        answer #(acp/answer-of req (json/generate-string %))]
+    (is (= {:outcome "allow_once" :valid true} (answer {:jsonrpc "2.0" :id 3 :result {:outcome {:outcome "selected" :optionId "a"}}})))
+    (is (= {:outcome "cancelled" :valid true} (answer {:jsonrpc "2.0" :id 3 :result {:outcome {:outcome "cancelled"}}})))
+    (is (= {:outcome "reject_once" :valid false} (answer {:jsonrpc "2.0" :id 3 :result {:outcome {:outcome "selected" :optionId "zzz"}}})))
+    (is (= {:outcome "reject_once" :valid false} (answer {:jsonrpc "2.0" :id 3 :error {:code 1}})))
+    (is (nil? (answer {:jsonrpc "2.0" :id 4 :result {}})) "another request's answer")
+    (is (nil? (answer {:jsonrpc "2.0" :id 3 :method "x"})) "a request, not an answer")
+    (is (= {"outcome" "cancelled"} (get-in (acp/refusal (assoc req :options [])) ["result" "outcome"])))))
