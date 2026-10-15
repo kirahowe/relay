@@ -445,7 +445,7 @@
                      :tool-command ["relay" "tool"]
                      :run-dir (doto (str dir "/run") fs/create-dirs)
                      :session-dir (str dir "/sessions")
-                     :timeout-ms -14000})]            ; the grace period leaves one second
+                     :timeout-ms -12000})]            ; the grace period leaves three seconds
         (is (= ["ran" "timeout" true] ((juxt :outcome :exit :crashed) report)))
         (is (not (pid-alive? (str dir "/fake.pid"))))
         (is (not (pid-alive? (str dir "/fake.child")))))

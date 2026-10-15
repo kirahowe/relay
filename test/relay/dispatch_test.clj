@@ -203,8 +203,12 @@
   (let [a (memo! "clerk" "One")
         b (memo! "hub" "Two")]
     (is (= ["clerk" "hub"] (dispatch/tick! *sys*)))
+    ;; The agent reads the memo before its wake process records the end,
+    ;; so wait for both.
     (loop [n 0]
-      (when (and (< n 150) (some #(not= :read (:status (core/memo (state) %))) [a b]))
+      (when (and (< n 150)
+                 (or (some #(not= :read (:status (core/memo (state) %))) [a b])
+                     (< (count (filter #(= :ended (:status %)) (vals (:wakes (state))))) 2)))
         (Thread/sleep 200)
         (recur (inc n))))
     (is (= [:read :read] (map #(:status (core/memo (state) %)) [a b])))

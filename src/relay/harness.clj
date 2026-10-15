@@ -69,6 +69,19 @@
                                                    (str/split (or (get env "PATH") "/usr/bin:/bin") #":"))))}
            extra)))
 
+(defn- stop-tree!
+  "Stops a process and its descendants, and returns once they have gone, so
+  that nothing of a run outlives its wake. Asks first; anything still there
+  after a few seconds is killed."
+  [proc]
+  (let [^Process jp (:proc proc)
+        tree (cons (.toHandle jp) (iterator-seq (.iterator (.descendants jp))))]
+    (doseq [^java.lang.ProcessHandle h tree] (.destroy h))
+    (doseq [^java.lang.ProcessHandle h tree]
+      (when (= ::alive (deref (.onExit h) 3000 ::alive))
+        (.destroyForcibly h)
+        (deref (.onExit h) 3000 nil)))))
+
 (defn run-process!
   "Runs a command to completion or the deadline, writing its output to
   `out-file`. Returns the exit code, or \"timeout\" when it was stopped."
@@ -78,7 +91,7 @@
                                     :err :write :err-file (fs/file (str out-file ".err"))})
         result (deref proc timeout-ms ::timeout)]
     (if (= ::timeout result)
-      (do (p/destroy-tree proc) "timeout")
+      (do (stop-tree! proc) "timeout")
       (:exit result))))
 
 (defn tail
