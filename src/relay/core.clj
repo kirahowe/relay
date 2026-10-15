@@ -766,7 +766,8 @@
 
 (defn- active-role! [state id]
   (when-not (active-role? state id)
-    (reject! :not-found (str "There is no role called " id "."))))
+    ;; A removed role still exists, and its id is text its creator chose.
+    (reject! :not-found (str "There is no role called " id ".") (id-labels state id))))
 
 (defn- caller-role! [{:keys [state actor]}]
   (when-not (active-role? state actor)
@@ -826,10 +827,11 @@
     (reject! (str "A role id is lower case letters, digits and hyphens, starting with "
                   "a letter, and not one of " (str/join ", " (sort reserved-ids)) ".")))
   (when (role state id)
-    (reject! :conflict (str "The id " id " is already taken; ids are never reused.")))
+    (reject! :conflict (str "The id " id " is already taken; ids are never reused.") (id-labels state id)))
   (let [reports-to (or reports-to (when (not= operator actor) actor))]
     (when (and reports-to (not (active-role? state reports-to)))
-      (reject! :not-found (str "There is no role called " reports-to " to report to.")))
+      (reject! :not-found (str "There is no role called " reports-to " to report to.")
+               (id-labels state reports-to)))
     (when (and harness (not (contains? (:harnesses config) (keyword harness))))
       (reject! (str "No harness called " harness " is configured.")))
     (script-without-grants! config id (or harness (some-> (:default-harness config) name)))
@@ -856,7 +858,7 @@
   (authorize-registry! tx)
   (active-role! state id)
   (when (= id actor) (reject! :forbidden "A role may not remove itself."))
-  (when (running? state id) (reject! :busy (str id " is running now; remove it once it stops.")))
+  (when (running? state id) (reject! :busy (str id " is running now; remove it once it stops.") (id-labels state id)))
   (as-> tx tx
     (reduce (fn [tx {:keys [name]}] (emit tx "routine/removed" {:owner id :name name}))
             tx (active-routines state id))
@@ -872,7 +874,7 @@
 
 (defmethod decide* :memo/send [{:keys [state actor] :as tx} {{:keys [to subject body]} :args}]
   (when-not (or (= operator to) (active-role? state to))
-    (reject! :not-found (str "There is no role called " to ".")))
+    (reject! :not-found (str "There is no role called " to ".") (id-labels state to)))
   (let [subject (require-text subject "A memo's subject")
         body (require-text body "A memo's body")]
     (when (str/includes? subject "\n") (reject! "A memo's subject is one line."))
@@ -952,11 +954,12 @@
   (when-not (#{dispatcher operator} actor)
     (reject! :forbidden "Only the operator or the dispatcher wakes a role."))
   (active-role! state role-id)
-  (when (running? state role-id) (reject! :busy (str role-id " is already running.")))
+  (when (running? state role-id) (reject! :busy (str role-id " is already running.") (id-labels state role-id)))
   ;; Resuming a session with a call still held would only stop at it again.
   ;; A conversation uses a session of its own, so it may go ahead.
   (when (and (not chat) (held? state role-id))
-    (reject! :held (str role-id " has a tool call waiting for the operator; see relay holds.")))
+    (reject! :held (str role-id " has a tool call waiting for the operator; see relay holds.")
+             (id-labels state role-id)))
   (let [harness (harness-of state config role-id)]
     (when dispatched
       (when (paused-until state harness now) (reject! :paused (str harness " is paused.")))
@@ -1031,8 +1034,13 @@
                   :harness harness :labels (:said-labels tx))
           :else tx)))))
 
-(defn- held-call? [c]
-  (and (map? c) (string? (:id c)) (not (blank? (:id c))) (string? (:name c)) (not (blank? (:name c)))))
+(defn- held-call?
+  "A held call relay can record: with an id, a tool name, and the digest
+  of its input that the decision is bound to. Without the digest it is
+  not recorded, since a decision could not be tied to it."
+  [c]
+  (and (map? c) (string? (:id c)) (not (blank? (:id c))) (string? (:name c)) (not (blank? (:name c)))
+       (string? (:input-sha256 c)) (not (blank? (:input-sha256 c)))))
 
 (defn- open-hold
   "Records a call held in a wake's session, unless it is already known: a
@@ -1042,9 +1050,8 @@
   (let [known (first (filter #(and (= session (:session %)) (= id (:call %))) (vals (:holds state))))]
     (cond
       (nil? known)
-      (let [tx (emit tx "hold/opened" (cond-> {:role (:role wake) :wake (:id wake) :session session
-                                               :call id :tool name :input input}
-                                        (string? input-sha256) (assoc :input-sha256 input-sha256))
+      (let [tx (emit tx "hold/opened" {:role (:role wake) :wake (:id wake) :session session
+                                       :call id :tool name :input input :input-sha256 input-sha256}
                      (:said-labels tx))
             hold-id (last-id tx)]
         (notify tx "hold-opened" (str (:role wake) " wants to use " name)
@@ -1052,7 +1059,8 @@
                      "\n\nrelay approve " hold-id ", or relay deny " hold-id " [why].")
                 :role (:role wake) :hold hold-id
                 :labels (union (:said-labels tx) (id-labels state (:role wake)))))
-      (and (not= :open (:status known)) (:delivered known))
+      ;; Carried back again only if it is the same call, by its digest.
+      (and (not= :open (:status known)) (:delivered known) (= input-sha256 (:input-sha256 known)))
       (emit tx "hold/requeued" {:hold (:id known)})
       :else tx)))
 
@@ -1389,9 +1397,12 @@
         (when (= corrected (merge (select-keys cur [:topic :text])
                                   (validity! (:valid-from cur) (:valid-to cur))))
           (reject! :invalid "That correction changes nothing." (content-labels (:labels cur))))
+        ;; A correction keeps whatever it does not change (the times, the
+        ;; topic, the text, the link to its successor), so it carries the
+        ;; labels of the version it corrects.
         (emit tx "fact/corrected" (assoc corrected :fact fact :why why
                                          :superseded-by (:superseded-by cur))
-              (when (or (blank? topic) (blank? text)) (:labels cur)))))))
+              (:labels cur))))))
 
 (def ^:private note-name-pattern #"[a-z0-9][a-z0-9-]{0,47}")
 

@@ -46,8 +46,10 @@
                                   "Nothing reads these files back: changing them changes nothing"
                                   " in relay.\n")]
                 ["facts.md" (facts-page sys)]]
-               (for [{:keys [path content labels]} (core/docs state nil)]
-                 [(str "docs/" path) (with-labels (core/content-labels labels) content)])
+               (for [{:keys [path content] :as v} (core/docs state nil)]
+                 [(str "docs/" path) (with-labels (core/content-labels (core/version-labels state v)
+                                                                       (core/path-labels state path))
+                                       content)])
                (for [id (sort (keys (:roles state)))
                      {:keys [name text labels]} (core/notes state id)]
                  [(str "roles/" id "/notes/" name ".md") (with-labels (core/content-labels labels) (str text "\n"))])

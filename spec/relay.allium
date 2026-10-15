@@ -507,7 +507,7 @@ entity Hold {
     input: String
     -- sha256 of the call's input as agentloop held it, handed back with
     -- the decision so it cannot be applied to a different call.
-    input_sha256: String?
+    input_sha256: String
     -- The session's labels when it held the call.
     labels: Set<Label>
     status: HoldStatus
@@ -1385,7 +1385,9 @@ rule OpenHold {
 
     @guidance
         -- A call agentloop held in a wake's session. The role is not
-        -- woken again until every hold of its is decided.
+        -- woken again until every hold of its is decided. A held call
+        -- without the digest of its input is not recorded, since no
+        -- decision could be bound to it.
 }
 
 rule HeldAgainIsCarriedBackAgain {
@@ -1400,6 +1402,7 @@ rule HeldAgainIsCarriedBackAgain {
         requires: exists hold
         requires: hold.status != open
         requires: hold.delivered_in != null
+        requires: hold.input_sha256 = call.input_sha256
         ensures: hold.delivered_in = null
 
     @guidance

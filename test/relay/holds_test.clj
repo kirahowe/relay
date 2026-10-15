@@ -102,9 +102,15 @@
         (is (empty? (core/pending-resolutions (:state w) "clerk"))))
       (testing "but if the session holds the same call again, it was never received, so it goes again"
         (let [w (run w "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :session "sess-1" :said ""
-                                               :held [{:id "toolu_1" :name "post" :input {:args ["hello"]}}]})]
+                                               :held [{:id "toolu_1" :name "post" :input {:args ["hello"]}
+                                                       :input-sha256 "abc123"}]})]
           (is (= [hold-id] (map :id (core/pending-resolutions (:state w) "clerk"))))
-          (is (empty? (core/open-holds (:state w))) "and no second hold is opened"))))))
+          (is (empty? (core/open-holds (:state w))) "and no second hold is opened"))
+        (let [w (run w "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :session "sess-1" :said ""
+                                               :held [{:id "toolu_1" :name "post" :input {:args ["other"]}
+                                                       :input-sha256 "not-abc123"}]})]
+          (is (empty? (core/pending-resolutions (:state w) "clerk"))
+              "a different input under the same call id is never given the old decision"))))))
 
 (deftest held-calls-that-make-no-sense-never-stop-a-wake-ending
   (let [w (-> {:state core/empty-state :now t0}
@@ -113,11 +119,13 @@
         wake (core/running-wake (:state w) "clerk")]
     (let [w (run (run w "dispatcher" :wake/end {:wake (:id wake) :outcome "ran"}) "operator" :wake/start {:role "clerk" :chat true})
           chat (core/running-wake (:state w) "clerk")
-          w (run w "dispatcher" :wake/end {:wake (:id chat) :outcome "ran" :session "s" :held [{:id "a" :name "post"}]})]
+          w (run w "dispatcher" :wake/end {:wake (:id chat) :outcome "ran" :session "s" :held [{:id "a" :name "post" :input-sha256 "d"}]})]
       (is (empty? (core/open-holds (:state w))) "a conversation's holds go through its client, not relay"))
     (doseq [args [{:outcome "limited" :session "s" :held [{:id "a" :name "post"}]}
                   {:outcome "ran" :held [{:id "a" :name "post"}]}
                   {:outcome "ran" :session "s" :held [{:id 3} "x" nil]}
+                  ;; No digest, so no decision could be tied to it.
+                  {:outcome "ran" :session "s" :held [{:id "a" :name "post" :input {}}]}
                   {:outcome "ran" :session "s" :held "nonsense" :labels ["bogus"]}]]
       (let [w (run w "dispatcher" :wake/end (assoc args :wake (:id wake)))]
         (is (not (core/running? (:state w) "clerk")) (pr-str args))
@@ -158,7 +166,8 @@
             wake (core/running-wake (inbound/current-state sys) "clerk")
             _ (inbound/submit! sys {:type :wake/end :actor "dispatcher"
                                     :args {:wake (:id wake) :outcome "ran" :session "s1" :said ""
-                                           :held [{:id "toolu_9" :name "post" :input {:args ["\u001b[2Jhi‮"]}}]}})
+                                           :held [{:id "toolu_9" :name "post" :input {:args ["\u001b[2Jhi‮"]}
+                                                   :input-sha256 "d9"}]}})
             id (:id (first (core/open-holds (inbound/current-state sys))))
             status #(:status (core/hold (inbound/current-state sys) id))]
         (testing "relay holds lists it in full"
@@ -211,7 +220,7 @@
           (submit {:type :wake/start :actor "operator" :args {:role "clerk" :note "Go."}})
           (submit {:type :wake/end :actor "dispatcher"
                    :args {:wake (:id (core/running-wake (state) "clerk")) :outcome "ran" :session "s1" :said ""
-                          :held [{:id "toolu_2" :name "post" :input {}}]}})
+                          :held [{:id "toolu_2" :name "post" :input {} :input-sha256 "d2"}]}})
           (let [id (:id (first (core/open-holds (state))))]
             (binding [cli/*tty* (tty (atom "") typed-code)]
               (is (= 0 (:exit (relay data "deny" (str id) "not" "today")))))
@@ -292,10 +301,15 @@
         (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "clerk" :title "Clerk" :instructions "x"}})
         (inbound/submit! sys {:type :doc/put :actor "clerk" :labels ["contaminated"] :args {:path "web.md" :content "page"}})
         (inbound/submit! sys {:type :doc/put :actor "clerk" :args {:path "mine.md" :content "mine"}})
+        (inbound/submit! sys {:type :role/add :actor "operator" :labels ["contaminated"]
+                              :args {:id "scribe" :title "S" :instructions "x"}})
+        (inbound/submit! sys {:type :doc/put :actor "scribe" :args {:path "theirs.md" :content "t"}})
         (inbound/submit! sys {:type :fact/add :actor "clerk" :labels ["contaminated"] :args {:text "From the web."}})
         (relay data "export" out)
         (is (str/starts-with? (slurp (str out "/docs/web.md")) "labels: contaminated, private\n\npage"))
         (is (str/starts-with? (slurp (str out "/docs/mine.md")) "labels: private\n\nmine"))
+        (is (str/starts-with? (slurp (str out "/docs/theirs.md")) "labels: contaminated, private")
+            "the author's id is text too")
         (let [facts (slurp (str out "/facts.md"))]
           (is (str/starts-with? facts "labels: contaminated, private"))
           (is (str/includes? facts "From the web.") "the operator's export shows everything"))

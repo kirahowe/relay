@@ -253,8 +253,10 @@
                   ;; it is accepted, since a match would say something about it.
                   found (core/facts state (merge q (select-keys args [:topic :search])))
                   found (if accept_contamination found (remove #(core/contaminated? (:labels %)) found))
-                  note (when (and (seq tainted) (not accept_contamination))
-                         (str (count tainted) " contaminated fact(s) were left out and not searched."
+                  ;; Said whether or not there are any: how many there are is
+                  ;; up to whoever wrote them.
+                  note (when-not accept_contamination
+                         (str "Contaminated facts, if there are any, were left out and not searched."
                               " Pass accept_contamination to include them."))]
               (if (and (empty? found) (nil? note))
                 "No facts match."
@@ -496,11 +498,10 @@
                                                (into (vec command) (map str args)))]
              (if (zero? exit)
                (labelled out labels)
-               ;; What it printed to stderr goes to the operator's log
-               ;; only; the model is told it failed and sees its stdout.
-               (do (binding [*out* *err*] (print err) (flush))
-                   (throw (ex-info (str tool-name " failed (exit " exit ")."
-                                        (when-not (str/blank? out) (str "\n" out)))
+               ;; What it printed goes to the operator's log only; the model
+               ;; is told just that it failed.
+               (do (binding [*out* *err*] (print err out) (flush))
+                   (throw (ex-info (str "The tool " tool-name " failed.")
                                    {:relay/labels (vec labels)}))))))}])
 
 (defn script-role?

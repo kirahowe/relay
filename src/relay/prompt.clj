@@ -17,9 +17,10 @@
               (str/join (for [{:keys [name text]} notes]
                           (str "\n## " name "\n\n" (str/trim text) "\n")))
               (when (pos? withheld)
-                (str "\n" withheld " more note(s) are withheld because they are contaminated: you"
-                     " wrote them after reading something an outsider may have written. Read them"
-                     " with `notes` and accept_contamination only if you need them.\n"))))))
+                ;; Not how many: that is up to whoever wrote them.
+                (str "\nSome notes are withheld because they are contaminated: you wrote them"
+                     " after reading something an outsider may have written. Read them with"
+                     " `notes` and accept_contamination only if you need them.\n"))))))
 
 (defn instructions
   "The system prompt for a role: the shared instructions, the operator's own

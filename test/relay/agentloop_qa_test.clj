@@ -381,7 +381,7 @@
         (let [results (mock/last-tool-results (:body (last @(:requests *mock*))))]
           (is (= 3 (count results)))
           (is (every? :error results))
-          (is (str/includes? (:text (first results)) "boom failed (exit 3)"))
+          (is (= "The tool boom failed." (:text (first results))))
           ;; Regression: a failing tool's stderr went to the model, which
           ;; could carry anything the tool printed for its operator.
           (is (not (str/includes? (:text (first results)) "it-went-wrong"))))))))
