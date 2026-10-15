@@ -232,16 +232,34 @@
 (defn under-topic? [topic t]
   (or (nil? topic) (= topic t) (and t (str/starts-with? t (str topic "/")))))
 
+(declare contaminated?)
+
+(defn fact-as-shown
+  "The fact as a reader is shown it. With `clean`, a contaminated change
+  never hides a clean record: the latest version not written by a
+  contaminated session, marked :newer-withheld when a contaminated one
+  came after it. A fact no clean session ever wrote is shown as it is,
+  for the reader to withhold whole."
+  [{:keys [versions] :as f} known-at clean]
+  (let [latest (fact-as-known f known-at)]
+    (if (or (not clean) (nil? latest) (not (contaminated? (:labels latest))))
+      latest
+      (let [vs (if known-at (take-while #(not-after? (:recorded-at %) known-at) versions) versions)]
+        (if-let [v (last (remove #(contaminated? (:labels %)) vs))]
+          (assoc (merge (select-keys f [:id :supersedes]) v) :newer-withheld true)
+          latest)))))
+
 (defn facts
   "The facts holding at world time :as-of, as recorded at :known-at, by id.
   With :all, every fact recorded by then and not retracted, whatever its
   validity. :topic keeps that topic and the topics under it; :search keeps
-  facts whose text contains it, ignoring case."
-  [state {:keys [as-of known-at topic search all]}]
+  facts whose text contains it, ignoring case. With :clean, each fact as
+  fact-as-shown gives it, so a contaminated change does not hide it."
+  [state {:keys [as-of known-at topic search all clean]}]
   (let [as-of (or as-of known-at (:last-at state))
         needle (some-> search str/lower-case)]
     (->> (vals (:facts state))
-         (keep #(fact-as-known % known-at))
+         (keep #(fact-as-shown % known-at clean))
          (filter #(and (if all (not (:retracted %)) (holds-at? % as-of))
                        (under-topic? topic (:topic %))
                        (or (nil? needle) (str/includes? (str/lower-case (:text %)) needle))))
@@ -267,14 +285,30 @@
       known-at (last (take-while #(not-after? (:at %) known-at) versions))
       :else (peek versions))))
 
+(defn doc-as-shown
+  "A doc's latest version as a reader is shown it. With `clean`, a
+  contaminated change (a new version or a removal) never hides a clean
+  one: the latest version not written by a contaminated session, marked
+  :newer-withheld. A doc no clean session wrote is shown as it is."
+  [state path clean]
+  (let [latest (doc-version state path {})]
+    (if (or (not clean) (nil? latest) (not (contaminated? (:labels latest))))
+      latest
+      (if-let [v (last (remove #(contaminated? (:labels %)) (get-in state [:docs path :versions])))]
+        (assoc v :newer-withheld true)
+        latest))))
+
 (defn docs
-  "The docs that exist, as recorded at `known-at` if given, by path."
-  [state known-at]
-  (->> (keys (:docs state))
-       (keep #(doc-version state % {:known-at known-at}))
-       (remove :removed)
-       (sort-by :path)
-       vec))
+  "The docs that exist, as recorded at `known-at` if given, by path. With
+  `clean`, as doc-as-shown gives them, so a contaminated removal or
+  overwrite does not hide a clean doc."
+  ([state known-at] (docs state known-at false))
+  ([state known-at clean]
+   (->> (keys (:docs state))
+        (keep #(if clean (doc-as-shown state % true) (doc-version state % {:known-at known-at})))
+        (remove :removed)
+        (sort-by :path)
+        vec)))
 
 ;; labels
 ;;
@@ -1394,6 +1428,9 @@
     (reject! "A fact's valid-to must come after its valid-from."))
   {:valid-from (some-> from str) :valid-to (some-> to str)})
 
+(defn- core-fact! [state id]
+  (or (fact state id) (reject! :not-found (str "There is no fact " id "."))))
+
 (defn- known-fact! [state id]
   (let [f (fact state id)]
     (when-not f (reject! :not-found (str "There is no fact " id ".")))
@@ -1485,6 +1522,30 @@
         (emit tx "fact/corrected" (assoc corrected :fact fact :why why
                                          :superseded-by (:superseded-by cur))
               (:labels cur))))))
+
+(defmethod decide* :fact/revert [{:keys [state] :as tx} {{:keys [fact version]} :args}]
+  ;; The operator puts back a version they have read, after a change they
+  ;; do not want, such as a contaminated session's. The restored version
+  ;; carries the labels of the text it restores.
+  (operator-only! tx "reverts a fact")
+  (let [f (core-fact! state fact)
+        v (first (filter #(= version (:seq %)) (:versions f)))]
+    (when-not v (reject! :not-found (str "Fact " fact " has no version " version ".")))
+    (emit tx "fact/corrected"
+          (cond-> (merge (select-keys v [:topic :text])
+                         {:fact fact :why (str "The operator reverted it to version " version ".")
+                          :superseded-by (:superseded-by v)}
+                         (validity! (:valid-from v) (:valid-to v)))
+            (:retracted v) (assoc :retracted true))
+          (:labels v))))
+
+(defmethod decide* :doc/revert [{:keys [state] :as tx} {{:keys [path version]} :args}]
+  (operator-only! tx "reverts a doc")
+  (let [v (doc-version state path {:version version})]
+    (when-not v (reject! :not-found (str "There is no version " version " of " path ".")))
+    (if (:removed v)
+      (emit tx "doc/removed" {:path path} (:labels v))
+      (emit tx "doc/put" {:path path :content (:content v)} (:labels v)))))
 
 (def ^:private note-name-pattern #"[a-z0-9][a-z0-9-]{0,47}")
 

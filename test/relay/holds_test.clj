@@ -344,3 +344,28 @@
         report (agentloop/classify {:outcome (agentloop/parse-outcome out) :exit 0 :session "s" :now t0})]
     (is (= ["ran" true] ((juxt :outcome :crashed) report)))
     (is (nil? (:labels report)) "no labels, so relay assumes every label the session could hold")))
+
+(deftest the-operator-reverts-at-the-terminal
+  (with-data
+    (fn [data]
+      (let [sys (inbound/system data)
+            submit #(inbound/submit! sys %)
+            state #(inbound/current-state sys)]
+        (submit {:type :role/add :actor "operator" :args {:id "clerk" :title "C" :instructions "x"}})
+        (relay data "fact" "add" "The key is in the drawer." "--topic" "home")
+        (let [id (first (keys (:facts (state))))
+              v1 (:seq (first (:versions (core/fact (state) id))))]
+          (submit {:type :fact/correct :actor "clerk" :labels ["contaminated"] :args {:fact id :retract true :why "x"}})
+          (let [shown (atom "")]
+            (binding [cli/*tty* (tty shown typed-code)]
+              (is (= 0 (:exit (relay data "fact" "revert" (str id) (str v1))))))
+            (is (str/includes? @shown "The key is in the drawer.")))
+          (is (not (:retracted (core/fact-as-known (core/fact (state) id) nil))))
+          (relay data "fact" "correct" (str id) "--why" "moved" "--text" "The key is on the hook.")
+          (is (= "The key is on the hook." (:text (core/fact-as-known (core/fact (state) id) nil)))))
+        (submit {:type :doc/put :actor "clerk" :args {:path "a.md" :content "Clean."}})
+        (let [v (:seq (core/doc-version (state) "a.md" {}))]
+          (submit {:type :doc/remove :actor "clerk" :labels ["contaminated"] :args {:path "a.md"}})
+          (binding [cli/*tty* (tty (atom "") typed-code)]
+            (relay data "doc" "revert" "a.md" (str v)))
+          (is (= "Clean." (:content (core/doc-version (state) "a.md" {})))))))))

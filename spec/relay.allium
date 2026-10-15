@@ -144,6 +144,16 @@ contract Tools {
         -- clean. A contaminated item is never searched unless accepted.
         -- A quarantined memo is withheld even then.
 
+    @invariant AContaminatedChangeNeverHidesCleanContent
+        -- Fact and doc writes are class write, so a contaminated session
+        -- can make them unasked. A read that does not accept
+        -- contamination therefore shows the latest version no
+        -- contaminated session wrote, with a note that a newer change
+        -- is withheld, rather than the contaminated retraction,
+        -- supersession, removal or overwrite. The operator can put an
+        -- earlier version back with relay fact revert or relay doc
+        -- revert, confirmed at the terminal like trust.
+
     @invariant AScriptHarnessGetsNoTools
         -- A script harness runs a program no policy watches, which could
         -- claim any labels, so a role on one is offered no tools, relay's
@@ -880,6 +890,44 @@ rule ReleaseMemo {
         -- operator's terminal and asks for a fresh code typed back
         -- there. The role then reads it like any other memo and takes
         -- on its labels.
+}
+
+rule RevertFact {
+    when: FactRevertRequested(caller, fact, version)
+
+    requires: caller.is_operator
+    requires: version.fact = fact
+
+    ensures: FactVersion.created(
+        fact: fact,
+        recorded_at: now,
+        actor: caller,
+        change: corrected,
+        topic: version.topic,
+        text: version.text,
+        valid_from: version.valid_from,
+        valid_to: version.valid_to,
+        superseded_by: version.superseded_by
+    )
+
+    @guidance
+        -- The restored version carries the labels of the version it
+        -- copies.
+}
+
+rule RevertDoc {
+    when: DocRevertRequested(caller, doc, version)
+
+    requires: caller.is_operator
+    requires: version.doc = doc
+
+    ensures: DocVersion.created(
+        doc: doc,
+        at: now,
+        actor: caller,
+        content: version.content,
+        removed: version.removed
+    )
 }
 
 rule TrustText {
@@ -2338,6 +2386,10 @@ surface Inbound {
         MemoReleaseRequested(caller, memo)
             when caller.is_operator
         TrustRequested(caller, kind: TrustKind, ref)
+            when caller.is_operator
+        FactRevertRequested(caller, fact, version)
+            when caller.is_operator
+        DocRevertRequested(caller, doc, version)
             when caller.is_operator
 
     @guarantee EveryWriteGoesThroughOneInboundPath

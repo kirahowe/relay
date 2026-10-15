@@ -53,12 +53,18 @@ Every command needs the data directory, from --data <dir> or from the file
   relay facts [<topic>] [--search <s>] [--as-of <t>] [--known-at <t>] [--all]
                                       what relay knows; times as for facts
   relay fact <id>                     every version of a fact
+  relay fact add <text> [--topic <t>] [--from <time>] [--to <time>]
+                                      record a fact
+  relay fact correct <id> --why <w> [--text <t>] [--topic <t>] [--from <time>] [--to <time>]
+                                      correct a fact
+  relay fact revert <id> <version>    put back an earlier version of a fact
   relay notes <role>                  a role's notes
   relay journal <role> [-n <count>]   a role's latest journal entries
   relay docs                          the docs
   relay doc <path> [--version <n>] [--history]
                                       read a doc, or list its versions
   relay put <path>                    write a doc from stdin
+  relay doc revert <path> <version>   put back an earlier version of a doc
   relay export <dir>                  write a read-only snapshot of the knowledge
   relay log [--tail <n>] [--json]     the events, newest last
   relay holds                         tool calls waiting for you to decide, in full
@@ -71,7 +77,7 @@ Every command needs the data directory, from --data <dir> or from the file
   relay tool --data <dir> --role <r> <name>
                                       run a role's tool call (harnesses use this)
 
-approve, deny, release and trust show you what they are about on the
+approve, deny, release, trust and revert show you what they are about on the
 terminal and ask you to type a code back there, so only a person at the
 terminal can make those decisions.
 
@@ -224,7 +230,8 @@ contaminated, for text you copied from somewhere you do not trust.")
    :coerce {:subject :string :message :string :title :string :reports-to :string
             :harness :string :model :string :schedule :string :note :string
             :tail :long :data :string :search :string :as-of :string :known-at :string
-            :version :long :role :string :trace :string :untrusted :boolean :approvals :boolean}})
+            :version :long :role :string :trace :string :untrusted :boolean :approvals :boolean
+            :topic :string :from :string :to :string :why :string :text :string}})
 
 (defn- command
   "Runs one command with the data directory's system. Returns {:exit :out},
@@ -282,7 +289,30 @@ contaminated, for text you copied from somewhere you do not trust.")
       "facts" (tool-output sys "facts" {:topic (first more) :search (:search opts)
                                         :as_of (:as-of opts) :known_at (:known-at opts)
                                         :all (:all opts)})
-      "fact" (tool-output sys "fact_history" {:fact (some-> (first more) parse-long)})
+      "fact" (let [[sub a b] more]
+               (case sub
+                 "add" (let [events (submit! sys :fact/add {:text a :topic (:topic opts)
+                                                            :valid-from (:from opts) :valid-to (:to opts)})]
+                         (result 0 (str "Recorded fact " (:seq (first events)))))
+                 "correct" (do (submit! sys :fact/correct
+                                        (cond-> {:fact (some-> a parse-long) :why (:why opts)}
+                                          (:text opts) (assoc :text (:text opts))
+                                          (:topic opts) (assoc :topic (:topic opts))
+                                          (:from opts) (assoc :valid-from (:from opts))
+                                          (:to opts) (assoc :valid-to (:to opts))))
+                               (result 0 (str "Corrected fact " a)))
+                 "revert" (let [id (some-> a parse-long)
+                                version (some-> b parse-long)
+                                v (first (filter #(= version (:seq %)) (:versions (core/fact (state) id))))]
+                            (when-not v (fail! "usage: relay fact revert <fact> <version>, a version from relay fact <fact>"))
+                            (confirm! "revert" [(str "Fact " id " back to version " version ":") ""
+                                                (str (when (:topic v) (str "[" (:topic v) "] ")) (:text v))
+                                                (str "holds from " (or (:valid-from v) "the start") " until "
+                                                     (or (:valid-to v) "further notice"))
+                                                "" (labels-line (:labels v))])
+                            (submit! sys :fact/revert {:fact id :version version})
+                            (result 0 (str "Reverted fact " id " to version " version ".")))
+                 (tool-output sys "fact_history" {:fact (some-> sub parse-long)})))
       "notes" (let [[r] more]
                 (when-not r (fail! "usage: relay notes <role>"))
                 (lines (render/notes zone (core/notes (state) r))))
@@ -290,11 +320,20 @@ contaminated, for text you copied from somewhere you do not trust.")
                   (when-not r (fail! "usage: relay journal <role> [-n <count>]"))
                   (tool-output sys "journal" {:owner r :limit (:tail opts)}))
       "docs" (tool-output sys "docs" {})
-      "doc" (let [[path] more]
+      "doc" (let [[path a b] more]
               (when-not path (fail! "usage: relay doc <path> [--version <n>] [--history]"))
-              (if (:history opts)
+              (when (= "revert" path)
+                (let [version (some-> b parse-long)
+                      v (core/doc-version (state) a {:version version})]
+                  (when-not v (fail! "usage: relay doc revert <path> <version>, a version from relay doc <path> --history"))
+                  (confirm! "revert" [(str a " back to version " version ":") ""
+                                      (if (:removed v) "(removed)" (:content v)) "" (labels-line (:labels v))])
+                  (submit! sys :doc/revert {:path a :version version})))
+              (cond
+                (= "revert" path) (result 0 (str "Reverted " a " to version " b "."))
+                (:history opts)
                 (tool-output sys "doc_history" {:path path})
-                (tool-output sys "doc_get" {:path path :version (:version opts)})))
+                :else (tool-output sys "doc_get" {:path path :version (:version opts)})))
       "put" (let [[path] more]
               (lines (render/doc-put path (submit! sys :doc/put {:path path :content (stdin-text)}))))
       "export" (let [[dir] more]

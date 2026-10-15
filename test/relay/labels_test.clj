@@ -547,3 +547,54 @@
         id (first (keys (:facts (:state w))))
         w (run w "operator" [] :fact/correct {:fact id :text "clean words" :topic "a" :why "fix"})]
     (is (core/contaminated? (:labels (core/fact-as-known (core/fact (:state w) id) nil))))))
+
+(defn- read-tool [w tool role args]
+  (let [r ((:read (get tools/builtin tool)) {:state (:state w) :config cfg :now (:now w)} role args)]
+    (if (map? r) r {:content r :labels []})))
+
+(deftest a-contaminated-change-never-hides-clean-facts
+  ;; Regression: a contaminated session could retract or supersede a clean
+  ;; fact, and a clean reader saw no trace of it.
+  (doseq [[what change] [["a retraction" (fn [w id] (run w "hub" ["contaminated"] :fact/correct {:fact id :retract true :why "x"}))]
+                         ["a correction" (fn [w id] (run w "hub" ["contaminated"] :fact/correct {:fact id :text "Evil." :why "x"}))]
+                         ["a supersession" (fn [w id] (run w "hub" ["contaminated"] :fact/supersede {:fact id :text "Evil."}))]]]
+    (let [w (-> (seed) (run "clerk" [] :fact/add {:text "The key is in the drawer." :valid-from "2026-01-01"}))
+          id (first (keys (:facts (:state w))))
+          w (change (advance w 60) id)
+          clean (read-tool w "facts" "clerk" {})
+          accepted (read-tool w "facts" "clerk" {:accept_contamination true})]
+      (is (str/includes? (:content clean) "The key is in the drawer.") what)
+      (is (str/includes? (:content clean) "newer change to this is contaminated") what)
+      (is (not (core/contaminated? (:labels clean))) what)
+      (is (not (str/includes? (:content accepted) "The key is in the drawer.")) (str what ", accepted, shows the change")))))
+
+(deftest a-contaminated-change-never-hides-clean-docs
+  (doseq [[what change] [["a removal" #(run % "hub" ["contaminated"] :doc/remove {:path "a.md"})]
+                         ["an overwrite" #(run % "hub" ["contaminated"] :doc/put {:path "a.md" :content "Evil."})]]]
+    (let [w (change (-> (seed) (run "clerk" [] :doc/put {:path "a.md" :content "Clean text."})))
+          listed (read-tool w "docs" "clerk" {})
+          got (read-tool w "doc_get" "clerk" {:path "a.md"})]
+      (is (str/includes? (:content listed) "a.md") what)
+      (is (str/includes? (:content listed) "contaminated and withheld") what)
+      (is (str/starts-with? (:content got) "Clean text.") what)
+      (is (str/includes? (:content got) "contaminated and withheld") what)
+      (is (not (core/contaminated? (:labels got))) what))))
+
+(deftest the-operator-can-revert-a-fact-or-a-doc
+  (let [w (-> (seed)
+              (run "clerk" [] :fact/add {:text "Clean."})
+              (run "clerk" [] :doc/put {:path "a.md" :content "Clean doc."}))
+        id (first (keys (:facts (:state w))))
+        clean-fact (:seq (first (:versions (core/fact (:state w) id))))
+        clean-doc (:seq (core/doc-version (:state w) "a.md" {}))
+        w (-> w
+              (run "hub" ["contaminated"] :fact/correct {:fact id :retract true :why "x"})
+              (run "hub" ["contaminated"] :doc/remove {:path "a.md"}))]
+    (is (= (:state w) (:state (run w "hub" [] :fact/revert {:fact id :version clean-fact}))) "not a role")
+    (let [w (-> w
+                (run "operator" [] :fact/revert {:fact id :version clean-fact})
+                (run "operator" [] :doc/revert {:path "a.md" :version clean-doc}))
+          v (core/fact-as-known (core/fact (:state w) id) nil)
+          d (core/doc-version (:state w) "a.md" {})]
+      (is (= ["Clean." false []] [(:text v) (boolean (:retracted v)) (:labels v)]))
+      (is (= ["Clean doc." []] [(:content d) (:labels d)])))))

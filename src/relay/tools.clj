@@ -74,11 +74,15 @@
           valid-to (str "until " (t valid-to))
           :else "with no known start or end")))
 
-(defn- fmt-fact [config {:keys [id topic text supersedes superseded-by] :as f}]
+(def ^:private newer-withheld
+  "A newer change to this is contaminated and withheld; pass accept_contamination to see it.")
+
+(defn- fmt-fact [config {:keys [id topic text supersedes superseded-by newer-withheld?] :as f}]
   (str "Fact " id (when topic (str " [" topic "]")) ", holds " (validity config f)
        (when supersedes (str ", replacing fact " supersedes))
        (when superseded-by (str ", superseded by fact " superseded-by))
-       "\n  " text))
+       "\n  " text
+       (when (:newer-withheld f) (str "\n  (" newer-withheld ")"))))
 
 (defn- fmt-version [config {:keys [change recorded-at actor why superseded-by] :as v}]
   (str (local-time config recorded-at) " by " actor ": "
@@ -248,7 +252,9 @@
     :parameters (obj {:topic text :search text :as_of world-time :known_at world-time :all flag
                       :accept_contamination accept})
     :read (fn [{:keys [state config] :as ctx} _ {:keys [accept_contamination] :as args}]
-            (let [q (merge (times ctx args) (select-keys args [:all]))
+            (let [q (merge (times ctx args) (select-keys args [:all])
+                           ;; A contaminated change never hides a clean record.
+                           {:clean (not accept_contamination)})
                   tainted (filter #(core/contaminated? (:labels %)) (core/facts state q))
                   ;; A contaminated fact's text is not even searched unless
                   ;; it is accepted, since a match would say something about it.
@@ -380,13 +386,14 @@
     :description "List the docs: longer shared content that is really a file, by path."
     :parameters (obj {:accept_contamination accept})
     :read (fn [{:keys [state config]} _ {:keys [accept_contamination]}]
-            (let [ds (core/docs state nil)]
+            (let [ds (core/docs state nil (not accept_contamination))]
               (if (empty? ds)
                 "There are no docs."
                 (show (for [{:keys [path at actor content seq] :as v} ds
                             :let [[who who-labels] (author state actor)]]
                         (item (str path " (" (count content) " characters, last written "
-                                   (local-time config at) " by " actor ")")
+                                   (local-time config at) " by " actor ")"
+                                   (when (:newer-withheld v) (str " (" newer-withheld ")")))
                               (core/union (core/version-labels state v) (core/path-labels state path))
                               (withheld (str "A doc, version " seq " by " who))
                               who-labels))
@@ -397,11 +404,15 @@
     :description "Read a doc, the latest version unless you give one from its history."
     :parameters (obj {:path text :version {:type "integer"} :accept_contamination accept} "path")
     :read (fn [{:keys [state]} _ {:keys [path version accept_contamination]}]
-            (let [v (core/doc-version state path {:version version})]
+            (let [v (if (or version accept_contamination)
+                      (core/doc-version state path {:version version})
+                      (core/doc-as-shown state path true))]
               (cond (nil? v) (throw (ex-info (str "There is no doc at " path
                                                   (when version (str " with version " version)) ".") {}))
                     (:removed v) (throw (ex-info (str path " was removed in version " (:seq v) ".") {}))
-                    :else (show [(item (:content v) (core/content-labels (:labels v))
+                    :else (show [(item (str (:content v)
+                                            (when (:newer-withheld v) (str "\n\n[relay: " newer-withheld "]")))
+                                       (core/content-labels (:labels v))
                                        (withheld (str "Version " (:seq v) " of the doc")))]
                                 "" accept_contamination))))}
 

@@ -127,7 +127,15 @@ tool of class `act` or `egress` is quarantined: the role is not shown it
 and is not woken for it until the operator runs `relay release <memo>`.
 A role with no such tool reads a contaminated memo like any other and
 becomes contaminated; agentloop then holds its calls to relay's own `act`
-tools. `relay trust <kind> <ref>` clears `contaminated`
+tools. Writing facts and docs is class `write`, so a contaminated session may
+retract, supersede, remove or overwrite them without asking. That never
+hides clean content: a read that does not accept contamination shows the
+latest version no contaminated session wrote, with a note that a newer
+change is withheld. `relay fact revert <fact> <version>` and `relay doc
+revert <path> <version>` put an earlier version back, and `relay fact
+add` and `relay fact correct` let the operator write facts directly.
+
+`relay trust <kind> <ref>` clears `contaminated`
 from something the operator has read and vouches for. It never clears
 `private`. `--untrusted` on `relay memo`, `put`, `add`, `update` and
 `routine` marks what the operator writes as contaminated, for text pasted
