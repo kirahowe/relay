@@ -111,6 +111,10 @@
               (run "operator" :role/add {:id "clerk" :title "Clerk" :instructions "File things."})
               (run "operator" :wake/start {:role "clerk" :note "Go."}))
         wake (core/running-wake (:state w) "clerk")]
+    (let [w (run (run w "dispatcher" :wake/end {:wake (:id wake) :outcome "ran"}) "operator" :wake/start {:role "clerk" :chat true})
+          chat (core/running-wake (:state w) "clerk")
+          w (run w "dispatcher" :wake/end {:wake (:id chat) :outcome "ran" :session "s" :held [{:id "a" :name "post"}]})]
+      (is (empty? (core/open-holds (:state w))) "a conversation's holds go through its client, not relay"))
     (doseq [args [{:outcome "limited" :session "s" :held [{:id "a" :name "post"}]}
                   {:outcome "ran" :held [{:id "a" :name "post"}]}
                   {:outcome "ran" :session "s" :held [{:id 3} "x" nil]}

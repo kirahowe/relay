@@ -28,6 +28,13 @@
 -- world time and are recorded at a moment of real time, notes and a journal
 -- for each role, and docs.
 --
+-- Every event carries labels, private and contaminated, saying what the
+-- text in it has seen. A role's session gathers the labels of what it
+-- reads and agentloop polices its calls by them, so that no session holds
+-- the operator's private data, an outsider's text and a way out at once
+-- without a person saying yes. A call that needs a person ends the wake
+-- held, and the role waits until the operator decides.
+--
 -- This file says what relay does and when. It does not say how the log is
 -- stored. The code that decides is the pure function `decide` in core.clj,
 -- and where this file and that code disagree the code is right.
@@ -97,10 +104,49 @@ contract Tools {
     -- inbound path as that role.
 
     @invariant ToolsAreNamedAndClassed
-        -- Every tool has a name and one class: read (reads relay data
-        -- or the outside world), write (changes relay data), egress
-        -- (sends data off the machine) or act (changes something
-        -- outside relay). Nothing depends on the class yet.
+        -- Every tool has a name and one class: read (returns content
+        -- and sends nothing out), write (changes relay data only),
+        -- egress (can send what the model chooses where an outsider can
+        -- see it) or act (does something in the operator's name outside
+        -- relay). relay's own tools that change the registry, routines
+        -- or dead letters are act. An external tool also names the
+        -- labels its output always carries; the settings refuse a tool
+        -- without them, or with a label relay does not know.
+
+    @invariant ThePolicyFollowsTheClass
+        -- agentloop decides each call from the session's labels and the
+        -- tool's class: an egress call waits for a person once the
+        -- session holds private and contaminated, an act call once it
+        -- holds contaminated, and a tool marked always_hold always does.
+        -- The tool's static labels join the session when the call is
+        -- decided, and its result's labels when the result arrives.
+
+    @invariant CallsComeInEnvelopes
+        -- A call reaches relay as exactly {input, labels, call_id}, the
+        -- labels being the calling session's and known to relay, and
+        -- its input fitting the tool's parameters. Anything else is
+        -- refused before it runs and the model is told only that the
+        -- tool failed. The result goes back as {content, is_error,
+        -- labels}.
+
+    @invariant ReadsCarryTheLabelsOfWhatTheyShow
+        -- A read tool returns the labels of every version whose text it
+        -- shows, and of every role id it shows, and private as well
+        -- when it shows relay content: a memo, fact, doc, note, journal
+        -- entry or routine's instructions. A refusal that quotes stored
+        -- text carries that text's labels. Over-labelling is allowed;
+        -- under-labelling never is.
+
+    @invariant ContaminatedTextIsWithheldUnlessAccepted
+        -- Unless the call asks for accept_contamination, a read shows a
+        -- placeholder for each contaminated item, naming only what is
+        -- clean (a number, a kind, a clean author), so the caller stays
+        -- clean. A contaminated item is never searched unless accepted.
+        -- A quarantined memo is withheld even then.
+
+    @invariant AScriptHarnessIsOfferedNoExternalTools
+        -- A script harness runs a program no policy watches, so a role
+        -- on one is offered relay's own tools only.
 
     @invariant OfferedByGrant
         -- relay's own tools are offered to every role, except these:
@@ -188,8 +234,13 @@ enum DeadLetterReason { never_closed | blocked | recipient_removed }
 enum NotificationKind {
     memo_for_operator | work_abandoned | runaway_guard_tripped
     | harness_needs_attention | harness_unreachable
+    | hold_opened | memo_quarantined
 }
 enum ToolClass { read | write | egress | act }
+enum Label { private | contaminated }
+enum HoldStatus { open | allowed | denied }
+enum HoldVerdict { allow | deny }
+enum TrustKind { memo_text | fact_text | doc_text | note_text | routine_text | role_text | journal_text }
 enum FactChange { added | superseded | corrected | retracted }
 
 ------------------------------------------------------------
@@ -203,8 +254,15 @@ entity Event {
     -- When it was recorded.
     at: Timestamp
     actor: Caller
-    -- Reserved. Always empty for now.
-    labels: Set<String>
+    -- What the text in the event has seen: for a role's call, the
+    -- calling session's labels; for an event that copies or quotes text
+    -- from elsewhere, the labels of that text as well. The operator
+    -- writes with none unless they mark the text untrusted.
+    labels: Set<Label>
+    -- The labels of the session whose call wrote it, for a role.
+    session_labels: Set<Label>
+    -- The labels of whatever text it copies or quotes.
+    copied_labels: Set<Label>
 }
 
 entity Caller {
@@ -273,7 +331,12 @@ entity Role {
     wakes: Wake with role = this
 
     open_memos: inbox where status = unread
+    deliverable_memos: inbox where status = unread and not is_quarantined
     waiting_memos: inbox where is_waiting
+    holds: Hold with role = this
+    open_holds: holds where status = open
+    -- Decided, and not yet carried back to the held session.
+    decided_holds: holds where status != open and delivered_in = null
     running_wakes: wakes where status = running
     -- Wakes the role got to work in, within the runaway window. A
     -- conversation counts for nothing, and neither does a wake the harness
@@ -286,7 +349,8 @@ entity Role {
     -- The tools it is offered, by name.
     offered_tools: Set<Tool>
     is_running: running_wakes.count > 0
-    has_work: waiting_memos.count > 0
+    is_held: open_holds.count > 0
+    has_work: waiting_memos.count > 0 or decided_holds.count > 0
     is_paused: harness.is_paused
     is_running_away: recent_wakes.count >= config.runaway_wakes
 
@@ -319,6 +383,10 @@ entity Memo {
     -- Set when a dead run of a routine was replaced by a newer run, so
     -- that it stays dead.
     superseded_by: Memo?
+    -- The labels of the event that sent it.
+    labels: Set<Label>
+    -- Set when the operator delivered it despite its being contaminated.
+    released: Boolean
 
     transitions status {
         unread -> read
@@ -331,7 +399,12 @@ entity Memo {
     -- A run of a routine that has fired again since.
     is_replaced_run: routine != null and routine.last_run != this
     is_backing_off: retry_at != null and retry_at > now
-    is_waiting: status = unread and not is_backing_off
+    -- black box: whether a set of labels holds contaminated.
+    is_contaminated: has_contaminated(labels)
+    -- Every role holds act tools (routine_write), so none may take in a
+    -- contaminated memo by itself: it waits for the operator.
+    is_quarantined: not is_for_operator and is_contaminated and not released
+    is_waiting: status = unread and not is_backing_off and not is_quarantined
 }
 
 entity Routine {
@@ -398,10 +471,47 @@ entity Wake {
     sessions: List<String>
     -- The earlier wake this one carries on from, if any.
     resumes: Wake?
+    -- The decided holds it carries back to the session it resumes.
+    resolves: Set<Hold>
+    -- The calls its session left waiting for a person, by call id.
+    held: List<String>
+    -- The labels its session started with: those of everything in its
+    -- prompts.
+    seed_labels: Set<Label>
+    -- The labels its session ended with, as the harness reported them,
+    -- or with none reported, every label it could have gathered.
+    labels: Set<Label>
 
     transitions status {
         running -> ended
         terminal: ended
+    }
+}
+
+entity Hold {
+    -- A tool call agentloop held for a person. The id is the seq of the
+    -- event that opened it.
+    role: Role
+    wake: Wake
+    session: String
+    call_id: String
+    tool: String
+    input: String
+    -- sha256 of the call's input as agentloop held it, handed back with
+    -- the decision so it cannot be applied to a different call.
+    input_sha256: String?
+    -- The session's labels when it held the call.
+    labels: Set<Label>
+    status: HoldStatus
+    reason: String?
+    resolved_by: Caller?
+    -- The wake that carried the decision back to the session.
+    delivered_in: Wake?
+
+    transitions status {
+        open -> allowed
+        open -> denied
+        terminal: allowed, denied
     }
 }
 
@@ -709,6 +819,61 @@ rule NotifyOperatorOfMemo {
         -- carries the subject as its title and the body as its text.
 }
 
+rule NotifyOperatorOfQuarantine {
+    when: memo: Memo.created
+
+    requires: memo.is_quarantined
+
+    ensures: Notification.created(
+        kind: memo_quarantined,
+        title: quarantine_title(memo),   -- black box: which memo, to whom
+        body: quarantine_note(memo),     -- black box: none of the memo's text
+        about: memo.recipient,
+        memo: memo,
+        created_at: now,
+        delivery: pending
+    )
+
+    @guidance
+        -- A contaminated memo to a role waits for the operator: it is
+        -- not shown to the role, carried in a wake or counted as
+        -- waiting. The notification quotes nothing of it.
+}
+
+rule ReleaseMemo {
+    when: MemoReleaseRequested(caller, memo)
+
+    requires: caller.is_operator
+    requires: memo.status = unread
+    requires: memo.is_quarantined
+
+    ensures: memo.released = true
+
+    @guidance
+        -- relay release shows the memo in full, with its labels, on the
+        -- operator's terminal and asks for a fresh code typed back
+        -- there. The role then reads it like any other memo and takes
+        -- on its labels.
+}
+
+rule TrustText {
+    when: TrustRequested(caller, kind, ref)
+
+    requires: caller.is_operator
+    requires: has_contaminated(trusted_labels(kind, ref))   -- black box: the labels of what it says now
+
+    ensures: TextTrusted(kind: kind, ref: ref)
+
+    @guidance
+        -- The operator has read the text and vouches for it: a memo, a
+        -- fact's current version, a doc's latest version and its path,
+        -- a note, a routine, a role's id, title and instructions, or a
+        -- journal entry. relay trust shows it on the terminal and asks
+        -- for a fresh code typed back there. It clears contaminated
+        -- from what that text says now and never clears private.
+        -- Copies already made keep their labels.
+}
+
 rule CloseMemo {
     when: MemoCloseRequested(caller, memo, outcome)
 
@@ -1003,14 +1168,17 @@ rule RetireOneOffRoutine {
 rule WakeOnTick {
     when: DispatcherTicks(lost_wakes)
 
-    for role in Roles where status = active and has_work and not is_running and not is_paused and not is_running_away:
+    for role in Roles where status = active and has_work and not is_held and not is_running and not is_paused and not is_running_away:
         ensures: DispatchedWakeSpawned(role: role)
 
     @guidance
         -- The tick then starts each wake in its own process, so a slow
         -- role holds up neither the others nor the next tick. A memo
-        -- waiting out a retry delay is left out. Nobody is woken while
-        -- their harness is paused.
+        -- waiting out a retry delay is left out, and so is a
+        -- quarantined one. Nobody is woken while their harness is
+        -- paused or a call of theirs waits for the operator. A role
+        -- whose holds the operator has decided is woken to carry the
+        -- decisions back.
 }
 
 rule StartDispatchedWake {
@@ -1022,20 +1190,25 @@ rule StartDispatchedWake {
     requires: not role.is_running
     requires: not role.is_paused
     requires: not role.is_running_away
-    requires: role.waiting_memos.count > 0
+    requires: not role.is_held
+    requires: role.has_work
 
-    ensures: Wake.created(
-        role: role,
-        memos: role.waiting_memos,
-        resumes: role.interrupted_wake,
-        harness_name: role.harness.name,
-        pid: pid,
-        pid_start: pid_start,
-        chat: false,
-        started_at: now,
-        status: running
-    )
-    ensures: role.interrupted_wake = null
+    ensures:
+        let wake = Wake.created(
+            role: role,
+            memos: role.waiting_memos,
+            resumes: role.interrupted_wake,
+            resolves: role.decided_holds,
+            harness_name: role.harness.name,
+            pid: pid,
+            pid_start: pid_start,
+            chat: false,
+            started_at: now,
+            status: running
+        )
+        role.interrupted_wake = null
+        for hold in role.decided_holds:
+            hold.delivered_in = wake
 
     @guidance
         -- A dispatched wake carries only the memos that are not
@@ -1049,28 +1222,35 @@ rule StartRequestedWake {
     requires: caller.is_operator or caller.is_dispatcher
     requires: role.status = active
     requires: not role.is_running
-    requires: role.open_memos.count > 0 or (note != null and note != "")
+    requires: not role.is_held
+    requires: role.deliverable_memos.count > 0 or role.decided_holds.count > 0 or (note != null and note != "")
 
-    ensures: Wake.created(
-        role: role,
-        memos: role.open_memos,
-        note: note,
-        resumes: role.interrupted_wake,
-        harness_name: role.harness.name,
-        pid: pid,
-        pid_start: pid_start,
-        chat: false,
-        started_at: now,
-        status: running
-    )
-    ensures: role.interrupted_wake = null
+    ensures:
+        let wake = Wake.created(
+            role: role,
+            memos: role.deliverable_memos,
+            note: note,
+            resumes: role.interrupted_wake,
+            resolves: role.decided_holds,
+            harness_name: role.harness.name,
+            pid: pid,
+            pid_start: pid_start,
+            chat: false,
+            started_at: now,
+            status: running
+        )
+        role.interrupted_wake = null
+        for hold in role.decided_holds:
+            hold.delivered_in = wake
 
     @guidance
         -- A wake asked for by hand carries every open memo, including
         -- those backing off, and ignores the runaway guard and a paused
         -- harness, so it doubles as a way to try a harness early. In
         -- every other way it is an ordinary wake. With no open memos and
-        -- no note it records nothing.
+        -- no note it records nothing. It never carries a quarantined
+        -- memo, and is refused while a call waits for the operator,
+        -- since the session would only stop at the same call.
 }
 
 rule OpenConversation {
@@ -1097,7 +1277,9 @@ rule OpenConversation {
         -- so no wake runs alongside it, but it carries no memos: what
         -- the role does with them there is up to the conversation, and
         -- nothing counts against them when it ends. It does not resume
-        -- an interrupted wake and leaves it to be resumed later.
+        -- an interrupted wake and leaves it to be resumed later. It
+        -- may open while a call of the role's waits for the operator,
+        -- since it runs in a session of its own.
         -- A conversation runs over ACP, so any ACP client can hold one;
         -- relay chat is one such client, on the operator's terminal.
 }
@@ -1114,11 +1296,13 @@ rule RunWake {
         -- wake that resumes another continues that wake's session where
         -- the harness can and is told it was cut short. A conversation
         -- has no prompt and does not run headless: it runs over ACP, and
-        -- the client sends each turn.
+        -- the client sends each turn. A wake carrying decided holds says
+        -- what the operator decided and hands the decisions to the
+        -- harness with the session to resume.
 }
 
 rule EndWake {
-    when: WakeReported(wake, outcome, exit?, crashed, cut_short, session?, sessions?, said?, transcript?, resets_at?)
+    when: WakeReported(wake, outcome, exit?, crashed, cut_short, session?, sessions?, said?, transcript?, resets_at?, held?, labels?)
 
     requires: wake.status = running
     requires: sessions = null or wake.chat
@@ -1132,6 +1316,8 @@ rule EndWake {
         wake.said = said
         wake.resets_at = resets_at
         wake.sessions = sessions ?? []
+        wake.held = usable_held_calls(wake, outcome, session, held)   -- black box: see guidance
+        wake.labels = labels ?? session_labels_bound(wake.role)       -- black box: see guidance
 
     @guidance
         -- Only the dispatcher ends wakes. Wakes end by the harness
@@ -1140,13 +1326,18 @@ rule EndWake {
         -- to stop it. A wake reports
         -- the one session a later wake can resume. A conversation
         -- reports every session it used instead, so the log says which
-        -- sessions a conversation held.
+        -- sessions a conversation held. Only a wake that ran and has a
+        -- session to resume can leave calls held; anything else in the
+        -- list is dropped rather than refused, so a wake always ends.
+        -- With no labels reported, what the wake said carries every
+        -- label anything in relay has, private, and the static labels
+        -- of every tool the role is granted.
 }
 
 rule InterruptedWakeIsKept {
     when: wake: Wake.status transitions_to ended
 
-    requires: wake.outcome != ran or wake.cut_short
+    requires: wake.outcome != ran or wake.cut_short or wake.held.count > 0
     requires: not wake.chat
 
     ensures: wake.role.interrupted_wake = wake
@@ -1155,7 +1346,98 @@ rule InterruptedWakeIsKept {
         -- The next ordinary wake of the role carries on from this one.
         -- A wake cut short at its deadline still ran, so its memos are
         -- settled as for any wake that ran.
-        -- A conversation cut short is not resumed.
+        -- A conversation cut short is not resumed. A wake that left
+        -- calls held is resumed once the operator has decided them.
+}
+
+-- Holds
+
+rule OpenHold {
+    when: WakeReported(wake, outcome, exit?, crashed, cut_short, session?, sessions?, said?, transcript?, resets_at?, held?, labels?)
+
+    requires: wake.status = running
+    requires: outcome = ran
+    requires: not wake.chat
+    requires: session != null
+
+    for call in usable_held_calls(wake, outcome, session, held):
+        requires: not exists Hold{session: session, call_id: call.id}
+        ensures: Hold.created(
+            role: wake.role,
+            wake: wake,
+            session: session,
+            call_id: call.id,
+            tool: call.name,
+            input: call.input,
+            input_sha256: call.input_sha256,
+            labels: labels ?? session_labels_bound(wake.role),
+            status: open
+        )
+
+    @guidance
+        -- A call agentloop held in a wake's session. The role is not
+        -- woken again until every hold of its is decided.
+}
+
+rule HeldAgainIsCarriedBackAgain {
+    when: WakeReported(wake, outcome, exit?, crashed, cut_short, session?, sessions?, said?, transcript?, resets_at?, held?, labels?)
+
+    requires: wake.status = running
+    requires: outcome = ran
+    requires: session != null
+
+    for call in usable_held_calls(wake, outcome, session, held):
+        let hold = Hold{session: session, call_id: call.id}
+        requires: exists hold
+        requires: hold.status != open
+        requires: hold.delivered_in != null
+        ensures: hold.delivered_in = null
+
+    @guidance
+        -- A decision that was carried back, with the session holding
+        -- the same call again, never reached it: the harness failed
+        -- before it could apply it. It is carried back again, rather
+        -- than asked about twice.
+}
+
+rule NotifyOperatorOfHold {
+    when: hold: Hold.created
+
+    ensures: Notification.created(
+        kind: hold_opened,
+        title: hold_title(hold),   -- black box: who wants to use what
+        body: hold.input,
+        about: hold.role,
+        created_at: now,
+        delivery: pending
+    )
+}
+
+rule ResolveHold {
+    when: HoldResolveRequested(caller, hold, verdict, reason?)
+
+    -- A person decides, never a model or a tool.
+    requires: caller.is_operator
+    requires: hold.status = open
+
+    ensures:
+        hold.status = if verdict = allow: allowed else: denied
+        hold.reason = reason
+        hold.resolved_by = caller
+
+    @guidance
+        -- relay approve and relay deny show the call in full on the
+        -- operator's terminal and ask for a fresh code to be typed back
+        -- there, never on stdin, so no harness or pipe can decide.
+}
+
+rule DenyHoldsOfRemovedRole {
+    when: role: Role.status transitions_to removed
+
+    for hold in role.open_holds:
+        ensures:
+            hold.status = denied
+            hold.reason = "The role was removed."
 }
 
 rule HarnessRecovers {
@@ -1301,6 +1583,7 @@ rule RetryMemoLater {
     when: wake: Wake.status transitions_to ended
 
     requires: wake.outcome = ran   -- the harness's failures fail no memo
+    requires: wake.held.count = 0  -- nor does waiting for the operator
 
     for memo in wake.memos:
         let attempt = memo.attempts + 1
@@ -1325,6 +1608,7 @@ rule AbandonMemo {
     when: wake: Wake.status transitions_to ended
 
     requires: wake.outcome = ran
+    requires: wake.held.count = 0
 
     for memo in wake.memos:
         let attempt = memo.attempts + 1
@@ -1777,9 +2061,48 @@ invariant TimeNeverDecreases {
             b.seq = a.seq + 1 implies b.at >= a.at
 }
 
-invariant NoLabelsForNow {
+invariant ARoleCallCarriesItsSessionsLabels {
+    -- A role's tool call writes with the labels its session holds,
+    -- which the harness sends with every call.
+    for event in Events where actor.kind = role:
+        includes_all(event.labels, event.session_labels)   -- black box: a superset of b
+}
+
+invariant NoEventDropsWhatItCopies {
+    -- An event that copies or quotes text (a dead letter quoting a memo
+    -- and a transcript, a routine's run, a notification) carries that
+    -- text's labels, whoever writes it, the dispatcher included.
     for event in Events:
-        event.labels.count = 0
+        includes_all(event.labels, event.copied_labels)
+}
+
+invariant AWakeStartsWithTheLabelsOfItsPrompts {
+    -- The role's id, title and instructions, the notes shown, the memos
+    -- carried and the ids of their senders, the routines they are runs
+    -- of, and private for any relay content among them.
+    for wake in Wakes:
+        includes_all(wake.seed_labels, prompt_labels(wake))   -- black box: see guidance on RunWake
+}
+
+invariant AQuarantinedMemoIsNeverCarried {
+    for wake in Wakes:
+        wake.memos.all(m => not m.is_quarantined)
+}
+
+invariant ARoleWaitsWhileACallOfItsIsHeld {
+    -- A conversation runs in a session of its own and may go ahead.
+    for wake in Wakes where status = running and not chat:
+        wake.role.open_holds.count = 0
+}
+
+invariant OnlyTheOperatorAllowsAHeldCall {
+    for hold in Holds where status = allowed:
+        hold.resolved_by.is_operator
+}
+
+invariant ADecisionGoesBackToItsOwnRole {
+    for wake in Wakes:
+        wake.resolves.all(h => h.role = wake.role and h.status != open)
 }
 
 invariant OneWakeAtATime {
@@ -1931,6 +2254,12 @@ surface Inbound {
         DocRemoveRequested(caller, doc)
         ToolCallRequested(caller, tool, arguments)
             when caller.kind = role
+        HoldResolveRequested(caller, hold, verdict: HoldVerdict, reason?)
+            when caller.is_operator
+        MemoReleaseRequested(caller, memo)
+            when caller.is_operator
+        TrustRequested(caller, kind: TrustKind, ref)
+            when caller.is_operator
 
     @guarantee EveryWriteGoesThroughOneInboundPath
         -- Whoever asks, whether the operator at the command line, a role
@@ -1960,6 +2289,12 @@ surface Inbound {
         -- anyone else acts as the operator. The caller must be the
         -- operator, the dispatcher or an active role.
 
+    @guarantee APersonDecides
+        -- Approving or denying a held call, releasing a quarantined memo
+        -- and trusting contaminated text are the operator's alone, and
+        -- each is confirmed on the operator's terminal with a fresh
+        -- code typed back there, never on stdin.
+
     @guarantee ReplayNeedsOnlyTheLog
         -- The state can always be rebuilt from the log. A log with an
         -- event type this version does not know is refused rather
@@ -1983,7 +2318,7 @@ surface Clock {
 
 surface HarnessBoundary {
     provides:
-        WakeReported(wake, outcome, exit?, crashed, cut_short, session?, said?, transcript?, resets_at?)
+        WakeReported(wake, outcome, exit?, crashed, cut_short, session?, said?, transcript?, resets_at?, held?, labels?)
         DispatchedWakeSpawned(role, pid, pid_start)
 
     contracts:

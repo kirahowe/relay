@@ -348,10 +348,31 @@
                :when (seq ms)]
            [:prompt role chat ms]))))
 
+(defn- hold-problems
+  "The spec's invariants on quarantine and holds."
+  [w]
+  (let [s (:state w)]
+    (concat
+     ;; AQuarantinedMemoIsNeverCarried
+     (for [wake (vals (:wakes s)) m (:memos wake) :when (core/quarantined? (core/memo s m))]
+       [:quarantined-memo-carried (:id wake) m])
+     ;; ARoleWaitsWhileACallOfItsIsHeld
+     (for [wake (vals (:wakes s))
+           :when (and (= :running (:status wake)) (not (:chat wake)) (core/held? s (:role wake)))]
+       [:running-while-held (:id wake)])
+     ;; OnlyTheOperatorAllowsAHeldCall
+     (for [h (vals (:holds s)) :when (and (= :allowed (:status h)) (not= "operator" (:resolved-by h)))]
+       [:allowed-by-someone-else h])
+     ;; ADecisionGoesBackToItsOwnRole
+     (for [wake (vals (:wakes s)) id (:resolves wake)
+           :let [h (core/hold s id)]
+           :when (or (not= (:role wake) (:role h)) (= :open (:status h)))]
+       [:decision-to-the-wrong-wake (:id wake) id]))))
+
 (defspec every-marker-carries-its-writers-labels-wherever-it-turns-up 150
   (prop/for-all [steps (gen/vector gen-step 1 60)]
     (let [w (reduce step (seed) steps)
-          problems (concat (event-problems w) (read-problems w) (prompt-problems w))]
+          problems (concat (event-problems w) (read-problems w) (prompt-problems w) (hold-problems w))]
       (or (empty? problems)
           (do (prn (take 3 problems)) false)))))
 
@@ -411,6 +432,17 @@
         id (:id (first (core/unread-memos (:state w) "clerk")))]
     (is (core/quarantined? (core/memo (:state w) id)))
     (is (= "memo-quarantined" (:kind (last (vals (:notifications (:state w)))))))
+    (is (not-any? #(str/includes? (str (:title %) (:body %)) "About") (vals (:notifications (:state w))))
+        "the notification quotes nothing of it")
+    (testing "a clean memo is not quarantined and tells nobody"
+      (let [w (run w "hub" [] :memo/send {:to "clerk" :subject "s" :body "b"})]
+        (is (= 1 (count (:notifications (:state w)))))))
+    (testing "release needs a quarantined, open memo"
+      (let [clean (run w "hub" [] :memo/send {:to "clerk" :subject "s" :body "b"})
+            clean-id (:id (last (sort-by :id (core/unread-memos (:state clean) "clerk"))))]
+        (is (= (:state clean) (:state (run clean "operator" [] :memo/release {:memo clean-id}))))
+        (let [closed (run w "clerk" [] :memo/close {:memo id :outcome "x"})]
+          (is (= (:state closed) (:state (run closed "operator" [] :memo/release {:memo id})))))))
     (is (empty? (core/roles-to-wake (:state w) cfg (:now w))) "it does not wake the role")
     (is (= (:events w) (:events (run w "operator" [] :wake/start {:role "clerk"})))
         "nor does a wake by hand carry it")
