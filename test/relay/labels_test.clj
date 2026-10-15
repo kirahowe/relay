@@ -598,3 +598,15 @@
           d (core/doc-version (:state w) "a.md" {})]
       (is (= ["Clean." false []] [(:text v) (boolean (:retracted v)) (:labels v)]))
       (is (= ["Clean doc." []] [(:content d) (:labels d)])))))
+
+(deftest a-quarantined-dead-letter-tells-the-operator
+  ;; Regression: escalation wrote the memo directly, skipping the
+  ;; quarantine notification.
+  (let [w (-> (seed)
+              (run "clerk" ["contaminated"] :memo/send {:to "clerk" :subject "s" :body "evil"}))
+        id (:id (first (core/unread-memos (:state w) "clerk")))
+        w (run w "clerk" ["contaminated"] :memo/block {:memo id :explanation "nope"})
+        letter (last (sort-by :id (core/unread-memos (:state w) "hub")))]
+    (is (core/quarantined? cfg letter))
+    (is (some #(and (= "memo-quarantined" (:kind %)) (= (:id letter) (:memo %)))
+              (vals (:notifications (:state w)))))))

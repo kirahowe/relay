@@ -802,36 +802,6 @@
          (when-not (blank? transcript-tail)
            (str "\n\n## End of the last transcript\n\n```\n" transcript-tail "\n```")))))
 
-(defn- escalate
-  "Passes a fresh dead letter on: as a memo to the dead letter handler, or as
-  a notification to the operator when the memo was the handler's own or
-  there is no handler."
-  [{:keys [state config] :as tx} letter-id]
-  (let [letter (get-in state [:dead-letters letter-id])
-        {:keys [to subject]} (memo state (:memo letter))
-        handler (:dead-letter-handler config)
-        title (str to " could not finish \"" subject "\"")
-        report (dead-letter-report state letter)
-        ;; The report quotes the memo, and what the role said about it.
-        m (memo state (:memo letter))
-        copied (union (memo-labels state m) (ids-labels state [(:from m) to]) (:labels letter))]
-    (if (and handler (active-role? state handler) (not= handler to))
-      (emit tx "memo/sent" {:from dispatcher :to handler
-                            :subject (str "Dead letter: " title) :body report}
-            copied)
-      (notify tx "work-abandoned" title report :role to :dead-letter letter-id :labels copied))))
-
-(defn- dead-letter
-  "Dead-letters a memo. `copied` is the labels of the text in `more`, such
-  as the end of a transcript."
-  [tx memo-id reason copied & {:as more}]
-  (let [tx (emit tx "memo/dead-lettered"
-                 (merge {:memo memo-id :reason reason
-                         :attempts (:attempts (memo (:state tx) memo-id))}
-                        more)
-                 copied)]
-    (escalate tx (last-id tx))))
-
 (defn- send-memo
   "Sends a memo. `copied` is the labels of text it copies, such as a
   routine's instructions."
@@ -850,6 +820,37 @@
                     (last-id tx) " shows it to you first.")
                :role to :memo (last-id tx) :labels (ids-labels (:state tx) [to]))
        :else tx))))
+
+(defn- escalate
+  "Passes a fresh dead letter on: as a memo to the dead letter handler, or as
+  a notification to the operator when the memo was the handler's own or
+  there is no handler."
+  [{:keys [state config] :as tx} letter-id]
+  (let [letter (get-in state [:dead-letters letter-id])
+        {:keys [to subject]} (memo state (:memo letter))
+        handler (:dead-letter-handler config)
+        title (str to " could not finish \"" subject "\"")
+        report (dead-letter-report state letter)
+        ;; The report quotes the memo, and what the role said about it.
+        m (memo state (:memo letter))
+        copied (union (memo-labels state m) (ids-labels state [(:from m) to]) (:labels letter))]
+    (if (and handler (active-role? state handler) (not= handler to))
+      ;; Through send-memo, so a contaminated dead letter is quarantined
+      ;; and the operator told, as for any memo.
+      (send-memo tx {:from dispatcher :to handler :subject (str "Dead letter: " title) :body report}
+                 copied)
+      (notify tx "work-abandoned" title report :role to :dead-letter letter-id :labels copied))))
+
+(defn- dead-letter
+  "Dead-letters a memo. `copied` is the labels of the text in `more`, such
+  as the end of a transcript."
+  [tx memo-id reason copied & {:as more}]
+  (let [tx (emit tx "memo/dead-lettered"
+                 (merge {:memo memo-id :reason reason
+                         :attempts (:attempts (memo (:state tx) memo-id))}
+                        more)
+                 copied)]
+    (escalate tx (last-id tx))))
 
 (defn- authorize-registry! [{:keys [config actor]}]
   (when-not (or (= operator actor) (config/may-add? config actor))
