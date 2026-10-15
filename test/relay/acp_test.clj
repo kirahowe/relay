@@ -694,7 +694,8 @@
       (is (= {"jsonrpc" "2.0" "id" 7 "result" {"outcome" {"outcome" "selected" "optionId" "no"}}}
              (json/parse-string (slurp got))) (str "approvals " approvals))
       (is (= [:asked :answered] (map first @seen)))
-      (is (= {:outcome "reject_once" :by "relay"} (nth (second @seen) 2)))
+      (is (= {:outcome "reject_once" :by "relay" :why (if approvals "client-gone" "no-approvals")}
+             (nth (second @seen) 2)))
       (fs/delete-tree dir))))
 
 (deftest answers-are-checked-against-the-request
@@ -756,3 +757,40 @@
       (deref run 10000 nil)
       (is (= "{\"after\":1}\n" (.toString out "UTF-8")) "only the next line reached the client")
       (fs/delete-tree dir))))
+
+
+(defn- permission-line [id]
+  (json/generate-string {:jsonrpc "2.0" :id id :method "session/request_permission"
+                         :params {:sessionId "s" :toolCall {:toolCallId "t" :title "post"}
+                                  :options [{:optionId "yes" :kind "allow_once"}
+                                            {:optionId "no" :kind "reject_once"}]}}))
+
+(deftest an-answer-to-no-open-request-refuses-what-is-open
+  ;; Regression: the stray answer was passed on and the open request hung.
+  (let [dir (fs/create-temp-dir {:prefix "relay-stray"})
+        got (str dir "/got")
+        client-out (java.io.PipedOutputStream.)
+        seen (atom [])
+        run (future (dispatch/proxy! {:argv ["sh" "-c" (str "echo '" (permission-line 7) "'; read l; echo \"$l\" > " got "; cat >/dev/null")]}
+                                     {:in (java.io.PipedInputStream. client-out) :out (ByteArrayOutputStream.)
+                                      :approvals true :on-permission (fn [& args] (swap! seen conj args))}))]
+    (loop [n 0] (when (and (< n 200) (empty? @seen)) (Thread/sleep 20) (recur (inc n))))
+    (.write client-out (.getBytes "{\"jsonrpc\":\"2.0\",\"id\":99,\"result\":{\"outcome\":{\"outcome\":\"selected\",\"optionId\":\"yes\"}}}\n"))
+    (.flush client-out)
+    (loop [n 0] (when (and (< n 200) (not (and (fs/exists? got) (str/ends-with? (slurp got) "\n")))) (Thread/sleep 20) (recur (inc n))))
+    (is (= {"jsonrpc" "2.0" "id" 7 "result" {"outcome" {"outcome" "selected" "optionId" "no"}}} (json/parse-string (slurp got))))
+    (is (= {:outcome "reject_once" :by "relay" :why "client-error"} (nth (second @seen) 2)))
+    (.close client-out)
+    (deref run 10000 nil)
+    (fs/delete-tree dir)))
+
+(deftest a-request-open-when-the-agent-stops-is-recorded-abandoned
+  (let [client-out (java.io.PipedOutputStream.)
+        seen (atom [])
+        run (future (dispatch/proxy! {:argv ["sh" "-c" (str "echo '" (permission-line 3) "'; sleep 0.5")]}
+                                     {:in (java.io.PipedInputStream. client-out) :out (ByteArrayOutputStream.)
+                                      :approvals true :on-permission (fn [& args] (swap! seen conj args))}))]
+    (deref run 10000 nil)
+    (.close client-out)
+    (is (= [:asked :answered] (map first @seen)))
+    (is (= {:outcome "abandoned" :by "relay" :why "agent-gone"} (nth (second @seen) 2)))))

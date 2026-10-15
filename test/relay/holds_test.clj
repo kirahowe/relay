@@ -466,3 +466,17 @@
         (let [w (deny-again w "t3")]
           (is (nil? (:interrupted-wake (core/role (:state w) "clerk"))))
           (is (some #(= "session-ended" (:kind %)) (vals (:notifications (:state w))))))))))
+
+(deftest relay-says-why-it-refused-a-conversation-s-call
+  (let [w (-> {:state core/empty-state :now t0}
+              (run "operator" :role/add {:id "clerk" :title "C" :instructions "x"})
+              (run "operator" :wake/start {:role "clerk" :chat true}))
+        wake (:id (core/running-wake (:state w) "clerk"))
+        body (fn [why] (:body (last (sort-by :id (vals (:notifications
+                                                          (:state (run w "dispatcher" :permission/answered
+                                                                       {:wake wake :call "c" :tool "post" :outcome "reject_once"
+                                                                        :by "relay" :why why}))))))))]
+    (is (str/includes? (body "no-approvals") "--approvals"))
+    (is (str/includes? (body "client-gone") "went away before answering"))
+    (is (not (str/includes? (body "client-gone") "--approvals")))
+    (is (str/includes? (body "client-error") "not open"))))

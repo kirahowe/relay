@@ -200,6 +200,14 @@
     (let [m (re-find #"\"id\"\s*:\s*(-?\d+|\"(?:[^\"\\]|\\.)*\")" line)]
       {:id (some-> m second parse) :unreadable true :options []})))
 
+(defn stray-answer?
+  "Whether a client's line is an answer (a result or an error, with an
+  id, and no method), whichever request it claims to answer."
+  [line]
+  (let [msg (when (string? line) (parse line))]
+    (and (map? msg) (contains? msg "id") (not (contains? msg "method"))
+         (or (contains? msg "result") (contains? msg "error")))))
+
 (defn- option-of-kind [{:keys [options]} kind]
   (some #(when (= kind (get % "kind")) (get % "optionId")) options))
 

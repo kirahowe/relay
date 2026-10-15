@@ -494,7 +494,7 @@
                                  (.destroyForcibly x)))))))
         outstanding (atom {})
         client-gone (atom false)
-        refuse! (fn [req]
+        refuse! (fn [req why]
                   (let [bs (.getBytes (str (json/generate-string (acp/refusal req)) "\n")
                                       java.nio.charset.StandardCharsets/UTF_8)]
                     ;; Without an id there is nothing to answer; the line is
@@ -504,7 +504,7 @@
                            (catch java.io.IOException _ nil)))
                     (on-permission :answered req {:outcome (if (some #(= "reject_once" (get % "kind")) (:options req))
                                                              "reject_once" "cancelled")
-                                                  :by "relay"})))
+                                                  :by "relay" :why why})))
         from-agent (fn [line]
                      (if-let [req (or (acp/permission-request line)
                                       ;; One relay cannot read is never passed on.
@@ -515,9 +515,12 @@
                                  ;; The client may have gone in the meantime.
                                  (when (and @client-gone (get @outstanding (:id req)))
                                    (swap! outstanding dissoc (:id req))
-                                   (refuse! req))
+                                   (refuse! req "client-gone"))
                                  :pass)
-                             (do (refuse! req) nil)))
+                             (do (refuse! req (cond (:unreadable req) "unreadable"
+                                                    (not approvals) "no-approvals"
+                                                    :else "client-gone"))
+                                 nil)))
                        :pass))
         from-client (fn [line]
                       (if-let [[req answer] (some (fn [req] (when-let [a (acp/answer-of req line)] [req a]))
@@ -525,7 +528,15 @@
                         (do (swap! outstanding dissoc (:id req))
                             (on-permission :answered req {:outcome (:outcome answer) :by "client"})
                             (if (:valid answer) :pass (json/generate-string (acp/refusal req))))
-                        :pass))
+                        (if (and (seq @outstanding) (acp/stray-answer? line))
+                          ;; An answer to no open request: the client is
+                          ;; confused, so what is open is refused rather
+                          ;; than left to hang the turn.
+                          (do (doseq [req (vals @outstanding)]
+                                (swap! outstanding dissoc (:id req))
+                                (refuse! req "client-error"))
+                              nil)
+                          :pass)))
         to-agent (spawn (fn []
                           ;; Line by line, so a refusal relay writes to the agent
                           ;; never lands inside one of the client's messages.
@@ -536,7 +547,7 @@
                           (reset! client-gone true)
                           (doseq [req (vals @outstanding)]
                             (swap! outstanding dissoc (:id req))
-                            (refuse! req))
+                            (refuse! req "client-gone"))
                           (deliver stop :client-gone)))
         ;; An agent line too long to read whole could be a permission
         ;; request, so it never reaches the client: relay refuses it when it
@@ -554,7 +565,11 @@
                       (on-oversized {:size size :permission? (boolean permission?) :refused (some? req)})))
         to-client (spawn (fn [] (pump! (:out proc) out (tap :agent) #(deliver stop :client-gone)
                                        {:screen from-agent :limit line-limit :on-oversized oversized})))
-        exit (.waitFor jp)]
+        exit (.waitFor jp)
+        ;; A request still open when the agent stopped was never answered.
+        _ (doseq [req (vals @outstanding)]
+            (swap! outstanding dissoc (:id req))
+            (on-permission :answered req {:outcome "abandoned" :by "relay" :why "agent-gone"}))]
     ;; The agent's stdout ends with it, unless something it started holds
     ;; the pipe open; that cannot keep relay waiting for long.
     (deref to-client 5000 nil)
@@ -566,13 +581,13 @@
   "Records a conversation's permission requests and their answers in the
   log. A record that fails is dropped: the conversation goes on."
   [sys wake-id]
-  (fn [kind {:keys [session call tool input labels]} & [{:keys [outcome by]}]]
+  (fn [kind {:keys [session call tool input labels]} & [{:keys [outcome by why]}]]
     (try
       (inbound/submit! sys {:type (if (= :asked kind) :permission/asked :permission/answered)
                             :actor core/dispatcher
                             :args {:wake wake-id :session session :call call :tool tool
                                    :input-sha256 (core/sha256 (json/generate-string input))
-                                   :labels labels :outcome outcome :by by}})
+                                   :labels labels :outcome outcome :by by :why why}})
       (catch Exception e
         (binding [*out* *err*] (println "relay could not record a permission request:" (ex-message e)))))))
 

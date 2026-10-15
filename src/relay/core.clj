@@ -1285,18 +1285,25 @@
                                  :input-sha256 input-sha256}
           (permission-labels tx role labels))))
 
-(defmethod decide* :permission/answered [{:keys [state] :as tx} {{:keys [wake session call tool outcome by labels]} :args}]
+(def ^:private refusal-reasons
+  {"no-approvals" "Its ACP client was not started with --approvals, so relay refused the call for it. To decide such calls yourself, talk with it through relay chat."
+   "client-gone" "Its client went away before answering, so relay refused the call."
+   "client-error" "Its client answered a request that was not open, so relay refused what was open rather than let the turn hang."
+   "unreadable" "relay could not read the request, so it refused it rather than pass it on."
+   "agent-gone" "Its agent stopped before the client answered."})
+
+(defmethod decide* :permission/answered [{:keys [state] :as tx} {{:keys [wake session call tool outcome by labels why]} :args}]
   (dispatcher-only! tx)
   (let [role (get-in state [:wakes wake :role])]
     (when-not (get-in state [:wakes wake :chat]) (reject! "Only a conversation asks its client."))
-    (cond-> (emit tx "permission/answered" {:wake wake :role role :session session :call call
-                                            :outcome outcome :by by}
+    (cond-> (emit tx "permission/answered" (cond-> {:wake wake :role role :session session :call call
+                                                    :outcome outcome :by by}
+                                             why (assoc :why why))
                   (permission-labels tx role labels))
-      ;; relay refused it for a client that cannot ask the operator.
+      ;; relay answered it, not the operator: say why.
       (= "relay" by)
       (notify "permission-refused" (str role " was refused a call to " tool " in a conversation")
-              (str "Its ACP client was not started with --approvals, so relay refused the call"
-                   " for it. To decide such calls yourself, talk with " role " through relay chat.")
+              (get refusal-reasons why "relay refused the call.")
               :role role :labels (union (id-labels state role) (permission-labels tx role labels))))))
 
 (defmethod decide* :conversation/line-dropped [{:keys [state] :as tx} {{:keys [wake size permission refused]} :args}]
