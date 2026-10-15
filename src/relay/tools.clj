@@ -116,12 +116,7 @@
                      " marks you contaminated, and from then on the operator must approve your"
                      " calls that act outside relay or send data out.")})
 
-(defn- author
-  "A role id for a placeholder, with its labels: the id when whoever chose
-  it was clean, else nothing that names it."
-  [state actor]
-  (let [ls (core/id-labels state actor)]
-    (if (core/contaminated? ls) ["a role" []] [actor ls])))
+(defn- author [state actor] (core/shown-id state actor))
 
 (defn- item
   "One thing a read shows: its text and labels, and what stands in for it
@@ -163,7 +158,7 @@
                                        who-labels)
                                  :always-withhold true)
                           ;; A released memo was delivered by the operator.
-                          (item (fmt-memo m) (core/memo-labels state m)
+                          (item (fmt-memo (core/shown-memo state m)) (core/memo-labels state m)
                                 (str "Memo " (:id m) " from " who ": contaminated.\n") who-labels)))
                       ;; Only released memos can be contaminated here, and
                       ;; the operator delivered those.
@@ -389,7 +384,7 @@
                             :let [[who who-labels] (author state actor)]]
                         (item (str path " (" (count content) " characters, last written "
                                    (local-time config at) " by " actor ")")
-                              (core/version-labels state v)
+                              (core/union (core/version-labels state v) (core/path-labels state path))
                               (withheld (str "A doc, version " seq " by " who))
                               who-labels))
                       "\n" accept_contamination))))}
@@ -404,7 +399,7 @@
                                                   (when version (str " with version " version)) ".") {}))
                     (:removed v) (throw (ex-info (str path " was removed in version " (:seq v) ".") {}))
                     :else (show [(item (:content v) (core/content-labels (:labels v))
-                                       (withheld (str "Version " (:seq v) " of " path)))]
+                                       (withheld (str "Version " (:seq v) " of the doc")))]
                                 "" accept_contamination))))}
 
    "doc_history"
@@ -433,8 +428,10 @@
              (str "Wrote " (:path args) ", version " v ".")
              ;; Saying the doc already holds this tells the caller what it holds.
              (labelled (str (:path args) " already says that.")
-                       (core/content-labels
-                        (:labels (core/doc-version (inbound/current-state sys) (str/trim (:path args)) {}))))))}
+                       (let [state (inbound/current-state sys)
+                             path (str/trim (:path args))]
+                         (core/content-labels (:labels (core/doc-version state path {}))
+                                              (core/path-labels state path))))))}
 
    "doc_remove"
    {:class :write :acp-kind "delete"

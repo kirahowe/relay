@@ -313,11 +313,23 @@
   (let [r (role state id)]
     (union (:id-labels r) (:title-labels r) (:instructions-labels r))))
 
+(defn shown-id
+  "A role id as a reader is shown it, with its labels: the id when whoever
+  chose it was clean, else words that do not name it."
+  [state id]
+  (let [ls (id-labels state id)]
+    (if (contaminated? ls) ["a role whose id is withheld" []] [id ls])))
+
 (defn memo-labels
-  "What reading a memo adds: its writers' labels, private, and the labels
-  of the role ids it shows."
+  "What reading a memo addressed to you adds: its writers' labels, private,
+  and the labels of its sender's id as shown (shown-id)."
   [state m]
-  (content-labels (:labels m) (ids-labels state [(:from m) (:to m)])))
+  (content-labels (:labels m) (second (shown-id state (:from m)))))
+
+(defn shown-memo
+  "A memo as its recipient is shown it, its sender per shown-id."
+  [state m]
+  (assoc m :from (first (shown-id state (:from m)))))
 
 (defn quarantined?
   "A contaminated memo to a role, not yet released by the operator. Every
@@ -335,6 +347,11 @@
   "What showing one version of a fact or doc adds, with who wrote it."
   [state v]
   (union (:labels v) (id-labels state (:actor v))))
+
+(defn path-labels
+  "What showing a doc's path adds: the labels of whoever first chose it."
+  [state path]
+  (or (get-in state [:docs path :path-labels]) []))
 
 (defn notes-labels
   "What showing these notes adds."
@@ -526,7 +543,9 @@
     (case kind
       "memo" (update-in state [:memos num :labels] clean)
       "fact" (update-in state [:facts num :versions (last-index [:facts num :versions]) :labels] clean)
-      "doc" (update-in state [:docs ref :versions (last-index [:docs ref :versions]) :labels] clean)
+      "doc" (-> state
+                (update-in [:docs ref :versions (last-index [:docs ref :versions]) :labels] clean)
+                (update-in [:docs ref :path-labels] clean))
       "note" (update-in state [:notes owner nm :labels] clean)
       "routine" (update-in state [:routines owner nm :labels] clean)
       "role" (update-in state [:roles ref] #(-> % (update :id-labels clean) (update :title-labels clean)
@@ -619,9 +638,12 @@
 
 (defn- add-doc-version [state {:keys [seq at actor labels]} path more]
   (update-in state [:docs path]
-             (fn [d] (update (assoc d :path path) :versions (fnil conj [])
-                             (merge {:seq seq :path path :at (inst at) :actor actor :labels (union labels)}
-                                    more)))))
+             (fn [d] (-> (assoc d :path path)
+                         ;; The path is text too, chosen by whoever first wrote it.
+                         (update :path-labels #(or % (union labels)))
+                         (update :versions (fnil conj [])
+                                 (merge {:seq seq :path path :at (inst at) :actor actor :labels (union labels)}
+                                        more))))))
 
 (defmethod evolve* "doc/put" [state {:keys [data] :as event}]
   (add-doc-version state event (:path data) {:content (:content data)}))
@@ -685,7 +707,8 @@
         title (str to " could not finish \"" subject "\"")
         report (dead-letter-report state letter)
         ;; The report quotes the memo, and what the role said about it.
-        copied (union (memo-labels state (memo state (:memo letter))) (:labels letter))]
+        m (memo state (:memo letter))
+        copied (union (memo-labels state m) (ids-labels state [(:from m) to]) (:labels letter))]
     (if (and handler (active-role? state handler) (not= handler to))
       (emit tx "memo/sent" {:from dispatcher :to handler
                             :subject (str "Dead letter: " title) :body report}
@@ -1001,7 +1024,8 @@
         (notify tx "hold-opened" (str (:role wake) " wants to use " name)
                 (str "It is waiting for you to decide.\n\n" (pr-str input)
                      "\n\nrelay approve " hold-id ", or relay deny " hold-id " [why].")
-                :role (:role wake) :hold hold-id :labels (:said-labels tx)))
+                :role (:role wake) :hold hold-id
+                :labels (union (:said-labels tx) (id-labels state (:role wake)))))
       (and (not= :open (:status known)) (:delivered known))
       (emit tx "hold/requeued" {:hold (:id known)})
       :else tx)))
@@ -1068,12 +1092,15 @@
         [owner nm] (str/split (str ref) #"/" 2)]
     (case kind
       "memo" (when-let [m (memo state num)] {:labels (:labels m) :text (str (:subject m) "\n\n" (:body m))})
-      "fact" (when-let [v (some-> (fact state num) (fact-as-known nil))] {:labels (:labels v) :text (:text v)})
-      "doc" (when-let [v (doc-version state ref {})] (when-not (:removed v) {:labels (:labels v) :text (:content v)}))
+      "fact" (when-let [v (some-> (fact state num) (fact-as-known nil))]
+               {:labels (:labels v) :text (str (when (:topic v) (str "[" (:topic v) "] ")) (:text v)
+                                               (when (:why v) (str "\n\nWhy it changed: " (:why v))))})
+      "doc" (when-let [v (doc-version state ref {})]
+              (when-not (:removed v) {:labels (union (:labels v) (path-labels state ref)) :text (:content v)}))
       "note" (when-let [n (get-in state [:notes owner nm])] {:labels (:labels n) :text (:text n)})
       "routine" (when-let [r (routine state owner nm)] {:labels (:labels r) :text (:instructions r)})
       "role" (when-let [r (role state ref)]
-               {:labels (role-labels state ref) :text (str (:title r) "\n\n" (:instructions r))})
+               {:labels (role-labels state ref) :text (str ref "\n" (:title r) "\n\n" (:instructions r))})
       "journal" (when-let [e (first (filter #(= num (:id %)) (mapcat val (:journals state))))]
                   {:labels (:labels e) :text (:text e)})
       nil)))
@@ -1140,7 +1167,7 @@
                         (str "It has been woken more often in the last "
                              (:runaway-window-minutes config) " minutes than ordinary use "
                              "explains. Its work is waiting and nothing was dropped.")
-                        :role id)
+                        :role id :labels (id-labels state id))
                 tx)))
           tx (active-role-ids state)))
 
@@ -1367,7 +1394,7 @@
                                     (docs state nil)))]
       (reject! :conflict (str path " would sit where " (:path clash) " is, as a file and a"
                               " folder at once. Choose another path.")
-               (version-labels state clash)))
+               (union (version-labels state clash) (path-labels state (:path clash)))))
     (if (= content (:content (doc-version state path {})))
       tx
       (emit tx "doc/put" {:path path :content content}))))

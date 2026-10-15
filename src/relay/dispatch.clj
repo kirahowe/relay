@@ -103,7 +103,7 @@
                                           :granted (tools/grants-summary config role)}
                                          role-row)
      :prompt (prompt/wake {:role role-row
-                           :memos (map #(core/memo state %) memos)
+                           :memos (map #(core/shown-memo state (core/memo state %)) memos)
                            :note note
                            :now (not-before (:now inputs) (:last-at state))
                            :zone (config/zone config)
@@ -229,7 +229,7 @@
 
 ;; --- a conversation
 
-(def ^:private conversation-note
+(def conversation-note
   "The operator has opened a conversation with you. Talk with them directly;
   use your tools as you would in a wake.")
 
