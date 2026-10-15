@@ -297,3 +297,8 @@
           (is (str/starts-with? facts "labels: contaminated, private"))
           (is (str/includes? facts "From the web.") "the operator's export shows everything"))
         (fs/delete-tree (fs/parent out))))))
+
+(deftest the-example-settings-are-valid
+  (let [c (config/resolve-config (clojure.edn/read-string (slurp "setup/relay.example.edn")))]
+    (is (= ["contaminated" "private"] (get-in c [:tools "rem-read" :labels])))
+    (is (core/quarantines? c "hub") "the hub can act through rem, so contaminated memos to it wait")))
