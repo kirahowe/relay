@@ -72,6 +72,19 @@ polices its calls, and it could claim any labels. relay refuses to put a
 role granted tools on a script harness, and `relay tool` refuses calls
 from one.
 
+An external tool normally gets the call's arguments on its command line.
+With `:protocol :envelope` it speaks the same envelope protocol as `relay
+tool`: the call arrives on stdin as `{input, labels, call_id}`, the labels
+being the calling session's, and the tool prints exactly one `{content,
+is_error, labels}`. The labels it reports are added to its static
+`:labels`. Output that is not exactly one such object (a repeated key, a
+key in another case, a label relay does not know, anything else printed),
+a non-zero exit or a timeout (`:timeout-seconds`, ten minutes by default)
+tells the model only that the tool failed, and what it printed goes to
+relay's stderr. An envelope tool may give its input schema as
+`:parameters`, which relay checks before running it. cleanroom's `relay-tool`
+is one such tool; the example settings show how to add it.
+
 An optional `<data>/AGENTS.md` adds the operator's own instructions to
 every role's system prompt.
 

@@ -313,7 +313,13 @@
                   (json/generate-string {:input {:args ["hi"]} :labels [] :call_id ""})
                   (json/generate-string {:input {:args ["hi"]} :labels []})
                   (json/generate-string {:input {:args ["hi"]} :labels [] :call_id "c" :extra 1})
-                  (json/generate-string {:input ["hi"] :labels [] :call_id "c"})]]
+                  (json/generate-string {:input ["hi"] :labels [] :call_id "c"})
+                  ;; A repeated key, which two parsers could read differently.
+                  "{\"input\":{\"args\":[\"hi\"]},\"labels\":[\"private\"],\"labels\":[],\"call_id\":\"c\"}"
+                  "{\"input\":{\"args\":[\"hi\"],\"args\":[]},\"labels\":[],\"call_id\":\"c\"}"
+                  ;; Two envelopes, or a key in another case.
+                  (str (json/generate-string {:input {:args ["hi"]} :labels [] :call_id "c"}) " {}")
+                  (json/generate-string {:Input {:args ["hi"]} :labels [] :call_id "c"})]]
         (let [{:keys [exit out err]} (raw "hub" "echo" in)]
           (is (= 1 exit) in)
           (is (= "" out) in)

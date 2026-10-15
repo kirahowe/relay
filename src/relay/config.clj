@@ -118,6 +118,16 @@
                            " always carries, from " (sort label-names) "; [] for none"
                            (when (contains? tool :labels) (str ", not " (pr-str labels))) ".")
                       {:tool tool-name :relay/usage true})))
+    (when-not (contains? #{nil :plain :envelope} (:protocol tool))
+      (throw (ex-info (str "Tool " tool-name " has :protocol " (pr-str (:protocol tool))
+                           "; it is :envelope, or left out for a command given its arguments.")
+                      {:tool tool-name :relay/usage true})))
+    (when (and (some? (:parameters tool))
+               (not (and (= :envelope (:protocol tool)) (map? (:parameters tool))
+                         (= "object" (get-in tool [:parameters :type])))))
+      (throw (ex-info (str "Tool " tool-name " has :parameters, which an :envelope tool may give as a"
+                           " JSON Schema object, {:type \"object\" ...}.")
+                      {:tool tool-name :relay/usage true})))
     (when-not (or (nil? always-hold) (boolean? always-hold))
       (throw (ex-info (str "Tool " tool-name " has :always-hold " (pr-str always-hold)
                            "; it must be true or false.")

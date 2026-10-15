@@ -164,6 +164,13 @@ contract Tools {
         -- whatever the harness let through. So is any call by a role
         -- that is no longer active.
 
+    @invariant EnvelopeToolsAnswerInEnvelopes
+        -- An external tool with the envelope protocol gets the call on
+        -- stdin with the calling session's labels and its call id, and
+        -- must print exactly one result envelope with known labels,
+        -- which are added to its static labels. Anything else, a
+        -- failure or a timeout tells the model only that it failed.
+
     @invariant ExternalToolsRunInACleanEnvironment
         -- An external tool gets the call's arguments on its command
         -- line and only PATH, HOME, USER, LANG and TMPDIR from the

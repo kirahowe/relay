@@ -153,7 +153,7 @@ contaminated, for text you copied from somewhere you do not trust.")
   can read why. A call that is not an exact envelope exits 1, with the
   reason on stderr only, and the harness tells the model the tool failed."
   [sys role tool-name]
-  (let [{:keys [problem input labels]} (tools/parse-envelope (stdin-text))]
+  (let [{:keys [problem input labels call-id]} (tools/parse-envelope (stdin-text))]
     (cond
       problem
       {:exit 1 :out [] :err [problem]}
@@ -161,7 +161,7 @@ contaminated, for text you copied from somewhere you do not trust.")
       (tools/script-role? (inbound/current-state sys) (:config sys) role)
       {:exit 1 :out [] :err [(str role " runs on a :script harness, which gets no tools.")]}
       :else
-      (result 0 (tools/envelope (tools/call! sys role tool-name input labels))))))
+      (result 0 (tools/envelope (tools/call! sys role tool-name input labels call-id))))))
 
 (defn- tool-output
   "Runs one of relay's own read tools as the operator, for its text. The

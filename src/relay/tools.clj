@@ -20,6 +20,7 @@
   :labels}."
   (:require [babashka.process :as p]
             [cheshire.core :as json]
+            [cheshire.factory :as json-factory]
             [clojure.set :as set]
             [clojure.string :as str]
             [relay.config :as config]
@@ -478,10 +479,80 @@
     :run (fn [sys actor labels args]
            (str "Requeued " (count (submit sys actor labels :memo/retry args)) " memo(s)."))}})
 
+(def ^:dynamic *call-id*
+  "The id of the call being run, which an envelope tool is given."
+  nil)
+
+(def ^:private strict-json
+  (json-factory/make-json-factory {:strict-duplicate-detection true}))
+
+(defn strict-json-value
+  "The one JSON value in `s`, or ::bad when it is not exactly one value or
+  repeats a key anywhere. A repeated key is how two parsers can be made to
+  read one text differently."
+  [s]
+  (try
+    (binding [json-factory/*json-factory* strict-json]
+      (let [vs (doall (json/parsed-seq (java.io.StringReader. (str s))))]
+        (if (= 1 (count vs)) (first vs) ::bad)))
+    (catch Exception _ ::bad)))
+
+(defn parse-result
+  "An envelope tool's stdout: exactly {content, labels} and optionally
+  is_error, keys in exactly that case, labels relay knows. Returns {:content
+  :is-error :labels} or nil."
+  [out]
+  (let [v (strict-json-value out)]
+    (when (and (map? v)
+               (every? #{"content" "is_error" "labels"} (keys v))
+               (string? (get v "content"))
+               (or (not (contains? v "is_error")) (boolean? (get v "is_error")))
+               (sequential? (get v "labels"))
+               (every? core/label-names (get v "labels")))
+      {:content (get v "content") :is-error (true? (get v "is_error")) :labels (core/union (get v "labels"))})))
+
+(def envelope-timeout-ms
+  "How long an envelope tool may run. agentloop's own tool timeout is the
+  outer bound; this one makes sure the model is told only that it failed."
+  (* 10 60 1000))
+
+(defn- run-envelope-tool
+  "Runs an envelope tool: the call on stdin, one result envelope on stdout.
+  Anything else (a failure, a timeout, output that is not exactly one
+  envelope) tells the model only that it failed, and what it printed goes
+  to the operator's log."
+  [tool-name command static labels args timeout-ms]
+  (let [failed (fn [why out err]
+                 (binding [*out* *err*] (println (str tool-name ": " why)) (print err out) (flush))
+                 (throw (ex-info (str "The tool " tool-name " failed.") {:relay/labels static})))
+        proc (p/process (vec command) {:in (json/generate-string {:input args :labels labels :call_id (str *call-id*)})
+                                       :out :string :err :string :env (harness/base-env {})})
+        result (deref proc timeout-ms ::timeout)]
+    (if (= ::timeout result)
+      (do (p/destroy-tree proc) (failed "timed out" "" ""))
+      (let [{:keys [exit out err]} result
+            parsed (when (zero? exit) (parse-result out))]
+        (cond
+          (not (zero? exit)) (failed (str "exited " exit) out err)
+          (nil? parsed) (failed "did not print exactly one result envelope" out err)
+          (:is-error parsed) (throw (ex-info (:content parsed) {:relay/labels (core/union static (:labels parsed))}))
+          :else (labelled (:content parsed) static (:labels parsed)))))))
+
 (defn- external-tool
   "A tool the operator defined in relay.edn: an external command, given the
-  call's `args` after its own."
-  [[tool-name {:keys [class description command labels always-hold]}]]
+  call's `args` after its own, or with :protocol :envelope, given the call
+  as an envelope on stdin and answering with one on stdout."
+  [[tool-name {:keys [class description command labels always-hold protocol parameters timeout-seconds]}]]
+  (if (= :envelope protocol)
+    [tool-name
+     {:class class
+      :labels (vec labels)
+      :always-hold (boolean always-hold)
+      :description description
+      :parameters (or parameters {:type "object"})
+      :run (fn [_ _ session-labels args]
+             (run-envelope-tool tool-name command (vec labels) session-labels args
+                                (if timeout-seconds (* 1000 timeout-seconds) envelope-timeout-ms)))}]
   [tool-name
    {:class class
     :labels (vec labels)
@@ -502,7 +573,7 @@
                ;; is told just that it failed.
                (do (binding [*out* *err*] (print err out) (flush))
                    (throw (ex-info (str "The tool " tool-name " failed.")
-                                   {:relay/labels (vec labels)}))))))}])
+                                   {:relay/labels (vec labels)}))))))}]))
 
 (defn script-role?
   "Whether a role runs on a :script harness. A script is any program: no
@@ -617,7 +688,7 @@
   returns {:ok text :labels} or {:error text :labels}: the text to give
   back to it and the labels of what that text shows. Refusals come back as
   text too, so the role can read why and adjust."
-  [sys role-id tool-name args labels]
+  [sys role-id tool-name args labels & [call-id]]
   (let [state (inbound/current-state sys)
         config (:config sys)
         tool (get (offered config role-id) tool-name)
@@ -636,7 +707,8 @@
       (let [args (coerce-input (or args {}))]
         (if-let [problem (input-problem (:parameters tool) args)]
           {:error problem :labels []}
-          (run-tool sys role-id tool args labels))))))
+          (binding [*call-id* call-id]
+            (run-tool sys role-id tool args labels)))))))
 
 ;; --- the envelope a harness sends for each call
 
@@ -653,10 +725,12 @@
   "Why a call's input does not fit its tool's parameter schema, or nil.
   relay's schemas are flat objects, so this checks what they say: the
   required properties, no others, and each one's type."
-  [{:keys [properties required]} input]
+  [{:keys [properties required] :as schema} input]
   (let [props (into {} (map (fn [[k v]] [(name k) v]) properties))]
     (cond
       (not (map? input)) "The input must be a JSON object."
+      ;; A schema that names no properties leaves checking to the tool.
+      (not (contains? schema :properties)) nil
       :else
       (or (first (for [r required :when (not (contains? input (keyword r)))]
                    (str "The input needs " r ".")))
@@ -683,7 +757,7 @@
   Anything else is refused, so a harness that has not sent the session's
   labels never has its calls run as a clean session's."
   [raw]
-  (let [env (try (when-not (str/blank? raw) (json/parse-string raw)) (catch Exception _ ::bad))]
+  (let [env (if (str/blank? raw) nil (strict-json-value raw))]
     (cond
       (or (nil? env) (= ::bad env)) {:problem "The call is not a JSON envelope."}
       (not (map? env)) {:problem "The call is not a JSON object."}

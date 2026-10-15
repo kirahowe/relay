@@ -1,0 +1,21 @@
+#!/usr/bin/env bb
+;; A stand-in for an envelope tool such as cleanroom relay-tool: it reads
+;; the call on stdin and prints what its mode says. Used by the tests only.
+(require '[cheshire.core :as json])
+
+(let [mode (first *command-line-args*)
+      call (json/parse-string (slurp *in*))
+      reply (fn [m] (println (json/generate-string m)))]
+  (case mode
+    "echo" (reply {:content (str "asked " (get-in call ["input" "question"])
+                                 " with " (pr-str (get call "labels")) " as " (get call "call_id"))
+                   :is_error false :labels ["contaminated"]})
+    "refuse" (reply {:content "No such source." :is_error true :labels ["private"]})
+    "exit" (do (reply {:content "secret" :labels []}) (binding [*out* *err*] (println "boom")) (System/exit 3))
+    "two" (do (reply {:content "a" :labels []}) (reply {:content "b" :labels []}))
+    "dup" (println "{\"content\":\"a\",\"labels\":[\"contaminated\"],\"labels\":[]}")
+    "case" (reply {:Content "a" :labels []})
+    "extra" (reply {:content "a" :labels [] :note "x"})
+    "badlabel" (reply {:content "a" :labels ["Contaminated"]})
+    "noisy" (do (println "loading...") (reply {:content "a" :labels []}))
+    "slow" (do (Thread/sleep 5000) (reply {:content "a" :labels []}))))
