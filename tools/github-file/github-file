@@ -1,0 +1,70 @@
+#!/usr/bin/env bb
+;; github-file: print one file from a public GitHub repository, at a ref the
+;; operator pins in relay.edn. A role passes only a path, so the tool reads
+;; that one branch and nothing else. See README.md beside this file.
+(ns github-file
+  (:require [babashka.http-client :as http]
+            [clojure.string :as str])
+  (:import (java.net URLEncoder)))
+
+(def default-api "https://api.github.com")
+
+(defn- usage [repo ref]
+  (str "Usage: github-file --repo <owner/name> --ref <ref> <command>\n"
+       "\n"
+       "Reads files from " (or repo "<owner/name>") " at " (or ref "<ref>") ".\n"
+       "\n"
+       "  help          this text\n"
+       "  get <path>    print the file at <path>, such as state.json or\n"
+       "                reports/2026-10-16.md\n"))
+
+(defn- fail [code msg]
+  (binding [*out* *err*] (println msg))
+  (System/exit code))
+
+(defn- parse
+  "The pinned flags come first, from the command in relay.edn; the role's
+  arguments follow. Flags after the command are refused, so a role cannot
+  repoint the tool."
+  [args]
+  (loop [opts {:api default-api} [a b & more :as args] args]
+    (case a
+      "--repo" (recur (assoc opts :repo b) more)
+      "--ref" (recur (assoc opts :ref b) more)
+      "--api" (recur (assoc opts :api b) more)
+      (assoc opts :command args))))
+
+(def ^:private segment #"[A-Za-z0-9._-]+")
+
+(defn- file-path? [path]
+  (let [parts (str/split path #"/" -1)]
+    (and (seq path)
+         (every? #(and (re-matches segment %) (not (#{"." ".."} %))) parts))))
+
+(defn- encode [s] (str/replace (URLEncoder/encode (str s) "UTF-8") "+" "%20"))
+
+(defn- get-file [{:keys [api repo ref]} path]
+  (let [resp (http/get (str api "/repos/" repo "/contents/" path "?ref=" (encode ref))
+                       {:headers {"Accept" "application/vnd.github.raw"
+                                  "User-Agent" "relay-github-file"}
+                        :timeout 15000
+                        :throw false})]
+    (case (:status resp)
+      200 (print (:body resp))
+      404 (fail 1 (str "No " path " at " ref " in " repo "."))
+      (fail 1 (str "GitHub answered " (:status resp) " for " path ": " (:body resp))))))
+
+(let [{:keys [repo ref command] :as opts} (parse *command-line-args*)
+      [cmd & more] command]
+  (when-not (and repo (re-matches #"[A-Za-z0-9-]+/[A-Za-z0-9._-]+" repo) (seq ref))
+    (fail 2 (str "github-file needs --repo <owner/name> and --ref <ref> before the command.\n"
+                 (usage repo ref))))
+  (cond
+    (= cmd "help") (print (usage repo ref))
+    (and (= cmd "get") (= 1 (count more)))
+    (let [path (first more)]
+      (if (file-path? path)
+        (get-file opts path)
+        (fail 2 (str "Not a file path: " (pr-str path) ". Use a relative path such as state.json."))))
+    :else (fail 2 (usage repo ref))))
+(flush)

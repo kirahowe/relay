@@ -143,6 +143,10 @@ is written in Go.
    ntfy when `relay init` asks.
 7. To give roles Apple Reminders, build `tools/rem` (see its README) and
    grant it in `relay.edn`.
+8. To let a role read files from one branch of a public GitHub repository,
+   such as reports another agent writes there, define `tools/github-file`
+   in `relay.edn` with the repository and ref pinned (see its README) and
+   grant it.
 
 The harness settings in `relay.edn` are `:kind :agentloop`, `:model`,
 `:effort`, `:provider` (`"anthropic"` by default, or `"openai"`),
