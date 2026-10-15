@@ -800,17 +800,27 @@
               tx))
           tx (sort-by key (:harnesses state))))
 
+(def conversation-gone
+  "What a conversation the tick found lost says: its client stopped relay
+  before relay could record the end."
+  "The conversation's client went away without letting relay record the end.")
+
 (defmethod decide* :tick [{:keys [state] :as tx} {{:keys [lost-wakes]} :args}]
   (dispatcher-only! tx)
   (as-> tx tx
     ;; A wake whose runner process is gone ended without saying how. It
     ;; counts against its memos, like a crash, so a memo that kills its
-    ;; runner every time is still dead-lettered in the end.
+    ;; runner every time is still dead-lettered in the end. A conversation
+    ;; carries no memos, and its process belongs to its client, which may
+    ;; close it by killing it outright (Zed kills the whole process group),
+    ;; so a lost one is the client going away, not a crash.
     (reduce (fn [tx id]
-              (if (= :running (get-in (:state tx) [:wakes id :status]))
-                (end-wake tx id {:outcome "ran" :crashed true
-                                 :said "The process running this wake disappeared."})
-                tx))
+              (let [wake (get-in (:state tx) [:wakes id])]
+                (cond
+                  (not= :running (:status wake)) tx
+                  (:chat wake) (end-wake tx id {:outcome "ran" :crashed false :said conversation-gone})
+                  :else (end-wake tx id {:outcome "ran" :crashed true
+                                         :said "The process running this wake disappeared."}))))
             tx (sort lost-wakes))
     (fire-routines tx)
     (trip-guards tx)

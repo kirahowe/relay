@@ -310,6 +310,18 @@
     (is (true? (:crashed (get-in (:state w) [:wakes wake-id]))))
     (is (= 1 (:attempts (first (memos-to w "clerk")))))))
 
+(deftest a-lost-conversation-is-ended-by-the-tick-as-its-client-going-away
+  ;; Regression: Zed closes a thread with SIGKILL to relay's process group,
+  ;; and the tick recorded every such conversation as a crash.
+  (let [w (-> (seed) (run "operator" :wake/start {:role "clerk" :chat true}))
+        wake-id (:id (core/running-wake (:state w) "clerk"))
+        w (run w "dispatcher" :tick {:lost-wakes [wake-id]})
+        wake (get-in (:state w) [:wakes wake-id])]
+    (is (not (core/running? (:state w) "clerk")))
+    (is (= [:ended "ran" false false core/conversation-gone]
+           ((juxt :status :outcome :crashed :cut-short :said) wake)))
+    (is (nil? (:interrupted-wake (core/role (:state w) "clerk"))) "nothing is left to resume")))
+
 (deftest the-runaway-guard-stops-a-loop-and-says-so-once-an-hour
   (let [w (seed)
         loop-once (fn [w] (let [w (run w "operator" :memo/send {:to "clerk" :subject "again" :body "b"})]
@@ -423,8 +435,16 @@
                  (run w owner :routine/write {:name n :schedule s :instructions "i"}))
       :unroutine (let [[owner n] args] (run w owner :routine/remove {:name n}))
       :tick (let [[lose?] args
-                  running (keep #(when (= :running (:status %)) (:id %)) (vals (:wakes (:state w))))]
-              (run w "dispatcher" :tick {:lost-wakes (if lose? running [])}))
+                  running (keep #(when (= :running (:status %)) (:id %)) (vals (:wakes (:state w))))
+                  lost (if lose? running [])
+                  w' (run w "dispatcher" :tick {:lost-wakes lost})
+                  ;; A lost wake is a crash; a lost conversation is its
+                  ;; client going away.
+                  misrecorded (for [id lost
+                                    :let [{:keys [chat crashed status]} (get-in (:state w') [:wakes id])]
+                                    :when (or (not= :ended status) (not= crashed (not chat)))]
+                                id)]
+              (cond-> w' (seq misrecorded) (assoc :problem [:lost-wake-misrecorded misrecorded])))
       :start-only (run w "dispatcher" :wake/start {:role (first args) :dispatched true})
       :chat (let [[r outcome sessions] args
                   w (run w "operator" :wake/start {:role r :chat true})

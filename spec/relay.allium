@@ -1345,7 +1345,7 @@ rule AbandonMemo {
 rule EndLostWakes {
     when: DispatcherTicks(lost_wakes)
 
-    for wake in lost_wakes where status = running:
+    for wake in lost_wakes where status = running and not chat:
         ensures: WakeReported(
             wake: wake,
             outcome: ran,
@@ -1354,12 +1354,26 @@ rule EndLostWakes {
             said: "The process running this wake disappeared."
         )
 
+    for wake in lost_wakes where status = running and chat:
+        ensures: WakeReported(
+            wake: wake,
+            outcome: ran,
+            crashed: false,
+            cut_short: false,
+            said: "The conversation's client went away without letting relay record the end."
+        )
+
     @guidance
         -- A wake whose process is gone (found by pid and the time
         -- the process started, so that a later process that was given
         -- the same pid does not count) ended without saying how. It
         -- counts against its memos like a crash, so a memo that kills
         -- its runner every time is still dead-lettered in the end.
+        -- A conversation carries no memos, and its process belongs to
+        -- its ACP client. A client may close it by killing it outright:
+        -- Zed sends SIGKILL to the agent server's whole process group,
+        -- which relay cannot handle. So a lost conversation is recorded
+        -- as its client going away, not as a crash.
 }
 
 rule TripRunawayGuard {

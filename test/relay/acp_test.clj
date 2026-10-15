@@ -335,11 +335,20 @@
               (is (= "client" (:from (first entries))))
               (is (= (count @(:lines c)) (count (filter #(= "agent" (:from %)) entries)))))))))))
 
+(defn- start-relay-as-zed!
+  "Starts relay acp as Zed starts an agent server: in a session of its own
+  (util::process::Child::spawn), so that one killpg reaches relay and
+  everything relay started."
+  []
+  (client/start! ["perl" "-MPOSIX" "-e" "POSIX::setsid() or die $!; exec @ARGV or die $!"
+                  "--" relay-bin "acp" "clerk" "--data" (data)]
+                 {:dir *dir*}))
+
 (defn- mid-turn!
   "Starts a conversation and a turn the model takes a long time over, and
   returns {:client :session :agentloop} once the model has been asked."
-  []
-  (let [c (start-relay!)
+  [& {:keys [start!] :or {start! start-relay!}}]
+  (let [c (start!)
         sid (client/handshake! c *dir*)
         prompt-id (client/request-async! c "session/prompt" (client/prompt-params sid "Take your time."))
         deadline (+ (System/currentTimeMillis) 30000)]
@@ -381,6 +390,35 @@
           (testing "relay forwarded only what agentloop wrote"
             (is (every-line-json? c)))
           (check-ended-cleanly run))))))
+
+;; Regression: Zed closes a thread by dropping the agent server, and the
+;; drop sends SIGKILL to its whole process group (util::process::Child::kill)
+;; before stdin closes. Nothing can handle that, so relay records nothing,
+;; and the tick's lost-wake reaper used to end the conversation as a crash.
+(deftest a-client-that-kills-relays-process-group-closes-the-conversation
+  (when bin
+    (with-world {} slow-model
+      (fn []
+        (let [{c :client :keys [agentloop]} (mid-turn! :start! start-relay-as-zed!)
+              leader (client/pid c)
+              group (str/trim (:out @(p/process ["ps" "-o" "pgid=" "-p" (str leader)] {:out :string})))]
+          ;; The group killed below is the one the test made, never its own.
+          (is (= (str leader) group) "relay leads a group of its own")
+          (when (= (str leader) group)
+            @(p/process ["kill" "-KILL" "--" (str "-" group)])
+            (is (not= :timeout (client/wait! c 20000)) "relay is gone")
+            (let [deadline (+ (System/currentTimeMillis) 5000)]
+              (while (and (alive? agentloop) (< (System/currentTimeMillis) deadline))
+                (Thread/sleep 20)))
+            (is (not (alive? agentloop)) "and so is agentloop")
+            (is (= :running (:status (first (chat-wakes)))) "relay had no chance to record the end")
+            (dispatch/tick! *sys* {:spawn! (fn [_ _])})
+            (let [[wake :as wakes] (chat-wakes)]
+              (is (= 1 (count wakes)))
+              (is (= [:ended "ran" false false] ((juxt :status :outcome :crashed :cut-short) wake))
+                  (pr-str wake))
+              (is (= core/conversation-gone (:said wake))))
+            (is (not (core/running? (state) "clerk")) "the role is free again")))))))
 
 (deftest a-busy-role-is-refused-before-any-traffic
   (when bin
