@@ -195,7 +195,27 @@
   (memo! "operator" "Another")
   (is (= #{:delivered :failed} (set (map :delivery (vals (:notifications (state)))))))
   (testing "the memo is in the log either way"
-    (is (= 2 (count (core/unread-memos (state) "operator"))))))
+    (is (= 2 (count (core/unread-memos (state) "operator")))))
+  (testing "a failed push is tried again by the tick, after a wait"
+    (script! (str *dir* "/notify") (str "echo \"$1\" >> \"" *dir* "/notifications\""))
+    (let [later (fn [secs] (assoc *sys* :clock #(.plusSeconds (Instant/now) secs)))]
+      (dispatch/tick! *sys* {:spawn! (fn [& _])})
+      (is (= ["Approve the filing?"] (notifications)) "not before the wait")
+      (dispatch/tick! (later 120) {:spawn! (fn [& _])})
+      (is (= ["Approve the filing?" "Another"] (notifications)))
+      (is (= #{:delivered} (set (map :delivery (vals (:notifications (state))))))))))
+
+(deftest a-push-that-keeps-failing-is-given-up-on
+  (script! (str *dir* "/notify") "exit 3")
+  (memo! "operator" "Never arrives")
+  (let [secs (atom 0)
+        sys (assoc *sys* :clock #(.plusSeconds (Instant/now) @secs))]
+    (dotimes [_ 12]
+      (swap! secs + 7200)
+      (dispatch/tick! sys {:spawn! (fn [& _])}))
+    (let [[n] (vals (:notifications (state)))]
+      (is (= core/notification-attempts (:attempts n)))
+      (is (nil? (:retry-at n))))))
 
 (deftest a-wake-whose-process-died-is-reaped-by-the-tick
   (let [id (memo! "clerk" "x")

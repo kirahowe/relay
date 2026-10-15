@@ -626,14 +626,6 @@
 
 (def ^:private stale-after (Duration/ofMinutes 2))
 
-(defn- stranded-notifications
-  "Notifications recorded but never pushed, because whoever recorded them
-  stopped first. Fresh ones are left to their own process."
-  [state ^Instant now]
-  (filter #(and (= :pending (:delivery %))
-                (.isBefore (.plus ^Instant (:created-at %) stale-after) now))
-          (vals (:notifications state))))
-
 (defn spawn-wake!
   "Starts a dispatched wake in its own process and does not wait for it."
   [{:keys [data-dir]} role-id]
@@ -651,7 +643,7 @@
                            :args {:lost-wakes (lost-wakes state)}}))
    (let [state (inbound/current-state sys)
          t (now sys state)]
-     (doseq [n (sort-by :id (stranded-notifications state t))]
+     (doseq [n (core/notifications-to-push state t (.minus ^Instant t stale-after))]
        (inbound/deliver! sys {:seq (:id n) :data n}))
      (let [roles (core/roles-to-wake state config t)]
        (doseq [r roles] (spawn! sys r))

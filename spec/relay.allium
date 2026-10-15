@@ -561,13 +561,20 @@ entity Notification {
     created_at: Timestamp
     delivery: pending | delivered | failed
 
+    -- Failed pushes so far, and when the next is due; none once relay
+    -- has given up.
+    attempts: Integer
+    retry_at: Timestamp?
+
     transitions delivery {
         pending -> delivered
         pending -> failed
-        terminal: delivered, failed
+        failed -> delivered
+        terminal: delivered
     }
 
     is_stranded: delivery = pending and created_at + config.stranded_after < now
+    is_due_again: delivery = failed and retry_at != null and retry_at <= now
 }
 
 entity Fact {
@@ -679,6 +686,9 @@ config {
     max_note_length: Integer = 4000
     max_journal_entry_length: Integer = 20000
     max_doc_length: Integer = 500000
+
+    -- How many times a notification is pushed before relay gives up.
+    notification_attempts: Integer = 8
 }
 
 ------------------------------------------------------------
@@ -1759,13 +1769,13 @@ rule PushNotification {
 rule RepushStranded {
     when: DispatcherTicks(lost_wakes)
 
-    for notification in Notifications where is_stranded:
+    for notification in Notifications where is_stranded or is_due_again:
         ensures: NotificationPushed(notification: notification)
 
     @guidance
         -- A notification left pending for over two minutes was
         -- recorded by a process that stopped before pushing it. A
-        -- failed one is not pushed again: its failure is the record.
+        -- failed one is pushed again once its wait is over.
 }
 
 rule NotificationDelivered {
@@ -1777,7 +1787,16 @@ rule NotificationDelivered {
 rule NotificationFailed {
     when: PushFailed(notification, error)
 
-    ensures: notification.delivery = failed
+    let attempt = notification.attempts + 1
+
+    ensures:
+        notification.delivery = failed
+        notification.attempts = attempt
+        notification.retry_at = if attempt < config.notification_attempts: now + retry_delay(attempt) else: null
+
+    @guidance
+        -- The wait doubles from retry_base up to retry_ceiling, as for a
+        -- memo, and relay gives up after notification_attempts tries.
 }
 
 -- Tools

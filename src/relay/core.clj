@@ -618,7 +618,8 @@
 
 (defmethod evolve* "notification/failed" [state {:keys [data]}]
   (update-in state [:notifications (:notification data)] assoc
-             :delivery :failed :error (:error data)))
+             :delivery :failed :error (:error data)
+             :attempts (:attempt data) :retry-at (inst (:retry-at data))))
 
 (defn- fact-version [{:keys [seq at actor labels]} change {:keys [topic text valid-from valid-to]}]
   {:seq seq :recorded-at (inst at) :actor actor :change change :labels (union labels)
@@ -1329,10 +1330,31 @@
   (when-not (get-in state [:notifications notification]) (reject! :not-found "No such notification."))
   (emit tx "notification/delivered" {:notification notification}))
 
-(defmethod decide* :notification/failed [{:keys [state] :as tx} {{:keys [notification error]} :args}]
+(def notification-attempts
+  "How many times a notification is pushed before relay gives up on it."
+  8)
+
+(defmethod decide* :notification/failed [{:keys [state config now] :as tx} {{:keys [notification error]} :args}]
   (dispatcher-only! tx)
-  (when-not (get-in state [:notifications notification]) (reject! :not-found "No such notification."))
-  (emit tx "notification/failed" {:notification notification :error (str error)}))
+  (let [n (get-in state [:notifications notification])]
+    (when-not n (reject! :not-found "No such notification."))
+    ;; A failed push is tried again after a wait that doubles, a few times.
+    (let [attempt (inc (or (:attempts n) 0))]
+      (emit tx "notification/failed"
+            {:notification notification :error (str error) :attempt attempt
+             :retry-at (when (< attempt notification-attempts)
+                         (str (.plusSeconds ^Instant now (config/retry-delay-seconds config attempt))))}))))
+
+(defn notifications-to-push
+  "Notifications the tick pushes: pending ones whose own process stopped
+  before pushing them, and failed ones whose retry is due."
+  [state ^Instant now ^Instant stale-before]
+  (->> (vals (:notifications state))
+       (filter #(case (:delivery %)
+                  :pending (.isBefore ^Instant (:created-at %) stale-before)
+                  :failed (some-> ^Instant (:retry-at %) (.isAfter now) not)
+                  false))
+       (sort-by :id)))
 
 ;; knowledge
 
