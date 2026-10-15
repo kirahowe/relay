@@ -246,7 +246,15 @@
     (is (= "/abs/data" (resolve {})))
     (testing "a config file that is not EDN is an error"
       (spit file "{:data \"/x\"")
-      (is (thrown? clojure.lang.ExceptionInfo (resolve {}))))))
+      (is (thrown? clojure.lang.ExceptionInfo (resolve {}))))
+    (testing "with --data the file is never read, so a broken one does not matter"
+      ;; Regression: the file was read before --data was looked at.
+      (is (= "/elsewhere" (resolve {:data "/elsewhere"}))))))
+
+(deftest the-tests-never-see-the-real-config-file
+  (is (not (fs/exists? (cli/config-file))))
+  (is (not= (str (fs/path (System/getProperty "user.home") ".config" "relay" "config.edn"))
+            (cli/config-file))))
 
 (deftest a-role-can-only-call-the-tools-it-is-offered
   (write-config! {:tools {"echo" {:class :read :description "Echo." :command ["echo" "said:"]}}

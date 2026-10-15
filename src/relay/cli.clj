@@ -79,17 +79,20 @@ Every command needs the data directory, from --data <dir> or from the file
   "The data directory: --data, else :data in the per-user config file, with
   a leading ~ expanded."
   [opts]
-  (let [file (config-file)
-        configured (when (fs/exists? file)
-                     (let [c (try (edn/read-string (slurp file))
-                                  (catch Exception _
-                                    (fail! (str "Could not read " file " as EDN."))))]
-                       (when (map? c) (:data c))))]
-    (cond
-      (not (str/blank? (:data opts))) (:data opts)
-      (and (string? configured) (not (str/blank? configured))) (expand-home configured)
-      :else (fail! (str "Which data directory? Pass --data <dir>, or set :data in " file
-                        ", for example {:data \"~/relay-data\"}.")))))
+  (if-not (str/blank? (:data opts))
+    ;; The file is not even read when --data is given, so a command run
+    ;; with --data can never be steered by it.
+    (:data opts)
+    (let [file (config-file)
+          configured (when (fs/exists? file)
+                       (let [c (try (edn/read-string (slurp file))
+                                    (catch Exception _
+                                      (fail! (str "Could not read " file " as EDN."))))]
+                         (when (map? c) (:data c))))]
+      (if (and (string? configured) (not (str/blank? configured)))
+        (expand-home configured)
+        (fail! (str "Which data directory? Pass --data <dir>, or set :data in " file
+                    ", for example {:data \"~/relay-data\"}."))))))
 
 (defn- result
   "A command's result: its exit code and the lines it prints."

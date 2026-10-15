@@ -9,8 +9,10 @@
         :task (runner/run! *command-line-args*)}
   soak {:doc "Run the model-based property many more times: bb soak [trials]"
         :extra-paths ["test"]
-        :requires ([relay.core-test :as core-test])
-        :task (let [n (or (some-> (first *command-line-args*) parse-long) 20000)
+        :requires ([relay.core-test :as core-test]
+                   [relay.test-support :as support])
+        :task (let [_ (support/isolate!)
+                    n (or (some-> (first *command-line-args*) parse-long) 20000)
                     result (core-test/the-rules-hold-under-any-sequence-of-commands n)]
                 (prn (select-keys result [:pass? :num-tests :seed :shrunk]))
                 (when-not (:pass? result) (System/exit 1)))}}}

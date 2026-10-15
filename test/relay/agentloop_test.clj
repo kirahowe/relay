@@ -17,6 +17,7 @@
             [relay.inbound :as inbound]
             [relay.log :as log]
             [relay.mock-anthropic :as mock]
+            [relay.test-support :as support]
             [relay.tools :as tools])
   (:import (java.time Instant)))
 
@@ -84,10 +85,9 @@
 ;; --- whole wakes against the stand-in
 
 (def bin
-  "The agentloop binary the tests run: on PATH, or built in the sibling checkout."
-  (or (some-> (fs/which "agentloop") str)
-      (let [sibling (fs/absolutize "../agentloop/bin/agentloop")]
-        (when (fs/executable? sibling) (str sibling)))))
+  "The agentloop binary the tests run: the sibling checkout's build, never
+  the one on PATH, which may be the live install."
+  support/agentloop-bin)
 
 (def relay-bin (str (fs/absolutize "bin/relay")))
 (def ^:dynamic *dir* nil)

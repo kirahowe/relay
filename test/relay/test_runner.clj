@@ -1,7 +1,8 @@
 (ns relay.test-runner
   (:require [babashka.fs :as fs]
             [clojure.string :as str]
-            [clojure.test :as t]))
+            [clojure.test :as t]
+            [relay.test-support :as support]))
 
 (defn- test-namespaces []
   (->> (fs/glob "test" "**_test.clj")
@@ -13,6 +14,7 @@
        sort))
 
 (defn run! [args]
+  (support/isolate!)
   (let [nses (if (seq args) (map symbol args) (test-namespaces))]
     (apply require nses)
     (let [{:keys [fail error]} (apply t/run-tests nses)]

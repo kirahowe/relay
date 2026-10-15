@@ -23,7 +23,8 @@
             [relay.harness.agentloop :as agentloop]
             [relay.inbound :as inbound]
             [relay.log :as log]
-            [relay.mock-anthropic :as mock])
+            [relay.mock-anthropic :as mock]
+            [relay.test-support :as support])
   (:import (java.time Instant)))
 
 (def now (Instant/parse "2026-10-14T12:00:00Z"))
@@ -167,9 +168,9 @@
 ;; --- infrastructure for whole wakes
 
 (def bin
-  (or (some-> (fs/which "agentloop") str)
-      (let [sibling (fs/absolutize "../agentloop/bin/agentloop")]
-        (when (fs/executable? sibling) (str sibling)))))
+  "The agentloop binary the tests run: the sibling checkout's build, never
+  the one on PATH, which may be the live install."
+  support/agentloop-bin)
 
 (def relay-bin (str (fs/absolutize "bin/relay")))
 
