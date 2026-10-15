@@ -92,20 +92,31 @@
            (filter #(and % (.isAfter ^Instant % now)))
            first str))
 
+(defn held-calls
+  "The calls an outcome line says are held, as relay records them."
+  [held]
+  (vec (for [{:keys [id name input input_sha256]} (when (sequential? held) held)
+             :when (and (string? id) (string? name))]
+         (cond-> {:id id :name name :input input}
+           (string? input_sha256) (assoc :input-sha256 input_sha256)))))
+
 (defn classify
   "How a run ended. Pure: takes the parsed outcome line (nil when there was
   none), the exit code, stderr, the session id and the time."
   [{:keys [outcome exit stderr session now]}]
-  (let [{:keys [reason text error]} (when (map? outcome) outcome)
+  (let [{:keys [reason text error held labels]} (when (map? outcome) outcome)
         error (when (map? error) error)
         ;; Whatever the outcome line held, only strings are shown to a person.
         said-from (fn [x] (when (and (string? x) (not (str/blank? x))) x))
         said (harness/tail (or (said-from text) (said-from (:message error)) "") 8)
         report (fn [result & {:as more}]
-                 (merge {:outcome result :exit exit :session session :said said
-                         :crashed (= "timeout" exit)
-                         :cut-short (or (= "timeout" exit) (= "canceled" reason))}
-                        more))]
+                 (cond-> (merge {:outcome result :exit exit :session session :said said
+                                 :crashed (= "timeout" exit)
+                                 :cut-short (or (= "timeout" exit) (= "canceled" reason))}
+                                more)
+                   ;; The session's labels at the end, which what it said
+                   ;; carries. Without them relay assumes the worst.
+                   (sequential? labels) (assoc :labels (vec labels))))]
     (cond
       (= "timeout" exit) (report "ran" :said "Stopped at the wake deadline.")
       (nil? outcome) (report "needs-attention"
@@ -115,7 +126,9 @@
                                         (harness/tail stderr 5)))
       :else
       (case reason
-        ("completed" "max_tokens" "limit" "held") (report "ran")
+        ("completed" "max_tokens" "limit") (report "ran")
+        ;; Calls that wait for the operator: relay records a hold for each.
+        "held" (report "ran" :held (held-calls held))
         "refused" (report "ran" :crashed true)
         "canceled" (report "ran" :crashed true :said "Stopped at the wake deadline.")
         "model_error"
@@ -136,7 +149,7 @@
 
 (defn- base-request
   "What every agentloop request holds, whatever the mode."
-  [{:keys [harness model system-prompt tools tool-command]} work]
+  [{:keys [harness model system-prompt tools tool-command policy]} work]
   (let [{:keys [provider effort base-url retry limits tool-timeout-seconds api-key-command]} harness
         limit-keys {:max-turns :max_turns :max-tool-calls :max_tool_calls :max-tokens :max_tokens}
         retry-keys {:retries :retries :backoff-seconds :backoff_seconds
@@ -148,6 +161,11 @@
              :system system-prompt
              :tools (mapv #(select-keys % [:name :description :parameters]) tools)
              :tool_command (vec tool-command)
+             ;; Every tool is policed: the session's starting labels and
+             ;; each tool's class and labels, with calls and results in
+             ;; envelopes that carry labels both ways.
+             :policy policy
+             :tool_protocol "envelope"
              :tool_env (harness/base-env {})
              :tool_dir (str work)
              :tool_timeout_seconds (or tool-timeout-seconds default-tool-timeout-seconds)}
@@ -158,11 +176,13 @@
 (defn request-json
   "The request `agentloop run` reads: the wake's prompt, and one session,
   the file named by `id` in the session directory."
-  [{:keys [prompt session-dir timeout-ms] :as request} id work]
+  [{:keys [prompt session-dir timeout-ms resolve] :as request} id work]
   (cond-> (assoc (base-request request work)
                  :session (str (fs/path session-dir (str id ".jsonl")))
                  :prompt prompt)
-    timeout-ms (assoc :timeout_seconds (max 1 (- (quot timeout-ms 1000) 10)))))
+    timeout-ms (assoc :timeout_seconds (max 1 (- (quot timeout-ms 1000) 10)))
+    ;; The operator's decisions on the calls the session left held.
+    (seq resolve) (assoc :resolve (vec resolve))))
 
 (defn acp-request-json
   "The request `agentloop acp` reads. The client opens and loads sessions,

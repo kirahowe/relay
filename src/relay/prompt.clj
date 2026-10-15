@@ -8,20 +8,24 @@
 (defn- local [^Instant at ^ZoneId zone]
   (.format (.atZone at zone) (DateTimeFormatter/ofPattern "EEE d MMM yyyy, HH:mm")))
 
-(defn- fmt-notes [notes]
+(defn- fmt-notes [notes withheld]
   (str "\n# Your notes\n\n"
-       (if (empty? notes)
+       (if (and (empty? notes) (zero? withheld))
          "You have no notes yet. Keep what you need to remember between wakes with `note_write`.\n"
          (str "Your memory from earlier wakes, as you left it. Keep it current with `note_write`"
               " and `note_remove`.\n"
               (str/join (for [{:keys [name text]} notes]
-                          (str "\n## " name "\n\n" (str/trim text) "\n")))))))
+                          (str "\n## " name "\n\n" (str/trim text) "\n")))
+              (when (pos? withheld)
+                (str "\n" withheld " more note(s) are withheld because they are contaminated: you"
+                     " wrote them after reading something an outsider may have written. Read them"
+                     " with `notes` and accept_contamination only if you need them.\n"))))))
 
 (defn instructions
   "The system prompt for a role: the shared instructions, the operator's own
   additions if there are any, the role's own instructions, what it is
   granted, and its notes."
-  [{:keys [shared operator-additions notes granted]} {:keys [id title instructions]}]
+  [{:keys [shared operator-additions notes withheld-notes granted]} {:keys [id title instructions]}]
   (str (str/trim shared) "\n\n"
        (when-not (str/blank? operator-additions)
          (str "---\n\n" (str/trim operator-additions) "\n\n"))
@@ -32,7 +36,7 @@
        (str/trim instructions) "\n"
        (when-not (str/blank? granted)
          (str "\n# What you are granted\n\n" granted "\n"))
-       (fmt-notes notes)))
+       (fmt-notes notes (or withheld-notes 0))))
 
 (defn- fmt-memo [zone {:keys [id from subject body sent-at attempts routine]}]
   (str "\n## Memo " id ": " subject "\n\n"
@@ -46,14 +50,20 @@
 
 (defn wake
   "The prompt for one wake."
-  [{:keys [role memos note now zone resumed?]}]
+  [{:keys [role memos note now zone resumed? decided]}]
   (str "You are " (:title role) " (`" (:id role) "`). It is " (local now zone) ".\n\n"
-       (if resumed?
+       (cond
+         (seq decided)
+         (str "Your last wake stopped at tool calls that need the operator's approval. They"
+              " have decided: " (str/join ", " (for [{:keys [tool status]} decided]
+                                                 (str "`" tool "` " (if (= :allowed status) "allowed" "refused"))))
+              ". The results are in your session. Carry on from where you stopped.\n\n")
+         resumed?
          (str "Your last wake was cut short through no fault of yours: the model's"
               " rate limit ran out or the service went away. It is back now. Carry on"
               " from where you stopped, and check what you had already done before"
               " repeating anything.\n\n")
-         "")
+         :else "")
        (if (seq memos)
          (str "You have been woken for the memos below. Every memo stays open until"
               " you close it with `memo_close`, saying what you did. If you cannot do"

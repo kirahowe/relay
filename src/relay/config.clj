@@ -10,14 +10,26 @@
 
 (def tool-classes
   "Every tool a role can be granted is named in config and given one of
-  these classes. Nothing depends on the class yet; it is there so that a
-  policy can be added later without renaming or reclassifying anything.
+  these classes, which agentloop's policy decides on:
 
-    :read    reads relay data or the outside world, changes nothing
-    :write   changes relay data
-    :egress  sends data off the machine
-    :act     changes something outside relay, such as a reminder"
+    :read    returns content, changes nothing, sends nothing out that an
+             outsider could see
+    :write   changes relay data only
+    :egress  can send data the model chose where an outsider could see it
+    :act     does something in the operator's name outside relay, such as
+             a reminder
+
+  A session that has seen both private data and something contaminated
+  needs the operator's approval for an egress call, and one that has seen
+  anything contaminated needs it for an act."
   #{:read :write :egress :act})
+
+(def label-names
+  "The labels a tool's output can carry (relay.core/label-names). An
+  external tool declares the ones its output always carries in :labels, as
+  strings: \"contaminated\" for anything an outsider could have written,
+  \"private\" for the operator's private data."
+  #{"private" "contaminated"})
 
 (def defaults
   "Settings relay can sensibly choose for itself. Everything relay needs
@@ -84,11 +96,30 @@
                  (every? #(and (string? %) (not (str/blank? %))) chat-client))
     (problem! (str "relay.edn has :chat-client " (pr-str chat-client)
                    "; it must be a command, such as [\"acp-tui\"].")))
-  (doseq [[tool-name {:keys [class]}] tools]
+  (doseq [[tool-name {:keys [class labels always-hold] :as tool}] tools]
     (when-not (tool-classes class)
       (throw (ex-info (str "Tool " tool-name " needs a :class, one of "
                            (sort (map name tool-classes)) ".")
-                      {:tool tool-name}))))
+                      {:tool tool-name :relay/usage true})))
+    ;; Required, even when empty, so that leaving it out is never taken to
+    ;; mean the output is clean. A name relay does not know is refused, so
+    ;; a typo cannot drop a label.
+    (when-not (and (contains? tool :labels) (vector? labels)
+                   (every? #(and (string? %) (label-names %)) labels))
+      (throw (ex-info (str "Tool " tool-name " needs :labels, a vector of the labels its output"
+                           " always carries, from " (sort label-names) "; [] for none"
+                           (when (contains? tool :labels) (str ", not " (pr-str labels))) ".")
+                      {:tool tool-name :relay/usage true})))
+    (when-not (or (nil? always-hold) (boolean? always-hold))
+      (throw (ex-info (str "Tool " tool-name " has :always-hold " (pr-str always-hold)
+                           "; it must be true or false.")
+                      {:tool tool-name :relay/usage true}))))
+  ;; A :script harness runs a program that no policy watches, so its
+  ;; roles may not be granted tools that reach outside relay.
+  (when (and (= :script (get-in config [:harnesses (:default-harness config) :kind]))
+             (some (comp seq :tools val) grants))
+    (problem! (str "The default harness in relay.edn is a :script harness, which enforces no"
+                   " policy, so no role may be granted :tools.")))
   (doseq [[role {granted :tools}] grants
           t granted]
     (when-not (contains? tools t)
@@ -96,7 +127,9 @@
                       {:role role :tool t}))))
   (when-not (and (integer? max-attempts) (pos? max-attempts))
     (throw (ex-info ":max-attempts must be a positive integer." {})))
-  config)
+  ;; Labels are kept as relay.core keeps them: sorted distinct strings.
+  (update config :tools update-vals
+          (fn [t] (update t :labels #(vec (sort (distinct %)))))))
 
 (defn resolve-config
   "Defaults overlaid with the operator's settings."

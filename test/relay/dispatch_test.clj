@@ -36,9 +36,9 @@
   (spit (str *dir* "/plan") (str body "\nexit " exit-code "\n")))
 
 (def close-everything
-  (str "ids=$($TOOL inbox </dev/null | sed -n 's/^Memo \\([0-9]*\\):.*/\\1/p')\n"
+  (str "ids=$(call inbox '{}' | sed -n 's/^Memo \\([0-9]*\\):.*/\\1/p')\n"
        "for id in $ids; do\n"
-       "  echo \"{\\\"memo\\\": $id, \\\"outcome\\\": \\\"Filed it.\\\"}\" | $TOOL memo_close\n"
+       "  call memo_close \"{\\\"memo\\\": $id, \\\"outcome\\\": \\\"Filed it.\\\"}\"\n"
        "done"))
 
 (def do-nothing ":")
@@ -68,6 +68,9 @@
                                          "REPORT=$(sed -n 's/.*\"report\":\"\\([^\"]*\\)\".*/\\1/p' \"$1\")\n"
                                          "RESUME=$(sed -n 's/.*\"resume\":\"\\([^\"]*\\)\".*/\\1/p' \"$1\")\n"
                                          "TOOL=$(sed -n 's/.*\"tool_command\":\\[\\([^]]*\\)\\].*/\\1/p' \"$1\" | tr -d '\"' | tr ',' ' ')\n"
+                                         ;; A tool call as agentloop makes one: an envelope in,
+                                         ;; an envelope out, of which the model sees the content.
+                                         "call() { printf '{\"input\":%s,\"labels\":%s,\"call_id\":\"c%s\"}' \"$2\" \"${LABELS:-[]}\" \"$$\" | $TOOL \"$1\" | jq -r .content; }\n"
                                          "cat > \"" dir "/prompt\"\n"
                                          ". \"" dir "/plan\""))
       (script! (str dir "/notify") (str "echo \"$1\" >> \"" dir "/notifications\""))
@@ -110,7 +113,10 @@
   (let [result (dispatch/wake! *sys* "clerk" {})
         env (into {} (map #(vec (str/split % #"=" 2)) (str/split-lines (slurp (str *dir* "/env")))))
         args (json/parse-string (slurp (str *dir* "/args.json")) true)]
-    (is (= #{:system_prompt :tools_file :report :resume :tool_command} (set (keys args))))
+    (is (= #{:system_prompt :tools_file :report :resume :tool_command :policy :resolve} (set (keys args))))
+    (is (= ["private"] (get-in args [:policy :labels])) "the memo it carries is private")
+    (is (= {:class "write"} (get-in args [:policy :tools :memo_send])))
+    (is (= {:class "act"} (get-in args [:policy :tools :routine_write])))
     (is (str/includes? (slurp (:system_prompt args)) "File things."))
     (is (sequential? (json/parse-string (slurp (:tools_file args)))))
     (is (= [relay-bin "tool" "--data" (str (fs/absolutize (str *dir* "/data"))) "--role" "clerk"]
@@ -256,38 +262,79 @@
   (is (not= (str (fs/path (System/getProperty "user.home") ".config" "relay" "config.edn"))
             (cli/config-file))))
 
+(defn- tool!
+  "Makes one tool call as a harness does: an envelope on stdin, carrying
+  the session's labels. Returns the exit code and the result envelope."
+  ([role tool input] (tool! role tool input []))
+  ([role tool input labels]
+   (let [{:keys [exit out err]} (p/shell {:out :string :err :string :continue true
+                                          :in (json/generate-string {:input input :labels labels :call_id "c1"})}
+                                         relay-bin "tool" "--data" (str *dir* "/data") "--role" role tool)]
+     (cond-> {:exit exit :err err}
+       (zero? exit) (merge (json/parse-string out true))))))
+
+(def ^:private policed-harness
+  "A harness that enforces a policy, for a config that grants tools."
+  {:default-harness :al
+   :harnesses {:al {:kind :agentloop :bin "/nonexistent/agentloop" :api-key-command ["true"]}}})
+
 (deftest a-role-can-only-call-the-tools-it-is-offered
-  (write-config! {:tools {"echo" {:class :read :description "Echo." :command ["echo" "said:"]}}
-                  :grants {"hub" {:may-add true :tools ["echo"]}}})
-  (let [run (fn [role tool args]
-              (p/shell {:out :string :err :string :continue true :in (json/generate-string args)
-                        }
+  (write-config! (merge policed-harness
+                        {:tools {"echo" {:class :read :labels ["contaminated"] :description "Echo."
+                                         :command ["echo" "said:"]}}
+                         :grants {"hub" {:may-add true :tools ["echo"]}}}))
+  (let [{:keys [content is_error labels]} (tool! "hub" "echo" {:args ["hi"]})]
+    (is (= "said: hi" (str/trim content)))
+    (is (false? is_error))
+    (is (= ["contaminated"] labels) "an external tool's output carries its labels"))
+  (let [{:keys [exit content is_error]} (tool! "clerk" "echo" {:args ["hi"]})]
+    (is (zero? exit) "a refusal is a result the model reads")
+    (is (true? is_error))
+    (is (str/includes? content "no tool called echo")))
+  (testing "registry tools need the grant"
+    (is (true? (:is_error (tool! "clerk" "role_add" {:id "x" :title "X" :instructions "c"}))))
+    (is (false? (:is_error (tool! "hub" "role_add" {:id "x" :title "X" :instructions "c"})))))
+  (let [raw (fn [role tool in]
+              (p/shell {:out :string :err :string :continue true :in in}
                        relay-bin "tool" "--data" (str *dir* "/data") "--role" role tool))]
-    (is (= "said: hi" (str/trim (:out (run "hub" "echo" {:args ["hi"]})))))
-    (let [{:keys [exit out]} (run "clerk" "echo" {:args ["hi"]})]
-      (is (= 1 exit))
-      (is (str/includes? out "no tool called echo")))
-    (testing "registry tools need the grant"
-      (is (= 1 (:exit (run "clerk" "role_add" {:id "x" :title "X" :instructions "c"}))))
-      (is (zero? (:exit (run "hub" "role_add" {:id "x" :title "X" :instructions "c"})))))
+    (testing "only an exact envelope with known labels is run; anything else fails with nothing on stdout"
+      (doseq [in [(json/generate-string {:args ["hi"]})
+                  ""
+                  "not json"
+                  (json/generate-string {:input {:args ["hi"]} :labels ["secret"] :call_id "c"})
+                  (json/generate-string {:input {:args ["hi"]} :labels ["Private"] :call_id "c"})
+                  (json/generate-string {:input {:args ["hi"]} :labels "private" :call_id "c"})
+                  (json/generate-string {:input {:args ["hi"]} :labels [] :call_id ""})
+                  (json/generate-string {:input {:args ["hi"]} :labels []})
+                  (json/generate-string {:input {:args ["hi"]} :labels [] :call_id "c" :extra 1})
+                  (json/generate-string {:input ["hi"] :labels [] :call_id "c"})]]
+        (let [{:keys [exit out err]} (raw "hub" "echo" in)]
+          (is (= 1 exit) in)
+          (is (= "" out) in)
+          (is (not (str/blank? err)) in))))
+    (testing "input that does not fit the tool's schema is refused before anything runs"
+      (doseq [input [{:args "hi"} {:args [1]} {:argz ["hi"]}]]
+        (is (true? (:is_error (tool! "hub" "echo" input))) (pr-str input)))
+      (is (true? (:is_error (tool! "hub" "memo_send" {:to "clerk" :subject "s"}))) "a required argument")
+      (is (empty? (core/unread-memos (state) "clerk"))))
     (testing "relay tool without a role or a data directory fails clearly"
       (doseq [argv [[relay-bin "tool" "--data" (str *dir* "/data") "echo"]
                     [relay-bin "tool" "--role" "hub" "echo"]]]
-        (let [{:keys [exit err]} (apply p/shell {:out :string :err :string :continue true :in "{}"} argv)]
+        (let [{:keys [exit err]} (apply p/shell {:out :string :err :string :continue true :in "{}"} argv)
+              _ raw]
           (is (= 1 exit))
           (is (str/includes? err "usage: relay tool --data <dir> --role <role>")))))))
 
 (deftest knowledge-goes-through-the-tools-and-notes-reach-the-next-wake
-  (let [run (fn [tool args]
-              (p/shell {:out :string :err :string :continue true :in (json/generate-string args)
-                        }
-                       relay-bin "tool" "--data" (str *dir* "/data") "--role" "clerk" tool))]
-    (is (str/starts-with? (:out (run "fact_add" {:text "The cabinet key is in the drawer."
-                                                 :topic "office" :valid_from "2026-01-01"}))
+  (let [run (fn [tool args] (tool! "clerk" tool args))]
+    (is (str/starts-with? (:content (run "fact_add" {:text "The cabinet key is in the drawer."
+                                                     :topic "office" :valid_from "2026-01-01"}))
                           "Recorded fact"))
-    (is (str/includes? (:out (run "facts" {:topic "office"})) "The cabinet key is in the drawer."))
-    (is (= 1 (:exit (run "fact_correct" {:fact 999 :why "x" :text "y"}))))
-    (is (zero? (:exit (run "note_write" {:name "keys" :text "Ask before moving the key."}))))
+    (let [{:keys [content labels]} (run "facts" {:topic "office"})]
+      (is (str/includes? content "The cabinet key is in the drawer."))
+      (is (= ["private"] labels) "reading a fact makes the session private"))
+    (is (true? (:is_error (run "fact_correct" {:fact 999 :why "x" :text "y"}))))
+    (is (false? (:is_error (run "note_write" {:name "keys" :text "Ask before moving the key."}))))
     (let [state (state)
           request (dispatch/wake-request *sys* state {:id 1 :role "clerk" :memos [] :harness "fake"}
                                          (dispatch/wake-inputs *sys*))]

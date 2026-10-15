@@ -118,7 +118,7 @@
                                                 :effort "high"
                                                 :retry {:retries 0}}
                                                harness)}
-                 :tools {"printenv" {:class :read :description "Print the environment." :command ["env"]}}
+                 :tools {"printenv" {:class :read :labels [] :description "Print the environment." :command ["env"]}}
                  :grants {"clerk" {:tools ["printenv"]}}
                  :notify {:kind :none}})))
 

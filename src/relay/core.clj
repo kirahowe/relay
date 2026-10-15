@@ -21,6 +21,26 @@
 (def dispatcher "dispatcher")
 (def reserved-ids #{operator dispatcher "relay" "all" "none"})
 
+(def private-label
+  "Seen the operator's private data. Reading the text of anything relay
+  keeps (a memo, fact, doc, note or journal entry) adds it."
+  "private")
+(def contaminated-label
+  "Seen something an outsider could have written."
+  "contaminated")
+(def label-names #{private-label contaminated-label})
+
+(defn union
+  "Labels as relay keeps them: the distinct names of all the given
+  collections, sorted, in a vector, so a state survives a JSON round trip."
+  [& colls]
+  (vec (sort (distinct (apply concat colls)))))
+
+(defn content-labels
+  "The labels of relay content: its writers' labels and private."
+  [& colls]
+  (apply union [private-label] colls))
+
 (def harness-outcomes
   "How a wake's harness run ended. Only \"ran\" means the role got to work;
   the others are the harness's own failures and count against no memo."
@@ -28,8 +48,13 @@
 
 (def empty-state
   {:roles {} :memos {} :routines {} :wakes {} :dead-letters {} :harnesses {}
-   :notifications {} :guards {} :facts {} :notes {} :journals {} :docs {}
+   :notifications {} :guards {} :facts {} :notes {} :journals {} :docs {} :holds {}
+   ;; Every label any event has carried, which bounds what a session that
+   ;; could read anything in relay may have seen.
+   :seen-labels []
    :next-seq 1 :last-at nil})
+
+(defn- blank? [s] (or (not (string? s)) (str/blank? s)))
 
 (defn inst ^Instant [s] (some-> s str Instant/parse))
 
@@ -39,12 +64,20 @@
 
 (defn reject!
   "Refuses a command. `reason` is a keyword a caller can act on; the message
-  is for whoever sent the command."
+  is for whoever sent the command. A message that quotes something relay
+  keeps carries that thing's labels, which go back with it to a role."
   ([message] (reject! :invalid message))
-  ([reason message]
-   (throw (ex-info message {:relay/rejected reason}))))
+  ([reason message] (reject! reason message []))
+  ([reason message labels]
+   (throw (ex-info message (cond-> {:relay/rejected reason}
+                             (seq labels) (assoc :relay/labels (union labels)))))))
 
 (defn rejection [e] (:relay/rejected (ex-data e)))
+
+(defn rejection-labels
+  "The labels of what a refusal's message quotes."
+  [e]
+  (or (:relay/labels (ex-data e)) []))
 
 ;; --- queries
 
@@ -81,10 +114,12 @@
 (defn backing-off? [memo ^Instant now]
   (boolean (some-> (:retry-at memo) (after? now))))
 
+(declare quarantined?)
+
 (defn waiting-memos
-  "Open memos that are not waiting out a retry delay."
+  "Open memos a role may be shown that are not waiting out a retry delay."
   [state to now]
-  (vec (remove #(backing-off? % now) (unread-memos state to))))
+  (vec (remove #(or (backing-off? % now) (quarantined? %)) (unread-memos state to))))
 
 (defn harness-of [state config role-id]
   (or (:harness (role state role-id)) (some-> (:default-harness config) name)))
@@ -130,12 +165,34 @@
          (schedule/due? sched baseline now (config/zone config))
          (not (has-open-run? state r)))))
 
+(defn hold [state id] (get-in state [:holds id]))
+
+(defn open-holds
+  "A role's tool calls waiting for the operator, oldest first, or every
+  role's with no role given."
+  ([state] (->> (vals (:holds state)) (filter #(= :open (:status %))) (sort-by :id) vec))
+  ([state role-id] (filterv #(= role-id (:role %)) (open-holds state))))
+
+(defn held? [state role-id] (boolean (seq (open-holds state role-id))))
+
+(defn pending-resolutions
+  "A role's holds the operator has decided that no wake has carried back to
+  the held session yet, oldest first."
+  [state role-id]
+  (->> (vals (:holds state))
+       (filter #(and (= role-id (:role %)) (#{:allowed :denied} (:status %)) (nil? (:delivered %))))
+       (sort-by :id)
+       vec))
+
 (defn roles-to-wake
-  "The roles the dispatcher should wake now: with a memo waiting, not already
-  running, their harness not paused, and not stopped by the runaway guard."
+  "The roles the dispatcher should wake now: with a memo waiting or a
+  decided hold to carry back, not already running, with no hold still
+  waiting for the operator, their harness not paused, and not stopped by
+  the runaway guard."
   [state config now]
   (vec (for [id (active-role-ids state)
-             :when (and (seq (waiting-memos state id now))
+             :when (and (or (seq (waiting-memos state id now)) (seq (pending-resolutions state id)))
+                        (not (held? state id))
                         (not (running? state id))
                         (not (paused-until state (harness-of state config id) now))
                         (not (running-away? state id config now)))]
@@ -219,6 +276,113 @@
        (sort-by :path)
        vec))
 
+;; labels
+;;
+;; Every event carries the labels of the text it holds: a role's call
+;; carries its session's labels, and an event that copies or quotes text
+;; (a routine into a memo, a memo into a dead letter) carries the labels of
+;; what it copied too. Each version of an object keeps the labels of the
+;; event that wrote it, and what a reader is shown carries the labels of
+;; the versions whose text it shows, never of versions it does not show.
+;; Reading the text of relay content (a memo, fact, doc, note, journal
+;; entry or routine's instructions) adds private as well; role titles and
+;; instructions, routine names and doc paths carry their writers' labels
+;; but are not private. A role id is text its creator chose, so wherever
+;; one is shown, the labels of whoever chose it go with it.
+;;
+;; Contaminated text is withheld by default. A reader is shown a
+;; placeholder that gives only what is clean (a number, a kind, a clean
+;; author) and can ask for the text, taking on its labels. A contaminated
+;; memo to a role is quarantined: it is not shown to the role, carried in
+;; a wake or counted as waiting until the operator releases it.
+
+(defn contaminated? [labels] (boolean (some #{contaminated-label} labels)))
+
+(defn id-labels
+  "The labels of a role id: those of whoever added the role. The operator
+  and the dispatcher are not chosen by anyone."
+  [state id]
+  (or (:id-labels (role state id)) []))
+
+(defn ids-labels [state ids]
+  (apply union (map #(id-labels state %) (distinct (remove nil? ids)))))
+
+(defn role-labels
+  "What a role's id, title and instructions carry."
+  [state id]
+  (let [r (role state id)]
+    (union (:id-labels r) (:title-labels r) (:instructions-labels r))))
+
+(defn memo-labels
+  "What reading a memo adds: its writers' labels, private, and the labels
+  of the role ids it shows."
+  [state m]
+  (content-labels (:labels m) (ids-labels state [(:from m) (:to m)])))
+
+(defn quarantined?
+  "A contaminated memo to a role, not yet released by the operator. Every
+  role is granted tools that act in the operator's name (routine_write),
+  so none may take one in by itself."
+  [m]
+  (and (not= operator (:to m)) (contaminated? (:labels m)) (not (:released m))))
+
+(defn deliverable-memos
+  "Open memos to a role that it may be shown, oldest first."
+  [state to]
+  (filterv (complement quarantined?) (unread-memos state to)))
+
+(defn version-labels
+  "What showing one version of a fact or doc adds, with who wrote it."
+  [state v]
+  (union (:labels v) (id-labels state (:actor v))))
+
+(defn notes-labels
+  "What showing these notes adds."
+  [notes]
+  (if (seq notes) (content-labels (mapcat :labels notes)) []))
+
+(defn journal-labels [entries]
+  (if (seq entries) (content-labels (mapcat :labels entries)) []))
+
+(defn routine-labels [state owner name] (or (:labels (routine state owner name)) []))
+
+(defn tool-labels
+  "The static labels relay.edn gives an external tool: what any call to it
+  adds to the session."
+  [config tool-name]
+  (or (get-in config [:tools tool-name :labels]) []))
+
+(defn session-labels-bound
+  "Every label a role's session could hold by now: anything relay keeps
+  could have been read, and any tool it is granted called. Text a session
+  wrote that relay was not told the labels of (what a wake said when the
+  harness gave no labels) carries this."
+  [state config role-id]
+  (content-labels (:seen-labels state)
+                  (mapcat #(tool-labels config %) (:tools (config/grants config role-id)))))
+
+(defn prompt-notes
+  "A role's notes as its system prompt shows them: the clean ones, and how
+  many are withheld as contaminated."
+  [state owner]
+  (let [{withheld true shown false} (group-by #(contaminated? (:labels %)) (notes state owner))]
+    {:shown (vec shown) :withheld (count withheld)}))
+
+(defn wake-labels
+  "The labels of everything a wake's prompts are made of: the role's id,
+  title and instructions, the notes shown, the memos it carries and the
+  ids of their senders, the routines they are runs of, the note from
+  whoever woke it, and the operator's reasons on the holds it carries back.
+  A conversation has no prompt, only the instructions and notes."
+  [state {:keys [role memos note chat resolves]}]
+  (let [ms (keep #(memo state %) memos)]
+    (union (role-labels state role)
+           (notes-labels (:shown (prompt-notes state role)))
+           (mapcat #(memo-labels state %) ms)
+           (mapcat #(when (:routine %) (routine-labels state (:to %) (:routine %))) ms)
+           (when (and (not chat) (not (blank? note))) [private-label])
+           (when (some #(not (blank? (:reason (hold state %)))) resolves) [private-label]))))
+
 ;; --- evolve
 
 (defmulti evolve* (fn [_state event] (:type event)))
@@ -228,24 +392,31 @@
                        " (event " (:seq event) "). Upgrade relay before reading this log.")
                   {:event event})))
 
-(defn evolve [state {:keys [seq at] :as event}]
+(defn evolve [state {:keys [seq at labels] :as event}]
   (when-not (= seq (:next-seq state))
     (throw (ex-info (str "Event " seq " is out of order; expected " (:next-seq state) ".")
                     {:event event})))
   (-> (evolve* state event)
+      (update :seen-labels union labels)
       (assoc :next-seq (inc seq) :last-at (inst at))))
 
 (defn replay [events] (reduce evolve empty-state events))
 
-(defmethod evolve* "role/added" [state {:keys [at data]}]
+(defmethod evolve* "role/added" [state {:keys [at data labels]}]
   (let [{:keys [id title instructions reports-to harness model]} data]
     (assoc-in state [:roles id] {:id id :title title :instructions instructions :reports-to reports-to
                                  :harness harness :model model :status :active
-                                 :added-at (inst at)})))
+                                 :added-at (inst at)
+                                 ;; Each piece of text carries the labels of
+                                 ;; whoever wrote what it says now.
+                                 :id-labels (union labels) :title-labels (union labels)
+                                 :instructions-labels (union labels)})))
 
-(defmethod evolve* "role/updated" [state {:keys [data]}]
-  (update-in state [:roles (:id data)] merge
-             (select-keys data [:title :instructions :reports-to :harness :model])))
+(defmethod evolve* "role/updated" [state {:keys [data labels]}]
+  (update-in state [:roles (:id data)]
+             #(cond-> (merge % (select-keys data [:title :instructions :reports-to :harness :model]))
+                (contains? data :title) (assoc :title-labels (union labels))
+                (contains? data :instructions) (assoc :instructions-labels (union labels)))))
 
 (defmethod evolve* "role/removed" [state {:keys [at data]}]
   (update-in state [:roles (:id data)] assoc :status :removed :removed-at (inst at)))
@@ -254,25 +425,29 @@
   (let [{:keys [from to subject body routine]} data]
     (assoc-in state [:memos seq] {:id seq :from from :to to :subject subject :body body
                                   :routine routine :sent-at (inst at) :status :unread
-                                  :attempts 0 :retry-at nil :labels labels})))
+                                  :attempts 0 :retry-at nil :labels (union labels)})))
 
-(defmethod evolve* "memo/closed" [state {:keys [at actor data]}]
+(defmethod evolve* "memo/closed" [state {:keys [at actor data labels]}]
   (update-in state [:memos (:memo data)] assoc
              :status :read :outcome (:outcome data) :closed-at (inst at) :closed-by actor
-             :retry-at nil))
+             :retry-at nil :outcome-labels (union labels)))
+
+(defmethod evolve* "memo/released" [state {:keys [data]}]
+  (assoc-in state [:memos (:memo data) :released] true))
 
 (defmethod evolve* "memo/attempt-failed" [state {:keys [data]}]
   (update-in state [:memos (:memo data)] assoc
              :attempts (:attempt data) :retry-at (inst (:retry-at data))))
 
-(defmethod evolve* "memo/dead-lettered" [state {:keys [seq at data]}]
+(defmethod evolve* "memo/dead-lettered" [state {:keys [seq at data labels]}]
   (let [{:keys [memo reason explanation attempts transcript-tail wake]} data]
     (-> state
         (update-in [:memos memo] assoc :status :dead :attempts attempts :retry-at nil)
         (assoc-in [:dead-letters seq] {:id seq :memo memo :reason reason
                                        :explanation explanation :attempts attempts
                                        :transcript-tail transcript-tail :wake wake
-                                       :created-at (inst at) :status :open}))))
+                                       :created-at (inst at) :status :open
+                                       :labels (union labels)}))))
 
 (defmethod evolve* "memo/requeued" [state {:keys [data]}]
   (let [id (:memo data)]
@@ -298,12 +473,12 @@
                                        l)]))
                         letters))))))
 
-(defmethod evolve* "routine/written" [state {:keys [at data]}]
+(defmethod evolve* "routine/written" [state {:keys [at data labels]}]
   (let [{:keys [owner name schedule instructions]} data]
     (update-in state [:routines owner name]
                (fn [r] (assoc r :owner owner :name name :schedule schedule
                               :instructions instructions :baseline (inst at)
-                              :status :active)))))
+                              :status :active :labels (union labels))))))
 
 (defmethod evolve* "routine/removed" [state {:keys [data]}]
   (assoc-in state [:routines (:owner data) (:name data) :status] :removed))
@@ -315,26 +490,64 @@
                :status (if one-off :retired :active))))
 
 (defmethod evolve* "wake/started" [state {:keys [seq at data]}]
-  (let [{:keys [role memos note resumes harness pid pid-start chat]} data]
+  (let [{:keys [role memos note resumes harness pid pid-start chat resolves]} data]
     (cond-> (assoc-in state [:wakes seq] {:id seq :role role :memos (vec memos) :note note
                                           :resumes resumes :harness harness :pid pid
                                           :pid-start pid-start :started-at (inst at)
-                                          :status :running :chat (boolean chat)})
+                                          :status :running :chat (boolean chat)
+                                          :resolves (vec resolves)})
       ;; A conversation leaves an interrupted wake to be resumed later.
-      (not chat) (assoc-in [:roles role :interrupted-wake] nil))))
+      (not chat) (assoc-in [:roles role :interrupted-wake] nil)
+      ;; The holds whose decisions this wake carries back to the session.
+      true (update :holds (fn [hs] (reduce #(assoc-in %1 [%2 :delivered] seq) hs resolves))))))
 
-(defmethod evolve* "wake/ended" [state {:keys [at data]}]
-  (let [{:keys [wake outcome exit crashed cut-short session sessions said transcript]} data
+(defmethod evolve* "wake/ended" [state {:keys [at data labels]}]
+  (let [{:keys [wake outcome exit crashed cut-short session sessions said transcript held]} data
         role-id (get-in state [:wakes wake :role])]
     (cond-> (update-in state [:wakes wake] assoc
                        :status :ended :ended-at (inst at) :outcome outcome :exit exit
                        :crashed (boolean crashed) :cut-short (boolean cut-short)
-                       :session session :said said :transcript transcript)
+                       :session session :said said :transcript transcript :labels (union labels))
       sessions (assoc-in [:wakes wake :sessions] (vec sessions))
-      ;; A wake the harness failed, or one cut short at its deadline, is
-      ;; kept to be resumed. A conversation is not.
-      (and (or (not= "ran" outcome) cut-short) (not (get-in state [:wakes wake :chat])))
+      (seq held) (assoc-in [:wakes wake :held] (vec held))
+      ;; A wake the harness failed, one cut short at its deadline, or one
+      ;; stopped for the operator to decide on a call, is kept to be
+      ;; resumed. A conversation is not.
+      (and (or (not= "ran" outcome) cut-short (seq held)) (not (get-in state [:wakes wake :chat])))
       (assoc-in [:roles role-id :interrupted-wake] wake))))
+
+(defn- clean [labels] (vec (remove #{contaminated-label} labels)))
+
+(defmethod evolve* "label/trusted" [state {:keys [data]}]
+  (let [{:keys [kind ref]} data
+        num (parse-long ref)
+        [owner nm] (str/split ref #"/" 2)
+        last-index #(dec (count (get-in state %)))]
+    (case kind
+      "memo" (update-in state [:memos num :labels] clean)
+      "fact" (update-in state [:facts num :versions (last-index [:facts num :versions]) :labels] clean)
+      "doc" (update-in state [:docs ref :versions (last-index [:docs ref :versions]) :labels] clean)
+      "note" (update-in state [:notes owner nm :labels] clean)
+      "routine" (update-in state [:routines owner nm :labels] clean)
+      "role" (update-in state [:roles ref] #(-> % (update :id-labels clean) (update :title-labels clean)
+                                                (update :instructions-labels clean)))
+      "journal" (update state :journals
+                        (fn [js] (update-vals js (fn [es] (mapv #(cond-> % (= num (:id %)) (update :labels clean)) es))))))))
+
+(defmethod evolve* "hold/opened" [state {:keys [seq at data labels]}]
+  (let [{:keys [role wake session call tool input input-sha256]} data]
+    (assoc-in state [:holds seq] {:id seq :role role :wake wake :session session :call call
+                                  :tool tool :input input :input-sha256 input-sha256
+                                  :status :open :opened-at (inst at) :labels (union labels)})))
+
+(defmethod evolve* "hold/resolved" [state {:keys [at actor data]}]
+  (let [{:keys [hold verdict reason]} data]
+    (update-in state [:holds hold] assoc
+               :status (if (= "allow" verdict) :allowed :denied) :reason reason
+               :resolved-at (inst at) :resolved-by actor)))
+
+(defmethod evolve* "hold/requeued" [state {:keys [data]}]
+  (update-in state [:holds (:hold data)] dissoc :delivered))
 
 (defmethod evolve* "harness/paused" [state {:keys [data]}]
   (let [{:keys [harness reason until failed-tries down-since]} data]
@@ -362,7 +575,7 @@
              :delivery :failed :error (:error data)))
 
 (defn- fact-version [{:keys [seq at actor labels]} change {:keys [topic text valid-from valid-to]}]
-  {:seq seq :recorded-at (inst at) :actor actor :change change :labels labels
+  {:seq seq :recorded-at (inst at) :actor actor :change change :labels (union labels)
    :topic topic :text text :valid-from (inst valid-from) :valid-to (inst valid-to)})
 
 (defn- add-version [state id version]
@@ -377,7 +590,9 @@
   (let [old (:fact data)
         ended (assoc (dissoc (peek (get-in state [:facts old :versions])) :why)
                      :seq seq :recorded-at (inst (:at event)) :actor (:actor event)
-                     :change :superseded :labels (:labels event)
+                     ;; It still says what the old version said.
+                     :change :superseded :labels (union (:labels (peek (get-in state [:facts old :versions])))
+                                                        (:labels event))
                      :valid-to (inst (:valid-from data)) :superseded-by seq)]
     (-> state
         (add-version old ended)
@@ -390,21 +605,22 @@
                                            :why why :superseded-by superseded-by)
                               retracted (assoc :retracted true)))))
 
-(defmethod evolve* "note/written" [state {:keys [at data]}]
+(defmethod evolve* "note/written" [state {:keys [at data labels]}]
   (let [{:keys [owner name text]} data]
-    (assoc-in state [:notes owner name] {:owner owner :name name :text text :written-at (inst at)})))
+    (assoc-in state [:notes owner name] {:owner owner :name name :text text :written-at (inst at)
+                                         :labels (union labels)})))
 
 (defmethod evolve* "note/removed" [state {:keys [data]}]
   (update-in state [:notes (:owner data)] dissoc (:name data)))
 
-(defmethod evolve* "journal/written" [state {:keys [seq at data]}]
+(defmethod evolve* "journal/written" [state {:keys [seq at data labels]}]
   (update-in state [:journals (:owner data)] (fnil conj [])
-             {:id seq :owner (:owner data) :text (:text data) :at (inst at)}))
+             {:id seq :owner (:owner data) :text (:text data) :at (inst at) :labels (union labels)}))
 
 (defn- add-doc-version [state {:keys [seq at actor labels]} path more]
   (update-in state [:docs path]
              (fn [d] (update (assoc d :path path) :versions (fnil conj [])
-                             (merge {:seq seq :path path :at (inst at) :actor actor :labels labels}
+                             (merge {:seq seq :path path :at (inst at) :actor actor :labels (union labels)}
                                     more)))))
 
 (defmethod evolve* "doc/put" [state {:keys [data] :as event}]
@@ -417,18 +633,19 @@
 
 (defn- emit
   "Adds an event to a transaction being built, folding it into the
-  transaction's state so later steps see it."
+  transaction's state so later steps see it. The event carries the
+  caller's labels, and `copied`, the labels of any text it copies from
+  elsewhere."
   ([tx type data] (emit tx type data []))
-  ([{:keys [state now actor] :as tx} type data labels]
+  ([{:keys [state now actor] :as tx} type data copied]
    (let [event {:seq (:next-seq state) :at (str now) :type type :actor actor
-                :labels (vec (sort (distinct labels))) :data data}]
+                :labels (union (:labels tx) copied) :data data}]
      (-> tx
          (assoc :state (evolve state event))
          (update :events conj event)))))
 
 (defn- last-id [tx] (:seq (peek (:events tx))))
 
-(defn- blank? [s] (or (not (string? s)) (str/blank? s)))
 
 (defn- require-text [value what]
   (when (blank? value) (reject! (str what " must not be empty.")))
@@ -440,7 +657,8 @@
   (boolean (and (string? id) (re-matches id-pattern id) (not (reserved-ids id)))))
 
 (defn- notify [tx kind title body & {:as about}]
-  (emit tx "notification/created" (merge {:kind kind :title title :body body} about)))
+  (emit tx "notification/created" (merge {:kind kind :title title :body body} (dissoc about :labels))
+        (:labels about)))
 
 (defn- quote-block [s] (str "> " (str/replace (str s) "\n" "\n> ")))
 
@@ -465,25 +683,44 @@
         {:keys [to subject]} (memo state (:memo letter))
         handler (:dead-letter-handler config)
         title (str to " could not finish \"" subject "\"")
-        report (dead-letter-report state letter)]
+        report (dead-letter-report state letter)
+        ;; The report quotes the memo, and what the role said about it.
+        copied (union (memo-labels state (memo state (:memo letter))) (:labels letter))]
     (if (and handler (active-role? state handler) (not= handler to))
       (emit tx "memo/sent" {:from dispatcher :to handler
-                            :subject (str "Dead letter: " title) :body report})
-      (notify tx "work-abandoned" title report :role to :dead-letter letter-id))))
+                            :subject (str "Dead letter: " title) :body report}
+            copied)
+      (notify tx "work-abandoned" title report :role to :dead-letter letter-id :labels copied))))
 
-(defn- dead-letter [tx memo-id reason & {:as more}]
+(defn- dead-letter
+  "Dead-letters a memo. `copied` is the labels of the text in `more`, such
+  as the end of a transcript."
+  [tx memo-id reason copied & {:as more}]
   (let [tx (emit tx "memo/dead-lettered"
                  (merge {:memo memo-id :reason reason
                          :attempts (:attempts (memo (:state tx) memo-id))}
-                        more))]
+                        more)
+                 copied)]
     (escalate tx (last-id tx))))
 
-(defn- send-memo [tx {:keys [from to subject body routine]}]
-  (let [tx (emit tx "memo/sent" (cond-> {:from from :to to :subject subject :body body}
-                                  routine (assoc :routine routine)))]
-    (if (= operator to)
-      (notify tx "memo-for-operator" subject body :memo (last-id tx))
-      tx)))
+(defn- send-memo
+  "Sends a memo. `copied` is the labels of text it copies, such as a
+  routine's instructions."
+  ([tx m] (send-memo tx m []))
+  ([tx {:keys [from to subject body routine]} copied]
+   (let [tx (emit tx "memo/sent" (cond-> {:from from :to to :subject subject :body body}
+                                   routine (assoc :routine routine))
+                  copied)]
+     (cond
+       (= operator to)
+       (notify tx "memo-for-operator" subject body :memo (last-id tx) :labels copied)
+       ;; Nothing of a quarantined memo's text goes in the notification.
+       (quarantined? (memo (:state tx) (last-id tx)))
+       (notify tx "memo-quarantined" (str "Memo " (last-id tx) " to " to " is quarantined")
+               (str "It is contaminated, so " to " is not shown it until you release it. relay release "
+                    (last-id tx) " shows it to you first.")
+               :role to :memo (last-id tx) :labels (ids-labels (:state tx) [to]))
+       :else tx))))
 
 (defn- authorize-registry! [{:keys [config actor]}]
   (when-not (or (= operator actor) (config/may-add? config actor))
@@ -513,12 +750,18 @@
   "The events a command produces. `ctx` has :now (an Instant no earlier than
   the state's last event) and :config. Throws a rejection when the command
   cannot be carried out."
-  [state {:keys [actor] :as command} {:keys [now config]}]
+  [state {:keys [actor labels] :as command} {:keys [now config]}]
   (when (and (:last-at state) (.isBefore ^Instant now (:last-at state)))
     (throw (ex-info "decide was given a time before the log's last event." {:now now})))
   (when-not (or (#{operator dispatcher} actor) (active-role? state actor))
     (reject! :forbidden (str "Unknown actor " (pr-str actor) ".")))
-  (:events (decide* {:state state :events [] :now now :config config :actor actor}
+  ;; A label relay does not know could only be a mistake, and dropping it
+  ;; would lose what it stands for, so the command is refused.
+  (when-not (and (or (nil? labels) (sequential? labels)) (every? label-names labels))
+    (reject! (str "Unknown labels " (pr-str labels) "; relay knows only "
+                  (str/join " and " (sort label-names)) ".")))
+  (:events (decide* {:state state :events [] :now now :config config :actor actor
+                     :labels (union labels)}
                     command)))
 
 (defn run-command
@@ -569,8 +812,12 @@
     (reduce (fn [tx {:keys [name]}] (emit tx "routine/removed" {:owner id :name name}))
             tx (active-routines state id))
     (emit tx "role/removed" {:id id})
-    (reduce (fn [tx m] (dead-letter tx (:id m) "recipient-removed"))
-            tx (unread-memos state id))))
+    (reduce (fn [tx m] (dead-letter tx (:id m) "recipient-removed" []))
+            tx (unread-memos state id))
+    ;; Nothing will ever carry a decision back to a removed role.
+    (reduce (fn [tx {hold-id :id}]
+              (emit tx "hold/resolved" {:hold hold-id :verdict "deny" :reason "The role was removed."}))
+            tx (open-holds state id))))
 
 ;; memos
 
@@ -594,7 +841,7 @@
   (let [m (open-memo! tx memo)]
     (when-not (= actor (:to m))
       (reject! :forbidden (str "Memo " memo " is not addressed to " actor ".")))
-    (dead-letter tx memo "blocked" :explanation (require-text explanation "The explanation"))))
+    (dead-letter tx memo "blocked" [] :explanation (require-text explanation "The explanation"))))
 
 (defmethod decide* :memo/retry [{:keys [state config actor] :as tx} {{:keys [role]} :args}]
   (when-not (or (= operator actor) (= actor (:dead-letter-handler config))
@@ -657,6 +904,10 @@
     (reject! :forbidden "Only the operator or the dispatcher wakes a role."))
   (active-role! state role-id)
   (when (running? state role-id) (reject! :busy (str role-id " is already running.")))
+  ;; Resuming a session with a call still held would only stop at it again.
+  ;; A conversation uses a session of its own, so it may go ahead.
+  (when (and (not chat) (held? state role-id))
+    (reject! :held (str role-id " has a tool call waiting for the operator; see relay holds.")))
   (let [harness (harness-of state config role-id)]
     (when dispatched
       (when (paused-until state harness now) (reject! :paused (str harness " is paused.")))
@@ -668,13 +919,15 @@
     ;; them when it ends.
     (when (and chat (not= operator actor))
       (reject! :forbidden "Only the operator can open a conversation."))
-    (let [memos (cond chat [] dispatched (waiting-memos state role-id now) :else (unread-memos state role-id))]
-      (if (and (empty? memos) (blank? note) (not chat))
+    (let [memos (cond chat [] dispatched (waiting-memos state role-id now) :else (deliverable-memos state role-id))
+          resolves (when-not chat (mapv :id (pending-resolutions state role-id)))]
+      (if (and (empty? memos) (blank? note) (not chat) (empty? resolves))
         tx
         (emit tx "wake/started" (cond-> {:role role-id :memos (mapv :id memos) :note note
                                          :resumes (when-not chat (:interrupted-wake (role state role-id)))
                                          :harness harness :pid pid :pid-start pid-start}
-                                  chat (assoc :chat true)))))))
+                                  chat (assoc :chat true)
+                                  (seq resolves) (assoc :resolves resolves)))))))
 
 (defn- settle-memos
   "Deals with each memo a wake carried that is still open. The role never
@@ -689,7 +942,8 @@
                 (-> tx
                     (emit "memo/attempt-failed" {:memo memo-id :attempt attempt :retry-at nil
                                                  :wake (:id wake)})
-                    (dead-letter memo-id "never-closed" :transcript-tail said :wake (:id wake)))
+                    (dead-letter memo-id "never-closed" (:said-labels tx)
+                                 :transcript-tail said :wake (:id wake)))
                 :else
                 (emit tx "memo/attempt-failed"
                       {:memo memo-id :attempt attempt :wake (:id wake)
@@ -725,14 +979,50 @@
           (notify tx "harness-needs-attention" (str harness " needs you before relay can work")
                   (str "It said:\n\n" said "\n\nEvery role on it is on hold and nothing has been "
                        "dropped. Work carries on by itself once it runs again.")
-                  :harness harness)
+                  :harness harness :labels (:said-labels tx))
           :else tx)))))
 
-(defn- end-wake [{:keys [state] :as tx} wake-id {:keys [outcome exit crashed cut-short session sessions said
-                                                       transcript resets-at]}]
-  (let [wake (get-in state [:wakes wake-id])]
+(defn- held-call? [c]
+  (and (map? c) (string? (:id c)) (not (blank? (:id c))) (string? (:name c)) (not (blank? (:name c)))))
+
+(defn- open-hold
+  "Records a call held in a wake's session, unless it is already known: a
+  hold still open stays as it is, and one decided and carried back that is
+  held again was never received, so it is carried back again."
+  [{:keys [state] :as tx} wake session {:keys [id name input input-sha256]}]
+  (let [known (first (filter #(and (= session (:session %)) (= id (:call %))) (vals (:holds state))))]
+    (cond
+      (nil? known)
+      (let [tx (emit tx "hold/opened" (cond-> {:role (:role wake) :wake (:id wake) :session session
+                                               :call id :tool name :input input}
+                                        (string? input-sha256) (assoc :input-sha256 input-sha256))
+                     (:said-labels tx))
+            hold-id (last-id tx)]
+        (notify tx "hold-opened" (str (:role wake) " wants to use " name)
+                (str "It is waiting for you to decide.\n\n" (pr-str input)
+                     "\n\nrelay approve " hold-id ", or relay deny " hold-id " [why].")
+                :role (:role wake) :hold hold-id :labels (:said-labels tx)))
+      (and (not= :open (:status known)) (:delivered known))
+      (emit tx "hold/requeued" {:hold (:id known)})
+      :else tx)))
+
+(defn- end-wake [{:keys [state config] :as tx} wake-id {:keys [outcome exit crashed cut-short session sessions said
+                                                              transcript resets-at held labels]}]
+  (let [wake (get-in state [:wakes wake-id])
+        ;; What the session said, and the input of any call it left held,
+        ;; are its own text, with the labels it had gathered by the end:
+        ;; as its harness reports them, or when it does not, every label
+        ;; it could have gathered.
+        tx (assoc tx :said-labels (if (and (sequential? labels) (every? label-names labels))
+                                    (union labels)
+                                    (session-labels-bound state config (:role wake))))]
     (when-not (harness-outcomes outcome)
       (reject! (str "Unknown harness outcome " (pr-str outcome) ".")))
+    ;; Whatever the harness said is held, the wake ends: only a wake that
+    ;; ran and has a session to resume can leave calls held, and anything
+    ;; else in the list is not a call.
+    (let [held (when (and (sequential? held) (= "ran" outcome) (not (:chat wake)) (not (blank? session)))
+                 (filterv held-call? held))]
     ;; A conversation records every session it used, in order, instead of
     ;; the one session a wake resumes from.
     (when (some? sessions)
@@ -744,9 +1034,77 @@
       (emit tx "wake/ended" (cond-> {:wake wake-id :outcome outcome :exit exit :crashed (boolean crashed)
                                      :cut-short (boolean cut-short) :session session :said said
                                      :transcript transcript}
-                              (some? sessions) (assoc :sessions (vec sessions))))
+                              (some? sessions) (assoc :sessions (vec sessions))
+                              (seq held) (assoc :held (mapv :id held)))
+            (:said-labels tx))
       (note-harness tx (:harness wake) outcome resets-at said)
-      (if (= "ran" outcome) (settle-memos tx wake said) tx))))
+      (reduce #(open-hold %1 wake session %2) tx held)
+      ;; A wake stopped for the operator has not failed its memos: it is
+      ;; resumed once they decide.
+      (if (and (= "ran" outcome) (empty? held)) (settle-memos tx wake said) tx)
+      (dissoc tx :said-labels)))))
+
+;; the operator's say over contaminated text
+
+(defn- operator-only! [{:keys [actor]} what]
+  (when-not (= operator actor)
+    (reject! :forbidden (str "Only the operator " what "."))))
+
+(defmethod decide* :memo/release [{:keys [state] :as tx} {{id :memo} :args}]
+  (operator-only! tx "releases a quarantined memo")
+  (let [m (open-memo! tx id)]
+    (when-not (quarantined? m)
+      (reject! :invalid (str "Memo " id " is not quarantined.")))
+    (emit tx "memo/released" {:memo id})))
+
+(def trust-kinds #{"memo" "fact" "doc" "note" "routine" "role" "journal"})
+
+(defn trusted-version
+  "What `relay trust <kind> <ref>` is about, and its labels: a memo, a
+  fact's current version, a doc's latest version, a note or routine named
+  owner/name, a role, or a journal entry by number. Nil when there is none."
+  [state kind ref]
+  (let [num (some-> ref str parse-long)
+        [owner nm] (str/split (str ref) #"/" 2)]
+    (case kind
+      "memo" (when-let [m (memo state num)] {:labels (:labels m) :text (str (:subject m) "\n\n" (:body m))})
+      "fact" (when-let [v (some-> (fact state num) (fact-as-known nil))] {:labels (:labels v) :text (:text v)})
+      "doc" (when-let [v (doc-version state ref {})] (when-not (:removed v) {:labels (:labels v) :text (:content v)}))
+      "note" (when-let [n (get-in state [:notes owner nm])] {:labels (:labels n) :text (:text n)})
+      "routine" (when-let [r (routine state owner nm)] {:labels (:labels r) :text (:instructions r)})
+      "role" (when-let [r (role state ref)]
+               {:labels (role-labels state ref) :text (str (:title r) "\n\n" (:instructions r))})
+      "journal" (when-let [e (first (filter #(= num (:id %)) (mapcat val (:journals state))))]
+                  {:labels (:labels e) :text (:text e)})
+      nil)))
+
+(defmethod decide* :label/trust [{:keys [state] :as tx} {{:keys [kind ref]} :args}]
+  ;; The operator has read it and vouches for it. That clears
+  ;; contaminated from what it says now, and never private.
+  (operator-only! tx "vouches for contaminated text")
+  (when-not (trust-kinds kind)
+    (reject! (str "Trust what? One of " (str/join ", " (sort trust-kinds)) ".")))
+  (let [v (trusted-version state kind ref)]
+    (when-not v (reject! :not-found (str "There is no " kind " " ref ".")))
+    (when-not (contaminated? (:labels v))
+      (reject! :invalid (str "The " kind " " ref " is not contaminated.")))
+    (emit tx "label/trusted" {:kind kind :ref (str ref)})))
+
+;; holds
+
+(defmethod decide* :hold/resolve [{:keys [state actor] :as tx} {{hold-id :hold :keys [verdict reason]} :args}]
+  ;; A person decides, never a model or a tool: only the operator, at the
+  ;; command line, can resolve a hold.
+  (when-not (= operator actor)
+    (reject! :forbidden "Only the operator decides on a held tool call."))
+  (let [h (hold state hold-id)]
+    (when-not h (reject! :not-found (str "There is no hold " hold-id ".")))
+    (when-not (= :open (:status h))
+      (reject! :invalid (str "Hold " hold-id " was already decided: " (name (:status h)) ".")))
+    (when-not (#{"allow" "deny"} verdict)
+      (reject! (str "A hold is resolved with allow or deny, not " (pr-str verdict) ".")))
+    (emit tx "hold/resolved" (cond-> {:hold hold-id :verdict verdict}
+                               (not (blank? reason)) (assoc :reason (str/trim reason))))))
 
 (defmethod decide* :wake/end [{:keys [state] :as tx} {{:keys [wake] :as args} :args}]
   (dispatcher-only! tx)
@@ -760,7 +1118,8 @@
   (reduce (fn [tx {:keys [owner name instructions schedule] :as r}]
             (if (routine-due? (:state tx) config r now)
               (let [tx (send-memo tx {:from dispatcher :to owner :subject name :body instructions
-                                      :routine name})
+                                      :routine name}
+                                  (:labels r))
                     memo-id (:seq (first (filter #(= "memo/sent" (:type %))
                                                  (rseq (:events tx)))))]
                 (emit tx "routine/fired" {:owner owner :name name :memo memo-id
@@ -895,16 +1254,21 @@
     (when-let [by (:superseded-by old)]
       (reject! :conflict (str "Fact " fact " was already superseded by fact " by "; supersede that one.")))
     (when (and (:valid-from old) (not (after? from (:valid-from old))))
-      (reject! (str "The change must come after fact " fact " began to hold, at " (:valid-from old)
-                    ". If the fact was wrong from the start, correct it instead.")))
+      (reject! :invalid (str "The change must come after fact " fact " began to hold, at " (:valid-from old)
+                             ". If the fact was wrong from the start, correct it instead.")
+               (content-labels (:labels old))))
     (when (and (:valid-to old) (after? from (:valid-to old)))
-      (reject! (str "Fact " fact " had already stopped holding at " (:valid-to old)
-                    "; add a new fact instead.")))
+      (reject! :invalid (str "Fact " fact " had already stopped holding at " (:valid-to old)
+                             "; add a new fact instead.")
+               (content-labels (:labels old))))
     (emit tx "fact/superseded"
           (merge {:fact fact
                   :topic (if (blank? topic) (:topic old) (fact-topic topic))
                   :text (fact-text text)}
-                 (validity! from (world-time config valid-to "valid-to"))))))
+                 (validity! from (world-time config valid-to "valid-to")))
+          ;; The old version's text is carried into the version that ends
+          ;; it, and its topic into the new fact when none is given.
+          (:labels old))))
 
 (defn- bound
   "A validity bound for a correction: unchanged when not given, open for
@@ -927,7 +1291,8 @@
                    {:fact old-id :superseded-by nil
                     :valid-from (some-> (:valid-from current) str)
                     :valid-to (some-> (:valid-to before) str)
-                    :why (str "Fact " retracted-id ", which superseded it, was retracted.")}))
+                    :why (str "Fact " retracted-id ", which superseded it, was retracted.")})
+            (:labels current))
       tx)))
 
 (defmethod decide* :fact/correct [{:keys [state config] :as tx}
@@ -945,7 +1310,8 @@
         (emit tx "fact/corrected" (merge (select-keys cur [:topic :text])
                                          {:fact fact :retracted true :why why
                                           :superseded-by (:superseded-by cur)}
-                                         (validity! (:valid-from cur) (:valid-to cur))))
+                                         (validity! (:valid-from cur) (:valid-to cur)))
+              (:labels cur))
         (if-let [old (:supersedes cur)] (reopen-superseded tx fact old) tx))
       (let [corrected (merge {:topic (if (blank? topic) (:topic cur) (fact-topic topic))
                               :text (if (blank? text) (:text cur) (fact-text text))}
@@ -953,9 +1319,10 @@
                                         (bound config valid-to (:valid-to cur) "valid-to")))]
         (when (= corrected (merge (select-keys cur [:topic :text])
                                   (validity! (:valid-from cur) (:valid-to cur))))
-          (reject! "That correction changes nothing."))
+          (reject! :invalid "That correction changes nothing." (content-labels (:labels cur))))
         (emit tx "fact/corrected" (assoc corrected :fact fact :why why
-                                         :superseded-by (:superseded-by cur)))))))
+                                         :superseded-by (:superseded-by cur))
+              (when (or (blank? topic) (blank? text)) (:labels cur)))))))
 
 (def ^:private note-name-pattern #"[a-z0-9][a-z0-9-]{0,47}")
 
@@ -999,7 +1366,8 @@
                                          (str/starts-with? path (str (:path %) "/")))
                                     (docs state nil)))]
       (reject! :conflict (str path " would sit where " (:path clash) " is, as a file and a"
-                              " folder at once. Choose another path.")))
+                              " folder at once. Choose another path.")
+               (version-labels state clash)))
     (if (= content (:content (doc-version state path {})))
       tx
       (emit tx "doc/put" {:path path :content content}))))

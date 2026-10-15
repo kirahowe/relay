@@ -204,10 +204,10 @@
 ;; --- tool kinds
 
 (deftest tool-kinds-come-from-classes-and-name-what-removes
-  (let [config {:tools {"r" {:class :read :description "d" :command ["true"]}
-                        "w" {:class :write :description "d" :command ["true"]}
-                        "e" {:class :egress :description "d" :command ["true"]}
-                        "a" {:class :act :description "d" :command ["true"]}}
+  (let [config {:tools {"r" {:class :read :labels [] :description "d" :command ["true"]}
+                        "w" {:class :write :labels [] :description "d" :command ["true"]}
+                        "e" {:class :egress :labels [] :description "d" :command ["true"]}
+                        "a" {:class :act :labels [] :description "d" :command ["true"]}}
                 :grants {"clerk" {:tools ["r" "w" "e" "a"] :may-add true}}}
         manifest (tools/manifest config "clerk")
         kinds (acp/tool-kinds manifest)]
@@ -249,7 +249,7 @@
                                                 :api-key-command ["echo" "sk-test-key"]
                                                 :retry {:retries 0}}
                                                harness)}
-                 :tools {"printenv" {:class :read :description "Print the environment." :command ["env"]}}
+                 :tools {"printenv" {:class :read :labels [] :description "Print the environment." :command ["env"]}}
                  :grants {"clerk" {:tools ["printenv"]}}
                  :notify {:kind :none}})))
 

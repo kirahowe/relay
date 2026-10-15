@@ -84,18 +84,22 @@
   "Everything a harness needs for one wake. Pure: everything read from
   outside the log comes in `inputs` (wake-inputs). The prompt's time is
   never earlier than the log's last entry."
-  [{:keys [data-dir config]} state {:keys [id role memos note resumes harness]}
+  [{:keys [data-dir config]} state {:keys [id role memos note resumes harness resolves] :as wake}
    {:keys [shared operator-additions relay-bin data-path] :as inputs}]
   (let [role-row (core/role state role)
         run-dir (fs/path data-dir "runs" role (str id))
-        resumed (when resumes (get-in state [:wakes resumes]))]
+        resumed (when resumes (get-in state [:wakes resumes]))
+        {shown-notes :shown withheld-notes :withheld} (core/prompt-notes state role)
+        holds (map #(core/hold state %) resolves)
+        manifest (tools/manifest config role {:script? (tools/script-role? state config role)})]
     {:harness (get-in config [:harnesses (keyword harness)])
      :harness-name harness
      :role role-row
      :model (or (:model role-row) (get-in config [:harnesses (keyword harness) :model]))
      :system-prompt (prompt/instructions {:shared shared
                                           :operator-additions operator-additions
-                                          :notes (core/notes state role)
+                                          :notes shown-notes
+                                          :withheld-notes withheld-notes
                                           :granted (tools/grants-summary config role)}
                                          role-row)
      :prompt (prompt/wake {:role role-row
@@ -103,8 +107,16 @@
                            :note note
                            :now (not-before (:now inputs) (:last-at state))
                            :zone (config/zone config)
-                           :resumed? (some? resumes)})
-     :tools (tools/manifest config role)
+                           :resumed? (some? resumes)
+                           :decided holds})
+     :tools manifest
+     ;; The session starts with the labels of everything in its prompts,
+     ;; and each tool is policed by its class and static labels.
+     :policy (tools/policy manifest (core/wake-labels state wake))
+     :resolve (vec (for [{:keys [call status reason input-sha256]} holds]
+                     (cond-> {:call_id call :verdict (if (= :allowed status) "allow" "deny")}
+                       (not (str/blank? reason)) (assoc :reason reason)
+                       input-sha256 (assoc :input_sha256 input-sha256))))
      :tool-command [relay-bin "tool" "--data" data-path "--role" role]
      :run-dir (str run-dir)
      :session-dir (str (fs/path data-dir "runs" role "sessions"))
@@ -170,7 +182,7 @@
 (defn wake-end-args
   "The :wake/end args for a harness's report on a wake."
   [wake-id report]
-  (-> (select-keys report [:outcome :exit :crashed :cut-short :session :said :resets-at])
+  (-> (select-keys report [:outcome :exit :crashed :cut-short :session :said :resets-at :held :labels])
       (update :exit exit-field)
       (update :resets-at #(some-> % str))
       (assoc :wake wake-id

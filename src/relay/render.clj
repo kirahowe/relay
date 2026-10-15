@@ -99,3 +99,17 @@
   [(if (seq events)
      (str "Wrote " path ", version " (:seq (first events)))
      (str path " already says that."))])
+
+(defn hold
+  "One held tool call, with its whole input."
+  [{:keys [id role tool input session call]}]
+  [(str "Hold " id ": " role " wants to use " tool)
+   (str "    session " session ", call " call)
+   "    input:"
+   (str/replace (json/generate-string input {:pretty true}) #"(?m)^" "      ")])
+
+(defn holds [hs]
+  (if (empty? hs)
+    ["No tool calls are waiting for you."]
+    (concat (mapcat #(concat (hold %) [""]) hs)
+            ["relay approve <hold> lets one run; relay deny <hold> [why] refuses it."])))

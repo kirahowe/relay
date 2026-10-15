@@ -193,16 +193,16 @@
                                   :api-key-command ["cat" (str *dir* "-key")]
                                   :effort "high" :retry {:retries 0}}
                                  harness-settings)}
-   :tools {"printenv" {:class :read :description "Print the environment." :command ["env"]}
-           "ledger" {:class :act :description "Append a line to the ledger."
+   :tools {"printenv" {:class :read :labels [] :description "Print the environment." :command ["env"]}
+           "ledger" {:class :act :labels [] :description "Append a line to the ledger."
                      :command ["sh" "-c" (str "echo \"$*\" >> " (ledger "ledger.txt")) "sh"]}
-           "slow-ledger" {:class :act :description "Append a line to the ledger, slowly."
+           "slow-ledger" {:class :act :labels [] :description "Append a line to the ledger, slowly."
                           :command ["sh" "-c" (str "sleep 1; echo \"$*\" >> " (ledger "ledger.txt")) "sh"]}
-           "ledger-clerk" {:class :act :description "The clerk's ledger."
+           "ledger-clerk" {:class :act :labels [] :description "The clerk's ledger."
                            :command ["sh" "-c" (str "echo \"clerk $*\" >> " (ledger "clerk.txt") "; echo clerk-result") "sh"]}
-           "ledger-auditor" {:class :act :description "The auditor's ledger."
+           "ledger-auditor" {:class :act :labels [] :description "The auditor's ledger."
                              :command ["sh" "-c" (str "echo \"auditor $*\" >> " (ledger "auditor.txt") "; echo auditor-result") "sh"]}
-           "boom" {:class :act :description "Always fails."
+           "boom" {:class :act :labels [] :description "Always fails."
                    :command ["sh" "-c" "echo it-went-wrong >&2; exit 3" "sh"]}}
    :grants {"clerk" {:tools ["printenv" "ledger" "slow-ledger" "ledger-clerk" "boom"]}
             "auditor" {:tools ["ledger-auditor"]}}
