@@ -23,10 +23,22 @@
  :dead-letter-handler "hub"
 
  ;; Tools beyond relay's own, each an external command given the call's
- ;; arguments after its own. Every tool has a class: :read, :write,
- ;; :egress or :act.
+ ;; arguments after its own. Every tool has a :class, which says what a
+ ;; call can do:
+ ;;   :read    returns content and sends nothing out
+ ;;   :write   changes relay's own data only
+ ;;   :egress  can send what the model chooses where an outsider can see it
+ ;;   :act     does something in your name outside relay
+ ;; and :labels, the labels its output always carries, as strings:
+ ;; "contaminated" when an outsider could have written any of it (a web
+ ;; page, an email, someone else's repository), "private" when it is your
+ ;; private data. [] means neither. A session that has seen both private
+ ;; and contaminated text needs your approval for an :egress call, and
+ ;; one that has seen anything contaminated needs it for an :act call
+ ;; (relay holds, relay approve). :always-hold true asks every time.
  :tools
  {"rem" {:class :act
+         :labels ["private"]
          :description "Apple Reminders. Run with [\"help\"] for the commands."
          :command ["/path/to/relay/tools/rem/rem"]}}
 

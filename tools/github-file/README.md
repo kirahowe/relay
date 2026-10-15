@@ -16,6 +16,8 @@ Give the tool a name per repository and ref, with the pinned flags in
 ```clojure
 :tools
 {"slk-reviews" {:class :read
+                ;; Anyone who can push to the branch writes what it returns.
+                :labels ["contaminated"]
                 :description "Upstream review reports for kirahowe/slk. Run with [\"help\"]."
                 :command ["/path/to/relay/tools/github-file/github-file"
                           "--repo" "kirahowe/slk" "--ref" "claude/upstream-review"]}}

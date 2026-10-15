@@ -27,8 +27,9 @@ A role has no files and no shell. It works only through tools, each one a
 - memos: `inbox`, `roles`, `memo_send`, `memo_close`, `memo_block`
 - routines: `routines`, `routine_write`, `routine_remove`
 - knowledge: `facts`, `fact_history`, `fact_add`, `fact_supersede`,
-  `fact_correct`, `note_write`, `note_remove`, `journal`, `journal_write`,
-  `docs`, `doc_get`, `doc_history`, `doc_put`, `doc_remove`
+  `fact_correct`, `notes`, `note_write`, `note_remove`, `journal`,
+  `journal_write`, `docs`, `doc_get`, `doc_history`, `doc_put`,
+  `doc_remove`
 - the registry, for roles granted `:may-add`: `role_add`, `role_update`,
   `role_remove`
 - `dead_letters_retry`, for the dead letter handler and roles granted
@@ -64,11 +65,60 @@ browsing. Nothing reads an export back.
 notifications go, limits, the dead letter handler, external tools and what
 each role is granted. `setup/relay.example.edn` shows each of them. No role
 can read this file. Every external tool has a class (`read`, `write`,
-`egress` or `act`), which nothing enforces yet; it is there for the
-security policy to come.
+`egress` or `act`) and the labels its output carries (see below), and
+relay refuses a tool that lacks either. A role on a `:script` harness is
+offered no external tools, since nothing polices what a script calls.
 
 An optional `<data>/AGENTS.md` adds the operator's own instructions to
 every role's system prompt.
+
+### Labels and holds
+
+relay keeps a role from holding all three parts of the lethal trifecta at
+once: the operator's private data, text an outsider could have written,
+and a way to send data out. It does this with labels, not by asking the
+model to behave.
+
+A session has the labels of what it has seen. `private` comes from
+reading anything relay keeps: a memo, fact, doc, note, journal entry or a
+routine's instructions. `contaminated` comes from text an outsider could
+have written, such as the output of a tool whose `:labels` say so, or
+anything a contaminated session wrote. Labels only grow. agentloop
+enforces the policy: once a session holds both labels, a call to an
+`:egress` tool waits for the operator, and once it is contaminated, so
+does a call to an `:act` tool. relay's own tools that change the
+registry, routines or dead letters are `act`.
+
+Every event a role's tool call writes carries its session's labels, and
+anything that copies text carries the copied text's labels too. Each
+version of a fact, doc or note keeps the labels of whoever wrote it, and
+every read tool returns the labels of what it shows, so the session that
+reads it takes them on. A wake starts with the labels of everything in
+its prompts.
+
+Contaminated items are withheld by default. A read tool shows a
+placeholder in their place and includes them only when called with
+`accept_contamination`. A contaminated memo to a role is quarantined: the
+role is not shown it and is not woken for it until the operator runs
+`relay release <memo>`. `relay trust <kind> <ref>` clears `contaminated`
+from something the operator has read and vouches for. It never clears
+`private`. `--untrusted` on `relay memo`, `put`, `add`, `update` and
+`routine` marks what the operator writes as contaminated, for text pasted
+from somewhere untrusted.
+
+When agentloop holds a call, the wake ends and relay records a hold for
+it and notifies the operator. The role is not woken again, and its memos
+wait without counting the wake against them, until every hold is
+decided. `relay holds` lists them with their whole input. `relay approve
+<hold>` or `relay deny <hold> [why]` decides one. At the next tick the
+role is woken in the same session, which carries out the decisions. In
+a conversation agentloop asks the ACP client instead, and `relay acp`
+passes the request through.
+
+`relay approve`, `deny`, `release` and `trust` print what they are about
+on the terminal (`/dev/tty`, never stdin) and ask for a four-character
+code to be typed back there, so no harness or pipe can answer for the
+operator.
 
 ## Setup
 
@@ -224,7 +274,15 @@ mock Anthropic server in `test/relay/mock_anthropic.clj`.
 event into the state. `decide` turns a command into events or refuses it.
 Every write goes through `relay.inbound`, which decides and appends under
 the log's lock. The model test in `test/relay/core_test.clj` drives random
-sequences of every command and checks the rules after each step.
+sequences of every command and checks the rules after each step. The
+property in `test/relay/labels_test.clj` writes random histories in which
+every piece of text holds a marker tied to its writer's labels, and checks
+that wherever a marker turns up later, in an event, a tool's output or a
+prompt, its writer's labels came with it.
+
+The tests never read `~/.config/relay/config.edn`, run the `relay` on
+PATH, or run the `agentloop` on PATH: they take agentloop only from
+`../agentloop/bin/agentloop`.
 
 ## License
 

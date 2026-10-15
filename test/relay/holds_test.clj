@@ -276,3 +276,20 @@
     (is (= ["s1"] (:sessions obs)))
     (is (= {:stop "end_turn"} (:last obs)) "the client's answer was not taken for the agent's")
     (is (empty? (:requests obs)))))
+
+(deftest an-export-names-each-file-s-labels
+  (with-data
+    (fn [data]
+      (let [sys (inbound/system data)
+            out (str (fs/create-temp-dir {:prefix "relay-export"}) "/x")]
+        (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "clerk" :title "Clerk" :instructions "x"}})
+        (inbound/submit! sys {:type :doc/put :actor "clerk" :labels ["contaminated"] :args {:path "web.md" :content "page"}})
+        (inbound/submit! sys {:type :doc/put :actor "clerk" :args {:path "mine.md" :content "mine"}})
+        (inbound/submit! sys {:type :fact/add :actor "clerk" :labels ["contaminated"] :args {:text "From the web."}})
+        (relay data "export" out)
+        (is (str/starts-with? (slurp (str out "/docs/web.md")) "labels: contaminated, private\n\npage"))
+        (is (str/starts-with? (slurp (str out "/docs/mine.md")) "labels: private\n\nmine"))
+        (let [facts (slurp (str out "/facts.md"))]
+          (is (str/starts-with? facts "labels: contaminated, private"))
+          (is (str/includes? facts "From the web.") "the operator's export shows everything"))
+        (fs/delete-tree (fs/parent out))))))

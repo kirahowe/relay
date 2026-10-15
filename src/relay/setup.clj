@@ -77,6 +77,8 @@
          "              :effort " (pr-str effort) "\n"
          "              :api-key-command " (pr-str api-key-command) "}}\n\n"
          " :notify " (pr-str notify) "\n\n"
+         " ;; Tools beyond relay's own. Each needs :class and :labels; see\n"
+         " ;; setup/relay.example.edn.\n"
          " :tools {}\n"
          " :grants {}}\n")))
 
