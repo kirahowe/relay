@@ -167,7 +167,11 @@ contaminated, for text you copied from somewhere you do not trust.")
   "Runs one of relay's own read tools as the operator, for its text. The
   operator sees everything, contaminated or not."
   [sys tool-name args]
-  (result 0 (tools/operator-text sys tool-name (assoc args :accept_contamination true))))
+  (let [{:keys [ok error labels]} (tools/run-tool sys core/operator (get tools/builtin tool-name)
+                                                  (assoc args :accept_contamination true) [])]
+    (when error (fail! error))
+    ;; Contaminated text is shown marked and with its URLs broken.
+    (result 0 (text/for-operator labels ok))))
 
 ;; --- decisions only a person at the terminal makes
 

@@ -73,7 +73,7 @@
   (gen/fmap (fn [parts] (apply str parts))
             (gen/vector (gen/elements ["http://" "HTTPS://" "hTtP://" "ftp://" "javascript://" "data://"
                                        "www." "WWW." "evil" ".com" "." "/path" "?q=1" " " "\n" "x"
-                                       "‮" "​" ":" "//"])
+                                       "‮" "​" ":" "//" "。" "．" "｡"])
                         1 15)))
 
 (defspec contaminated-text-for-the-operator-has-no-followable-url 500
@@ -85,6 +85,7 @@
            (every? #{"hxxp" "hxxps" "fxp"}
                    (map (comp str/lower-case second) (re-seq #"(?i)([a-z][a-z0-9+.\-]*)://" out)))
            (not (re-find #"(?i)\bwww\.[^\s\[]" out))
+           (not (re-find #"[^\s\[][.\u3002\uFF0E\uFF61][^\s\]]" out))
            (not (raw-hidden out))))))
 
 (deftest clean-text-is-only-made-visible
@@ -97,3 +98,25 @@
         out (str/join "\n" lines)]
     (is (str/includes? out "[3] [contaminated] Click hxxps://evil[.]example/x"))
     (is (str/includes? out "www[.]evil[.]example"))))
+
+
+(deftest every-operator-view-breaks-contaminated-urls
+  (with-data
+    (fn [data]
+      (let [sys (inbound/system data)
+            C ["contaminated"]
+            url "see https://evil.example/x and evil。com"
+            submit #(inbound/submit! sys (assoc %1 :labels C :actor %2))]
+        (submit {:type :role/add :args {:id "clerk" :title url :instructions url}} "operator")
+        (submit {:type :fact/add :args {:text url}} "clerk")
+        (submit {:type :doc/put :args {:path "a.md" :content url}} "clerk")
+        (submit {:type :note/write :args {:name "n" :text url}} "clerk")
+        (submit {:type :journal/write :args {:text url}} "clerk")
+        (submit {:type :routine/write :args {:name "r" :schedule "every 1d" :instructions url}} "clerk")
+        (submit {:type :memo/send :args {:to "clerk" :subject url :body url}} "clerk")
+        (doseq [args [["status"] ["roles"] ["routines"] ["log"] ["log" "--json"] ["docs"] ["doc" "a.md"]
+                      ["facts" "--all"] ["notes" "clerk"] ["journal" "clerk"] ["inbox"]]
+                :let [out (str/join "\n" (:out (cli/execute (concat ["--data" data] args))))]]
+          (is (not (str/includes? out "https://evil")) (str/join " " args))
+          (is (not (str/includes? out "evil.example")) (str/join " " args))
+          (is (not (str/includes? out "evil。com")) (str/join " " args)))))))

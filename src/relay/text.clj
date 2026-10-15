@@ -45,7 +45,8 @@
                        "http" "hxxp://" "https" "hxxps://" "ftp" "fxp://"
                        ("hxxp" "hxxps" "fxp") (str scheme "://")
                        (str scheme "[:]//"))))
-      (str/replace #"(?<=\S)\.(?=\S)" "[.]")))
+      ;; Fullwidth and ideographic full stops work as dots in a host too.
+      (str/replace #"(?<=\S)[.\u3002\uFF0E\uFF61](?=\S)" "[.]")))
 
 (defn contaminated? [labels] (boolean (some #{"contaminated"} labels)))
 
