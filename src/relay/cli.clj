@@ -151,8 +151,13 @@ contaminated, for text you copied from somewhere you do not trust.")
   reason on stderr only, and the harness tells the model the tool failed."
   [sys role tool-name]
   (let [{:keys [problem input labels]} (tools/parse-envelope (stdin-text))]
-    (if problem
+    (cond
+      problem
       {:exit 1 :out [] :err [problem]}
+      ;; A script harness can claim any labels, so it gets no tools.
+      (tools/script-role? (inbound/current-state sys) (:config sys) role)
+      {:exit 1 :out [] :err [(str role " runs on a :script harness, which gets no tools.")]}
+      :else
       (result 0 (tools/envelope (tools/call! sys role tool-name input labels))))))
 
 (defn- tool-output

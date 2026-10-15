@@ -144,9 +144,11 @@ contract Tools {
         -- clean. A contaminated item is never searched unless accepted.
         -- A quarantined memo is withheld even then.
 
-    @invariant AScriptHarnessIsOfferedNoExternalTools
-        -- A script harness runs a program no policy watches, so a role
-        -- on one is offered relay's own tools only.
+    @invariant AScriptHarnessGetsNoTools
+        -- A script harness runs a program no policy watches, which could
+        -- claim any labels, so a role on one is offered no tools, relay's
+        -- own included, and its calls are refused. A role granted tools
+        -- may not be put on one.
 
     @invariant OfferedByGrant
         -- relay's own tools are offered to every role, except these:

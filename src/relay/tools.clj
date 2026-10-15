@@ -504,17 +504,20 @@
                                    {:relay/labels (vec labels)}))))))}])
 
 (defn script-role?
-  "Whether a role runs on a :script harness, which enforces no policy on
-  the calls it makes, so may not be offered external tools."
+  "Whether a role runs on a :script harness. A script is any program: no
+  policy watches its calls and it can claim any labels, so it is offered
+  no tools at all, and relay tool refuses its calls."
   [state config role-id]
   (= :script (get-in config [:harnesses (keyword (core/harness-of state config role-id)) :kind])))
 
 (defn offered
   "The tools a role is offered, by name: relay's own, less those that need a
-  grant it lacks, plus the external tools it is granted, unless it runs on
-  a :script harness."
+  grant it lacks, plus the external tools it is granted. None at all for a
+  role on a :script harness."
   [config role-id & [{:keys [script?]}]]
-  (let [{:keys [tools]} (when-not script? (config/grants config role-id))
+  (if script?
+    {}
+  (let [{:keys [tools]} (config/grants config role-id)
         holds? (fn [grant]
                  (case grant
                    nil true
@@ -522,14 +525,16 @@
                    :dead-letter-handler (or (= role-id (:dead-letter-handler config))
                                             (config/may-add? config role-id))))]
     (merge (into {} (filter #(holds? (:grant (val %))) builtin))
-           (into {} (map external-tool (select-keys (:tools config) tools))))))
+           (into {} (map external-tool (select-keys (:tools config) tools)))))))
 
 (defn grants-summary
   "What a role is granted, in a few sentences for its prompt, so it knows
   what it can and cannot do without trying."
-  [config role-id]
-  (let [offered (offered config role-id)
+  [config role-id & [{:keys [script?] :as opts}]]
+  (let [offered (offered config role-id opts)
         external (sort (keys (select-keys (:tools config) (:tools (config/grants config role-id)))))]
+    (if script?
+      "You run on a script harness, which has no tools."
     (str/join "\n"
               (cond-> []
                 (contains? offered "role_add")
@@ -545,7 +550,7 @@
                         "You have relay's own tools and nothing beyond them."))
                 :always
                 (conj (str "Only the operator grants tools and powers. If your work needs one you lack,"
-                           " ask whoever you report to, or the operator if you report to nobody."))))))
+                           " ask whoever you report to, or the operator if you report to nobody.")))))))
 
 (defn manifest
   "What a harness needs to present the tools: names, descriptions and
@@ -613,8 +618,14 @@
   text too, so the role can read why and adjust."
   [sys role-id tool-name args labels]
   (let [state (inbound/current-state sys)
-        tool (get (offered (:config sys) role-id {:script? (script-role? state (:config sys) role-id)})
-                  tool-name)]
+        config (:config sys)
+        tool (get (offered config role-id) tool-name)
+        ;; A harness that cannot attest its session's labels is taken to
+        ;; have seen everything it could have. relay tool refuses a script
+        ;; role's calls outright; this is the second line.
+        labels (if (script-role? state config role-id)
+                 (core/union labels (core/session-labels-bound state config role-id))
+                 labels)]
     (cond
       (not (core/active-role? state role-id))
       {:error (str role-id " is not an active role.") :labels []}

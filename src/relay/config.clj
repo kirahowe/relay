@@ -125,9 +125,9 @@
   ;; A :script harness runs a program that no policy watches, so its
   ;; roles may not be granted tools that reach outside relay.
   (when (and (= :script (get-in config [:harnesses (:default-harness config) :kind]))
-             (some (comp seq :tools val) grants))
-    (problem! (str "The default harness in relay.edn is a :script harness, which enforces no"
-                   " policy, so no role may be granted :tools.")))
+             (some (fn [[_ g]] (or (seq (:tools g)) (:may-add g))) grants))
+    (problem! (str "The default harness in relay.edn is a :script harness, which gets no tools,"
+                   " so no role may be granted :tools or :may-add.")))
   (doseq [[role {granted :tools}] grants
           t granted]
     (when-not (contains? tools t)

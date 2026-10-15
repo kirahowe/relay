@@ -246,10 +246,13 @@
 (deftest a-script-harness-gets-no-tools
   (is (str/includes? (problem (assoc settings :default-harness :fake
                                      :harnesses {:fake {:kind :script :command ["true"]}}))
-                     "no role may be granted :tools"))
+                     "no role may be granted :tools or :may-add"))
+  (is (problem (-> settings
+                   (assoc :default-harness :fake :harnesses {:fake {:kind :script :command ["true"]}})
+                   (assoc :grants {"hub" {:may-add true}}))))
   (is (nil? (problem (-> settings
                          (assoc :default-harness :fake :harnesses {:fake {:kind :script :command ["true"]}})
-                         (assoc :grants {"hub" {:may-add true}}))))))
+                         (assoc :grants {}))))))
 
 ;; --- agentloop's outcome line
 

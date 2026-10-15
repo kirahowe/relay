@@ -810,6 +810,15 @@
 
 ;; roles
 
+(defn- script-without-grants!
+  "A :script harness gets no tools, so a role granted any may not run on one."
+  [config id harness]
+  (let [g (config/grants config id)]
+    (when (and (= :script (get-in config [:harnesses (keyword harness) :kind]))
+               (or (seq (:tools g)) (:may-add g)))
+      (reject! (str id " is granted tools in relay.edn, and a :script harness gets none."
+                    " Choose another harness or take the grants away.")))))
+
 (defmethod decide* :role/add [{:keys [state config actor] :as tx}
                               {{:keys [id title reports-to harness model] :as args} :args}]
   (authorize-registry! tx)
@@ -823,6 +832,7 @@
       (reject! :not-found (str "There is no role called " reports-to " to report to.")))
     (when (and harness (not (contains? (:harnesses config) (keyword harness))))
       (reject! (str "No harness called " harness " is configured.")))
+    (script-without-grants! config id (or harness (some-> (:default-harness config) name)))
     (emit tx "role/added" {:id id
                            :title (if (blank? title) id (str/trim title))
                            :instructions (require-text (:instructions args) "A role's instructions")
@@ -837,7 +847,8 @@
     (when (contains? changes :instructions) (require-text (:instructions changes) "A role's instructions"))
     (when-let [h (:harness changes)]
       (when-not (contains? (:harnesses config) (keyword h))
-        (reject! (str "No harness called " h " is configured."))))
+        (reject! (str "No harness called " h " is configured.")))
+      (script-without-grants! config id h))
     (when-let [r (:reports-to changes)] (active-role! state r))
     (emit tx "role/updated" (assoc changes :id id))))
 

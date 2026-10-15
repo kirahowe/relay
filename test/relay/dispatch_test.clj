@@ -36,9 +36,11 @@
   (spit (str *dir* "/plan") (str body "\nexit " exit-code "\n")))
 
 (def close-everything
-  (str "ids=$(call inbox '{}' | sed -n 's/^Memo \\([0-9]*\\):.*/\\1/p')\n"
+  ;; A script harness gets no tools, so the stand-in closes the memos in
+  ;; its prompt the way the operator would, with relay close.
+  (str "ids=$(sed -n 's/^## Memo \\([0-9]*\\):.*/\\1/p' \"$PROMPT\")\n"
        "for id in $ids; do\n"
-       "  call memo_close \"{\\\"memo\\\": $id, \\\"outcome\\\": \\\"Filed it.\\\"}\"\n"
+       "  $RELAY close \"$id\" -m \"Filed it.\" --data \"$DATA\" >/dev/null\n"
        "done"))
 
 (def do-nothing ":")
@@ -53,7 +55,7 @@
                         :harnesses {:fake {:kind :script :command [(str *dir* "/harness")]}}
                         :notify {:kind :command :command [(str *dir* "/notify")]}
                         :max-attempts 2
-                        :grants {"hub" {:may-add true}}}
+                        :grants {}}
                        extra))))
 
 (defn- system [] (inbound/system (str *dir* "/data")))
@@ -68,10 +70,14 @@
                                          "REPORT=$(sed -n 's/.*\"report\":\"\\([^\"]*\\)\".*/\\1/p' \"$1\")\n"
                                          "RESUME=$(sed -n 's/.*\"resume\":\"\\([^\"]*\\)\".*/\\1/p' \"$1\")\n"
                                          "TOOL=$(sed -n 's/.*\"tool_command\":\\[\\([^]]*\\)\\].*/\\1/p' \"$1\" | tr -d '\"' | tr ',' ' ')\n"
-                                         ;; A tool call as agentloop makes one: an envelope in,
-                                         ;; an envelope out, of which the model sees the content.
-                                         "call() { printf '{\"input\":%s,\"labels\":%s,\"call_id\":\"c%s\"}' \"$2\" \"${LABELS:-[]}\" \"$$\" | $TOOL \"$1\" | jq -r .content; }\n"
-                                         "cat > \"" dir "/prompt\"\n"
+                                         "DIR=\"" dir "\"\n"
+                                         "RELAY=$(echo $TOOL | cut -d' ' -f1)\n"
+                                         "DATA=$(echo $TOOL | cut -d' ' -f4)\n"
+                                         ;; Each run's own copy of its prompt, since wakes of
+                                         ;; different roles can run at once.
+                                         "PROMPT=$(dirname \"$1\")/prompt.txt\n"
+                                         "cat > \"$PROMPT\"\n"
+                                         "cp \"$PROMPT\" \"" dir "/prompt\"\n"
                                          ". \"" dir "/plan\""))
       (script! (str dir "/notify") (str "echo \"$1\" >> \"" dir "/notifications\""))
       (log/init! (str dir "/data"))
@@ -103,7 +109,7 @@
     (is (= {:result :ran :outcome "ran" :left-open 0} (dissoc result :wake)))
     (is (= :read (:status (core/memo (state) id))))
     (is (= "Filed it." (:outcome (core/memo (state) id))))
-    (is (= "clerk" (:closed-by (core/memo (state) id))))
+    (is (= "operator" (:closed-by (core/memo (state) id))) "the stand-in closes it as the operator")
     (testing "the harness was given the prompt, and its transcript is kept"
       (is (str/includes? (slurp (str *dir* "/prompt")) "Memo 3: File this"))
       (is (fs/exists? (get-in (state) [:wakes (:wake result) :transcript]))))))
@@ -115,8 +121,8 @@
         args (json/parse-string (slurp (str *dir* "/args.json")) true)]
     (is (= #{:system_prompt :tools_file :report :resume :tool_command :policy :resolve} (set (keys args))))
     (is (= ["private"] (get-in args [:policy :labels])) "the memo it carries is private")
-    (is (= {:class "write"} (get-in args [:policy :tools :memo_send])))
-    (is (= {:class "act"} (get-in args [:policy :tools :routine_write])))
+    (is (= {} (get-in args [:policy :tools])) "a script harness gets no tools")
+    (is (= [] (json/parse-string (slurp (:tools_file args)))))
     (is (str/includes? (slurp (:system_prompt args)) "File things."))
     (is (sequential? (json/parse-string (slurp (:tools_file args)))))
     (is (= [relay-bin "tool" "--data" (str (fs/absolutize (str *dir* "/data"))) "--role" "clerk"]
@@ -326,6 +332,7 @@
           (is (str/includes? err "usage: relay tool --data <dir> --role <role>")))))))
 
 (deftest knowledge-goes-through-the-tools-and-notes-reach-the-next-wake
+  (write-config! (assoc policed-harness :grants {"hub" {:may-add true}}))
   (let [run (fn [tool args] (tool! "clerk" tool args))]
     (is (str/starts-with? (:content (run "fact_add" {:text "The cabinet key is in the drawer."
                                                      :topic "office" :valid_from "2026-01-01"}))
@@ -336,13 +343,13 @@
     (is (true? (:is_error (run "fact_correct" {:fact 999 :why "x" :text "y"}))))
     (is (false? (:is_error (run "note_write" {:name "keys" :text "Ask before moving the key."}))))
     (let [state (state)
-          request (dispatch/wake-request *sys* state {:id 1 :role "clerk" :memos [] :harness "fake"}
+          request (dispatch/wake-request (system) state {:id 1 :role "clerk" :memos [] :harness "fake"}
                                          (dispatch/wake-inputs *sys*))]
       (is (str/includes? (:system-prompt request) "## keys\n\nAsk before moving the key."))
       (is (some #{"fact_add" "doc_put" "journal_write"} (map :name (:tools request))))
       (testing "and a role is told what it is granted"
         (is (str/includes? (:system-prompt request) "relay's own tools and nothing beyond them"))
-        (let [hub (dispatch/wake-request *sys* state {:id 1 :role "hub" :memos [] :harness "fake"}
+        (let [hub (dispatch/wake-request (system) state {:id 1 :role "hub" :memos [] :harness "fake"}
                                              (dispatch/wake-inputs *sys*))]
           (is (str/includes? (:system-prompt hub) "`role_add`"))
           (is (str/includes? (:system-prompt hub) "comes to you as dead letters")))))))

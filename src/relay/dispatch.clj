@@ -91,7 +91,8 @@
         resumed (when resumes (get-in state [:wakes resumes]))
         {shown-notes :shown withheld-notes :withheld} (core/prompt-notes state role)
         holds (map #(core/hold state %) resolves)
-        manifest (tools/manifest config role {:script? (tools/script-role? state config role)})]
+        script {:script? (tools/script-role? state config role)}
+        manifest (tools/manifest config role script)]
     {:harness (get-in config [:harnesses (keyword harness)])
      :harness-name harness
      :role role-row
@@ -100,7 +101,7 @@
                                           :operator-additions operator-additions
                                           :notes shown-notes
                                           :withheld-notes withheld-notes
-                                          :granted (tools/grants-summary config role)}
+                                          :granted (tools/grants-summary config role script)}
                                          role-row)
      :prompt (prompt/wake {:role role-row
                            :memos (map #(core/shown-memo state (core/memo state %)) memos)

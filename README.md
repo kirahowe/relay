@@ -66,8 +66,11 @@ notifications go, limits, the dead letter handler, external tools and what
 each role is granted. `setup/relay.example.edn` shows each of them. No role
 can read this file. Every external tool has a class (`read`, `write`,
 `egress` or `act`) and the labels its output carries (see below), and
-relay refuses a tool that lacks either. A role on a `:script` harness is
-offered no external tools, since nothing polices what a script calls.
+relay refuses a tool that lacks either. A role on a `:script` harness gets
+no tools at all, relay's own included: a script is any program, nothing
+polices its calls, and it could claim any labels. relay refuses to put a
+role granted tools on a script harness, and `relay tool` refuses calls
+from one.
 
 An optional `<data>/AGENTS.md` adds the operator's own instructions to
 every role's system prompt.
