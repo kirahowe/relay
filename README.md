@@ -195,7 +195,7 @@ is written in Go.
    `{:kind :ntfy :url "http://127.0.0.1:2586" :topic "relay"}`, or choose
    ntfy when `relay init` asks.
 7. To give roles Apple Reminders, build `tools/rem` (see its README) and
-   grant it in `relay.edn`.
+   define its two tools (`rem-read`, `rem`) and grant them in `relay.edn`.
 8. To let a role read files from one branch of a public GitHub repository,
    such as reports another agent writes there, define `tools/github-file`
    in `relay.edn` with the repository and ref pinned (see its README) and

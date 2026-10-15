@@ -37,11 +37,19 @@
  ;; one that has seen anything contaminated needs it for an :act call
  ;; (relay holds, relay approve). :always-hold true asks every time.
  :tools
- {"rem" {:class :act
+ ;; Reminders is two tools over one binary. The operator fixes --mode here;
+ ;; the model's arguments come after it and cannot change it. Reading brings
+ ;; in text other people may have written (shared lists); writing can send
+ ;; text to them. See tools/rem/README.md.
+ {"rem-read" {:class :read
+              :labels ["private" "contaminated"]
+              :description "Read Apple Reminders. Run with [\"help\"] for the commands."
+              :command ["/path/to/relay/tools/rem/rem" "--mode" "read"]}
+  "rem" {:class :act
          :labels ["private"]
-         :description "Apple Reminders. Run with [\"help\"] for the commands."
-         :command ["/path/to/relay/tools/rem/rem"]}}
+         :description "Change Apple Reminders. Run with [\"help\"] for the commands."
+         :command ["/path/to/relay/tools/rem/rem" "--mode" "write"]}}
 
  ;; What each role is granted beyond relay's own tools.
  :grants
- {"hub" {:may-add true :tools ["rem"]}}}
+ {"hub" {:may-add true :tools ["rem-read" "rem"]}}}

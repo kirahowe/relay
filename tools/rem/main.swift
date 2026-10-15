@@ -7,6 +7,12 @@ import Foundation
 let usage = """
 rem: read and manage Apple Reminders
 
+  rem --mode read|write|write-shared|all <command> ...
+  The operator fixes --mode in the tool's configured command; it must come
+  first and cannot be repeated. read: lists, ls, show. write: add, set,
+  done, and never to a shared or subscribed list. write-shared: as write,
+  shared lists allowed. all: everything.
+
   rem lists                           every list, with its unfinished count
   rem ls [--list <name>] [--today]    unfinished reminders: id, list, due, title
                                       --today is what the Today smart list shows:
@@ -70,7 +76,7 @@ func list(named name: String) -> EKCalendar {
     let matches = store.calendars(for: .reminder).filter {
         $0.title.caseInsensitiveCompare(name) == .orderedSame
     }
-    if matches.isEmpty { fail("No list named \"\(name)\". Run `rem lists`.") }
+    if matches.isEmpty { fail("No list named \"\(escape(name))\". Run `rem lists`.") }
     if matches.count > 1 { fail("More than one list is named \"\(name)\".") }
     return matches[0]
 }
@@ -78,8 +84,8 @@ func list(named name: String) -> EKCalendar {
 func reminder(withId id: String) -> EKReminder {
     if let exact = store.calendarItem(withIdentifier: id) as? EKReminder { return exact }
     let matches = unfinished().filter { $0.calendarItemIdentifier.hasPrefix(id.uppercased()) }
-    if matches.isEmpty { fail("No unfinished reminder has an id starting \"\(id)\".") }
-    if matches.count > 1 { fail("\(matches.count) reminders have an id starting \"\(id)\". Give more of it.") }
+    if matches.isEmpty { fail("No unfinished reminder has an id starting \"\(escape(id))\".") }
+    if matches.count > 1 { fail("\(matches.count) reminders have an id starting \"\(escape(id))\". Give more of it.") }
     return matches[0]
 }
 
@@ -119,40 +125,58 @@ func save(_ reminder: EKReminder) {
     do { try store.save(reminder, commit: true) } catch { fail("Could not save: \(error.localizedDescription)") }
 }
 
-func line(_ reminder: EKReminder) -> String {
-    let id = String(reminder.calendarItemIdentifier.prefix(8))
-    return "\(id)\t\(reminder.calendar.title)\t\(dueString(reminder))\t\(reminder.title ?? "")"
-}
-
-// Split the arguments into positionals and --flag values.
-var positionals: [String] = []
-var flags: [String: String] = [:]
-var arguments = Array(CommandLine.arguments.dropFirst())
-while !arguments.isEmpty {
-    let argument = arguments.removeFirst()
-    if argument == "--today" {
-        flags["today"] = "yes"
-    } else if argument.hasPrefix("--") {
-        if arguments.isEmpty { fail("\(argument) needs a value.") }
-        flags[String(argument.dropFirst(2))] = arguments.removeFirst()
-    } else {
-        positionals.append(argument)
+func traits(_ calendar: EKCalendar) -> ListTraits {
+    let name: String
+    switch calendar.type {
+    case .local: name = "local"
+    case .calDAV: name = "calDAV"
+    case .exchange: name = "exchange"
+    case .subscription: name = "subscription"
+    case .birthday: name = "birthday"
+    @unknown default: name = "unknown"
     }
+    return ListTraits(isSubscribed: calendar.isSubscribed, typeName: name,
+                      allowsContentModifications: calendar.allowsContentModifications,
+                      isDelegateSource: calendar.source?.isDelegate ?? false)
 }
 
-guard let command = positionals.first, command != "help" else {
+func markers(_ calendar: EKCalendar) -> [String] { sharingMarkers(traits(calendar)) }
+
+func line(_ reminder: EKReminder) -> String {
+    reminderLine(id: String(reminder.calendarItemIdentifier.prefix(8)), list: reminder.calendar.title,
+                 due: dueString(reminder), title: reminder.title ?? "", markers: markers(reminder.calendar))
+}
+
+func requireWritable(_ calendar: EKCalendar) {
+    if let reason = sharedRefusal(mode: mode, listName: calendar.title, traits: traits(calendar)) { fail("rem: \(reason)") }
+}
+
+let invocation: Invocation
+switch parse(Array(CommandLine.arguments.dropFirst())) {
+case .usage:
+    print(usage)
+    exit(0)
+case .refused(let reason):
+    fail("rem: \(reason)")
+case .run(let parsed):
+    invocation = parsed
+}
+let mode = invocation.mode
+let flags = invocation.flags
+let target = invocation.target
+
+if invocation.command == .help {
     print(usage)
     exit(0)
 }
-let target = positionals.count > 1 ? positionals[1] : nil
 
 requestAccess()
 
-switch command {
+switch invocation.command.rawValue {
 case "lists":
     let counts = Dictionary(grouping: unfinished(), by: { $0.calendar.calendarIdentifier })
     for calendar in store.calendars(for: .reminder).sorted(by: { $0.title < $1.title }) {
-        print("\(counts[calendar.calendarIdentifier]?.count ?? 0)\t\(calendar.title)")
+        print(listLine(count: counts[calendar.calendarIdentifier]?.count ?? 0, title: calendar.title, markers: markers(calendar)))
     }
 
 case "ls":
@@ -167,18 +191,17 @@ case "ls":
 case "show":
     guard let target else { fail("rem show <id>") }
     let found = reminder(withId: target)
-    print("id:     \(found.calendarItemIdentifier)")
-    print("title:  \(found.title ?? "")")
-    print("list:   \(found.calendar.title)")
-    print("due:    \(dueString(found))")
-    print("done:   \(found.isCompleted ? "yes" : "no")")
-    if let notes = found.notes, !notes.isEmpty { print("notes:\n\(notes)") }
+    for text in showLines(id: found.calendarItemIdentifier, title: found.title ?? "", list: found.calendar.title,
+                          markers: markers(found.calendar), due: dueString(found), done: found.isCompleted,
+                          notes: found.notes) { print(text) }
 
 case "add":
     guard let target, let listName = flags["list"] else { fail("rem add <title> --list <name> [--due <when>] [--notes <text>]") }
+    let destination = list(named: listName)
+    requireWritable(destination)
     let new = EKReminder(eventStore: store)
     new.title = target
-    new.calendar = list(named: listName)
+    new.calendar = destination
     new.notes = flags["notes"]
     if let due = flags["due"] { setDue(new, due) }
     save(new)
@@ -187,8 +210,13 @@ case "add":
 case "set":
     guard let target else { fail("rem set <id> [--title <t>] [--due <when>|none] [--list <name>] [--notes <text>]") }
     let found = reminder(withId: target)
+    requireWritable(found.calendar)
     if let title = flags["title"] { found.title = title }
-    if let listName = flags["list"] { found.calendar = list(named: listName) }
+    if let listName = flags["list"] {
+        let destination = list(named: listName)
+        requireWritable(destination)
+        found.calendar = destination
+    }
     if let notes = flags["notes"] { found.notes = notes }
     if let due = flags["due"] { setDue(found, due) }
     save(found)
@@ -199,8 +227,8 @@ case "done":
     let found = reminder(withId: target)
     found.isCompleted = true
     save(found)
-    print("Completed: \(found.title ?? "")")
+    print("Completed: \(escape(found.title ?? ""))")
 
 default:
-    fail("Unknown command \"\(command)\".\n\n\(usage)")
+    fail("rem: unreachable command")
 }
