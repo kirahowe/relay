@@ -709,3 +709,24 @@
     (is (nil? (answer {:jsonrpc "2.0" :id 4 :result {}})) "another request's answer")
     (is (nil? (answer {:jsonrpc "2.0" :id 3 :method "x"})) "a request, not an answer")
     (is (= {"outcome" "cancelled"} (get-in (acp/refusal (assoc req :options [])) ["result" "outcome"])))))
+
+
+(deftest a-trace-file-is-the-operator-s-alone
+  (with-world {} (fn [_] {:text "hi"})
+    (fn []
+      (let [shared (str (fs/create-temp-dir {:prefix "relay-shared"}))]
+        (fs/set-posix-file-permissions shared "rwxrwxrwx")
+        (let [{:keys [exit err]} @(p/process [relay-bin "acp" "clerk" "--data" (data) "--trace" (str shared "/t.jsonl")]
+                                             {:in "" :out :string :err :string :dir *dir*})]
+          (is (= 1 exit))
+          (is (str/includes? err "only you can write to"))
+          (is (not (fs/exists? (str shared "/t.jsonl"))))
+          (is (empty? (chat-wakes)) "no conversation was opened"))
+        (fs/delete-tree shared))
+      (when bin
+        (let [trace (str *dir* "/trace.jsonl")
+              c (start-relay! "--trace" trace)]
+          (client/handshake! c *dir*)
+          (client/close-input! c)
+          (client/wait! c 20000)
+          (is (= "rw-------" (fs/posix->str (fs/posix-file-permissions trace)))))))))

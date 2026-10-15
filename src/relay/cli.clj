@@ -11,6 +11,7 @@
             [relay.export :as export]
             [relay.inbound :as inbound]
             [relay.log :as log]
+            [relay.notify :as notify]
             [relay.render :as render]
             [relay.setup :as setup]
             [relay.text :as text]
@@ -327,6 +328,24 @@ contaminated, for text you copied from somewhere you do not trust.")
       "tool" (run-tool sys (:role opts) (first more))
       (result 1 usage))))
 
+(defn- report-broken-settings!
+  "When the tick cannot load relay.edn, nothing else runs, so it says so:
+  on stderr, which launchd keeps, and once per distinct problem through
+  :notify, if that section alone is sound. Best effort: it never throws."
+  [dir problem]
+  (binding [*out* *err*] (println (str "relay tick: relay.edn cannot be used: " problem)))
+  (try
+    (let [marker (fs/path dir ".settings-problem")
+          notify-settings (:notify (edn/read-string (slurp (str (fs/path dir "relay.edn")))))]
+      (when-not (and (fs/exists? marker) (= problem (slurp (str marker))))
+        (config/check-notify notify-settings)
+        (notify/push! notify-settings {:title "relay has stopped: relay.edn cannot be used"
+                                       :body (str problem "\n\nNo role is woken until it is fixed.")
+                                       :labels []})
+        (spit (str marker) problem)))
+    (catch Exception e
+      (binding [*out* *err*] (println (str "relay tick: could not tell the operator: " (ex-message e)))))))
+
 (defn execute
   "Runs one command line. Returns {:exit :out}, :out being the lines to
   print. Prints nothing itself, except what a command that talks with the
@@ -344,8 +363,13 @@ contaminated, for text you copied from somewhere you do not trust.")
           (let [dir (data-dir opts)
                 result (if (= "init" cmd)
                          (init! dir)
-                         (binding [*untrusted* (if (:untrusted opts) [core/contaminated-label] [])]
-                           (command (inbound/system dir) dir cmd more opts)))]
+                         (let [sys (try (inbound/system dir)
+                                        (catch clojure.lang.ExceptionInfo e
+                                          (when (= "tick" cmd) (report-broken-settings! dir (ex-message e)))
+                                          (throw e)))]
+                           (when (= "tick" cmd) (fs/delete-if-exists (fs/path dir ".settings-problem")))
+                           (binding [*untrusted* (if (:untrusted opts) [core/contaminated-label] [])]
+                             (command sys dir cmd more opts))))]
             ;; Everything printed may hold text a role wrote, so nothing
             ;; that could drive the terminal is printed raw. relay tool's
             ;; output is a JSON envelope for the harness, not a terminal.

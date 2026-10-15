@@ -272,6 +272,11 @@ before `--`:
 The client gets `--` and then the agent command as its last arguments. If
 relay cannot find the client, it says so on stderr and exits 1.
 
+Give `:chat-client` an absolute path, and likewise `:bin` in the harness
+settings for agentloop. A bare name is looked up on PATH, so whatever
+comes first on PATH would run as your chat client, see your
+conversations and answer permission requests for you.
+
 ### ACP clients
 
 `relay acp <role>` speaks the [Agent Client Protocol](https://agentclientprotocol.com)
@@ -293,7 +298,9 @@ busy, relay writes the reason to stderr and exits 1 before sending
 anything.
 
 `--trace <file>` appends every line in both directions to `<file>`, one
-JSON object per line, with `from` set to `client` or `agent`.
+JSON object per line, with `from` set to `client` or `agent`. The file
+holds everything said, so relay makes it readable by you only and refuses
+a directory others can write to, such as `/tmp`.
 
 When agentloop holds a tool call in a conversation, it asks the client
 with `session/request_permission`. relay passes that request on only when
@@ -328,6 +335,10 @@ property in `test/relay/labels_test.clj` writes random histories in which
 every piece of text holds a marker tied to its writer's labels, and checks
 that wherever a marker turns up later, in an event, a tool's output or a
 prompt, its writer's labels came with it.
+
+If `relay tick` cannot load `relay.edn`, nothing runs. It says why on
+stderr, which launchd keeps, and once per problem through `:notify`, if
+that section alone is sound.
 
 The tests never read `~/.config/relay/config.edn`, run the `relay` on
 PATH, or run the `agentloop` on PATH: they take agentloop only from

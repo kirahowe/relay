@@ -319,3 +319,22 @@
   (let [c (config/resolve-config (clojure.edn/read-string (slurp "setup/relay.example.edn")))]
     (is (= ["contaminated" "private"] (get-in c [:tools "rem-read" :labels])))
     (is (core/quarantines? c "hub") "the hub can act through rem, so contaminated memos to it wait")))
+
+(deftest a-tick-that-cannot-load-its-settings-tells-the-operator-once
+  (let [dir (str (fs/create-temp-dir {:prefix "relay-broken"}))
+        data (str dir "/data")
+        told (str dir "/told")
+        notify (str dir "/notify.sh")]
+    (log/init! data)
+    (spit notify (str "#!/bin/sh\necho \"$1\" >> " told "\n"))
+    (fs/set-posix-file-permissions notify "rwxr-xr-x")
+    ;; Broken everywhere but :notify.
+    (spit (str data "/relay.edn") (pr-str {:timezone "Nowhere/At_All" :notify {:kind :command :command [notify]}}))
+    (dotimes [_ 2]
+      (is (thrown? clojure.lang.ExceptionInfo (relay data "tick"))))
+    (is (= ["relay has stopped: relay.edn cannot be used"] (str/split-lines (slurp told))) "told once, not every tick")
+    (testing "a broken :notify too: only stderr, and the tick still fails"
+      (spit (str data "/relay.edn") (pr-str {:notify {:kind :pigeon}}))
+      (is (thrown? clojure.lang.ExceptionInfo (relay data "tick")))
+      (is (= 1 (count (str/split-lines (slurp told))))))
+    (fs/delete-tree dir)))

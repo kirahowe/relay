@@ -61,6 +61,27 @@
 
 (defn- problem! [msg] (throw (ex-info msg {:relay/usage true})))
 
+(defn check-notify
+  "Checks the :notify settings alone, throwing on the first problem, so a
+  relay.edn broken elsewhere can still say so to the operator."
+  [notify]
+  (let [{:keys [kind url topic command]} notify]
+    (when-not (notify-kinds kind)
+      (problem! (str "relay.edn needs :notify with a :kind, one of "
+                     (sort (map name notify-kinds)) ", saying where notifications go.")))
+    (when (and (= :ntfy kind) (not (and (string? url) (string? topic))))
+      (problem! "The ntfy :notify in relay.edn needs a :url and a :topic."))
+    (let [{:keys [token-command token-file]} notify]
+      (when (and (some? token-command)
+                 (not (and (sequential? token-command) (seq token-command) (every? string? token-command))))
+        (problem! "The ntfy :token-command in relay.edn must be a command, such as [\"cat\" \"/path/to/token\"]."))
+      (when (and (some? token-file) (not (and (string? token-file) (not (str/blank? token-file)))))
+        (problem! "The ntfy :token-file in relay.edn must be a path."))
+      (when (and token-command token-file)
+        (problem! "The ntfy :notify in relay.edn takes :token-command or :token-file, not both.")))
+    (when (and (= :command kind) (not (and (sequential? command) (seq command))))
+      (problem! "The command :notify in relay.edn needs a :command."))))
+
 (defn- check-required
   [{:keys [timezone default-harness harnesses notify]}]
   (when-not (and (string? timezone)
@@ -79,22 +100,7 @@
   (when-not (contains? harnesses default-harness)
     (problem! (str "relay.edn needs :default-harness, naming one of :harnesses"
                    (when default-harness (str "; there is no harness " (pr-str default-harness))) ".")))
-  (let [{:keys [kind url topic command]} notify]
-    (when-not (notify-kinds kind)
-      (problem! (str "relay.edn needs :notify with a :kind, one of "
-                     (sort (map name notify-kinds)) ", saying where notifications go.")))
-    (when (and (= :ntfy kind) (not (and (string? url) (string? topic))))
-      (problem! "The ntfy :notify in relay.edn needs a :url and a :topic."))
-    (let [{:keys [token-command token-file]} notify]
-      (when (and (some? token-command)
-                 (not (and (sequential? token-command) (seq token-command) (every? string? token-command))))
-        (problem! "The ntfy :token-command in relay.edn must be a command, such as [\"cat\" \"/path/to/token\"]."))
-      (when (and (some? token-file) (not (and (string? token-file) (not (str/blank? token-file)))))
-        (problem! "The ntfy :token-file in relay.edn must be a path."))
-      (when (and token-command token-file)
-        (problem! "The ntfy :notify in relay.edn takes :token-command or :token-file, not both.")))
-    (when (and (= :command kind) (not (and (sequential? command) (seq command))))
-      (problem! "The command :notify in relay.edn needs a :command."))))
+  (check-notify notify))
 
 (defn validate
   "Returns the config, or throws describing the first problem found."

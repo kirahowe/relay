@@ -417,12 +417,28 @@
                     (recur acp/no-rest (long-piece! {} left (alength left)))
                     (recur (if over acp/no-rest rest') over)))))))))))
 
+(defn- private-trace-file!
+  "Makes sure a trace file is the operator's alone: refused in a directory
+  others can write to, such as /tmp, and created, or kept, readable by its
+  owner only. A trace holds everything the conversation said."
+  [file]
+  (let [parent (or (fs/parent (fs/absolutize file)) (fs/path "."))
+        perms (fs/posix-file-permissions parent)]
+    (when (some #{java.nio.file.attribute.PosixFilePermission/OTHERS_WRITE
+                  java.nio.file.attribute.PosixFilePermission/GROUP_WRITE} perms)
+      (throw (ex-info (str "The trace file must be in a directory only you can write to, not "
+                           parent ".") {})))
+    (when-not (fs/exists? file)
+      (fs/create-file file {:posix-file-permissions "rw-------"}))
+    (fs/set-posix-file-permissions file "rw-------")))
+
 (defn- tracer
   "A function that writes one line of traffic to the trace file as JSON,
   with its direction, or nil without a file. Both directions write to it,
   so the writes are serialised."
   [file]
   (when file
+    (private-trace-file! file)
     (let [w (io/writer (fs/file file) :append true)]
       (fn [direction line]
         (locking w
@@ -579,6 +595,8 @@
   (binding [*out* *err*]
     (let [stop (promise)]
       (try
+        ;; Before any conversation opens, so a refused file costs nothing.
+        (when trace (private-trace-file! trace))
         (let [{:keys [exit]}
               (with-signals (assoc terminal-signals "TERM" #(deliver stop :terminated))
                 #(with-conversation! sys role-id
