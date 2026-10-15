@@ -6,7 +6,7 @@
     {:kind :macos}                                   ; a notification on this Mac
     {:kind :none}                                    ; record only
 
-  With nothing configured, notifications are shown on this Mac."
+  relay.edn must say which; see relay.config."
   (:require [babashka.http-client :as http]
             [babashka.process :as p]
             [cheshire.core :as json]))
@@ -19,7 +19,7 @@
 
 (defn push!
   "Sends one notification ({:title :body}). Throws when it could not be sent."
-  [{:keys [kind url topic command] :or {kind :macos}} {:keys [title body]}]
+  [{:keys [kind url topic command]} {:keys [title body]}]
   (case kind
     ;; Published as JSON so that a non-ASCII title is not sent in a header.
     :ntfy (let [resp (http/post url {:headers {"Content-Type" "application/json"}

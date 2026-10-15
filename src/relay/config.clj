@@ -19,11 +19,10 @@
   #{:read :write :egress :act})
 
 (def defaults
-  {:timezone nil                     ; nil means the system zone
-   :default-harness :agentloop
-   :harnesses {}
-   :notify {}
-   :dead-letter-handler "hub"
+  "Settings relay can sensibly choose for itself. Everything relay needs
+  and cannot guess, :timezone, :default-harness, :harnesses and :notify,
+  is required in relay.edn; `relay init` asks for it."
+  {:dead-letter-handler "hub"
    :wake-timeout-minutes 30
    ;; A memo a wake carries and leaves open is retried after a wait that
    ;; doubles from the base up to the ceiling, and dead-lettered once it
@@ -42,9 +41,41 @@
    :tools {}
    :grants {}})
 
+(def notify-kinds #{:ntfy :command :macos :none})
+
+(defn- problem! [msg] (throw (ex-info msg {:relay/usage true})))
+
+(defn- check-required
+  [{:keys [timezone default-harness harnesses notify]}]
+  (when-not (and (string? timezone)
+                 (try (ZoneId/of timezone) (catch Exception _ nil)))
+    (problem! (str "relay.edn needs :timezone, a zone name such as \"America/Halifax\""
+                   (when timezone (str "; " (pr-str timezone) " is not one")) ".")))
+  (when-not (and (map? harnesses) (seq harnesses))
+    (problem! "relay.edn needs :harnesses, saying how to run a model."))
+  (doseq [[h {:keys [kind api-key-command]}] harnesses]
+    (when-not kind
+      (problem! (str "Harness " (name h) " in relay.edn needs a :kind.")))
+    (when (and (= :agentloop kind)
+               (not (and (sequential? api-key-command) (seq api-key-command))))
+      (problem! (str "Harness " (name h) " in relay.edn needs :api-key-command, "
+                     "the command that prints the API key."))))
+  (when-not (contains? harnesses default-harness)
+    (problem! (str "relay.edn needs :default-harness, naming one of :harnesses"
+                   (when default-harness (str "; there is no harness " (pr-str default-harness))) ".")))
+  (let [{:keys [kind url topic command]} notify]
+    (when-not (notify-kinds kind)
+      (problem! (str "relay.edn needs :notify with a :kind, one of "
+                     (sort (map name notify-kinds)) ", saying where notifications go.")))
+    (when (and (= :ntfy kind) (not (and (string? url) (string? topic))))
+      (problem! "The ntfy :notify in relay.edn needs a :url and a :topic."))
+    (when (and (= :command kind) (not (and (sequential? command) (seq command))))
+      (problem! "The command :notify in relay.edn needs a :command."))))
+
 (defn validate
   "Returns the config, or throws describing the first problem found."
   [{:keys [tools grants max-attempts] :as config}]
+  (check-required config)
   (doseq [[tool-name {:keys [class]}] tools]
     (when-not (tool-classes class)
       (throw (ex-info (str "Tool " tool-name " needs a :class, one of "
@@ -66,10 +97,12 @@
 
 (defn load-config [data-dir]
   (let [file (fs/path data-dir "relay.edn")]
-    (resolve-config (if (fs/exists? file) (edn/read-string (slurp (str file))) {}))))
+    (when-not (fs/exists? file)
+      (problem! (str data-dir " has no relay.edn. Run `relay init` to make one.")))
+    (resolve-config (edn/read-string (slurp (str file))))))
 
 (defn zone ^ZoneId [config]
-  (if-let [tz (:timezone config)] (ZoneId/of tz) (ZoneId/systemDefault)))
+  (ZoneId/of (:timezone config)))
 
 (defn grants
   "What a role is granted beyond the defaults every role has."

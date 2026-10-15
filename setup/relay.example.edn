@@ -1,6 +1,7 @@
 ;; relay's settings. Copy this to <data dir>/relay.edn and edit it. Only the
 ;; operator edits this file; no role has a tool that can read it.
-{:timezone "America/New_York"          ; omit to use the system zone
+;; :timezone, :default-harness, :harnesses and :notify are required.
+{:timezone "America/New_York"
 
  :default-harness :agentloop
  :harnesses

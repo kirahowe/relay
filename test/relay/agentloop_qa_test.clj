@@ -128,8 +128,10 @@
   (let [dir (str (fs/create-temp-dir {:prefix "relay-qa-core"}))]
     (try
       (log/init! (str dir "/data"))
-      ;; Without this the needs-attention outcomes reach the operator's Mac.
-      (spit (str dir "/data/relay.edn") (pr-str {:format 1 :notify {:kind :none}}))
+      (spit (str dir "/data/relay.edn")
+            (pr-str {:format 1 :timezone "UTC" :default-harness :agentloop
+                     :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"]}}
+                     :notify {:kind :none}}))
       (let [sys (inbound/system (str dir "/data"))
             submit! #(inbound/submit! sys %)
             _ (submit! {:type :role/add :actor "operator"

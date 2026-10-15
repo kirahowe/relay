@@ -86,15 +86,22 @@ is written in Go.
    mkdir -p ~/.config/relay
    echo "{:data \"$data\"}" > ~/.config/relay/config.edn
    bin/relay init
-   cp setup/relay.example.edn "$data/relay.edn"
    ```
+
+   `relay init` asks for the settings relay cannot run without: the time
+   zone, the model and how to get its API key, and where notifications go.
+   Each question has a suggestion that Enter accepts, and nothing is
+   written until you have seen the whole `relay.edn` and said yes. relay
+   refuses to run with a `relay.edn` that lacks any of them. Run it in a
+   terminal; elsewhere, write `relay.edn` yourself from
+   `setup/relay.example.edn`.
 
    Every command takes the data directory from `--data <dir>`, or else
    from `:data` in `~/.config/relay/config.edn`. A leading `~` is
    expanded. With neither, relay says so and stops. There are no
    environment variables.
 
-   Edit `relay.edn`. The data directory is plain files, so a file-sync tool
+   To add tools and grants later, edit `relay.edn`. The data directory is plain files, so a file-sync tool
    can back it up, as long as this Mac is its only writer. Avoid iCloud
    Drive, which evicts files to placeholders.
 3. Store the Anthropic API key in the login keychain, where the example
@@ -131,8 +138,9 @@ is written in Go.
    Edit its `base-url` and `cache-file`, install
    `setup/launchd/relay.ntfy.plist` the same way as the tick (it uses
    `@NTFY@`, `@NTFYCONFIG@` and `@LOGS@`), and subscribe to the topic from
-   the ntfy app. Without `:notify`, notifications appear on this Mac
-   instead.
+   the ntfy app. Then set `:notify` in `relay.edn` to
+   `{:kind :ntfy :url "http://127.0.0.1:2586" :topic "relay"}`, or choose
+   ntfy when `relay init` asks.
 7. To give roles Apple Reminders, build `tools/rem` (see its README) and
    grant it in `relay.edn`.
 

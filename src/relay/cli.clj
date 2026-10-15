@@ -11,6 +11,7 @@
             [relay.export :as export]
             [relay.inbound :as inbound]
             [relay.log :as log]
+            [relay.setup :as setup]
             [relay.tools :as tools])
   (:import (java.time Instant ZoneId)
            (java.time.format DateTimeFormatter)))
@@ -21,7 +22,7 @@
 Every command needs the data directory, from --data <dir> or from the file
 ~/.config/relay/config.edn, which holds a map such as {:data \"~/relay-data\"}.
 
-  relay init                          make the directory a relay data directory
+  relay init                          make the data directory, asking for its settings
   relay status                        roles, open work, harnesses, recent wakes
   relay inbox                         memos waiting for the operator
   relay memo <to> -s <subject>        send a memo; body from -m or stdin
@@ -85,6 +86,27 @@ Every command needs the data directory, from --data <dir> or from the file
       (and (string? configured) (not (str/blank? configured))) (expand-home configured)
       :else (fail! (str "Which data directory? Pass --data <dir>, or set :data in " file
                         ", for example {:data \"~/relay-data\"}.")))))
+
+(defn- init!
+  "Makes a data directory, asking for its settings when it has none. An
+  existing relay.edn is checked, never rewritten."
+  [dir]
+  (let [file (str (fs/path dir "relay.edn"))
+        ready (fn []
+                (log/init! dir)
+                (println "relay data directory ready at" (str (fs/absolutize dir)))
+                0)]
+    (cond
+      (fs/exists? file) (do (config/load-config dir) (ready))
+      (not (System/console))
+      (fail! "relay init asks for settings, so run it in a terminal. Or write"
+             file "yourself, from setup/relay.example.edn.")
+      :else
+      (do (if (setup/create! {:ask (fn [prompt] (print prompt) (flush) (read-line))
+                              :say println}
+                             file)
+            (ready)
+            1)))))
 
 (defn- stdin-text []
   (if (System/console) "" (slurp *in*)))
@@ -185,9 +207,7 @@ Every command needs the data directory, from --data <dir> or from the file
                 (fail! "usage: relay tool --data <dir> --role <role> --wake <id> <tool name>"))
             dir (data-dir opts)]
         (if (= "init" cmd)
-          (do (log/init! dir)
-              (println "relay data directory ready at" (str (fs/absolutize dir)))
-              0)
+          (init! dir)
           (let [sys (inbound/system dir)
                 zone (config/zone (:config sys))]
             (case cmd

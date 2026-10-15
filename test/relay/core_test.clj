@@ -12,7 +12,9 @@
 (def t0 (Instant/parse "2026-10-14T12:00:00Z"))
 
 (def cfg (config/resolve-config {:timezone "America/Toronto"
-                                 :harnesses {:agentloop {}}
+                                 :default-harness :agentloop
+                                 :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"]}}
+                                 :notify {:kind :none}
                                  :max-attempts 3
                                  :runaway-wakes 6
                                  :grants {"hub" {:may-add true}}}))

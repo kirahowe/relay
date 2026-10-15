@@ -160,8 +160,12 @@
         (is (= 1 (:attempts (core/memo (state) id))))))))
 
 (deftest a-missing-harness-is-reported-not-crashed-on
+  ;; A role on a harness the operator has since taken out of relay.edn.
+  (let [fake {:kind :script :command [(str *dir* "/harness")]}]
+    (write-config! {:harnesses {:fake fake :other fake}})
+    (inbound/submit! (system) {:type :role/update :actor "operator" :args {:id "clerk" :harness "other"}})
+    (write-config! {:harnesses {:fake fake}}))
   (memo! "clerk" "x")
-  (write-config! {:harnesses {}})
   (binding [*sys* (system)]
     (is (= "needs-attention" (:outcome (dispatch/wake! *sys* "clerk" {}))))
     (is (= 1 (count (notifications))))))
