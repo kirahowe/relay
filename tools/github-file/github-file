@@ -23,16 +23,16 @@
   (System/exit code))
 
 (defn- parse
-  "The pinned flags come first, from the command in relay.edn; the role's
-  arguments follow. Flags after the command are refused, so a role cannot
-  repoint the tool."
+  "The pinned flags come first, from the command in relay.edn, in this order
+  and once each: an optional --api, then --repo, then --ref. The role's
+  arguments follow them, so a role can never supply a flag of its own: a
+  later --api, --repo or --ref is a command the tool does not know."
   [args]
-  (loop [opts {:api default-api} [a b & more :as args] args]
-    (case a
-      "--repo" (recur (assoc opts :repo b) more)
-      "--ref" (recur (assoc opts :ref b) more)
-      "--api" (recur (assoc opts :api b) more)
-      (assoc opts :command args))))
+  (let [[api args] (if (= "--api" (first args)) [(second args) (drop 2 args)] [default-api args])
+        [repo-flag repo ref-flag ref & command] args]
+    (if (and (= "--repo" repo-flag) (= "--ref" ref-flag))
+      {:api api :repo repo :ref ref :command command}
+      {:api api :command args})))
 
 (def ^:private segment #"[A-Za-z0-9._-]+")
 

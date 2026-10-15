@@ -27,7 +27,7 @@
 
 (defn- run [api & args]
   (apply p/shell {:out :string :err :string :continue true :in ""}
-         "bb" script "--repo" "kirahowe/slk" "--ref" "claude/upstream-review" "--api" api args))
+         "bb" script "--api" api "--repo" "kirahowe/slk" "--ref" "claude/upstream-review" args))
 
 (deftest prints-a-file-at-the-pinned-repo-and-ref
   (with-api {["kirahowe/slk" "claude/upstream-review" "state.json"] "{\"counts\":{}}\n"
@@ -64,6 +64,32 @@
       (let [{:keys [exit err]} (run api "get" "x" "--repo" "other/repo")]
         (is (= 2 exit))
         (is (str/includes? err "Usage")))
+      (is (empty? @seen)))))
+
+(deftest the-role-cannot-supply-flags-before-its-command
+  ;; relay appends the role's arguments right after the pinned flags, so
+  ;; flags at the head of the role's arguments must not be honoured.
+  (with-api {["other/repo" "main" "x"] "secret"}
+    (fn [api seen]
+      (with-api {}
+        (fn [evil evil-seen]
+          (doseq [role-args [["--api" (str evil "/exfil/SECRET") "get" "x"]
+                             ["--repo" "other/repo" "get" "x"]
+                             ["--ref" "main" "get" "x"]
+                             ["--repo" "other/repo" "--ref" "main" "get" "x"]]]
+            (let [{:keys [exit err]} (apply run api role-args)]
+              (is (= 2 exit) (pr-str role-args))
+              (is (str/includes? err "Usage") (pr-str role-args))))
+          (is (empty? @evil-seen))))
+      (is (empty? @seen)))))
+
+(deftest an-api-given-after-the-pinned-flags-is-refused
+  (with-api {}
+    (fn [api seen]
+      (let [{:keys [exit]} (p/shell {:out :string :err :string :continue true :in ""}
+                                    "bb" script "--repo" "kirahowe/slk" "--ref" "claude/upstream-review"
+                                    "--api" api "get" "state.json")]
+        (is (= 2 exit)))
       (is (empty? @seen)))))
 
 (deftest help-describes-the-commands
