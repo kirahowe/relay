@@ -95,10 +95,11 @@ is written in Go.
    ```sh
    security add-generic-password -a "$USER" -s relay-anthropic -w
    ```
-4. Add the hub. Its instructions come from stdin:
+4. Add the hub. Its instructions come from stdin. `setup/hub.md` is a
+   starting point; change it to suit you:
 
    ```sh
-   bin/relay add hub --title "Hub" < hub.md
+   bin/relay add hub --title "Hub" < setup/hub.md
    ```
 5. Install the dispatcher's launchd job. Fill in the template's paths and
    load it:
