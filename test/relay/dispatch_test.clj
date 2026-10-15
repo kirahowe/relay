@@ -8,6 +8,7 @@
             [cheshire.core :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
+            [relay.cli :as cli]
             [relay.core :as core]
             [relay.dispatch :as dispatch]
             [relay.inbound :as inbound]
@@ -30,15 +31,15 @@
   (spit (str *dir* "/plan") (str body "\nexit " exit-code "\n")))
 
 (def close-everything
-  (str "ids=$(\"$RELAY_BIN\" tool inbox </dev/null | sed -n 's/^Memo \\([0-9]*\\):.*/\\1/p')\n"
+  (str "ids=$($TOOL inbox </dev/null | sed -n 's/^Memo \\([0-9]*\\):.*/\\1/p')\n"
        "for id in $ids; do\n"
-       "  echo \"{\\\"memo\\\": $id, \\\"outcome\\\": \\\"Filed it.\\\"}\" | \"$RELAY_BIN\" tool memo_close\n"
+       "  echo \"{\\\"memo\\\": $id, \\\"outcome\\\": \\\"Filed it.\\\"}\" | $TOOL memo_close\n"
        "done"))
 
 (def do-nothing ":")
 
 (defn- report! [m]
-  (str "cat > \"$RELAY_REPORT\" <<'JSON'\n" (json/generate-string m) "\nJSON"))
+  (str "cat > \"$REPORT\" <<'JSON'\n" (json/generate-string m) "\nJSON"))
 
 (defn- write-config! [extra]
   (spit (str *dir* "/data/relay.edn")
@@ -58,6 +59,10 @@
           before (System/getProperty "relay.bin")]
       (System/setProperty "relay.bin" relay-bin)
       (script! (str dir "/harness") (str "env > \"" dir "/env\"\n"
+                                         "cp \"$1\" \"" dir "/args.json\"\n"
+                                         "REPORT=$(sed -n 's/.*\"report\":\"\\([^\"]*\\)\".*/\\1/p' \"$1\")\n"
+                                         "RESUME=$(sed -n 's/.*\"resume\":\"\\([^\"]*\\)\".*/\\1/p' \"$1\")\n"
+                                         "TOOL=$(sed -n 's/.*\"tool_command\":\\[\\([^]]*\\)\\].*/\\1/p' \"$1\" | tr -d '\"' | tr ',' ' ')\n"
                                          "cat > \"" dir "/prompt\"\n"
                                          ". \"" dir "/plan\""))
       (script! (str dir "/notify") (str "echo \"$1\" >> \"" dir "/notifications\""))
@@ -95,14 +100,19 @@
       (is (str/includes? (slurp (str *dir* "/prompt")) "Memo 3: File this"))
       (is (fs/exists? (get-in (state) [:wakes (:wake result) :transcript]))))))
 
-(deftest the-harness-runs-in-a-clean-environment-as-the-role
+(deftest the-script-harness-gets-one-argument-a-json-file-and-a-clean-environment
   (memo! "clerk" "x")
-  (dispatch/wake! *sys* "clerk" {})
-  (let [env (into {} (map #(vec (str/split % #"=" 2)) (str/split-lines (slurp (str *dir* "/env")))))]
-    (is (= "clerk" (get env "RELAY_ROLE")))
-    (is (= relay-bin (get env "RELAY_BIN")))
-    (is (some? (get env "RELAY_WAKE")))
-    (testing "nothing leaks in from whoever started relay"
+  (let [result (dispatch/wake! *sys* "clerk" {})
+        env (into {} (map #(vec (str/split % #"=" 2)) (str/split-lines (slurp (str *dir* "/env")))))
+        args (json/parse-string (slurp (str *dir* "/args.json")) true)]
+    (is (= #{:system_prompt :tools_file :report :resume :tool_command} (set (keys args))))
+    (is (str/includes? (slurp (:system_prompt args)) "File things."))
+    (is (sequential? (json/parse-string (slurp (:tools_file args)))))
+    (is (= (str (get-in (state) [:wakes (:wake result) :id])) (last (:tool_command args))))
+    (is (= [relay-bin "tool" "--data" (str (fs/absolutize (str *dir* "/data"))) "--role" "clerk" "--wake"]
+           (butlast (:tool_command args))))
+    (testing "no RELAY_ variables, and nothing leaks in from whoever started relay"
+      (is (not-any? #(str/starts-with? % "RELAY_") (keys env)))
       (is (not-any? #(re-find #"^(CLAUDE|ANTHROPIC|OPENAI|AWS_|GITHUB)" %) (keys env))))))
 
 (deftest a-clean-exit-that-closes-nothing-is-a-failed-attempt-then-a-dead-letter
@@ -123,7 +133,7 @@
     (is (zero? (:attempts (core/memo (state) id))))
     (is (some? (core/paused-until (state) "fake" (Instant/now))))
     (is (empty? (dispatch/tick! *sys* {:spawn! (fn [& _] (throw (ex-info "should not spawn" {})))})))
-    (plan! (str "echo \"$RELAY_RESUME\" > \"" *dir* "/resumed\"\n" close-everything) 0)
+    (plan! (str "echo \"$RESUME\" > \"" *dir* "/resumed\"\n" close-everything) 0)
     (is (= "ran" (:outcome (dispatch/wake! *sys* "clerk" {}))))
     (is (= "s-1" (str/trim (slurp (str *dir* "/resumed")))))
     (is (str/includes? (slurp (str *dir* "/prompt")) "cut short"))
@@ -199,20 +209,39 @@
 (deftest two-wakes-of-one-role-at-once-are-refused
   (memo! "clerk" "x")
   (plan! (str "sleep 2\n" close-everything) 0)
-  (let [env {"RELAY_DATA" (str *dir* "/data")}
-        procs (doall (for [_ (range 3)]
-                       (p/process [relay-bin "wake" "clerk"] {:extra-env env :out :string :err :string})))
+  (let [procs (doall (for [_ (range 3)]
+                       (p/process [relay-bin "wake" "clerk" "--data" (str *dir* "/data")]
+                                  {:out :string :err :string})))
         results (map (comp str/trim :out deref) procs)]
     (is (= 1 (count (filter #(str/starts-with? % "ran") results))) (pr-str results))
     (is (= 2 (count (filter #(str/starts-with? % "busy") results))) (pr-str results))))
+
+(deftest the-data-directory-comes-from-the-flag-or-the-config-file
+  (let [file (str *dir* "/config.edn")
+        resolve (fn [opts] (binding [cli/*config-file* file] (cli/data-dir opts)))
+        home (System/getProperty "user.home")]
+    (testing "neither: an error naming both options"
+      (let [e (try (resolve {}) (catch clojure.lang.ExceptionInfo e e))]
+        (is (str/includes? (ex-message e) "--data <dir>"))
+        (is (str/includes? (ex-message e) file))))
+    (spit file (pr-str {:data "~/Sync/relay"}))
+    (testing "the config file, with ~ expanded"
+      (is (= (str home "/Sync/relay") (resolve {}))))
+    (testing "--data wins"
+      (is (= "/elsewhere" (resolve {:data "/elsewhere"}))))
+    (spit file (pr-str {:data "/abs/data"}))
+    (is (= "/abs/data" (resolve {})))
+    (testing "a config file that is not EDN is an error"
+      (spit file "{:data \"/x\"")
+      (is (thrown? clojure.lang.ExceptionInfo (resolve {}))))))
 
 (deftest a-role-can-only-call-the-tools-it-is-offered
   (write-config! {:tools {"echo" {:class :read :description "Echo." :command ["echo" "said:"]}}
                   :grants {"hub" {:may-add true :tools ["echo"]}}})
   (let [run (fn [role tool args]
               (p/shell {:out :string :err :string :continue true :in (json/generate-string args)
-                        :extra-env {"RELAY_DATA" (str *dir* "/data") "RELAY_ROLE" role}}
-                       relay-bin "tool" tool))]
+                        }
+                       relay-bin "tool" "--data" (str *dir* "/data") "--role" role "--wake" "1" tool))]
     (is (= "said: hi" (str/trim (:out (run "hub" "echo" {:args ["hi"]})))))
     (let [{:keys [exit out]} (run "clerk" "echo" {:args ["hi"]})]
       (is (= 1 exit))
@@ -220,18 +249,18 @@
     (testing "registry tools need the grant"
       (is (= 1 (:exit (run "clerk" "role_add" {:id "x" :title "X" :instructions "c"}))))
       (is (zero? (:exit (run "hub" "role_add" {:id "x" :title "X" :instructions "c"})))))
-    (testing "a role cannot act as anyone else, even the operator"
-      (let [{:keys [exit err]} (p/shell {:out :string :err :string :continue true :in ""
-                                         :extra-env {"RELAY_DATA" (str *dir* "/data") "RELAY_ROLE" "clerk"}}
-                                        relay-bin "tick")]
-        (is (= 1 exit))
-        (is (str/includes? err "Only the operator"))))))
+    (testing "relay tool without a role or a data directory fails clearly"
+      (doseq [argv [[relay-bin "tool" "--data" (str *dir* "/data") "echo"]
+                    [relay-bin "tool" "--role" "hub" "echo"]]]
+        (let [{:keys [exit err]} (apply p/shell {:out :string :err :string :continue true :in "{}"} argv)]
+          (is (= 1 exit))
+          (is (str/includes? err "usage: relay tool --data <dir> --role <role>")))))))
 
 (deftest knowledge-goes-through-the-tools-and-notes-reach-the-next-wake
   (let [run (fn [tool args]
               (p/shell {:out :string :err :string :continue true :in (json/generate-string args)
-                        :extra-env {"RELAY_DATA" (str *dir* "/data") "RELAY_ROLE" "clerk"}}
-                       relay-bin "tool" tool))]
+                        }
+                       relay-bin "tool" "--data" (str *dir* "/data") "--role" "clerk" "--wake" "1" tool))]
     (is (str/starts-with? (:out (run "fact_add" {:text "The cabinet key is in the drawer."
                                                  :topic "office" :valid_from "2026-01-01"}))
                           "Recorded fact"))

@@ -11,6 +11,8 @@
     <string>@BB@</string>
     <string>@RELAY@/bin/relay</string>
     <string>tick</string>
+    <string>--data</string>
+    <string>@DATA@</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -18,8 +20,6 @@
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>HOME</key>
     <string>@HOME@</string>
-    <key>RELAY_DATA</key>
-    <string>@DATA@</string>
   </dict>
   <key>StartInterval</key>
   <integer>60</integer>

@@ -13,6 +13,7 @@
             [clojure.string :as str]
             [relay.config :as config]
             [relay.core :as core]
+            [relay.harness :as harness]
             [relay.inbound :as inbound])
   (:import (java.time Instant LocalTime)
            (java.time.format DateTimeFormatter)))
@@ -367,8 +368,7 @@
            ;; A clean environment: nothing the harness or relay was started
            ;; with, such as credentials, reaches an external command.
            (let [{:keys [exit out err]} (apply p/shell {:out :string :err :string :continue true :in ""
-                                                        :env (select-keys (into {} (System/getenv))
-                                                                          ["PATH" "HOME" "USER" "LANG" "TMPDIR"])}
+                                                        :env (harness/base-env {})}
                                                (into (vec command) (map str args)))]
              (if (zero? exit)
                out

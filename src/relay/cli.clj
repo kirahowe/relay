@@ -1,6 +1,7 @@
 (ns relay.cli
   "The relay command."
   (:require [babashka.cli :as cli]
+            [clojure.edn :as edn]
             [babashka.fs :as fs]
             [cheshire.core :as json]
             [clojure.string :as str]
@@ -17,7 +18,8 @@
 (def usage
   "relay: a relay of agent roles, with an append-only log as the record.
 
-Every command needs the data directory, from --data <dir> or RELAY_DATA.
+Every command needs the data directory, from --data <dir> or from the file
+~/.config/relay/config.edn, which holds a map such as {:data \"~/Sync/relay\"}.
 
   relay init                          make the directory a relay data directory
   relay status                        roles, open work, harnesses, recent wakes
@@ -49,26 +51,40 @@ Every command needs the data directory, from --data <dir> or RELAY_DATA.
   relay put <path>                    write a doc from stdin
   relay export <dir>                  write a read-only snapshot of the knowledge
   relay log [--tail <n>] [--json]     the events, newest last
-  relay tool <name>                   run a role's tool call (harnesses use this)")
+  relay tool --data <dir> --role <r> --wake <id> <name>
+                                      run a role's tool call (harnesses use this)")
 
 (defn- fail! [& msg]
   (throw (ex-info (str/join " " msg) {:relay/usage true})))
 
-(defn- data-dir [opts]
-  (or (:data opts) (System/getenv "RELAY_DATA")
-      (fail! "Which data directory? Pass --data <dir> or set RELAY_DATA.")))
+(def ^:dynamic *config-file*
+  "The per-user config file. Bound in tests."
+  nil)
 
-(defn- caller
-  "Who is running this command. A harness sets RELAY_ROLE for every tool call
-  it makes, and a command run with it set acts as that role and nothing
-  more. Anything else is the operator."
-  []
-  (let [r (System/getenv "RELAY_ROLE")]
-    (if (str/blank? r) core/operator r)))
+(defn config-file []
+  (or *config-file* (str (fs/path (System/getProperty "user.home") ".config" "relay" "config.edn"))))
 
-(defn- operator-only! [what]
-  (when (not= core/operator (caller))
-    (fail! (str "Only the operator can " what "."))))
+(defn- expand-home [path]
+  (let [home (System/getProperty "user.home")]
+    (cond (= "~" path) home
+          (str/starts-with? path "~/") (str (fs/path home (subs path 2)))
+          :else path)))
+
+(defn data-dir
+  "The data directory: --data, else :data in the per-user config file, with
+  a leading ~ expanded."
+  [opts]
+  (let [file (config-file)
+        configured (when (fs/exists? file)
+                     (let [c (try (edn/read-string (slurp file))
+                                  (catch Exception _
+                                    (fail! (str "Could not read " file " as EDN."))))]
+                       (when (map? c) (:data c))))]
+    (cond
+      (not (str/blank? (:data opts))) (:data opts)
+      (and (string? configured) (not (str/blank? configured))) (expand-home configured)
+      :else (fail! (str "Which data directory? Pass --data <dir>, or set :data in " file
+                        ", for example {:data \"~/Sync/relay\"}.")))))
 
 (defn- stdin-text []
   (if (System/console) "" (slurp *in*)))
@@ -77,7 +93,7 @@ Every command needs the data directory, from --data <dir> or RELAY_DATA.
   (when at (.format (.atZone at ^ZoneId zone) (DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm"))))
 
 (defn- submit! [sys type args]
-  (inbound/submit! sys {:type type :actor (caller) :args args}))
+  (inbound/submit! sys {:type type :actor core/operator :args args}))
 
 (defn- print-memo [zone {:keys [id from subject body sent-at]}]
   (println (str "\n[" id "] " subject))
@@ -132,10 +148,8 @@ Every command needs the data directory, from --data <dir> or RELAY_DATA.
   "A harness runs this for each tool call: JSON arguments on stdin, the
   result as text on stdout. A refused call exits 1 with the reason, which
   the harness hands back to the model."
-  [sys tool-name]
-  (let [role (System/getenv "RELAY_ROLE")
-        _ (when (str/blank? role) (fail! "relay tool runs only inside a wake, with RELAY_ROLE set."))
-        raw (stdin-text)
+  [sys role tool-name]
+  (let [raw (stdin-text)
         args (try (if (str/blank? raw) {} (json/parse-string raw true))
                   (catch Exception _ ::bad))]
     (if (= ::bad args)
@@ -155,7 +169,7 @@ Every command needs the data directory, from --data <dir> or RELAY_DATA.
    :coerce {:subject :string :message :string :title :string :reports-to :string
             :harness :string :model :string :schedule :string :note :string
             :tail :long :data :string :search :string :as-of :string :known-at :string
-            :version :long}})
+            :version :long :role :string :wake :string}})
 
 (defn run
   "Runs one command and returns the exit code."
@@ -167,17 +181,18 @@ Every command needs the data directory, from --data <dir> or RELAY_DATA.
         opts (merge global local-opts)]
     (if (or (nil? cmd) (#{"help" "-h" "--help"} cmd))
       (do (println usage) 0)
-      (let [dir (data-dir opts)]
+      (let [_ (when (and (= "tool" cmd) (or (str/blank? (:role opts)) (str/blank? (:data opts))))
+                (fail! "usage: relay tool --data <dir> --role <role> --wake <id> <tool name>"))
+            dir (data-dir opts)]
         (if (= "init" cmd)
-          (do (operator-only! "initialize a data directory")
-              (log/init! dir)
+          (do (log/init! dir)
               (println "relay data directory ready at" (str (fs/absolutize dir)))
               0)
           (let [sys (inbound/system dir)
                 zone (config/zone (:config sys))]
             (case cmd
               "status" (do (status sys) 0)
-              "inbox" (let [memos (core/unread-memos (inbound/current-state sys) (caller))]
+              "inbox" (let [memos (core/unread-memos (inbound/current-state sys) core/operator)]
                         (if (empty? memos)
                           (println "Nothing waiting.")
                           (doseq [m memos] (print-memo zone m)))
@@ -232,17 +247,14 @@ Every command needs the data directory, from --data <dir> or RELAY_DATA.
                         (println (count (submit! sys :memo/retry {:role r})) "memo(s) requeued")
                         0)
               "wake" (let [[r] more
-                           _ (operator-only! "wake a role")
                            result (dispatch/wake! sys r {:note (:note opts)
                                                          :dispatched (:dispatched opts)})]
                        (println (name (:result result)) (pr-str (dissoc result :result)))
                        (if (#{:ran :idle} (:result result)) 0 1))
               "chat" (let [[r] more]
-                       (operator-only! "open a conversation")
                        (when-not r (fail! "usage: relay chat <role>"))
                        (or (dispatch/chat! sys r) 0))
-              "tick" (do (operator-only! "run the dispatcher")
-                         (dispatch/tick! sys)
+              "tick" (do (dispatch/tick! sys)
                          0)
               "facts" (tool-output sys "facts" {:topic (first more) :search (:search opts)
                                                 :as_of (:as-of opts) :known_at (:known-at opts)
@@ -268,12 +280,11 @@ Every command needs the data directory, from --data <dir> or RELAY_DATA.
                                    (str path " already says that.")))
                       0)
               "export" (let [[dir] more]
-                         (operator-only! "export")
                          (when-not dir (fail! "usage: relay export <dir>"))
                          (println "Wrote" (export/export! sys dir) "files to" dir)
                          0)
               "log" (do (show-log sys opts) 0)
-              "tool" (run-tool sys (first more))
+              "tool" (run-tool sys (:role opts) (first more))
               (do (println usage) 1))))))))
 
 (defn -main [& args]

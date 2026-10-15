@@ -10,7 +10,7 @@
     leaves the memos consistent and runs no tool call twice
   - an interactive session with piped input
 
-  The kill trials default to a few; RELAY_QA_CHAOS=<n> runs n of them."
+  The kill trials run three times."
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [cheshire.core :as json]
@@ -438,7 +438,7 @@
                     {:harness {:kind :agentloop :bin (fake-agentloop! dir)
                                :api-key-command ["echo" secret]}
                      :role {:id "clerk"} :system-prompt "s" :prompt "p" :tools []
-                     :env {"RELAY_ROLE" "clerk"}
+                     :tool-command ["relay" "tool"]
                      :run-dir (doto (str dir "/run") fs/create-dirs)
                      :session-dir (str dir "/sessions")
                      :timeout-ms -14000})]            ; the grace period leaves one second
@@ -516,7 +516,8 @@
           (let [dumps (fs/list-dir (str *dir* "/tool-env"))]
             (is (seq dumps) "relay tool ran under the wrapper")
             (doseq [d dumps]
-              (is (str/includes? (slurp (str d)) "RELAY_ROLE=clerk"))
+              (is (str/includes? (slurp (str d)) "PATH="))
+              (is (not (re-find #"(?m)^RELAY_" (slurp (str d)))))
               (is (not (str/includes? (slurp (str d)) secret)) (str d))
               (is (not (re-find #"(?m)^(AGENTLOOP_API_KEY|ANTHROPIC_API_KEY)=" (slurp (str d)))))))
           (is (some #(str/includes? (get-in % [:headers "x-api-key"] "") secret) @(:requests *mock*))
@@ -631,7 +632,7 @@
 
 (deftest killing-agentloop-at-random-moments-leaves-the-memos-consistent
   (when bin
-    (let [n (or (some-> (System/getenv "RELAY_QA_CHAOS") parse-long) 3)
+    (let [n 3
           base (System/currentTimeMillis)
           trials (doall (for [i (range n)] (chaos-trial! (+ base i))))]
       (println (str "chaos: " n " trials, " (reduce + (map :kills trials)) " kills, outcomes "
@@ -646,10 +647,9 @@
     (with-world {} (fn [body] {:text (str "You said: " (str/includes? (all-text body) "hello relay"))})
       (fn []
         (let [id (memo! "Untouched by a conversation")
-              proc (p/process [relay-bin "chat" "clerk"]
+              proc (p/process [relay-bin "chat" "clerk" "--data" (str *dir* "/data")]
                               {:in "hello relay\n" :out :string :err :string
-                               :dir *dir*
-                               :extra-env {"RELAY_DATA" (str *dir* "/data")}})
+                               :dir *dir*})
               {:keys [exit out err]} (deref proc 90000 {:exit :timeout})
               wakes (vals (:wakes (state)))]
           (is (= 0 exit) (str out err))

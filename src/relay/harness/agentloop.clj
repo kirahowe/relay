@@ -9,7 +9,8 @@
                  :model \"claude-opus-5-5\"    ; the default
                  :effort \"medium\"            ; low, medium, high, xhigh or max
                  :api-key-command [\"security\" \"find-generic-password\" \"-s\" \"relay-anthropic\" \"-w\"]
-                 ;; or :api-key-env \"ANTHROPIC_API_KEY\", read from relay's environment
+                 ;; required: agentloop runs this itself and takes its
+                 ;; output as the key; relay never sees the key
                  :base-url \"https://...\"      ; the provider's own API by default
                  :bin \"/path/to/agentloop\"
                  :retry {:retries 2 :backoff-seconds 2 :max-wait-seconds 30}
@@ -30,8 +31,9 @@
 
   Each wake writes request.json in its run directory and runs
   `agentloop run request.json`. The model gets relay's tools and nothing
-  else. A tool call runs `relay tool <name>` with the environment the request
-  names, which never holds the API key. The transcript is agentloop's output:
+  else. A tool call runs relay's `tool` command (the request's :tool-command,
+  with the data directory, role and wake named) with only the base
+  environment, which never holds the API key. The transcript is agentloop's output:
   one JSON line per session entry, then an outcome line. The session itself
   is a file in the role's session directory, named by the session id.
 
@@ -60,17 +62,6 @@
       (some-> (fs/which "agentloop") str)
       (let [sibling (some-> (repo-root) (fs/path ".." "agentloop" "bin" "agentloop"))]
         (when (and sibling (fs/executable? sibling)) (str (fs/normalize sibling))))))
-
-(defn api-key
-  "The API key, from a command (such as a keychain lookup) or an environment
-  variable. Nil when there is none."
-  [{:keys [provider api-key-command api-key-env]}]
-  (let [api-key-env (or api-key-env (if (= "openai" provider) "OPENAI_API_KEY" "ANTHROPIC_API_KEY"))]
-    (if api-key-command
-      (let [{:keys [exit out]} (apply p/shell {:out :string :err :string :continue true :in ""}
-                                      api-key-command)]
-        (when (zero? exit) (not-empty (str/trim out))))
-      (not-empty (System/getenv api-key-env)))))
 
 ;; --- reading a run back
 
@@ -134,27 +125,27 @@
 ;; --- running
 
 (def ^:private no-key
-  "No API key: set :api-key-command or :api-key-env for the agentloop harness in relay.edn.")
+  "No API key command: set :api-key-command for the agentloop harness in relay.edn.")
 
 (def ^:private no-bin
   "agentloop not found: set :bin, put agentloop on PATH, or run `make -C ../agentloop build`.")
 
 (defn request-json
   "The request agentloop reads. `prompt` is nil for an interactive session."
-  [{:keys [harness model system-prompt prompt tools env session-dir timeout-ms]} id work]
-  (let [{:keys [provider effort base-url retry limits tool-timeout-seconds]} harness
+  [{:keys [harness model system-prompt prompt tools tool-command session-dir timeout-ms]} id work]
+  (let [{:keys [provider effort base-url retry limits tool-timeout-seconds api-key-command]} harness
         limit-keys {:max-turns :max_turns :max-tool-calls :max_tool_calls :max-tokens :max_tokens}
         retry-keys {:retries :retries :backoff-seconds :backoff_seconds
                     :max-wait-seconds :max_wait_seconds}]
     (cond-> {:provider (or provider default-provider)
              :model (or model (:model harness) default-model)
              :effort (or effort default-effort)
-             :api_key_env "AGENTLOOP_API_KEY"
+             :api_key_command (vec api-key-command)
              :system system-prompt
              :session (str (fs/path session-dir (str id ".jsonl")))
              :tools (mapv #(select-keys % [:name :description :parameters]) tools)
-             :tool_command [(or (get env "RELAY_BIN") (System/getProperty "relay.bin") "relay") "tool"]
-             :tool_env (harness/base-env env)
+             :tool_command (vec tool-command)
+             :tool_env (harness/base-env {})
              :tool_dir (str work)
              :tool_timeout_seconds (or tool-timeout-seconds default-tool-timeout-seconds)}
       base-url (assoc :base_url base-url)
@@ -168,7 +159,7 @@
   :env}, or {:problem text} when it cannot run."
   [{:keys [harness run-dir session-dir resume] :as request}]
   (let [bin (agentloop-bin harness)
-        key (api-key harness)]
+        key (not-empty (:api-key-command harness))]
     (cond
       (nil? key) {:problem no-key}
       (nil? bin) {:problem no-bin}
@@ -180,7 +171,7 @@
         (fs/create-dirs session-dir)
         (spit file (json/generate-string (request-json request id work)))
         {:id id :work work :file file :bin bin
-         :env (harness/base-env {"AGENTLOOP_API_KEY" key})}))))
+         :env (harness/base-env {})}))))
 
 (defmethod harness/run! :agentloop
   [{:keys [run-dir timeout-ms] :as request}]

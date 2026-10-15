@@ -84,10 +84,8 @@
                            :zone (config/zone config)
                            :resumed? (some? resumes)})
      :tools (tools/manifest config role)
-     :env (harness/base-env {"RELAY_DATA" (str (fs/absolutize data-dir))
-                             "RELAY_ROLE" role
-                             "RELAY_WAKE" (str id)
-                             "RELAY_BIN" (relay-bin)})
+     :tool-command [(relay-bin) "tool" "--data" (str (fs/absolutize data-dir))
+                    "--role" role "--wake" (str id)]
      :run-dir (str run-dir)
      :session-dir (str (fs/path data-dir "runs" role "sessions"))
      :resume (:session resumed)
@@ -183,9 +181,8 @@
 (defn spawn-wake!
   "Starts a dispatched wake in its own process and does not wait for it."
   [{:keys [data-dir]} role-id]
-  (p/process [(relay-bin) "wake" role-id "--dispatched"]
-             {:in "" :out :discard :err :discard
-              :extra-env {"RELAY_DATA" (str (fs/absolutize data-dir))}}))
+  (p/process [(relay-bin) "wake" role-id "--dispatched" "--data" (str (fs/absolutize data-dir))]
+             {:in "" :out :discard :err :discard}))
 
 (defn tick!
   "One pass: end wakes whose process has gone, fire due routines, report what

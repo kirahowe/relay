@@ -9,7 +9,7 @@ Everything relay knows is an append-only log of events in a data
 directory. The state (who exists, what is open, what is known) is the log
 folded in order, so it can always be rebuilt, and nothing is ever deleted.
 relay itself holds no personal data: the code is this repository, and the
-data is wherever `--data` or `RELAY_DATA` points.
+data is wherever `--data` or the config file points.
 
 ## How it works
 
@@ -81,10 +81,17 @@ is written in Go.
 2. Choose a data directory and initialize it:
 
    ```sh
-   export RELAY_DATA=/path/to/data
+   data=/path/to/data
+   mkdir -p ~/.config/relay
+   echo "{:data \"$data\"}" > ~/.config/relay/config.edn
    bin/relay init
-   cp setup/relay.example.edn "$RELAY_DATA/relay.edn"
+   cp setup/relay.example.edn "$data/relay.edn"
    ```
+
+   Every command takes the data directory from `--data <dir>`, or else
+   from `:data` in `~/.config/relay/config.edn`. A leading `~` is
+   expanded. With neither, relay says so and stops. There are no
+   environment variables.
 
    Edit `relay.edn`. The data directory is plain files, so a file-sync tool
    can back it up, as long as this Mac is its only writer. Avoid iCloud
@@ -107,7 +114,7 @@ is written in Go.
    ```sh
    mkdir -p ~/Library/Logs/relay
    sed -e "s|@BB@|$(command -v bb)|" -e "s|@RELAY@|$PWD|" \
-       -e "s|@DATA@|$RELAY_DATA|" -e "s|@HOME@|$HOME|" \
+       -e "s|@DATA@|$data|" -e "s|@HOME@|$HOME|" \
        -e "s|@LOGS@|$HOME/Library/Logs/relay|" \
        setup/launchd/relay.tick.plist > ~/Library/LaunchAgents/relay.tick.plist
    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/relay.tick.plist
@@ -130,12 +137,14 @@ is written in Go.
 
 The harness settings in `relay.edn` are `:kind :agentloop`, `:model`,
 `:effort`, `:provider` (`"anthropic"` by default, or `"openai"`),
-`:base-url`, `:bin`, and the key as either `:api-key-command` or
-`:api-key-env`. `:retry` sets how agentloop retries a failed model call,
+`:base-url`, `:bin`, and `:api-key-command`, which is required. `:retry`
+sets how agentloop retries a failed model call,
 for example `{:retries 2 :backoff-seconds 2 :max-wait-seconds 30}`. A rate
 limit that outlasts the longest wait pauses the harness until it lifts.
-The key goes to agentloop alone. Tools get only the environment relay
-names for them.
+`:api-key-command` is a command and its arguments. agentloop runs it
+itself and takes its output as the key, so relay never holds the key. A
+missing or wrong key shows up as a needs-attention wake. Tools get only a
+base environment (PATH, HOME and the like).
 
 Talk to a role with `relay chat <role>`. `relay status` shows roles, open
 work, harnesses and recent wakes, and `relay help` lists every command.

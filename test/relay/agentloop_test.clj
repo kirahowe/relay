@@ -265,7 +265,7 @@
 (deftest the-request-carries-a-per-call-tool-timeout
   (let [req (fn [harness]
               (agentloop/request-json {:harness harness :system-prompt "s" :prompt "p" :tools []
-                                       :env {} :session-dir "/tmp/s"}
+                                       :tool-command ["relay" "tool"] :session-dir "/tmp/s"}
                                       "id" "/tmp/work"))]
     (is (= 300 (:tool_timeout_seconds (req {}))))
     (is (= 45 (:tool_timeout_seconds (req {:tool-timeout-seconds 45}))))))

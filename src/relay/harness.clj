@@ -11,7 +11,10 @@
     :system-prompt  the role's standing instructions
     :prompt         the prompt for this wake
     :tools          the tools the role is offered (relay.tools/manifest)
-    :env            variables the harness passes to every tool call it runs
+    :tool-command   the command a harness runs for a tool call, given the
+                    tool's name as its last argument: relay's own `tool`
+                    command with the data directory, role and wake already
+                    named. Tool calls get base-env and nothing else.
     :run-dir        an empty directory for this wake's transcript and files
     :session-dir    where the harness keeps sessions for this role
     :resume         a session to carry on from, if the last wake was cut short
@@ -85,22 +88,33 @@
 
 ;; --- script: any program, for tests and simple automations
 
+;; Any program, for tests and simple automations. It gets the prompt on
+;; stdin and one argument: the path of a JSON file in the run directory.
+;; The file holds
+;;
+;;   system_prompt  path of a file with the system prompt
+;;   tools_file     path of a file with the tools, as JSON
+;;   report         path where the program may write a JSON report
+;;                  ({outcome, session, said, resets_at}); without one, a
+;;                  run counts as having got to work
+;;   resume         the session to carry on from, or ""
+;;   tool_command   the argv that runs a tool call, given the tool name last
 (defmethod run! :script
-  [{:keys [harness system-prompt prompt tools env run-dir resume timeout-ms]}]
-  ;; The program gets the prompt on stdin and finds everything else in
-  ;; files named by its environment. It may write a JSON report to
-  ;; $RELAY_REPORT; without one, a run counts as having got to work.
+  [{:keys [harness system-prompt prompt tools tool-command run-dir resume timeout-ms]}]
   (let [file #(str (fs/path run-dir %))
         _ (spit (file "system-prompt.md") system-prompt)
         _ (spit (file "tools.json") (json/generate-string tools))
         out (file "transcript.log")
         report-file (file "report.json")
-        exit (run-process! (:command harness)
+        args-file (file "args.json")
+        _ (spit args-file (json/generate-string {:system_prompt (file "system-prompt.md")
+                                                 :tools_file (file "tools.json")
+                                                 :report report-file
+                                                 :resume (str resume)
+                                                 :tool_command (vec tool-command)}))
+        exit (run-process! (conj (vec (:command harness)) args-file)
                            {:dir run-dir :in prompt :out-file out :timeout-ms timeout-ms
-                            :env (merge env {"RELAY_SYSTEM_PROMPT" (file "system-prompt.md")
-                                             "RELAY_TOOLS_FILE" (file "tools.json")
-                                             "RELAY_REPORT" report-file
-                                             "RELAY_RESUME" (str resume)})})
+                            :env (base-env {})})
         report (when (fs/exists? report-file)
                  (json/parse-string (slurp report-file) true))]
     {:outcome (or (:outcome report) "ran")
