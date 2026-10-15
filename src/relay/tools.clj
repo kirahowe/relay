@@ -496,8 +496,12 @@
                                                (into (vec command) (map str args)))]
              (if (zero? exit)
                (labelled out labels)
-               (throw (ex-info (str tool-name " failed (exit " exit "): " err out)
-                               {:relay/labels (vec labels)})))))}])
+               ;; What it printed to stderr goes to the operator's log
+               ;; only; the model is told it failed and sees its stdout.
+               (do (binding [*out* *err*] (print err) (flush))
+                   (throw (ex-info (str tool-name " failed (exit " exit ")."
+                                        (when-not (str/blank? out) (str "\n" out)))
+                                   {:relay/labels (vec labels)}))))))}])
 
 (defn script-role?
   "Whether a role runs on a :script harness, which enforces no policy on

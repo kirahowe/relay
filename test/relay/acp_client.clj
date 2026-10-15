@@ -1,8 +1,9 @@
 (ns relay.acp-client
   "A small ACP client for tests. It starts an agent command, sends JSON-RPC
   requests on its stdin, and keeps every message the agent writes. It
-  answers the agent's own requests: a permission request is cancelled,
-  anything else is method-not-found."
+  answers the agent's own requests: a permission request with ::permit,
+  a function of the request, if given, else by cancelling it, and
+  anything else with method-not-found."
   (:require [babashka.process :as p]
             [cheshire.core :as json]
             [clojure.java.io :as io]))
@@ -12,17 +13,27 @@
     (.write writer (str (json/generate-string msg) "\n"))
     (.flush writer)))
 
-(defn- answer [{:strs [id method]}]
+(defn- answer [{:strs [id method] :as msg} permit]
   (if (= "session/request_permission" method)
-    {:jsonrpc "2.0" :id id :result {:outcome {:outcome "cancelled"}}}
+    {:jsonrpc "2.0" :id id :result {:outcome (if permit
+                                               (permit msg)
+                                               {:outcome "cancelled"})}}
     {:jsonrpc "2.0" :id id :error {:code -32601 :message (str "No method " method)}}))
+
+(defn choose
+  "A permission answer picking the option of `kind` the agent offered."
+  [kind]
+  (fn [msg]
+    {:outcome "selected"
+     :optionId (some #(when (= kind (get % "kind")) (get % "optionId")) (get-in msg ["params" "options"]))}))
 
 (defn start!
   "Starts the agent. Returns a client: {:proc :messages :out-bytes}, where
   :messages is an atom of every message the agent wrote, parsed with
   string keys, and :lines every raw stdout line."
   [argv opts]
-  (let [proc (p/process (vec argv) (merge {:err :string} opts))
+  (let [permit (::permit opts)
+        proc (p/process (vec argv) (merge {:err :string} (dissoc opts ::permit)))
         client {:proc proc
                 :writer (io/writer (:in proc))
                 :messages (atom [])
@@ -37,7 +48,7 @@
                       (let [msg (try (json/parse-string line) (catch Exception _ nil))]
                         (swap! (:messages client) conj msg)
                         (when (and (map? msg) (get msg "method") (contains? msg "id"))
-                          (try (send! client (answer msg)) (catch java.io.IOException _ nil)))))
+                          (try (send! client (answer msg permit)) (catch java.io.IOException _ nil)))))
                     (catch java.io.IOException _ nil))))]
     (.setDaemon reader true)
     (.start reader)

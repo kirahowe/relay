@@ -7,7 +7,7 @@
 #
 # Needs Go, uv and a checkout of agentloop beside this repository. The
 # script builds agentloop's mock provider into a temporary directory and
-# runs whichever agentloop relay would find; it changes nothing in the
+# runs the sibling checkout's bin/agentloop; it changes nothing in the
 # agentloop checkout. The acp-tck commit and the requirements allowed to
 # be SKIPPED are read from agentloop's own scripts/tck.sh, so the two runs
 # hold relay to exactly what agentloop advertises. The JSON report goes to
@@ -26,9 +26,9 @@ if [ -z "$TCK_REF" ] || [ -z "$ALLOWED_SKIPS" ]; then
 	exit 1
 fi
 
-if command -v agentloop >/dev/null 2>&1; then
-	agentloop_bin=$(command -v agentloop)
-elif [ -x "$agentloop_src/bin/agentloop" ]; then
+# The sibling checkout's build, never the agentloop on PATH, which may be
+# the live install.
+if [ -x "$agentloop_src/bin/agentloop" ]; then
 	agentloop_bin="$agentloop_src/bin/agentloop"
 else
 	echo "tck: agentloop is not built; run make -C ../agentloop build" >&2

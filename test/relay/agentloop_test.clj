@@ -163,7 +163,7 @@
           (testing "the model saw only relay's tools, with their schemas"
             (is (= #{"inbox" "roles" "memo_send" "memo_close" "memo_block" "routines"
                      "routine_write" "routine_remove" "facts" "fact_history" "fact_add"
-                     "fact_supersede" "fact_correct" "note_write" "note_remove" "journal"
+                     "fact_supersede" "fact_correct" "notes" "note_write" "note_remove" "journal"
                      "journal_write" "docs" "doc_get" "doc_history" "doc_put" "doc_remove"
                      "printenv"}
                    (set (map :name (:tools first-req)))))

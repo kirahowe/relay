@@ -57,6 +57,10 @@
             (str condition ", next try " (local paused-until zone))
             "available")))
    [(format "\nOperator's inbox: %d open" (count (core/unread-memos state core/operator)))]
+   (when-let [hs (seq (core/open-holds state))]
+     [(format "Held tool calls: %d (relay holds)" (count hs))])
+   (when-let [qs (seq (filter core/quarantined? (filter #(= :unread (:status %)) (vals (:memos state)))))]
+     [(format "Quarantined memos: %s (relay release <memo>)" (str/join ", " (sort (map :id qs))))])
    (when-let [recent (seq (take-last 5 (sort-by :id (vals (:wakes state)))))]
      (cons "\nRecent wakes"
            (for [{:keys [id role started-at status outcome crashed]} recent]
