@@ -274,7 +274,7 @@
     (is (= 300 (:tool_timeout_seconds (req {}))))
     (is (= 45 (:tool_timeout_seconds (req {:tool-timeout-seconds 45}))))))
 
-;; --- conversations are described, not run
+;; --- wakes and conversations are described, not run
 
 (def gen-harness
   (gen/fmap (fn [[provider effort base-url limits retry timeout model]]
@@ -316,7 +316,7 @@
   (let [result (tc/quick-check 300 an-acp-request-is-a-run-request-for-a-session-directory)]
     (is (:pass? result) (pr-str (select-keys result [:seed :shrunk :fail])))))
 
-(deftest conversations-are-described-as-commands-for-relay-to-start
+(deftest wakes-and-conversations-are-described-as-commands-for-relay-to-start
   (let [dir (str (fs/create-temp-dir {:prefix "relay-agentloop-describe"}))
         ;; A binary that leaves a mark if anything runs it.
         bin (str (fs/path dir "agentloop"))
@@ -328,6 +328,18 @@
     (try
       (spit bin "#!/bin/sh\ntouch \"$0.ran\"\nexit 9\n")
       (fs/set-posix-file-permissions bin "rwxr-xr-x")
+      (testing "a wake: agentloop run, resuming the session, given longer than its own deadline"
+        (let [wake (assoc request :prompt "p" :resume "s-7"
+                          :session-dir (str (fs/path dir "sessions")))
+              {:keys [argv dir out-file timeout-ms session] :as cmd} (harness/wake-command wake)
+              written (read-request)]
+          (is (= [bin "run" (str (fs/path (:run-dir request) "request.json"))] argv) (pr-str cmd))
+          (is (= (str (fs/path (:run-dir request) "work")) dir))
+          (is (= (str (fs/path (:run-dir request) "transcript.jsonl")) out-file))
+          (is (= 75000 timeout-ms))
+          (is (= "s-7" session))
+          (is (= (str (fs/path (:session-dir wake) "s-7.jsonl")) (:session written)))
+          (is (= "p" (:prompt written)))))
       (testing "acp: the ACP agent, with a directory of sessions"
         (let [{:keys [argv session-dir] :as cmd} (harness/acp-command request)
               written (read-request)]
@@ -336,9 +348,10 @@
           (is (= session-dir (:session_dir written)))
           (is (not-any? #(contains? written %) [:session :prompt :timeout_seconds]))
           (is (fs/directory? session-dir))))
-      (testing "describing it starts no process"
+      (testing "describing them starts no process"
         (is (not (fs/exists? (str bin ".ran")))))
       (testing "what cannot run is a problem, not an exception"
+        (is (string? (:problem (harness/wake-command (assoc-in request [:harness :api-key-command] [])))))
         (is (string? (:problem (harness/acp-command (assoc-in request [:harness :api-key-command] [])))))
         (is (string? (:problem (harness/acp-command (assoc-in request [:harness :kind] :script))))))
       (finally (fs/delete-tree dir)))))

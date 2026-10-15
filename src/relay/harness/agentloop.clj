@@ -197,21 +197,21 @@
         {:id id :work work :file file :bin bin
          :env (harness/base-env {})}))))
 
-(defmethod harness/run! :agentloop
+(defmethod harness/wake-command :agentloop
   [{:keys [run-dir timeout-ms] :as request}]
-  (let [{:keys [problem id work file bin env]} (prepare! request #(request-json request %1 %2))]
+  (let [{:keys [problem id work file bin env] :as prepared}
+        (prepare! request #(request-json request %1 %2))]
     (if problem
-      {:outcome "needs-attention" :exit nil :crashed false :said problem}
-      (let [out (str (fs/path run-dir "transcript.jsonl"))
-            exit (harness/run-process! [bin "run" file]
-                                       {:dir work :out-file out :env env
-                                        :timeout-ms (+ timeout-ms 15000)})]
-        (assoc (classify {:outcome (parse-outcome (slurp out))
-                          :exit exit
-                          :stderr (slurp (str out ".err"))
-                          :session id
-                          :now (Instant/now)})
-               :transcript out)))))
+      prepared
+      ;; agentloop stops itself at the deadline (request-json), so relay
+      ;; waits a little longer before stopping it.
+      {:argv [bin "run" file] :dir work :env env
+       :out-file (str (fs/path run-dir "transcript.jsonl"))
+       :timeout-ms (+ timeout-ms 15000)
+       :session id})))
+
+(defmethod harness/wake-report :agentloop [_ {:keys [session]} {:keys [exit out err now]}]
+  (classify {:outcome (parse-outcome out) :exit exit :stderr err :session session :now now}))
 
 (defmethod harness/acp-command :agentloop [{:keys [session-dir] :as request}]
   (let [{:keys [problem work file bin env] :as prepared} (prepare! request (fn [_ work] (acp-request-json request work)))]

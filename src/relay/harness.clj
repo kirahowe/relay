@@ -3,7 +3,8 @@
   that runs a role, and where its tool calls execute, can change without
   touching anything else.
 
-  `run!` takes a request:
+  A wake runs in two steps, so that relay's dispatcher is the only code
+  that starts a process. `wake-command` takes a request:
 
     :harness        the harness's settings from relay.edn, with :kind
     :role           the role being run
@@ -21,7 +22,25 @@
     :resume         a session to carry on from, if the last wake was cut short
     :timeout-ms     how long the run may take
 
-  and returns a report:
+  writes whatever files its program needs into the run directory, and
+  describes the program as data:
+
+    :argv         the command line
+    :dir          the directory to run it in
+    :env          its whole environment
+    :in           what it reads on stdin, if anything
+    :out-file     where its stdout goes; stderr goes beside it, in
+                  <out-file>.err. This is the wake's transcript.
+    :timeout-ms   how long it may run before it is stopped, with its
+                  descendants
+    :report-file  a file the program may write, read back after it exits
+
+  It may add keys of its own for wake-report, or return {:problem text}
+  when it cannot run. The dispatcher runs the command and calls
+  `wake-report`, which is pure, with the request, the command, and what
+  came back: {:exit :out :err :report :now}, where :exit is the exit code
+  or \"timeout\", :out and :err are the output's text, :report is the text
+  of the report file or nil, and :now is the time. It returns the report:
 
     :outcome     \"ran\" when the role got to work, whatever came of it.
                  \"limited\", \"unreachable\" or \"needs-attention\" when the
@@ -34,7 +53,8 @@
     :session     the session id, so an interrupted wake can be resumed
     :said        the last thing the harness said, for a person to read
     :resets-at   when a rate limit lifts, if the harness said
-    :transcript  where the full transcript is
+
+  The dispatcher adds :transcript, the out-file.
 
   A clean exit is not a verdict on the memos. Only the role closing them is.
 
@@ -44,22 +64,29 @@
   {:argv :dir :env :session-dir}, or {:problem text} when it cannot run.
   It may write files (a request file, say) into the run directory, but it
   starts no process."
-  (:refer-clojure :exclude [run!])
   (:require [babashka.fs :as fs]
-            [babashka.process :as p]
             [cheshire.core :as json]
             [clojure.string :as str]))
 
-(defmulti run! (fn [request] (get-in request [:harness :kind])))
+(defn- kind [request] (get-in request [:harness :kind]))
 
-(defmethod run! :default [request]
-  (throw (ex-info (str "No harness kind " (pr-str (get-in request [:harness :kind])) ".") {})))
+(defmulti wake-command
+  "Describes the program that runs one wake, writing the files it needs."
+  kind)
+
+(defmethod wake-command :default [request]
+  (throw (ex-info (str "No harness kind " (pr-str (kind request)) ".") {})))
+
+(defmulti wake-report
+  "The report on a wake, from its request, its command and what came back
+  from running it. Pure."
+  (fn [request _command _ran] (kind request)))
 
 (defmulti acp-command
   "Describes an ACP agent for a conversation request: a program that
   speaks the Agent Client Protocol on stdin and stdout and keeps each ACP
   session it opens in the session-dir."
-  (fn [request] (get-in request [:harness :kind])))
+  kind)
 
 (defmethod acp-command :default [request]
   {:problem (str "The " (pr-str (get-in request [:harness :kind])) " harness has no ACP mode.")})
@@ -76,31 +103,6 @@
                                                    (str/split (or (get env "PATH") "/usr/bin:/bin") #":"))))}
            extra)))
 
-(defn- stop-tree!
-  "Stops a process and its descendants, and returns once they have gone, so
-  that nothing of a run outlives its wake. Asks first; anything still there
-  after a few seconds is killed."
-  [proc]
-  (let [^Process jp (:proc proc)
-        tree (cons (.toHandle jp) (iterator-seq (.iterator (.descendants jp))))]
-    (doseq [^java.lang.ProcessHandle h tree] (.destroy h))
-    (doseq [^java.lang.ProcessHandle h tree]
-      (when (= ::alive (deref (.onExit h) 3000 ::alive))
-        (.destroyForcibly h)
-        (deref (.onExit h) 3000 nil)))))
-
-(defn run-process!
-  "Runs a command to completion or the deadline, writing its output to
-  `out-file`. Returns the exit code, or \"timeout\" when it was stopped."
-  [argv {:keys [dir env in out-file timeout-ms]}]
-  (let [proc (p/process (vec argv) {:dir (str dir) :env env :in (or in "")
-                                    :out :write :out-file (fs/file out-file)
-                                    :err :write :err-file (fs/file (str out-file ".err"))})
-        result (deref proc timeout-ms ::timeout)]
-    (if (= ::timeout result)
-      (do (stop-tree! proc) "timeout")
-      (:exit result))))
-
 (defn tail
   "The last few non-blank lines of a text, for a person to read."
   [s n]
@@ -116,32 +118,32 @@
 ;;   tools_file     path of a file with the tools, as JSON
 ;;   report         path where the program may write a JSON report
 ;;                  ({outcome, session, said, resets_at}); without one, a
-;;                  run counts as having got to work
+;;                  run counts as having got to work.
 ;;   resume         the session to carry on from, or ""
 ;;   tool_command   the argv that runs a tool call, given the tool name last
-(defmethod run! :script
+(defmethod wake-command :script
   [{:keys [harness system-prompt prompt tools tool-command run-dir resume timeout-ms]}]
   (let [file #(str (fs/path run-dir %))
-        _ (fs/create-dirs run-dir)
-        _ (spit (file "system-prompt.md") system-prompt)
-        _ (spit (file "tools.json") (json/generate-string tools))
-        out (file "transcript.log")
-        report-file (file "report.json")
         args-file (file "args.json")
-        _ (spit args-file (json/generate-string {:system_prompt (file "system-prompt.md")
-                                                 :tools_file (file "tools.json")
-                                                 :report report-file
-                                                 :resume (str resume)
-                                                 :tool_command (vec tool-command)}))
-        exit (run-process! (conj (vec (:command harness)) args-file)
-                           {:dir run-dir :in prompt :out-file out :timeout-ms timeout-ms
-                            :env (base-env {})})
-        report (when (fs/exists? report-file)
-                 (json/parse-string (slurp report-file) true))]
+        report-file (file "report.json")]
+    (fs/create-dirs run-dir)
+    (spit (file "system-prompt.md") system-prompt)
+    (spit (file "tools.json") (json/generate-string tools))
+    (spit args-file (json/generate-string {:system_prompt (file "system-prompt.md")
+                                           :tools_file (file "tools.json")
+                                           :report report-file
+                                           :resume (str resume)
+                                           :tool_command (vec tool-command)}))
+    {:argv (conj (vec (:command harness)) args-file)
+     :dir run-dir :env (base-env {}) :in prompt
+     :out-file (file "transcript.log") :timeout-ms timeout-ms
+     :report-file report-file}))
+
+(defmethod wake-report :script [_ _ {:keys [exit out err report]}]
+  (let [report (when report (json/parse-string report true))]
     {:outcome (or (:outcome report) "ran")
      :exit exit
      :crashed (not= 0 exit)
      :session (:session report)
-     :said (or (:said report) (tail (str (slurp out) (slurp (str out ".err"))) 10))
-     :resets-at (:resets-at report)
-     :transcript out}))
+     :said (or (:said report) (tail (str out err) 10))
+     :resets-at (:resets-at report)}))

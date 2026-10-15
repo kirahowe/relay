@@ -20,7 +20,6 @@
             [clojure.test.check.properties :as prop]
             [relay.core :as core]
             [relay.dispatch :as dispatch]
-            [relay.harness :as harness]
             [relay.harness.agentloop :as agentloop]
             [relay.inbound :as inbound]
             [relay.log :as log]
@@ -437,7 +436,8 @@
 (deftest the-hard-deadline-kills-a-hung-agentloop-and-its-children
   (let [dir (str (fs/create-temp-dir {:prefix "relay-qa-hung"}))]
     (try
-      (let [report (harness/run!
+      (let [report (dispatch/run-harness!
+                    {:clock #(java.time.Instant/now)}
                     {:harness {:kind :agentloop :bin (fake-agentloop! dir)
                                :api-key-command ["echo" secret]}
                      :role {:id "clerk"} :system-prompt "s" :prompt "p" :tools []

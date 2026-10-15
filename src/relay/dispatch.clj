@@ -111,15 +111,53 @@
      :resume (:session resumed)
      :timeout-ms (long (* 60 1000 (:wake-timeout-minutes config)))}))
 
-(defn- run-harness
-  "Runs the harness, turning anything it throws into a report, so that a
-  wake that started always ends."
-  [request]
+(defn- stop-tree!
+  "Stops a process and its descendants, and returns once they have gone, so
+  that nothing of a run outlives its wake. Asks first; anything still there
+  after a few seconds is killed."
+  [proc]
+  (let [^Process jp (:proc proc)
+        tree (cons (.toHandle jp) (iterator-seq (.iterator (.descendants jp))))]
+    (doseq [^java.lang.ProcessHandle h tree] (.destroy h))
+    (doseq [^java.lang.ProcessHandle h tree]
+      (when (= ::alive (deref (.onExit h) 3000 ::alive))
+        (.destroyForcibly h)
+        (deref (.onExit h) 3000 nil)))))
+
+(defn run-command!
+  "Runs a harness's wake command (relay.harness/wake-command) to completion
+  or its deadline, with stdout in its :out-file and stderr beside it.
+  Returns what came back, for relay.harness/wake-report: {:exit :out :err
+  :report}, where :exit is \"timeout\" when the command was stopped and
+  :report is the text of its :report-file, if it wrote one."
+  [{:keys [argv dir env in out-file timeout-ms report-file]}]
+  (let [err-file (str out-file ".err")
+        proc (p/process (vec argv) {:dir (str dir) :env env :in (or in "")
+                                    :out :write :out-file (fs/file out-file)
+                                    :err :write :err-file (fs/file err-file)})
+        result (deref proc timeout-ms ::timeout)
+        exit (if (= ::timeout result)
+               (do (stop-tree! proc) "timeout")
+               (:exit result))]
+    {:exit exit
+     :out (slurp out-file)
+     :err (slurp err-file)
+     :report (when (and report-file (fs/exists? report-file)) (slurp report-file))}))
+
+(defn run-harness!
+  "Runs a wake's request: has the harness describe the command, runs it,
+  and has the harness read the result. Anything thrown becomes a report,
+  so that a wake that started always ends."
+  [{:keys [clock]} request]
   (try
-    (if (:harness request)
-      (harness/run! request)
+    (if-not (:harness request)
       {:outcome "needs-attention" :exit nil :crashed false
-       :said (str "relay.edn has no harness called " (:harness-name request) ".")})
+       :said (str "relay.edn has no harness called " (:harness-name request) ".")}
+      (let [{:keys [problem out-file] :as command} (harness/wake-command request)]
+        (if problem
+          {:outcome "needs-attention" :exit nil :crashed false :said problem}
+          (let [ran (assoc (run-command! command) :now (clock))]
+            (assoc (harness/wake-report request command ran) :transcript out-file)))))
     (catch Exception e
       {:outcome "ran" :exit nil :crashed true :cut-short false
        :said (str "The harness adapter failed: " (or (ex-message e) (class e)))})))
@@ -159,8 +197,8 @@
       :else
       (let [wake-id (:seq (first started))
             state (inbound/current-state sys)
-            report (run-harness (wake-request sys state (get-in state [:wakes wake-id])
-                                              (wake-inputs sys)))]
+            report (run-harness! sys (wake-request sys state (get-in state [:wakes wake-id])
+                                                   (wake-inputs sys)))]
         (inbound/submit! sys {:type :wake/end :actor core/dispatcher
                               :args (wake-end-args wake-id report)})
         (let [state (inbound/current-state sys)]
