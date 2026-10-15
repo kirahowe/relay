@@ -140,6 +140,24 @@
            :left-open (count (filter #(= :unread (:status (core/memo state %)))
                                      (get-in state [:wakes wake-id :memos])))})))))
 
+(defn- reap-lost-wakes!
+  "Ends the running wakes whose process has gone, as a tick would, so a
+  chat that was killed does not hold its role until the next tick."
+  [sys]
+  (when-let [lost (seq (lost-wakes (inbound/current-state sys)))]
+    (inbound/submit! sys {:type :tick :actor core/dispatcher :args {:lost-wakes (vec lost)}})))
+
+(defn- ignoring-terminal-signals
+  "Calls f with SIGINT and SIGHUP ignored. The terminal sends them to relay
+  as well as to the harness, and relay has to outlive the harness to record
+  that the conversation ended. The harness decides what they mean."
+  [f]
+  (let [signals (mapv #(sun.misc.Signal. %) ["INT" "HUP"])
+        ignore (reify sun.misc.SignalHandler (handle [_ _]))
+        old (mapv #(sun.misc.Signal/handle % ignore) signals)]
+    (try (f)
+         (finally (doseq [[s h] (map vector signals old)] (sun.misc.Signal/handle s h))))))
+
 (def ^:private conversation-note
   "The operator has opened a conversation with you. Talk with them directly;
   use your tools as you would in a wake.")
@@ -149,6 +167,7 @@
   like a wake, so no wake runs alongside it, and carries no memos. Returns
   the harness's exit code."
   [sys role-id]
+  (reap-lost-wakes! sys)
   (let [started (inbound/submit! sys {:type :wake/start :actor core/operator
                                       :args (merge {:role role-id :chat true
                                                     :note conversation-note}
@@ -158,7 +177,8 @@
         request (wake-request sys state (get-in state [:wakes wake-id]))
         exit (try
                (if (:harness request)
-                 (harness/chat! (update request :system-prompt str "\n\n" conversation-note "\n"))
+                 (ignoring-terminal-signals
+                  #(harness/chat! (update request :system-prompt str "\n\n" conversation-note "\n")))
                  (throw (ex-info (str "relay.edn has no harness called " (:harness-name request) ".") {})))
                (finally
                  (inbound/submit! sys {:type :wake/end :actor core/dispatcher
