@@ -15,6 +15,7 @@
             [relay.config :as config]
             [relay.core :as core]
             [relay.dispatch :as dispatch]
+            [relay.harness :as harness]
             [relay.inbound :as inbound]
             [relay.log :as log])
   (:import (java.time Instant)))
@@ -476,3 +477,54 @@
 (deftest a-wake-request-depends-only-on-its-arguments-and-never-goes-back-in-time
   (let [result (tc/quick-check 300 a-wake-request-is-a-pure-value)]
     (is (:pass? result) (pr-str (select-keys result [:seed :shrunk :fail])))))
+
+;; Whatever the script harness's program prints, exits with or writes as
+;; its report, the wake's end is one core accepts: a wake that started
+;; always ends.
+
+(def gen-report-field
+  (gen/one-of [gen-junk (gen/elements ["ran" "limited" "unreachable" "needs-attention" "bogus"])
+               (gen/elements ["2099-01-01T00:00:00Z" "soon" ""])]))
+
+(def gen-report-text
+  (gen/one-of
+   [(gen/return nil) gen/string (gen/return "{") (gen/return "[]") (gen/return "null")
+    (gen/fmap json/generate-string
+              (gen/map (gen/elements [:outcome :session :said :resets_at :resets-at :other])
+                       gen-report-field))]))
+
+(def a-script-wake-always-ends
+  (let [cfg (config/resolve-config {:timezone "UTC" :default-harness :x :harnesses {:x {:kind :script}}
+                                    :notify {:kind :none}})
+        now (Instant/parse "2026-10-15T12:00:00Z")
+        cmd (fn [state actor type args]
+              (first (core/run-command state {:type type :actor actor :args args} {:now now :config cfg})))
+        started (-> core/empty-state
+                    (cmd "operator" :role/add {:id "clerk" :title "Clerk" :instructions "x"})
+                    (cmd "operator" :memo/send {:to "clerk" :subject "s" :body "b"})
+                    (cmd "operator" :wake/start {:role "clerk"}))
+        wake-id (:id (core/running-wake started "clerk"))]
+    (prop/for-all [exit (gen/one-of [gen/small-integer (gen/return "timeout")])
+                   out gen/string
+                   err gen/string
+                   report gen-report-text]
+      (let [r (harness/wake-report {:harness {:kind :script}} {}
+                                   {:exit exit :out out :err err :report report :now now})
+            ended (get-in (cmd started "dispatcher" :wake/end (dispatch/wake-end-args wake-id r))
+                          [:wakes wake-id])]
+        (and (= :ended (:status ended))
+             (string? (:said r)))))))
+
+(deftest a-script-wake-ends-whatever-its-program-reports
+  (let [result (tc/quick-check 1000 a-script-wake-always-ends)]
+    (is (:pass? result) (pr-str (select-keys result [:seed :shrunk :fail])))))
+
+(deftest a-script-that-reports-an-unknown-outcome-still-ends-its-wake
+  ;; Regression: core refused the report, so the wake stayed running.
+  (memo! "clerk" "x")
+  (plan! (report! {:outcome "bogus" :said "all good"}) 0)
+  (let [result (dispatch/wake! *sys* "clerk" {})
+        wake (get-in (state) [:wakes (:wake result)])]
+    (is (= [:ended "ran" true] ((juxt :status :outcome :crashed) wake)))
+    (is (str/includes? (:said wake) "\"bogus\""))
+    (is (not (core/running? (state) "clerk")))))

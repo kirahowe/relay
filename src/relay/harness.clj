@@ -66,7 +66,9 @@
   starts no process."
   (:require [babashka.fs :as fs]
             [cheshire.core :as json]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [relay.core :as core])
+  (:import (java.time Instant)))
 
 (defn- kind [request] (get-in request [:harness :kind]))
 
@@ -118,7 +120,9 @@
 ;;   tools_file     path of a file with the tools, as JSON
 ;;   report         path where the program may write a JSON report
 ;;                  ({outcome, session, said, resets_at}); without one, a
-;;                  run counts as having got to work.
+;;                  run counts as having got to work. A report that is not
+;;                  an object, or names an outcome relay does not know,
+;;                  counts as a crash.
 ;;   resume         the session to carry on from, or ""
 ;;   tool_command   the argv that runs a tool call, given the tool name last
 (defmethod wake-command :script
@@ -139,11 +143,31 @@
      :out-file (file "transcript.log") :timeout-ms timeout-ms
      :report-file report-file}))
 
+(defn- text [x] (when (and (string? x) (not (str/blank? x))) x))
+
+(defn- instant-text
+  "An instant as text, or nil when x is not one."
+  [x]
+  (when (string? x) (try (str (Instant/parse x)) (catch Exception _ nil))))
+
 (defmethod wake-report :script [_ _ {:keys [exit out err report]}]
-  (let [report (when report (json/parse-string report true))]
-    {:outcome (or (:outcome report) "ran")
-     :exit exit
-     :crashed (not= 0 exit)
-     :session (:session report)
-     :said (or (:said report) (tail (str out err) 10))
-     :resets-at (:resets-at report)}))
+  ;; The program is anything at all, so its report is checked here rather
+  ;; than trusted: a report core would refuse would leave the wake running.
+  (let [parsed (when report (try (json/parse-string report true) (catch Exception _ ::unreadable)))
+        outcome (when (map? parsed) (:outcome parsed))
+        said (or (when (map? parsed) (text (:said parsed))) (tail (str out err) 10))
+        crash (fn [why] {:outcome "ran" :exit exit :crashed true :said why})]
+    (cond
+      (and (some? parsed) (not (map? parsed)))
+      (crash "The program's report.json is not a JSON object.")
+
+      (and (some? outcome) (not (core/harness-outcomes outcome)))
+      (crash (str "The program reported an outcome relay does not know: " (pr-str outcome) "."))
+
+      :else
+      {:outcome (or outcome "ran")
+       :exit exit
+       :crashed (not= 0 exit)
+       :session (text (:session parsed))
+       :said said
+       :resets-at (instant-text (or (:resets_at parsed) (:resets-at parsed)))})))

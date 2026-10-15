@@ -76,7 +76,9 @@ contract HarnessAdapter {
 
     @invariant AFailingAdapterStillEndsTheWake
         -- If the adapter itself throws, the wake is ended as ran and
-        -- crashed. A harness that is not configured is reported as
+        -- crashed, and so is one whose program reported something that
+        -- is not a report or names an outcome relay does not know. A
+        -- harness that is not configured is reported as
         -- needs_attention. A wake that started always ends.
 }
 
