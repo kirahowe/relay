@@ -338,3 +338,9 @@
       (is (thrown? clojure.lang.ExceptionInfo (relay data "tick")))
       (is (= 1 (count (str/split-lines (slurp told))))))
     (fs/delete-tree dir)))
+
+(deftest an-outcome-relay-cannot-read-is-a-crash-not-a-pause
+  (let [out (str "{\"type\":\"entry\"}\n{\"type\":\"outcome\",\"reason\":\"completed\",\"text\":\"" (apply str (repeat 3 "x")) "\n")
+        report (agentloop/classify {:outcome (agentloop/parse-outcome out) :exit 0 :session "s" :now t0})]
+    (is (= ["ran" true] ((juxt :outcome :crashed) report)))
+    (is (nil? (:labels report)) "no labels, so relay assumes every label the session could hold")))

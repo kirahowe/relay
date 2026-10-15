@@ -70,14 +70,16 @@
 ;; --- reading a run back
 
 (defn parse-outcome
-  "The last outcome line in agentloop's output, or nil."
+  "The last outcome line in agentloop's output, or nil when there is none.
+  A line that looks like an outcome but cannot be read is ::unreadable."
   [text]
   (->> (str/split-lines (str text))
        (keep (fn [line]
                (when (str/starts-with? (str/triml line) "{")
                  (try (let [e (json/parse-string line true)]
                         (when (and (map? e) (= "outcome" (:type e))) e))
-                      (catch Exception _ nil)))))
+                      (catch Exception _
+                        (when (str/includes? line "\"outcome\"") ::unreadable))))))
        last))
 
 (defn- instant [s]
@@ -119,6 +121,10 @@
                    (sequential? labels) (assoc :labels (vec labels))))]
     (cond
       (= "timeout" exit) (report "ran" :said "Stopped at the wake deadline.")
+      ;; agentloop ran and said how it ended, but relay could not read it:
+      ;; the run crashed, and with no labels reported relay assumes the
+      ;; worst. It says nothing about the harness, so nothing is paused.
+      (= ::unreadable outcome) (report "ran" :crashed true :said "agentloop's outcome could not be read.")
       (nil? outcome) (report "needs-attention"
                              :said (str (if (and (number? exit) (> exit 128))
                                           (str "agentloop was killed (exit " exit ") before it finished. ")

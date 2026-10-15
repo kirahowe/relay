@@ -730,3 +730,29 @@
           (client/close-input! c)
           (client/wait! c 20000)
           (is (= "rw-------" (fs/posix->str (fs/posix-file-permissions trace)))))))))
+
+(deftest a-permission-request-relay-cannot-read-is-never-passed-on
+  (doseq [approvals [true false]
+          [line refused?] [["{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"session/request_permission\",\"params\":{\"options\":[" true]
+                           ["{\"method\":\"session/request_permission\",\"params\":{}}" false]]]
+    (let [dir (fs/create-temp-dir {:prefix "relay-unread"})
+          line-file (str dir "/line") got (str dir "/got")
+          _ (spit line-file (str line "\n"))
+          client-out (java.io.PipedOutputStream.)
+          out (ByteArrayOutputStream.)
+          seen (atom [])
+          run (future (dispatch/proxy! {:argv ["sh" "-c" (str "cat " line-file "; echo '{\"after\":1}';"
+                                                              (when refused? (str " read l; echo \"$l\" > " got ";"))
+                                                              " cat >/dev/null")]}
+                                       {:in (java.io.PipedInputStream. client-out) :out out :approvals approvals
+                                        :on-permission (fn [& args] (swap! seen conj args))}))]
+      (loop [n 0] (when (and (< n 250) (< (count @seen) 2)) (Thread/sleep 20) (recur (inc n))))
+      (when refused?
+        (loop [n 0] (when (and (< n 200) (not (and (fs/exists? got) (str/ends-with? (slurp got) "\n"))))
+                      (Thread/sleep 20) (recur (inc n))))
+        (is (= {"jsonrpc" "2.0" "id" 5 "result" {"outcome" {"outcome" "cancelled"}}} (json/parse-string (slurp got)))))
+      (is (= [:asked :answered] (map first @seen)) (str "approvals " approvals))
+      (.close client-out)
+      (deref run 10000 nil)
+      (is (= "{\"after\":1}\n" (.toString out "UTF-8")) "only the next line reached the client")
+      (fs/delete-tree dir))))

@@ -495,15 +495,20 @@
         refuse! (fn [req]
                   (let [bs (.getBytes (str (json/generate-string (acp/refusal req)) "\n")
                                       java.nio.charset.StandardCharsets/UTF_8)]
-                    (try (locking agent-in (write-chunk! agent-in bs (alength bs)))
-                         (catch java.io.IOException _ nil))
+                    ;; Without an id there is nothing to answer; the line is
+                    ;; still never passed on.
+                    (when (some? (:id req))
+                      (try (locking agent-in (write-chunk! agent-in bs (alength bs)))
+                           (catch java.io.IOException _ nil)))
                     (on-permission :answered req {:outcome (if (some #(= "reject_once" (get % "kind")) (:options req))
                                                              "reject_once" "cancelled")
                                                   :by "relay"})))
         from-agent (fn [line]
-                     (if-let [req (acp/permission-request line)]
+                     (if-let [req (or (acp/permission-request line)
+                                      ;; One relay cannot read is never passed on.
+                                      (acp/unreadable-permission-request line))]
                        (do (on-permission :asked req)
-                           (if (and approvals (not @client-gone))
+                           (if (and approvals (not @client-gone) (not (:unreadable req)))
                              (do (swap! outstanding assoc (:id req) req)
                                  ;; The client may have gone in the meantime.
                                  (when (and @client-gone (get @outstanding (:id req)))

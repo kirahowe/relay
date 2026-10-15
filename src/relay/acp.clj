@@ -188,6 +188,18 @@
                    (when (sequential? ls) (vec ls)))
          :options (vec (filter map? (when (sequential? options) options)))}))))
 
+(defn unreadable-permission-request
+  "A line that mentions request_permission but is not a request relay can
+  read, as much of a request as can be made of it: its id if one can be
+  found, and :unreadable. Nil for a line that does not mention it. Such a
+  line is refused, never passed on: another reader might read it as a
+  request relay never saw."
+  [line]
+  (when (and (string? line) (str/includes? line "request_permission")
+             (nil? (permission-request line)))
+    (let [m (re-find #"\"id\"\s*:\s*(-?\d+|\"(?:[^\"\\]|\\.)*\")" line)]
+      {:id (some-> m second parse) :unreadable true :options []})))
+
 (defn- option-of-kind [{:keys [options]} kind]
   (some #(when (= kind (get % "kind")) (get % "optionId")) options))
 
