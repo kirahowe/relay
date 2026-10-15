@@ -280,12 +280,14 @@
     (is (= 1 (:exit (run "fact_correct" {:fact 999 :why "x" :text "y"}))))
     (is (zero? (:exit (run "note_write" {:name "keys" :text "Ask before moving the key."}))))
     (let [state (state)
-          request (dispatch/wake-request *sys* state {:id 1 :role "clerk" :memos [] :harness "fake"})]
+          request (dispatch/wake-request *sys* state {:id 1 :role "clerk" :memos [] :harness "fake"}
+                                         (dispatch/wake-inputs *sys*))]
       (is (str/includes? (:system-prompt request) "## keys\n\nAsk before moving the key."))
       (is (some #{"fact_add" "doc_put" "journal_write"} (map :name (:tools request))))
       (testing "and a role is told what it is granted"
         (is (str/includes? (:system-prompt request) "relay's own tools and nothing beyond them"))
-        (let [hub (dispatch/wake-request *sys* state {:id 1 :role "hub" :memos [] :harness "fake"})]
+        (let [hub (dispatch/wake-request *sys* state {:id 1 :role "hub" :memos [] :harness "fake"}
+                                             (dispatch/wake-inputs *sys*))]
           (is (str/includes? (:system-prompt hub) "`role_add`"))
           (is (str/includes? (:system-prompt hub) "comes to you as dead letters")))))))
 
@@ -431,3 +433,46 @@
          (dispatch/wake-end-args 7 {:outcome "ran" :exit "timeout" :crashed true :cut-short true
                                     :session "s" :said "x" :resets-at (Instant/parse "2026-10-15T12:00:00Z")
                                     :transcript (fs/path "/t/transcript.jsonl") :ignored 1}))))
+
+;; A wake's request is a pure function of the log's state and what
+;; wake-inputs read at the edge.
+
+(def gen-instant
+  (gen/fmap #(Instant/ofEpochSecond %) (gen/choose 1700000000 1900000000)))
+
+(def a-wake-request-is-a-pure-value
+  (let [cfg (config/resolve-config {:timezone "UTC" :default-harness :x :harnesses {:x {:kind :script}}
+                                    :notify {:kind :none}})
+        t0 (Instant/parse "2026-10-15T12:00:00Z")
+        cmd (fn [state actor type args]
+              (first (core/run-command state {:type type :actor actor :args args} {:now t0 :config cfg})))
+        started (-> core/empty-state
+                    (cmd "operator" :role/add {:id "clerk" :title "Clerk" :instructions "File things."})
+                    (cmd "operator" :memo/send {:to "clerk" :subject "File this" :body "Body."})
+                    (cmd "operator" :wake/start {:role "clerk"}))
+        wake (core/running-wake started "clerk")
+        data-dir (str (fs/path (fs/temp-dir) (str "relay-never-made-" (random-uuid))))
+        sys {:data-dir data-dir :config cfg
+             :clock #(throw (ex-info "wake-request read the clock" {}))}
+        shown (fn [^Instant t]
+                (.format (.atZone t (java.time.ZoneId/of "UTC"))
+                         (java.time.format.DateTimeFormatter/ofPattern "EEE d MMM yyyy, HH:mm")))]
+    (prop/for-all [shared gen/string-alphanumeric
+                   additions (gen/one-of [(gen/return nil) gen/string-alphanumeric])
+                   now gen-instant
+                   last-at gen-instant
+                   relay-bin gen-arg
+                   data-path gen-arg]
+      (let [state (assoc started :last-at last-at)
+            inputs {:shared shared :operator-additions additions :now now
+                    :relay-bin relay-bin :data-path data-path}
+            request (dispatch/wake-request sys state wake inputs)
+            later (if (.isBefore ^Instant now last-at) last-at now)]
+        (and (= request (dispatch/wake-request sys state wake inputs))
+             (str/includes? (:prompt request) (str "It is " (shown later) "."))
+             (= [relay-bin "tool" "--data" data-path "--role" "clerk"] (:tool-command request))
+             (not (fs/exists? data-dir)))))))
+
+(deftest a-wake-request-depends-only-on-its-arguments-and-never-goes-back-in-time
+  (let [result (tc/quick-check 300 a-wake-request-is-a-pure-value)]
+    (is (:pass? result) (pr-str (select-keys result [:seed :shrunk :fail])))))

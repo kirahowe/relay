@@ -49,7 +49,8 @@
 ;; --- one wake
 
 (defn relay-bin
-  "The relay command, for harnesses to run tool calls with."
+  "The relay command, for harnesses to run tool calls with. bin/relay names
+  itself in the relay.bin property."
   []
   (or (System/getProperty "relay.bin") "relay"))
 
@@ -60,14 +61,31 @@
   (let [f (fs/path data-dir "AGENTS.md")]
     (when (fs/exists? f) (slurp (str f)))))
 
-(defn- now ^Instant [{:keys [clock]} state]
-  (let [t ^Instant (clock)]
-    (if (and (:last-at state) (.isBefore t (:last-at state))) (:last-at state) t)))
+(defn- not-before ^Instant [^Instant t ^Instant floor]
+  (if (and floor (.isBefore t floor)) floor t))
+
+(defn- now
+  "The clock, but never earlier than the last thing the log recorded."
+  ^Instant [{:keys [clock]} state]
+  (not-before (clock) (:last-at state)))
+
+(defn wake-inputs
+  "What a wake's request needs from outside the log, read once at the edge:
+  the shared instructions, the operator's additions, the clock, the relay
+  command, and the data directory as an absolute path for tool calls."
+  [{:keys [data-dir clock]}]
+  {:shared (shared-instructions)
+   :operator-additions (operator-additions data-dir)
+   :now (clock)
+   :relay-bin (relay-bin)
+   :data-path (str (fs/absolutize data-dir))})
 
 (defn wake-request
-  "Everything a harness needs for one wake. Writes nothing: the harness
-  creates the run directory."
-  [{:keys [data-dir config] :as sys} state {:keys [id role memos note resumes harness]}]
+  "Everything a harness needs for one wake. Pure: everything read from
+  outside the log comes in `inputs` (wake-inputs). The prompt's time is
+  never earlier than the log's last entry."
+  [{:keys [data-dir config]} state {:keys [id role memos note resumes harness]}
+   {:keys [shared operator-additions relay-bin data-path] :as inputs}]
   (let [role-row (core/role state role)
         run-dir (fs/path data-dir "runs" role (str id))
         resumed (when resumes (get-in state [:wakes resumes]))]
@@ -75,19 +93,19 @@
      :harness-name harness
      :role role-row
      :model (or (:model role-row) (get-in config [:harnesses (keyword harness) :model]))
-     :system-prompt (prompt/instructions {:shared (shared-instructions)
-                                          :operator-additions (operator-additions data-dir)
+     :system-prompt (prompt/instructions {:shared shared
+                                          :operator-additions operator-additions
                                           :notes (core/notes state role)
                                           :granted (tools/grants-summary config role)}
                                          role-row)
      :prompt (prompt/wake {:role role-row
                            :memos (map #(core/memo state %) memos)
                            :note note
-                           :now (now sys state)
+                           :now (not-before (:now inputs) (:last-at state))
                            :zone (config/zone config)
                            :resumed? (some? resumes)})
      :tools (tools/manifest config role)
-     :tool-command [(relay-bin) "tool" "--data" (str (fs/absolutize data-dir)) "--role" role]
+     :tool-command [relay-bin "tool" "--data" data-path "--role" role]
      :run-dir (str run-dir)
      :session-dir (str (fs/path data-dir "runs" role "sessions"))
      :resume (:session resumed)
@@ -141,7 +159,8 @@
       :else
       (let [wake-id (:seq (first started))
             state (inbound/current-state sys)
-            report (run-harness (wake-request sys state (get-in state [:wakes wake-id])))]
+            report (run-harness (wake-request sys state (get-in state [:wakes wake-id])
+                                              (wake-inputs sys)))]
         (inbound/submit! sys {:type :wake/end :actor core/dispatcher
                               :args (wake-end-args wake-id report)})
         (let [state (inbound/current-state sys)]
@@ -169,8 +188,8 @@
   told it is a conversation, keeping its sessions apart from the role's
   wake sessions, so that a client listing or loading sessions can reach
   only conversations."
-  [{:keys [data-dir] :as sys} state wake]
-  (-> (wake-request sys state wake)
+  [{:keys [data-dir] :as sys} state wake inputs]
+  (-> (wake-request sys state wake inputs)
       (update :system-prompt str "\n\n" conversation-note "\n")
       (dissoc :prompt)
       (assoc :session-dir (str (fs/path data-dir "runs" (:role wake) "conversations")))))
@@ -205,7 +224,8 @@
         report (volatile! nil)]
     (try
       (let [state (inbound/current-state sys)
-            request (conversation-request sys state (get-in state [:wakes wake-id]))]
+            request (conversation-request sys state (get-in state [:wakes wake-id])
+                                          (wake-inputs sys))]
         (when-not (:harness request)
           (throw (ex-info (str "relay.edn has no harness called " (:harness-name request) ".") {})))
         (vreset! report (f request)))
