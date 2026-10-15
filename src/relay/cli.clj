@@ -69,7 +69,8 @@ Every command needs the data directory, from --data <dir> or from the file
   relay log [--tail <n>] [--json]     the events, newest last
   relay holds                         tool calls waiting for you to decide, in full
   relay approve <hold>                let a held tool call run
-  relay deny <hold> [why]             refuse a held tool call
+  relay deny <hold> [why] [--end]     refuse a held tool call; --end also starts the
+                                      role's next wake afresh instead of in that session
   relay release <memo>                deliver a quarantined memo to its role
   relay trust <kind> <ref>            vouch for contaminated text you have read:
                                       memo <n>, fact <n>, doc <path>, note <role>/<name>,
@@ -217,11 +218,12 @@ contaminated, for text you copied from somewhere you do not trust.")
 (defn- labels-line [labels]
   (str "Labels: " (if (seq labels) (str/join ", " labels) "none")))
 
-(defn- decide-hold! [sys verb verdict hold-id reason]
+(defn- decide-hold! [sys verb verdict hold-id reason & [end]]
   (let [h (core/hold (inbound/current-state sys) hold-id)]
     (when-not h (fail! (str "There is no hold " hold-id ".")))
-    (confirm! verb (concat (render/hold h) [(labels-line (:labels h))]))
-    (submit! sys :hold/resolve {:hold hold-id :verdict verdict :reason reason})
+    (confirm! verb (concat (render/hold h (:config sys))
+                           (when end ["" "The session will not be carried on: the role's next wake starts afresh."])))
+    (submit! sys :hold/resolve {:hold hold-id :verdict verdict :reason reason :end (boolean end)})
     (result 0 (str (if (= "allow" verdict) "Approved" "Denied") " hold " hold-id ". "
                    (:role h) " carries on at the next tick."))))
 
@@ -231,7 +233,7 @@ contaminated, for text you copied from somewhere you do not trust.")
             :harness :string :model :string :schedule :string :note :string
             :tail :long :data :string :search :string :as-of :string :known-at :string
             :version :long :role :string :trace :string :untrusted :boolean :approvals :boolean
-            :topic :string :from :string :to :string :why :string :text :string}})
+            :topic :string :from :string :to :string :why :string :text :string :end :boolean}})
 
 (defn- command
   "Runs one command with the data directory's system. Returns {:exit :out},
@@ -340,12 +342,13 @@ contaminated, for text you copied from somewhere you do not trust.")
                  (when-not dir (fail! "usage: relay export <dir>"))
                  (result 0 (str "Wrote " (export/export! sys dir) " files to " dir)))
       "log" (lines (render/log (log/read-events (:data-dir sys)) opts))
-      "holds" (lines (render/holds (core/open-holds (state))))
+      "holds" (lines (render/holds (core/open-holds (state)) (:config sys)))
       "approve" (let [[h] more]
                   (decide-hold! sys "approve" "allow" (some-> h parse-long) nil))
       "deny" (let [[h & why] more]
                (decide-hold! sys "deny" "deny" (some-> h parse-long)
-                             (or (:message opts) (when (seq why) (str/join " " why)))))
+                             (or (:message opts) (when (seq why) (str/join " " why)))
+                             (:end opts)))
       "release" (let [id (some-> (first more) parse-long)
                       m (core/memo (state) id)]
                   (when-not (and m (core/quarantined? (:config sys) m)) (fail! (str "Memo " (first more) " is not quarantined.")))

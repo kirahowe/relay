@@ -253,7 +253,7 @@ enum DeadLetterReason { never_closed | blocked | recipient_removed }
 enum NotificationKind {
     memo_for_operator | work_abandoned | runaway_guard_tripped
     | harness_needs_attention | harness_unreachable
-    | hold_opened | memo_quarantined | permission_refused
+    | hold_opened | memo_quarantined | permission_refused | session_ended
 }
 enum ToolClass { read | write | egress | act }
 enum Label { private | contaminated }
@@ -701,6 +701,9 @@ config {
 
     -- How many times a notification is pushed before relay gives up.
     notification_attempts: Integer = 8
+
+    -- How many denied calls end a session.
+    denials_per_session: Integer = 3
 }
 
 ------------------------------------------------------------
@@ -1492,8 +1495,25 @@ rule NotifyOperatorOfHold {
     )
 }
 
+rule EndSessionOnDenial {
+    when: HoldResolveRequested(caller, hold, verdict, reason?, end?)
+
+    requires: caller.is_operator
+    requires: hold.status = open
+    requires: verdict = deny
+    requires: end = true or (Holds where session = hold.session and status = denied).count + 1 >= config.denials_per_session
+
+    ensures: SessionEnded(role: hold.role, session: hold.session)
+
+    @guidance
+        -- relay deny --end, or the third denied call in one session,
+        -- ends it: its decided holds are not carried back, and the
+        -- role's next wake starts a fresh session with its open memos.
+        -- The operator is told when it was the count that ended it.
+}
+
 rule ResolveHold {
-    when: HoldResolveRequested(caller, hold, verdict, reason?)
+    when: HoldResolveRequested(caller, hold, verdict, reason?, end?)
 
     -- A person decides, never a model or a tool.
     requires: caller.is_operator
@@ -2393,7 +2413,7 @@ surface Inbound {
         DocRemoveRequested(caller, doc)
         ToolCallRequested(caller, tool, arguments)
             when caller.kind = role
-        HoldResolveRequested(caller, hold, verdict: HoldVerdict, reason?)
+        HoldResolveRequested(caller, hold, verdict: HoldVerdict, reason?, end?)
             when caller.is_operator
         MemoReleaseRequested(caller, memo)
             when caller.is_operator

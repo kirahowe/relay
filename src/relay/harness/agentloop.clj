@@ -106,7 +106,7 @@
   "How a run ended. Pure: takes the parsed outcome line (nil when there was
   none), the exit code, stderr, the session id and the time."
   [{:keys [outcome exit stderr session now]}]
-  (let [{:keys [reason text error held labels]} (when (map? outcome) outcome)
+  (let [{:keys [reason text error held labels label_sources]} (when (map? outcome) outcome)
         error (when (map? error) error)
         ;; Whatever the outcome line held, only strings are shown to a person.
         said-from (fn [x] (when (and (string? x) (not (str/blank? x))) x))
@@ -134,7 +134,9 @@
       (case reason
         ("completed" "max_tokens" "limit") (report "ran")
         ;; Calls that wait for the operator: relay records a hold for each.
-        "held" (report "ran" :held (held-calls held))
+        ;; Where each of the session's labels came from, for the operator.
+        "held" (report "ran" :held (mapv #(cond-> % (map? label_sources) (assoc :label-sources label_sources))
+                                         (held-calls held)))
         "refused" (report "ran" :crashed true)
         "canceled" (report "ran" :crashed true :said "Stopped at the wake deadline.")
         "model_error"

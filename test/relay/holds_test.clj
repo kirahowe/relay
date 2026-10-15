@@ -12,7 +12,8 @@
             [relay.dispatch :as dispatch]
             [relay.harness.agentloop :as agentloop]
             [relay.inbound :as inbound]
-            [relay.log :as log])
+            [relay.log :as log]
+            [relay.render :as render])
   (:import (java.time Instant)))
 
 (def t0 (Instant/parse "2026-10-14T12:00:00Z"))
@@ -414,3 +415,54 @@
               (inbound/submit! sys {:type :label/trust :actor "operator"
                                     :args {:kind "doc" :ref "web.md" :version (:version v) :sha256 (core/sha256 (:text v))}})
               (is (= ["private"] (:labels (core/doc-version (inbound/current-state sys) "web.md" {})))))))))))
+
+(deftest a-hold-says-what-the-operator-needs-to-decide
+  (let [h {:id 9 :role "clerk" :tool "post" :session "s" :call "c"
+           :input {:to "pаypal-support@evil.example" :args ["hello"]}
+           :labels ["contaminated" "private"]
+           :label-sources {:contaminated {:kind "tool" :tool "fetch" :call_id "toolu_1" :seq 9}
+                           :private {:kind "seed" :seq 2}}}
+        out (str/join "\n" (render/hold h cfg))]
+    (is (str/includes? out "held because it can send data out, and the session has seen both"))
+    (is (str/includes? out "the tool: egress, Post."))
+    (is (str/includes? out "where it would go: to: pаypal-support@evil.example"))
+    (is (str/includes? out "contaminated from the tool fetch (call toolu_1)"))
+    (is (str/includes? out "private from what relay put in its prompt"))
+    (is (str/includes? out "mixes Cyrillic and Latin"))
+    (is (str/includes? out "U+0430 CYRILLIC SMALL LETTER A")))
+  (testing "agentloop's label sources reach the hold"
+    (let [line (json/generate-string {:type "outcome" :reason "held" :labels ["private"]
+                                      :label_sources {:private {:kind "seed" :seq 2}}
+                                      :held [{:id "t1" :name "post" :input {} :input_sha256 "d"}]})
+          report (agentloop/classify {:outcome (agentloop/parse-outcome line) :exit 0 :session "s" :now t0})]
+      (is (= {:private {:kind "seed" :seq 2}} (:label-sources (first (:held report))))))))
+
+(deftest a-denial-can-end-the-session-and-three-always-do
+  (let [w (held-world)
+        hold-id (:id (first (core/open-holds (:state w))))
+        ended (run w "operator" :hold/resolve {:hold hold-id :verdict "deny" :end true})]
+    (testing "deny --end: the next wake starts afresh, with the memo"
+      (is (nil? (:interrupted-wake (core/role (:state ended) "clerk"))))
+      (is (empty? (core/pending-resolutions (:state ended) "clerk")))
+      (let [w (run ended "dispatcher" :wake/start {:role "clerk" :dispatched true})
+            wake (core/running-wake (:state w) "clerk")]
+        (is (nil? (:resumes wake)))
+        (is (empty? (:resolves wake)))
+        (is (= 1 (count (:memos wake))))))
+    (testing "a plain denial carries the session on"
+      (let [w (run w "operator" :hold/resolve {:hold hold-id :verdict "deny"})]
+        (is (some? (:interrupted-wake (core/role (:state w) "clerk"))))))
+    (testing "the third denial in one session ends it, and the operator is told"
+      (let [deny-again (fn [w call]
+                         (let [w (run w "dispatcher" :wake/start {:role "clerk" :dispatched true})
+                               wake (core/running-wake (:state w) "clerk")
+                               w (run w "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :session "sess-1" :said ""
+                                                                :held [{:id call :name "post" :input {} :input-sha256 call}]})
+                               h (first (core/open-holds (:state w) "clerk"))]
+                           (run w "operator" :hold/resolve {:hold (:id h) :verdict "deny"})))
+            w (-> (run w "operator" :hold/resolve {:hold hold-id :verdict "deny"})
+                  (deny-again "t2"))]
+        (is (some? (:interrupted-wake (core/role (:state w) "clerk"))) "two is not enough")
+        (let [w (deny-again w "t3")]
+          (is (nil? (:interrupted-wake (core/role (:state w) "clerk"))))
+          (is (some #(= "session-ended" (:kind %)) (vals (:notifications (:state w))))))))))

@@ -120,16 +120,77 @@
      (str "Wrote " path ", version " (:seq (first events)))
      (str path " already says that."))])
 
-(defn hold
-  "One held tool call, with its whole input."
-  [{:keys [id role tool input session call]}]
-  [(str "Hold " id ": " role " wants to use " tool)
-   (str "    session " session ", call " call)
-   "    input:"
-   (str/replace (json/generate-string input {:pretty true}) #"(?m)^" "      ")])
+(defn- why-held
+  "Why agentloop's policy held a call, from the tool's class and the
+  session's labels."
+  [{:keys [class always-hold]} labels]
+  (let [ls (set labels)]
+    (cond
+      always-hold "the tool is set to always ask you"
+      (and (= :egress class) (ls "private") (ls "contaminated"))
+      "it can send data out, and the session has seen both your private data and an outsider's text"
+      (and (= :act class) (ls "contaminated"))
+      "it acts in your name, and the session has seen an outsider's text"
+      :else "the policy held it")))
 
-(defn holds [hs]
-  (if (empty? hs)
-    ["No tool calls are waiting for you."]
-    (concat (mapcat #(concat (hold %) [""]) hs)
-            ["relay approve <hold> lets one run; relay deny <hold> [why] refuses it."])))
+(def ^:private destination-key
+  #"(?i)url|uri|link|to|cc|bcc|recipient|host|address|email|endpoint|dest|channel|repo|webhook|server|domain|phone|number")
+
+(defn- destinations
+  "What in a call's input says where data would go: values under keys
+  that name a destination, and any other string that looks like an
+  address."
+  [input]
+  (let [nodes (tree-seq coll? seq input)
+        keyed (for [n nodes :when (map-entry? n)
+                    :let [[k v] n]
+                    :when (and (re-find destination-key (name k)) (or (string? v) (number? v)))]
+                [(name k) v])
+        keyed-values (set (map second keyed))
+        loose (for [n nodes :when (and (string? n) (not (keyed-values n))
+                                       (re-find #"://|@|\.[a-z]{2,}(/|$)" n))]
+                n)]
+    (distinct (concat (map (fn [[k v]] (str k ": " v)) keyed) loose))))
+
+(defn hold
+  "One held tool call, with what the operator needs to decide it: why it
+  was held, what the tool is, where the data would go, what the session
+  has seen and from where, anything in the input that could pass for
+  something else, and the whole input."
+  ([h] (hold h nil))
+  ([{:keys [id role tool input session call labels label-sources]} config]
+   (let [t (get-in config [:tools tool])
+         class (or (:class t) (when-not t :builtin))
+         input-text (json/generate-string input {:pretty true})
+         odd (text/lookalikes (str/join " " (filter string? (tree-seq coll? seq input))))]
+     (concat
+      [(str "Hold " id ": " role " wants to use " tool)
+       (str "    held because " (why-held t labels))
+       (str "    the tool: " (if (= :builtin class) "one of relay's own" (name (or class :unknown)))
+            (when (:description t) (str ", " (:description t))))]
+      (when (#{:egress :act} class)
+        (let [ds (destinations input)]
+          [(str "    where it would go: " (if (seq ds) (str/join "; " ds) "nothing in the input names a place"))]))
+      [(str "    the session has seen: " (if (seq labels) (str/join ", " labels) "nothing labelled"))]
+      (for [[label src] (sort-by key label-sources)]
+        (str "      " (name label) " from "
+             (case (get src :kind (get src "kind"))
+               "tool" (str "the tool " (or (:tool src) (get src "tool")) " (call " (or (:call_id src) (get src "call_id")) ")")
+               "seed" "what relay put in its prompt"
+               "prompt" "a prompt it was given"
+               (pr-str src))))
+      (when (seq odd)
+        (cons "    look closely, the input has characters that can pass for others:"
+              (map #(str "      " %) odd)))
+      [(str "    session " session ", call " call)
+       "    input:"
+       (str/replace input-text #"(?m)^" "      ")]))))
+
+(defn holds
+  ([hs] (holds hs nil))
+  ([hs config]
+   (if (empty? hs)
+     ["No tool calls are waiting for you."]
+     (concat (mapcat #(concat (hold % config) [""]) hs)
+             ["relay approve <hold> lets one run; relay deny <hold> [why] refuses it,"
+              "and with --end also starts the role's next wake afresh."]))))

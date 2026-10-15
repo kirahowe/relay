@@ -180,7 +180,8 @@
   the held session yet, oldest first."
   [state role-id]
   (->> (vals (:holds state))
-       (filter #(and (= role-id (:role %)) (#{:allowed :denied} (:status %)) (nil? (:delivered %))))
+       (filter #(and (= role-id (:role %)) (#{:allowed :denied} (:status %)) (nil? (:delivered %))
+                     (not (:abandoned %))))
        (sort-by :id)
        vec))
 
@@ -634,9 +635,10 @@
                         (fn [js] (update-vals js (fn [es] (mapv #(cond-> % (= num (:id %)) (update :labels clean)) es))))))))
 
 (defmethod evolve* "hold/opened" [state {:keys [seq at data labels]}]
-  (let [{:keys [role wake session call tool input input-sha256]} data]
+  (let [{:keys [role wake session call tool input input-sha256 label-sources]} data]
     (assoc-in state [:holds seq] {:id seq :role role :wake wake :session session :call call
                                   :tool tool :input input :input-sha256 input-sha256
+                                  :label-sources label-sources
                                   :status :open :opened-at (inst at) :labels (union labels)})))
 
 (defmethod evolve* "hold/resolved" [state {:keys [at actor data]}]
@@ -656,6 +658,17 @@
       asked (update-in [:permissions (:id asked)] assoc :outcome (:outcome data) :by (:by data)))))
 
 (defmethod evolve* "conversation/line-dropped" [state _] state)
+
+(defmethod evolve* "hold/session-ended" [state {:keys [data]}]
+  (let [{:keys [role session]} data
+        interrupted (get-in state [:roles role :interrupted-wake])]
+    (cond-> (update state :holds
+                    (fn [hs] (update-vals hs #(cond-> % (and (= session (:session %)) (not= :open (:status %))
+                                                              (nil? (:delivered %)))
+                                                     (assoc :abandoned true)))))
+      ;; The next wake starts afresh, carrying the role's open memos.
+      (= session (get-in state [:wakes interrupted :session]))
+      (assoc-in [:roles role :interrupted-wake] nil))))
 
 (defmethod evolve* "hold/requeued" [state {:keys [data]}]
   (update-in state [:holds (:hold data)] dissoc :delivered))
@@ -1128,12 +1141,13 @@
   "Records a call held in a wake's session, unless it is already known: a
   hold still open stays as it is, and one decided and carried back that is
   held again was never received, so it is carried back again."
-  [{:keys [state] :as tx} wake session {:keys [id name input input-sha256]}]
+  [{:keys [state] :as tx} wake session {:keys [id name input input-sha256 label-sources]}]
   (let [known (first (filter #(and (= session (:session %)) (= id (:call %))) (vals (:holds state))))]
     (cond
       (nil? known)
-      (let [tx (emit tx "hold/opened" {:role (:role wake) :wake (:id wake) :session session
-                                       :call id :tool name :input input :input-sha256 input-sha256}
+      (let [tx (emit tx "hold/opened" (cond-> {:role (:role wake) :wake (:id wake) :session session
+                                               :call id :tool name :input input :input-sha256 input-sha256}
+                                        (map? label-sources) (assoc :label-sources label-sources))
                      (:said-labels tx))
             hold-id (last-id tx)]
         (notify tx "hold-opened" (str (:role wake) " wants to use " name)
@@ -1307,7 +1321,12 @@
 
 ;; holds
 
-(defmethod decide* :hold/resolve [{:keys [state actor] :as tx} {{hold-id :hold :keys [verdict reason]} :args}]
+(def denials-per-session
+  "After this many denied calls a session is not carried on: a model
+  that keeps asking for what it is refused starts afresh."
+  3)
+
+(defmethod decide* :hold/resolve [{:keys [state actor] :as tx} {{hold-id :hold :keys [verdict reason end]} :args}]
   ;; A person decides, never a model or a tool: only the operator, at the
   ;; command line, can resolve a hold.
   (when-not (= operator actor)
@@ -1318,8 +1337,21 @@
       (reject! :invalid (str "Hold " hold-id " was already decided: " (name (:status h)) ".")))
     (when-not (#{"allow" "deny"} verdict)
       (reject! (str "A hold is resolved with allow or deny, not " (pr-str verdict) ".")))
-    (emit tx "hold/resolved" (cond-> {:hold hold-id :verdict verdict}
-                               (not (blank? reason)) (assoc :reason (str/trim reason))))))
+    (let [tx (emit tx "hold/resolved" (cond-> {:hold hold-id :verdict verdict}
+                                        (not (blank? reason)) (assoc :reason (str/trim reason))))
+          denied (count (filter #(and (= (:session h) (:session %)) (= :denied (:status %)))
+                                (vals (:holds (:state tx)))))
+          ended (cond (and (= "deny" verdict) end) "the operator ended it"
+                      (and (= "deny" verdict) (>= denied denials-per-session))
+                      (str denied " of its calls were denied"))]
+      (if-not ended
+        tx
+        (cond-> (emit tx "hold/session-ended" {:role (:role h) :session (:session h) :why ended})
+          (not end)
+          (notify "session-ended" (str (:role h) "'s session will not be carried on")
+                  (str "Its calls were denied " denied " times, so its next wake starts afresh,"
+                       " with its open memos.")
+                  :role (:role h) :labels (id-labels state (:role h))))))))
 
 (defmethod decide* :wake/end [{:keys [state] :as tx} {{:keys [wake] :as args} :args}]
   (dispatcher-only! tx)

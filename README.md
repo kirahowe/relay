@@ -151,9 +151,16 @@ from somewhere untrusted.
 When agentloop holds a call, the wake ends and relay records a hold for
 it and notifies the operator. The role is not woken again, and its memos
 wait without counting the wake against them, until every hold is
-decided. `relay holds` lists them with their whole input. `relay approve
+decided. `relay holds` lists them, and `relay approve` and `relay deny`
+show the same before asking for the code: why the call was held, what
+the tool is, where its data would go, what the session has seen and
+where each label came from, any characters in the input that could pass
+for others (a Cyrillic `а` in `pаypal`), and the whole input. `relay approve
 <hold>` or `relay deny <hold> [why]` decides one. At the next tick the
-role is woken in the same session, which carries out the decisions. In
+role is woken in the same session, which carries out the decisions.
+`relay deny <hold> --end` also ends that session, so the role's next
+wake starts afresh with its open memos; the third denied call in one
+session does the same, and tells the operator. In
 a conversation agentloop asks the ACP client instead, and `relay acp`
 passes the request through.
 
