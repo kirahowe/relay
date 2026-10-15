@@ -102,7 +102,10 @@ field count. It never touches EventKit or asks for Reminders access.
 ## Commands
 
 Output is plain text, one item per line, with tab-separated fields. The
-last field of `lists`, `ls`, `add` and `set` lines is the sharing marker.
+last field of `lists` and `ls` lines is the sharing marker. The write
+commands print only a verb and the reminder's id (`Added 4F2A9C1B`), never
+its title or list name: those may hold text other people wrote, and a
+write should hand the session nothing it did not already know.
 Commands below are shown without the mode prefix.
 
 - `rem help` prints every command.
@@ -115,12 +118,12 @@ Commands below are shown without the mode prefix.
 - `rem show <id>` prints one reminder in full, with notes.
   Example: `rem show 4F2A9C1B`
 - `rem add <title> --list <name> [--due <when>] [--notes <text>]` creates a
-  reminder and prints its line.
+  reminder and prints `Added <id>`.
   Example: `rem add "Buy milk" --list Groceries --due "2026-01-15 09:00"`
 - `rem set <id> [--title <t>] [--due <when>|none] [--list <name>] [--notes <text>]`
-  edits a reminder. `--due none` clears the due date.
+  edits a reminder and prints `Updated <id>`. `--due none` clears the due date.
   Example: `rem set 4F2A9C1B --due 2026-01-16`
-- `rem done <id>` marks a reminder completed.
+- `rem done <id>` marks a reminder completed and prints `Completed <id>`.
   Example: `rem done 4F2A9C1B`
 
 `<when>` is `YYYY-MM-DD`, or `"YYYY-MM-DD HH:MM"` for a timed reminder. A

@@ -83,7 +83,15 @@ a non-zero exit or a timeout (`:timeout-seconds`, ten minutes by default)
 tells the model only that the tool failed, and what it printed goes to
 relay's stderr. An envelope tool may give its input schema as
 `:parameters`, which relay checks before running it. cleanroom's `relay-tool`
-is one such tool; the example settings show how to add it.
+is one such tool; the example settings show how to add it, with `:labels
+["private"]` since every answer comes from the operator's mail.
+
+A typed answer from cleanroom (a date, a number, a record) holds no text
+an outsider chose, which is why it can come back clean, but it is still
+a value an outsider can influence: the mail decides what date or number
+it is. Do not trust such a value for integrity. When it will feed an
+`act` tool, ask with `choice` among options you wrote, so the most an
+outsider can do is pick the wrong one of your options.
 
 An optional `<data>/AGENTS.md` adds the operator's own instructions to
 every role's system prompt.

@@ -58,8 +58,10 @@
  ;; reported labels added to :labels. :parameters is the JSON Schema for
  ;; its input, checked by relay; without it the tool checks its own input.
  ;; cleanroom answers questions about your mail this way (see its USAGE.md):
+ ;; Every answer comes from your mail, so it is private whatever cleanroom
+ ;; reports.
  ;; "mail" {:class :read
- ;;         :labels []
+ ;;         :labels ["private"]
  ;;         :protocol :envelope
  ;;         :timeout-seconds 200
  ;;         :description "Ask a question about your mail; run cleanroom relay-tool --schema for this text."

@@ -209,6 +209,13 @@ func listLine(count: Int, title: String, markers: [String]) -> String {
     "\(count)\t\(escape(title))\t\(markerColumn(markers))"
 }
 
+/// What a write prints: the verb and the reminder's id, nothing else. Its
+/// title and list may hold text other people wrote, which a write must not
+/// hand back to the session that made it.
+func writeResultLine(verb: String, id: String) -> String {
+    "\(verb) \(escape(id))"
+}
+
 func reminderLine(id: String, list: String, due: String, title: String, markers: [String]) -> String {
     "\(id)\t\(escape(list))\t\(due)\t\(escape(title))\t\(markerColumn(markers))"
 }

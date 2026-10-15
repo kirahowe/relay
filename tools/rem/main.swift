@@ -205,7 +205,7 @@ case "add":
     new.notes = flags["notes"]
     if let due = flags["due"] { setDue(new, due) }
     save(new)
-    print(line(new))
+    print(writeResultLine(verb: "Added", id: String(new.calendarItemIdentifier.prefix(8))))
 
 case "set":
     guard let target else { fail("rem set <id> [--title <t>] [--due <when>|none] [--list <name>] [--notes <text>]") }
@@ -220,14 +220,14 @@ case "set":
     if let notes = flags["notes"] { found.notes = notes }
     if let due = flags["due"] { setDue(found, due) }
     save(found)
-    print(line(found))
+    print(writeResultLine(verb: "Updated", id: String(found.calendarItemIdentifier.prefix(8))))
 
 case "done":
     guard let target else { fail("rem done <id>") }
     let found = reminder(withId: target)
     found.isCompleted = true
     save(found)
-    print("Completed: \(escape(found.title ?? ""))")
+    print(writeResultLine(verb: "Completed", id: String(found.calendarItemIdentifier.prefix(8))))
 
 default:
     fail("rem: unreachable command")

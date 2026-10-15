@@ -10,6 +10,8 @@ func runs(_ args: [String]) -> Invocation? { if case .run(let i) = parse(args) {
 
 // mode gating
 check(refused([]), "no args")
+check(writeResultLine(verb: "Added", id: "AB12CD34") == "Added AB12CD34", "a write echoes its id")
+check(writeResultLine(verb: "Updated", id: "a\u{1b}b") == "Updated a\\u{1b}b" || !writeResultLine(verb: "Updated", id: "a\u{1b}b").contains("\u{1b}"), "an id is escaped")
 check(refused(["lists"]), "no mode fails closed")
 check(refused(["--mode", "bogus", "lists"]), "bad mode")
 check(refused(["--mode"]), "mode without value")
