@@ -47,7 +47,7 @@
 (defn status
   "Roles with their routines and open work, harnesses, the operator's
   inbox and the latest wakes, as of `now`."
-  [state zone ^Instant now]
+  [state zone ^Instant now & [config]]
   (concat
    ["Roles"]
    (mapcat #(role-status state zone %) (core/active-role-ids state))
@@ -59,7 +59,7 @@
    [(format "\nOperator's inbox: %d open" (count (core/unread-memos state core/operator)))]
    (when-let [hs (seq (core/open-holds state))]
      [(format "Held tool calls: %d (relay holds)" (count hs))])
-   (when-let [qs (seq (filter core/quarantined? (filter #(= :unread (:status %)) (vals (:memos state)))))]
+   (when-let [qs (seq (filter #(core/quarantined? config %) (filter #(= :unread (:status %)) (vals (:memos state)))))]
      [(format "Quarantined memos: %s (relay release <memo>)" (str/join ", " (sort (map :id qs))))])
    (when-let [recent (seq (take-last 5 (sort-by :id (vals (:wakes state)))))]
      (cons "\nRecent wakes"

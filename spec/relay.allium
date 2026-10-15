@@ -321,6 +321,12 @@ entity Role {
     -- Granted by the operator's settings and by nobody else, not by
     -- anything a role can write.
     may_add: Boolean
+    -- Whether the settings grant it an external tool of class act or
+    -- egress. relay's own act tools do not count: agentloop holds them
+    -- anyway once the session is contaminated. A role that does not
+    -- quarantine reads a contaminated memo like any other and becomes
+    -- contaminated.
+    quarantines: Boolean
     -- The wake to carry on from, when the last one was cut short.
     interrupted_wake: Wake?
     -- When the operator was last told this role tripped the guard.
@@ -401,9 +407,9 @@ entity Memo {
     is_backing_off: retry_at != null and retry_at > now
     -- black box: whether a set of labels holds contaminated.
     is_contaminated: has_contaminated(labels)
-    -- Every role holds act tools (routine_write), so none may take in a
-    -- contaminated memo by itself: it waits for the operator.
-    is_quarantined: not is_for_operator and is_contaminated and not released
+    -- A contaminated memo to a role that holds an external tool able
+    -- to act or send data out waits for the operator.
+    is_quarantined: not is_for_operator and is_contaminated and not released and recipient.quarantines
     is_waiting: status = unread and not is_backing_off and not is_quarantined
 }
 
@@ -835,9 +841,10 @@ rule NotifyOperatorOfQuarantine {
     )
 
     @guidance
-        -- A contaminated memo to a role waits for the operator: it is
-        -- not shown to the role, carried in a wake or counted as
-        -- waiting. The notification quotes nothing of it.
+        -- A contaminated memo to a role granted an external act or
+        -- egress tool waits for the operator: it is not shown to the
+        -- role, carried in a wake or counted as waiting. The
+        -- notification quotes nothing of it.
 }
 
 rule ReleaseMemo {

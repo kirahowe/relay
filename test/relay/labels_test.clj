@@ -234,7 +234,7 @@
           w))
 
       :release
-      (let [m (nth-or (sort-by :id (filter core/quarantined? (filter #(= :unread (:status %)) (vals (:memos s)))))
+      (let [m (nth-or (sort-by :id (filter #(core/quarantined? cfg %) (filter #(= :unread (:status %)) (vals (:memos s)))))
                       (first args))]
         (if m (run w "operator" [] :memo/release {:memo (:id m)}) w))
 
@@ -320,10 +320,13 @@
                                               (catch clojure.lang.ExceptionInfo _ {:ok "" :labels []}))
                      ms (missing w ok labels {:private-for-content? true})
                      ;; Read without accepting, nothing contaminated comes
-                     ;; back, except in an inbox a memo the operator released.
+                     ;; back, except in an inbox a contaminated memo the
+                     ;; role may take in: released, or to a role holding
+                     ;; no external tool that acts or sends data out.
                      tainted? (and (not (:accept_contamination args)) (core/contaminated? labels)
                                    (not (and (= "inbox" tool)
-                                             (some #(and (:released %) (core/contaminated? (:labels %)))
+                                             (some #(and (core/contaminated? (:labels %))
+                                                         (not (core/quarantined? cfg %)))
                                                    (core/unread-memos state role)))))]
                :when (or (seq ms) tainted?)]
            [:read role tool args (if tainted? :tainted-by-default ms)]))))
@@ -337,7 +340,7 @@
                :let [[w note] (mark w [] true)
                      wake {:id 999999 :role role :harness "agentloop" :chat chat
                            :note (if chat dispatch/conversation-note (str "Look at " note))
-                           :memos (if chat [] (mapv :id (core/deliverable-memos state role)))
+                           :memos (if chat [] (mapv :id (core/deliverable-memos state cfg role)))
                            :resolves (if chat [] (mapv :id (core/pending-resolutions state role)))
                            :resumes (when-not chat (:interrupted-wake (core/role state role)))}
                      request (if chat
@@ -354,7 +357,7 @@
   (let [s (:state w)]
     (concat
      ;; AQuarantinedMemoIsNeverCarried
-     (for [wake (vals (:wakes s)) m (:memos wake) :when (core/quarantined? (core/memo s m))]
+     (for [wake (vals (:wakes s)) m (:memos wake) :when (core/quarantined? cfg (core/memo s m))]
        [:quarantined-memo-carried (:id wake) m])
      ;; ARoleWaitsWhileACallOfItsIsHeld
      (for [wake (vals (:wakes s))
@@ -391,7 +394,7 @@
         w (run w "clerk" ["private"] :memo/block {:memo id :explanation "nope"})
         letter (last (sort-by :id (core/unread-memos (:state w) "hub")))]
     (is (= ["contaminated" "private"] (:labels letter)))
-    (is (core/quarantined? letter) "and so it waits for the operator before the hub sees it")))
+    (is (core/quarantined? cfg letter) "the hub may send data out, so it waits for the operator")))
 
 (deftest a-routine-run-carries-the-routine-s-labels
   (let [w (-> (seed)
@@ -400,7 +403,9 @@
               (run "dispatcher" [] :tick {:lost-wakes []}))
         m (first (vals (:memos (:state w))))]
     (is (= ["contaminated"] (:labels m)))
-    (is (core/quarantined? m))))
+    (testing "clerk holds no tool that acts or sends data out, so it takes the run in, and is woken for it"
+      (is (not (core/quarantined? cfg m)))
+      (is (= ["clerk"] (core/roles-to-wake (:state w) cfg (:now w)))))))
 
 (deftest what-a-wake-said-carries-the-session-s-labels
   (let [w (-> (seed)
@@ -428,37 +433,53 @@
                             {:now t0 :config cfg}))))
 
 (deftest a-quarantined-memo-waits-for-the-operator
-  (let [w (-> (seed) (run "hub" ["contaminated"] :memo/send {:to "clerk" :subject "s" :body "b"}))
-        id (:id (first (core/unread-memos (:state w) "clerk")))]
-    (is (core/quarantined? (core/memo (:state w) id)))
+  (let [w (-> (seed) (run "clerk" ["contaminated"] :memo/send {:to "hub" :subject "About x" :body "b"}))
+        id (:id (first (core/unread-memos (:state w) "hub")))]
+    (is (core/quarantined? cfg (core/memo (:state w) id)))
     (is (= "memo-quarantined" (:kind (last (vals (:notifications (:state w)))))))
     (is (not-any? #(str/includes? (str (:title %) (:body %)) "About") (vals (:notifications (:state w))))
         "the notification quotes nothing of it")
     (testing "a clean memo is not quarantined and tells nobody"
-      (let [w (run w "hub" [] :memo/send {:to "clerk" :subject "s" :body "b"})]
+      (let [w (run w "clerk" [] :memo/send {:to "hub" :subject "s" :body "b"})]
         (is (= 1 (count (:notifications (:state w)))))))
     (testing "release needs a quarantined, open memo"
-      (let [clean (run w "hub" [] :memo/send {:to "clerk" :subject "s" :body "b"})
-            clean-id (:id (last (sort-by :id (core/unread-memos (:state clean) "clerk"))))]
+      (let [clean (run w "clerk" [] :memo/send {:to "hub" :subject "s" :body "b"})
+            clean-id (:id (last (sort-by :id (core/unread-memos (:state clean) "hub"))))]
         (is (= (:state clean) (:state (run clean "operator" [] :memo/release {:memo clean-id}))))
-        (let [closed (run w "clerk" [] :memo/close {:memo id :outcome "x"})]
+        (let [closed (run w "hub" [] :memo/close {:memo id :outcome "x"})]
           (is (= (:state closed) (:state (run closed "operator" [] :memo/release {:memo id})))))))
     (is (empty? (core/roles-to-wake (:state w) cfg (:now w))) "it does not wake the role")
-    (is (= (:events w) (:events (run w "operator" [] :wake/start {:role "clerk"})))
+    (is (= (:events w) (:events (run w "operator" [] :wake/start {:role "hub"})))
         "nor does a wake by hand carry it")
     (testing "the role sees only that it is there"
-      (let [r ((:read (get tools/builtin "inbox")) {:state (:state w) :config cfg :now t0} "clerk"
+      (let [r ((:read (get tools/builtin "inbox")) {:state (:state w) :config cfg :now t0} "hub"
                {:accept_contamination true})]
         (is (str/includes? (:content r) "quarantined"))
         (is (not (str/includes? (:content r) "About")))
         (is (not (core/contaminated? (:labels r))))))
     (testing "only the operator releases it"
-      (is (= (:state w) (:state (run w "hub" [] :memo/release {:memo id}))))
+      (is (= (:state w) (:state (run w "clerk" [] :memo/release {:memo id}))))
       (let [w (run w "operator" [] :memo/release {:memo id})]
-        (is (not (core/quarantined? (core/memo (:state w) id))))
-        (is (= ["clerk"] (core/roles-to-wake (:state w) cfg (:now w))))
-        (let [wake (core/running-wake (:state (run w "dispatcher" [] :wake/start {:role "clerk" :dispatched true})) "clerk")]
+        (is (not (core/quarantined? cfg (core/memo (:state w) id))))
+        (is (= ["hub"] (core/roles-to-wake (:state w) cfg (:now w))))
+        (let [wake (core/running-wake (:state (run w "dispatcher" [] :wake/start {:role "hub" :dispatched true})) "hub")]
           (is (= [id] (:memos wake))))))))
+
+(deftest a-role-with-no-tool-that-reaches-out-takes-contaminated-memos-in
+  (let [w (-> (seed) (run "hub" ["contaminated"] :memo/send {:to "clerk" :subject "From the web" :body "b"}))
+        m (first (core/unread-memos (:state w) "clerk"))
+        ctx {:state (:state w) :config cfg :now t0}
+        r ((:read (get tools/builtin "inbox")) ctx "clerk" {})]
+    (is (not (core/quarantined? cfg m)))
+    (is (not-any? #(= "memo-quarantined" (:kind %)) (vals (:notifications (:state w)))))
+    (is (str/includes? (:content r) "From the web"))
+    (is (= ["contaminated" "private"] (:labels r)) "and reading it makes clerk contaminated")
+    (let [w (run w "dispatcher" [] :wake/start {:role "clerk" :dispatched true})
+          wake (core/running-wake (:state w) "clerk")
+          request (dispatch/wake-request {:data-dir "/nowhere" :config cfg} (:state w) wake
+                                         {:shared "" :now t0 :relay-bin "relay" :data-path "/nowhere"})]
+      (is (= [(:id m)] (:memos wake)))
+      (is (= ["contaminated" "private"] (get-in request [:policy :labels]))))))
 
 (deftest trust-clears-contaminated-and-only-that
   (let [w (-> (seed) (run "clerk" ["contaminated" "private"] :doc/put {:path "a.md" :content "x"}))

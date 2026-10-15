@@ -118,8 +118,8 @@
 
 (defn waiting-memos
   "Open memos a role may be shown that are not waiting out a retry delay."
-  [state to now]
-  (vec (remove #(or (backing-off? % now) (quarantined? %)) (unread-memos state to))))
+  [state config to now]
+  (vec (remove #(or (backing-off? % now) (quarantined? config %)) (unread-memos state to))))
 
 (defn harness-of [state config role-id]
   (or (:harness (role state role-id)) (some-> (:default-harness config) name)))
@@ -191,7 +191,7 @@
   the runaway guard."
   [state config now]
   (vec (for [id (active-role-ids state)
-             :when (and (or (seq (waiting-memos state id now)) (seq (pending-resolutions state id)))
+             :when (and (or (seq (waiting-memos state config id now)) (seq (pending-resolutions state id)))
                         (not (held? state id))
                         (not (running? state id))
                         (not (paused-until state (harness-of state config id) now))
@@ -293,8 +293,9 @@
 ;; Contaminated text is withheld by default. A reader is shown a
 ;; placeholder that gives only what is clean (a number, a kind, a clean
 ;; author) and can ask for the text, taking on its labels. A contaminated
-;; memo to a role is quarantined: it is not shown to the role, carried in
-;; a wake or counted as waiting until the operator releases it.
+;; memo to a role granted an external act or egress tool is quarantined:
+;; it is not shown to the role, carried in a wake or counted as waiting
+;; until the operator releases it.
 
 (defn contaminated? [labels] (boolean (some #{contaminated-label} labels)))
 
@@ -331,17 +332,27 @@
   [state m]
   (assoc m :from (first (shown-id state (:from m)))))
 
+(defn quarantines?
+  "Whether a role holds an external tool that acts in the operator's name
+  or sends data out. Such a role may not take in a contaminated memo by
+  itself: the operator releases it. relay's own act tools do not count,
+  since agentloop holds them anyway once the role is contaminated. A role
+  without such tools reads a contaminated memo like any other and
+  becomes contaminated."
+  [config role-id]
+  (boolean (some #(#{:act :egress} (get-in config [:tools % :class]))
+                 (:tools (config/grants config role-id)))))
+
 (defn quarantined?
-  "A contaminated memo to a role, not yet released by the operator. Every
-  role is granted tools that act in the operator's name (routine_write),
-  so none may take one in by itself."
-  [m]
-  (and (not= operator (:to m)) (contaminated? (:labels m)) (not (:released m))))
+  "A contaminated memo to a role that quarantines, not yet released."
+  [config m]
+  (and (not= operator (:to m)) (contaminated? (:labels m)) (not (:released m))
+       (quarantines? config (:to m))))
 
 (defn deliverable-memos
   "Open memos to a role that it may be shown, oldest first."
-  [state to]
-  (filterv (complement quarantined?) (unread-memos state to)))
+  [state config to]
+  (filterv #(not (quarantined? config %)) (unread-memos state to)))
 
 (defn version-labels
   "What showing one version of a fact or doc adds, with who wrote it."
@@ -738,7 +749,7 @@
        (= operator to)
        (notify tx "memo-for-operator" subject body :memo (last-id tx) :labels copied)
        ;; Nothing of a quarantined memo's text goes in the notification.
-       (quarantined? (memo (:state tx) (last-id tx)))
+       (quarantined? (:config tx) (memo (:state tx) (last-id tx)))
        (notify tx "memo-quarantined" (str "Memo " (last-id tx) " to " to " is quarantined")
                (str "It is contaminated, so " to " is not shown it until you release it. relay release "
                     (last-id tx) " shows it to you first.")
@@ -942,7 +953,7 @@
     ;; them when it ends.
     (when (and chat (not= operator actor))
       (reject! :forbidden "Only the operator can open a conversation."))
-    (let [memos (cond chat [] dispatched (waiting-memos state role-id now) :else (deliverable-memos state role-id))
+    (let [memos (cond chat [] dispatched (waiting-memos state config role-id now) :else (deliverable-memos state config role-id))
           resolves (when-not chat (mapv :id (pending-resolutions state role-id)))]
       (if (and (empty? memos) (blank? note) (not chat) (empty? resolves))
         tx
@@ -1074,10 +1085,10 @@
   (when-not (= operator actor)
     (reject! :forbidden (str "Only the operator " what "."))))
 
-(defmethod decide* :memo/release [{:keys [state] :as tx} {{id :memo} :args}]
+(defmethod decide* :memo/release [{:keys [config] :as tx} {{id :memo} :args}]
   (operator-only! tx "releases a quarantined memo")
   (let [m (open-memo! tx id)]
-    (when-not (quarantined? m)
+    (when-not (quarantined? config m)
       (reject! :invalid (str "Memo " id " is not quarantined.")))
     (emit tx "memo/released" {:memo id})))
 
@@ -1159,7 +1170,7 @@
   (reduce (fn [tx id]
             (let [reported (get-in (:state tx) [:guards id])
                   window (Duration/ofMinutes (:runaway-window-minutes config))]
-              (if (and (seq (waiting-memos state id now))
+              (if (and (seq (waiting-memos state config id now))
                        (not (running? state id))
                        (running-away? state id config now)
                        (or (nil? reported) (not (after? (.plus ^Instant reported window) now))))

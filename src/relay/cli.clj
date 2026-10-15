@@ -234,7 +234,7 @@ contaminated, for text you copied from somewhere you do not trust.")
         state #(inbound/current-state sys)
         lines (fn [ls] {:exit 0 :out ls})]
     (case cmd
-      "status" (lines (render/status (state) zone ((:clock sys))))
+      "status" (lines (render/status (state) zone ((:clock sys)) (:config sys)))
       "inbox" (lines (render/inbox zone (core/unread-memos (state) core/operator)))
       "memo" (let [[to] more
                    body (or (:message opts) (stdin-text))]
@@ -309,7 +309,7 @@ contaminated, for text you copied from somewhere you do not trust.")
                              (or (:message opts) (when (seq why) (str/join " " why)))))
       "release" (let [id (some-> (first more) parse-long)
                       m (core/memo (state) id)]
-                  (when-not (and m (core/quarantined? m)) (fail! (str "Memo " (first more) " is not quarantined.")))
+                  (when-not (and m (core/quarantined? (:config sys) m)) (fail! (str "Memo " (first more) " is not quarantined.")))
                   (confirm! "release" (concat (render/memo zone m) ["" (labels-line (:labels m))
                                                                     (str "Releasing it shows it to " (:to m)
                                                                          ", which then counts as contaminated.")]))

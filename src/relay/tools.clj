@@ -145,13 +145,13 @@
     :description (str "List the memos addressed to you that are still open. A memo the operator"
                       " has quarantined is listed but not shown until they release it.")
     :parameters (obj {:accept_contamination accept})
-    :read (fn [{:keys [state]} actor _]
+    :read (fn [{:keys [state config]} actor _]
             (let [memos (core/unread-memos state actor)]
               (if (empty? memos)
                 "Nothing is waiting for you."
                 (show (for [m memos
                             :let [[who who-labels] (author state (:from m))]]
-                        (if (core/quarantined? m)
+                        (if (core/quarantined? config m)
                           (assoc (item nil (:labels m)
                                        (str "Memo " (:id m) " from " who ": quarantined. It is contaminated,"
                                             " and the operator has to release it before you can read it.\n")
@@ -160,8 +160,8 @@
                           ;; A released memo was delivered by the operator.
                           (item (fmt-memo (core/shown-memo state m)) (core/memo-labels state m)
                                 (str "Memo " (:id m) " from " who ": contaminated.\n") who-labels)))
-                      ;; Only released memos can be contaminated here, and
-                      ;; the operator delivered those.
+                      ;; A contaminated memo shown here was released by the
+                      ;; operator, or is to a role that may take one in.
                       "\n" true))))}
 
    "roles"

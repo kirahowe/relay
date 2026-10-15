@@ -98,9 +98,12 @@ its prompts.
 
 Contaminated items are withheld by default. A read tool shows a
 placeholder in their place and includes them only when called with
-`accept_contamination`. A contaminated memo to a role is quarantined: the
-role is not shown it and is not woken for it until the operator runs
-`relay release <memo>`. `relay trust <kind> <ref>` clears `contaminated`
+`accept_contamination`. A contaminated memo to a role granted an external
+tool of class `act` or `egress` is quarantined: the role is not shown it
+and is not woken for it until the operator runs `relay release <memo>`.
+A role with no such tool reads a contaminated memo like any other and
+becomes contaminated; agentloop then holds its calls to relay's own `act`
+tools. `relay trust <kind> <ref>` clears `contaminated`
 from something the operator has read and vouches for. It never clears
 `private`. `--untrusted` on `relay memo`, `put`, `add`, `update` and
 `routine` marks what the operator writes as contaminated, for text pasted

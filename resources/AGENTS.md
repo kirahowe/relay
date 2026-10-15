@@ -37,8 +37,10 @@ and show a placeholder instead, unless you call them with
 `accept_contamination`. Reading it marks you contaminated too, and from
 then on the operator has to approve your calls that act outside relay
 or send data out, so accept it only when your work needs it. A memo
-marked quarantined waits for the operator to release it; you cannot read
-it before then.
+from such a source may reach you as usual, which marks you contaminated
+too, or, if you hold tools that reach outside relay, it is quarantined:
+it waits for the operator to release it, and you cannot read it before
+then.
 
 ## Start of every wake
 
