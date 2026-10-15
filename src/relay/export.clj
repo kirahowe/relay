@@ -6,6 +6,7 @@
             [clojure.string :as str]
             [relay.core :as core]
             [relay.inbound :as inbound]
+            [relay.text :as text]
             [relay.tools :as tools]))
 
 (defn- write! [root rel content]
@@ -21,9 +22,12 @@
     [ok labels]))
 
 (defn- with-labels
-  "A file's text under a first line naming the labels of what it shows."
+  "A file's text under a first line naming the labels of what it shows,
+  with nothing in it that could drive a terminal it is printed on, and,
+  from a contaminated source, its URLs broken."
   [labels text]
-  (str "labels: " (if (seq labels) (str/join ", " labels) "none") "\n\n" text))
+  (str "labels: " (if (seq labels) (str/join ", " labels) "none") "\n\n"
+       (text/visible (if (text/contaminated? labels) (text/defang text) text))))
 
 (defn- facts-page [sys]
   (let [[now now-labels] (tool-result sys "facts" {})

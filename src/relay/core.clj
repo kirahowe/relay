@@ -1151,9 +1151,14 @@
                                         (map? label-sources) (assoc :label-sources label-sources))
                      (:said-labels tx))
             hold-id (last-id tx)]
+        ;; The input stays in relay holds: it may hold private data, and a
+        ;; notification goes to a phone.
         (notify tx "hold-opened" (str (:role wake) " wants to use " name)
-                (str "It is waiting for you to decide.\n\n" (pr-str input)
-                     "\n\nrelay approve " hold-id ", or relay deny " hold-id " [why].")
+                (str "Hold " hold-id ": " (:role wake) " wants to use " name ", "
+                     (if-let [c (get-in (:config tx) [:tools name :class])]
+                       (str (if (#{:act :egress} c) "an " "a ") (clojure.core/name c) " tool")
+                             "one of relay's own tools")
+                     ". It is waiting for you: relay holds shows it in full.")
                 :role (:role wake) :hold hold-id
                 :labels (union (:said-labels tx) (id-labels state (:role wake)))))
       ;; Carried back again only if it is the same call, by its digest.

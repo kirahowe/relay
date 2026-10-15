@@ -480,3 +480,41 @@
     (is (str/includes? (body "client-gone") "went away before answering"))
     (is (not (str/includes? (body "client-gone") "--approvals")))
     (is (str/includes? (body "client-error") "not open"))))
+
+(deftest operator-screens-and-files-are-safe-too
+  (with-data
+    (fn [data]
+      (let [sys (inbound/system data)
+            submit #(inbound/submit! sys %)
+            state #(inbound/current-state sys)
+            nasty "Go to https://evil.example now\u001b[2J"]
+        (submit {:type :role/add :actor "operator" :args {:id "clerk" :title "C" :instructions "x"}})
+        (submit {:type :doc/put :actor "clerk" :labels ["contaminated"] :args {:path "web.md" :content nasty}})
+        (testing "an export holds no escape sequence and no live contaminated URL"
+          (let [out (str (fs/create-temp-dir {:prefix "relay-export"}) "/x")]
+            (relay data "export" out)
+            (let [text (slurp (str out "/docs/web.md"))]
+              (is (not (str/includes? text "\u001b")))
+              (is (not (str/includes? text "https://evil")))
+              (is (str/includes? text "hxxps://evil[.]example")))
+            (fs/delete-tree (fs/parent out))))
+        (testing "the trust screen breaks the URL it shows"
+          (let [shown (atom "")]
+            (binding [cli/*tty* (tty shown (constantly "NOPE"))]
+              (is (thrown? clojure.lang.ExceptionInfo (relay data "trust" "doc" "web.md"))))
+            (is (not (str/includes? @shown "https://evil")))))
+        (testing "a decided hold is refused before any code is asked for"
+          (submit {:type :wake/start :actor "operator" :args {:role "clerk" :note "Go."}})
+          (submit {:type :wake/end :actor "dispatcher"
+                   :args {:wake (:id (core/running-wake (state) "clerk")) :outcome "ran" :session "s1" :said ""
+                          :held [{:id "c1" :name "post" :input {:secret "the safe code is 1234"} :input-sha256 "d"}]}})
+          (let [id (:id (first (core/open-holds (state))))
+                asked (atom false)]
+            (testing "and a hold's notification carries no input"
+              (let [n (last (sort-by :id (filter #(= "hold-opened" (:kind %)) (vals (:notifications (state))))))]
+                (is (not (str/includes? (str (:title n) (:body n)) "1234")))
+                (is (str/includes? (:body n) "an egress tool"))))
+            (binding [cli/*tty* (tty (atom "") typed-code)] (relay data "deny" (str id)))
+            (binding [cli/*tty* (fn [] (reset! asked true) {:say identity :ask (constantly "x")})]
+              (is (thrown-with-msg? clojure.lang.ExceptionInfo #"already decided" (relay data "approve" (str id)))))
+            (is (false? @asked))))))))

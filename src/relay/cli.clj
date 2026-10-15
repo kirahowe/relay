@@ -221,6 +221,9 @@ contaminated, for text you copied from somewhere you do not trust.")
 (defn- decide-hold! [sys verb verdict hold-id reason & [end]]
   (let [h (core/hold (inbound/current-state sys) hold-id)]
     (when-not h (fail! (str "There is no hold " hold-id ".")))
+    ;; Asking for a code to do nothing would only teach typing codes.
+    (when-not (= :open (:status h))
+      (fail! (str "Hold " hold-id " was already decided: " (name (:status h)) ".")))
     (confirm! verb (concat (render/hold h (:config sys))
                            (when end ["" "The session will not be carried on: the role's next wake starts afresh."])))
     (submit! sys :hold/resolve {:hold hold-id :verdict verdict :reason reason :end (boolean end)})
@@ -360,7 +363,9 @@ contaminated, for text you copied from somewhere you do not trust.")
       "trust" (let [[kind ref] more
                     v (core/trusted-version (state) kind ref)]
                 (when-not v (fail! "usage: relay trust <kind> <ref>, naming something relay keeps"))
-                (confirm! "trust" [(str kind " " ref ":") "" (:text v) "" (labels-line (:labels v))
+                ;; Shown with its URLs broken, like anything contaminated;
+                ;; only what is shown is changed, not what is trusted.
+                (confirm! "trust" [(str kind " " ref ":") "" (text/defang (:text v)) "" (labels-line (:labels v))
                                    "Trusting it clears contaminated from what it says now."])
                 ;; What was shown, so a change while the operator read it
                 ;; trusts nothing.
