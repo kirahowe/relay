@@ -11,10 +11,9 @@
             [relay.export :as export]
             [relay.inbound :as inbound]
             [relay.log :as log]
+            [relay.render :as render]
             [relay.setup :as setup]
-            [relay.tools :as tools])
-  (:import (java.time Instant ZoneId)
-           (java.time.format DateTimeFormatter)))
+            [relay.tools :as tools]))
 
 (def usage
   "relay: a relay of agent roles, with an append-only log as the record.
@@ -92,6 +91,11 @@ Every command needs the data directory, from --data <dir> or from the file
       :else (fail! (str "Which data directory? Pass --data <dir>, or set :data in " file
                         ", for example {:data \"~/relay-data\"}.")))))
 
+(defn- result
+  "A command's result: its exit code and the lines it prints."
+  [exit & lines]
+  {:exit exit :out lines})
+
 (defn- init!
   "Makes a data directory, asking for its settings when it has none. An
   existing relay.edn is checked, never rewritten."
@@ -99,77 +103,23 @@ Every command needs the data directory, from --data <dir> or from the file
   (let [file (str (fs/path dir "relay.edn"))
         ready (fn []
                 (log/init! dir)
-                (println "relay data directory ready at" (str (fs/absolutize dir)))
-                0)]
+                (result 0 (str "relay data directory ready at " (fs/absolutize dir))))]
     (cond
       (fs/exists? file) (do (config/load-config dir) (ready))
       (not (System/console))
       (fail! "relay init asks for settings, so run it in a terminal. Or write"
              file "yourself, from setup/relay.example.edn.")
-      :else
-      (do (if (setup/create! {:ask (fn [prompt] (print prompt) (flush) (read-line))
-                              :say println}
-                             file)
-            (ready)
-            1)))))
+      (setup/create! {:ask (fn [prompt] (print prompt) (flush) (read-line))
+                      :say println}
+                     file)
+      (ready)
+      :else (result 1))))
 
 (defn- stdin-text []
   (if (System/console) "" (slurp *in*)))
 
-(defn- local [^Instant at zone]
-  (when at (.format (.atZone at ^ZoneId zone) (DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm"))))
-
 (defn- submit! [sys type args]
   (inbound/submit! sys {:type type :actor core/operator :args args}))
-
-(defn- print-memo [zone {:keys [id from subject body sent-at]}]
-  (println (str "\n[" id "] " subject))
-  (println (str "    from " from ", " (local sent-at zone)))
-  (println)
-  (println (str/replace (str body) #"(?m)^" "    ")))
-
-(defn- status [{:keys [config] :as sys}]
-  (let [state (inbound/current-state sys)
-        zone (config/zone config)
-        now (Instant/now)]
-    (println "Roles")
-    (doseq [id (core/active-role-ids state)
-            :let [{:keys [title reports-to]} (core/role state id)]]
-      (println (format "  %-20s %s%s%s" id title
-                       (if reports-to (str ", reports to " reports-to) "")
-                       (if (core/running? state id) "  [running]" "")))
-      (doseq [{:keys [name schedule]} (core/active-routines state id)]
-        (println (format "    routine %-18s %s" name schedule)))
-      (doseq [{:keys [id subject attempts retry-at]} (core/unread-memos state id)]
-        (println (format "    open  [%d] %s%s" id subject
-                         (cond-> ""
-                           (pos? attempts) (str " (" attempts " failed attempts")
-                           (and (pos? attempts) retry-at) (str ", next " (local retry-at zone))
-                           (pos? attempts) (str ")")))))
-      (doseq [{memo-id :id :keys [subject]} (core/dead-memos state id)]
-        (println (format "    dead  [%d] %s (relay retry %s)" memo-id subject id))))
-    (doseq [[h {:keys [condition paused-until]}] (sort-by key (:harnesses state))]
-      (println (str "\nHarness " h ": "
-                    (if (and paused-until (.isAfter ^Instant paused-until now))
-                      (str condition ", next try " (local paused-until zone))
-                      "available"))))
-    (let [waiting (core/unread-memos state core/operator)]
-      (println (format "\nOperator's inbox: %d open" (count waiting))))
-    (when-let [recent (seq (take-last 5 (sort-by :id (vals (:wakes state)))))]
-      (println "\nRecent wakes")
-      (doseq [{:keys [id role started-at status outcome crashed]} recent]
-        (println (format "  %-6d %s  %-20s %s" id (local started-at zone) role
-                         (if (= :running status) "running"
-                             (str outcome (when crashed ", crashed")))))))))
-
-(defn- show-log [sys {:keys [tail json]}]
-  (let [events (log/read-events (:data-dir sys))
-        events (if tail (take-last tail events) events)]
-    (doseq [e events]
-      (println (if json
-                 (json/generate-string e)
-                 (format "%5d %s %-22s %-12s %s" (:seq e) (:at e) (:type e) (:actor e)
-                         (let [s (pr-str (:data e))] (subs s 0 (min 120 (count s))))))))))
 
 (defn- run-tool
   "A harness runs this for each tool call: JSON arguments on stdin, the
@@ -180,16 +130,14 @@ Every command needs the data directory, from --data <dir> or from the file
         args (try (if (str/blank? raw) {} (json/parse-string raw true))
                   (catch Exception _ ::bad))]
     (if (= ::bad args)
-      (do (println "The arguments were not valid JSON.") 1)
+      (result 1 "The arguments were not valid JSON.")
       (let [{:keys [ok error]} (tools/call! sys role tool-name args)]
-        (println (or ok error))
-        (if error 1 0)))))
+        (result (if error 1 0) (or ok error))))))
 
 (defn- tool-output
-  "Runs one of relay's own read tools as the operator and prints its text."
+  "Runs one of relay's own read tools as the operator, for its text."
   [sys tool-name args]
-  (println ((get-in tools/builtin [tool-name :run]) sys core/operator args))
-  0)
+  (result 0 ((get-in tools/builtin [tool-name :run]) sys core/operator args)))
 
 (def ^:private spec
   {:alias {:s :subject :m :message :n :tail}
@@ -198,8 +146,88 @@ Every command needs the data directory, from --data <dir> or from the file
             :tail :long :data :string :search :string :as-of :string :known-at :string
             :version :long :role :string :trace :string}})
 
-(defn run
-  "Runs one command and returns the exit code."
+(defn- command
+  "Runs one command with the data directory's system. Returns {:exit :out},
+  :out being the lines to print."
+  [sys dir cmd more opts]
+  (let [zone (config/zone (:config sys))
+        state #(inbound/current-state sys)
+        lines (fn [ls] {:exit 0 :out ls})]
+    (case cmd
+      "status" (lines (render/status (state) zone ((:clock sys))))
+      "inbox" (lines (render/inbox zone (core/unread-memos (state) core/operator)))
+      "memo" (let [[to] more
+                   body (or (:message opts) (stdin-text))]
+               (when-not to (fail! "usage: relay memo <to> -s <subject> [-m <body>]"))
+               (let [events (submit! sys :memo/send {:to to :subject (:subject opts) :body body})]
+                 (result 0 (str "Sent memo " (:seq (first events))))))
+      "close" (let [[id] more]
+                (submit! sys :memo/close {:memo (some-> id parse-long) :outcome (:message opts)})
+                (result 0 (str "Closed memo " id)))
+      "roles" (lines (render/roles (state)))
+      "add" (let [[id] more]
+              (submit! sys :role/add {:id id :title (:title opts) :reports-to (:reports-to opts)
+                                      :harness (:harness opts) :model (:model opts)
+                                      :instructions (stdin-text)})
+              (result 0 (str "Added " id)))
+      "update" (let [[id] more]
+                 (submit! sys :role/update
+                          (cond-> (select-keys opts [:title :harness :model :reports-to])
+                            true (assoc :id id)
+                            (:instructions opts) (assoc :instructions (stdin-text))))
+                 (result 0 (str "Updated " id)))
+      "remove" (let [[id] more]
+                 (submit! sys :role/remove {:id id})
+                 (result 0 (str "Removed " id)))
+      "routines" (lines (render/routines (state) zone (take 1 more)))
+      "routine" (let [[owner rname] more]
+                  (submit! sys :routine/write {:owner owner :name rname :schedule (:schedule opts)
+                                               :instructions (stdin-text)})
+                  (result 0 (str "Routine " rname " is set for " owner)))
+      "unroutine" (let [[owner rname] more]
+                    (submit! sys :routine/remove {:owner owner :name rname})
+                    (result 0 (str "Removed routine " rname)))
+      "retry" (let [[r] more]
+                (result 0 (str (count (submit! sys :memo/retry {:role r})) " memo(s) requeued")))
+      "wake" (let [[r] more
+                   woke (dispatch/wake! sys r {:note (:note opts) :dispatched (:dispatched opts)})]
+               {:exit (if (#{:ran :idle} (:result woke)) 0 1) :out (render/wake-result woke)})
+      "chat" (let [[r] more]
+               (when-not r (fail! "usage: relay chat <role>"))
+               (result (dispatch/chat! sys r {:data (when (:data opts) (str (fs/absolutize dir)))})))
+      "acp" (let [[r] more]
+              (when-not r (fail! "usage: relay acp <role> [--trace <file>]"))
+              (result (dispatch/acp! sys r {:trace (:trace opts)})))
+      "tick" (do (dispatch/tick! sys) (result 0))
+      "facts" (tool-output sys "facts" {:topic (first more) :search (:search opts)
+                                        :as_of (:as-of opts) :known_at (:known-at opts)
+                                        :all (:all opts)})
+      "fact" (tool-output sys "fact_history" {:fact (some-> (first more) parse-long)})
+      "notes" (let [[r] more]
+                (when-not r (fail! "usage: relay notes <role>"))
+                (lines (render/notes zone (core/notes (state) r))))
+      "journal" (let [[r] more]
+                  (when-not r (fail! "usage: relay journal <role> [-n <count>]"))
+                  (tool-output sys "journal" {:owner r :limit (:tail opts)}))
+      "docs" (tool-output sys "docs" {})
+      "doc" (let [[path] more]
+              (when-not path (fail! "usage: relay doc <path> [--version <n>] [--history]"))
+              (if (:history opts)
+                (tool-output sys "doc_history" {:path path})
+                (tool-output sys "doc_get" {:path path :version (:version opts)})))
+      "put" (let [[path] more]
+              (lines (render/doc-put path (submit! sys :doc/put {:path path :content (stdin-text)}))))
+      "export" (let [[dir] more]
+                 (when-not dir (fail! "usage: relay export <dir>"))
+                 (result 0 (str "Wrote " (export/export! sys dir) " files to " dir)))
+      "log" (lines (render/log (log/read-events (:data-dir sys)) opts))
+      "tool" (run-tool sys (:role opts) (first more))
+      (result 1 usage))))
+
+(defn execute
+  "Runs one command line. Returns {:exit :out}, :out being the lines to
+  print. Prints nothing itself, except what a command that talks with the
+  operator directly (init, chat, acp) prints along the way."
   [args]
   ;; Options may come before the command (--data) and after it, and
   ;; babashka.cli stops at the first argument, so parse in two passes.
@@ -207,113 +235,20 @@ Every command needs the data directory, from --data <dir> or from the file
         {[cmd & more] :args local-opts :opts} (cli/parse-args rest-args spec)
         opts (merge global local-opts)]
     (if (or (nil? cmd) (#{"help" "-h" "--help"} cmd))
-      (do (println usage) 0)
-      (let [_ (when (and (= "tool" cmd) (or (str/blank? (:role opts)) (str/blank? (:data opts))))
-                (fail! "usage: relay tool --data <dir> --role <role> <tool name>"))
-            dir (data-dir opts)]
-        (if (= "init" cmd)
-          (init! dir)
-          (let [sys (inbound/system dir)
-                zone (config/zone (:config sys))]
-            (case cmd
-              "status" (do (status sys) 0)
-              "inbox" (let [memos (core/unread-memos (inbound/current-state sys) core/operator)]
-                        (if (empty? memos)
-                          (println "Nothing waiting.")
-                          (doseq [m memos] (print-memo zone m)))
-                        0)
-              "memo" (let [[to] more
-                           body (or (:message opts) (stdin-text))]
-                       (when-not to (fail! "usage: relay memo <to> -s <subject> [-m <body>]"))
-                       (let [events (submit! sys :memo/send {:to to :subject (:subject opts) :body body})]
-                         (println "Sent memo" (:seq (first events)))
-                         0))
-              "close" (let [[id] more]
-                        (submit! sys :memo/close {:memo (some-> id parse-long) :outcome (:message opts)})
-                        (println "Closed memo" id)
-                        0)
-              "roles" (do (doseq [id (core/active-role-ids (inbound/current-state sys))
-                                  :let [{:keys [title reports-to]} (core/role (inbound/current-state sys) id)]]
-                            (println (str id ": " title (when reports-to (str ", reports to " reports-to)))))
-                          0)
-              "add" (let [[id] more]
-                      (submit! sys :role/add {:id id :title (:title opts) :reports-to (:reports-to opts)
-                                              :harness (:harness opts) :model (:model opts)
-                                              :instructions (stdin-text)})
-                      (println "Added" id)
-                      0)
-              "update" (let [[id] more]
-                         (submit! sys :role/update
-                                  (cond-> (select-keys opts [:title :harness :model :reports-to])
-                                    true (assoc :id id)
-                                    (:instructions opts) (assoc :instructions (stdin-text))))
-                         (println "Updated" id)
-                         0)
-              "remove" (let [[id] more]
-                         (submit! sys :role/remove {:id id})
-                         (println "Removed" id)
-                         0)
-              "routines" (let [state (inbound/current-state sys)]
-                           (doseq [owner (if (first more) [(first more)] (core/active-role-ids state))
-                                   {:keys [name schedule baseline]} (core/active-routines state owner)]
-                             (println (format "%-16s %-18s %s (since %s)" owner name schedule
-                                              (local baseline zone))))
-                           0)
-              "routine" (let [[owner rname] more]
-                          (submit! sys :routine/write {:owner owner :name rname :schedule (:schedule opts)
-                                                       :instructions (stdin-text)})
-                          (println "Routine" rname "is set for" owner)
-                          0)
-              "unroutine" (let [[owner rname] more]
-                            (submit! sys :routine/remove {:owner owner :name rname})
-                            (println "Removed routine" rname)
-                            0)
-              "retry" (let [[r] more]
-                        (println (count (submit! sys :memo/retry {:role r})) "memo(s) requeued")
-                        0)
-              "wake" (let [[r] more
-                           result (dispatch/wake! sys r {:note (:note opts)
-                                                         :dispatched (:dispatched opts)})]
-                       (println (name (:result result)) (pr-str (dissoc result :result)))
-                       (if (#{:ran :idle} (:result result)) 0 1))
-              "chat" (let [[r] more]
-                       (when-not r (fail! "usage: relay chat <role>"))
-                       (dispatch/chat! sys r {:data (when (:data opts) (str (fs/absolutize dir)))}))
-              "acp" (let [[r] more]
-                      (when-not r (fail! "usage: relay acp <role> [--trace <file>]"))
-                      (dispatch/acp! sys r {:trace (:trace opts)}))
-              "tick" (do (dispatch/tick! sys)
-                         0)
-              "facts" (tool-output sys "facts" {:topic (first more) :search (:search opts)
-                                                :as_of (:as-of opts) :known_at (:known-at opts)
-                                                :all (:all opts)})
-              "fact" (tool-output sys "fact_history" {:fact (some-> (first more) parse-long)})
-              "notes" (let [[r] more]
-                        (when-not r (fail! "usage: relay notes <role>"))
-                        (doseq [{:keys [name text written-at]} (core/notes (inbound/current-state sys) r)]
-                          (println (str "## " name "  (" (local written-at zone) ")\n\n" text "\n")))
-                        0)
-              "journal" (let [[r] more]
-                          (when-not r (fail! "usage: relay journal <role> [-n <count>]"))
-                          (tool-output sys "journal" {:owner r :limit (:tail opts)}))
-              "docs" (tool-output sys "docs" {})
-              "doc" (let [[path] more]
-                      (when-not path (fail! "usage: relay doc <path> [--version <n>] [--history]"))
-                      (if (:history opts)
-                        (tool-output sys "doc_history" {:path path})
-                        (tool-output sys "doc_get" {:path path :version (:version opts)})))
-              "put" (let [[path] more
-                          events (submit! sys :doc/put {:path path :content (stdin-text)})]
-                      (println (if (seq events) (str "Wrote " path ", version " (:seq (first events)))
-                                   (str path " already says that.")))
-                      0)
-              "export" (let [[dir] more]
-                         (when-not dir (fail! "usage: relay export <dir>"))
-                         (println "Wrote" (export/export! sys dir) "files to" dir)
-                         0)
-              "log" (do (show-log sys opts) 0)
-              "tool" (run-tool sys (:role opts) (first more))
-              (do (println usage) 1))))))))
+      (result 0 usage)
+      (do (when (and (= "tool" cmd) (or (str/blank? (:role opts)) (str/blank? (:data opts))))
+            (fail! "usage: relay tool --data <dir> --role <role> <tool name>"))
+          (let [dir (data-dir opts)]
+            (if (= "init" cmd)
+              (init! dir)
+              (command (inbound/system dir) dir cmd more opts)))))))
+
+(defn run
+  "Runs one command line, prints what it says, and returns the exit code."
+  [args]
+  (let [{:keys [exit out]} (execute args)]
+    (doseq [line out] (println line))
+    exit))
 
 (defn -main [& args]
   (let [code (try (run args)
