@@ -96,23 +96,63 @@
   (check 60 bytes-pass-through-unchanged))
 
 (deftest a-client-that-stops-reading-does-not-wedge-the-agent
-  ;; The client's output fails after the first chunk; the agent is still
-  ;; drained, its stdin is closed, and it exits.
+  ;; The client's output fails; the agent can still write everything it
+  ;; has, and its stdin is closed once the client's input ends.
   (let [failing (proxy [java.io.OutputStream] []
                   (write ([b] (throw (java.io.IOException. "gone")))
                     ([b off len] (throw (java.io.IOException. "gone"))))
                   (flush []))
-        ;; An agent that writes far more than any pipe buffer holds, then
-        ;; waits for its stdin to close.
-        result (deref (future (dispatch/proxy! {:argv ["sh" "-c" "head -c 1000000 /dev/zero; cat >/dev/null"]}
-                                               {:in (java.io.PipedInputStream. (java.io.PipedOutputStream.))
-                                                :out failing
-                                                ;; A line past the limit goes on unread, so
-                                                ;; the failed write is noticed.
-                                                :line-limit 65536}))
-                      20000 :hung)]
-    (is (not= :hung result))
-    (is (= 0 (:exit result)))))
+        dir (fs/create-temp-dir {:prefix "relay-wedge"})
+        done (str dir "/done")
+        client-out (java.io.PipedOutputStream.)
+        ;; An agent that writes far more than any pipe buffer holds, in
+        ;; lines short and long, then waits for its stdin to close.
+        run (future (dispatch/proxy! {:argv ["sh" "-c" (str "for i in $(seq 2000); do echo '{\"jsonrpc\":\"2.0\"}'; done;"
+                                                            " head -c 1000000 /dev/zero; echo;"
+                                                            " touch " done "; cat >/dev/null")]}
+                                     {:in (java.io.PipedInputStream. client-out) :out failing
+                                      :line-limit 65536}))]
+    (loop [n 0] (when (and (< n 500) (not (fs/exists? done))) (Thread/sleep 20) (recur (inc n))))
+    (is (fs/exists? done) "the agent wrote everything")
+    (.close client-out)
+    (let [result (deref run 20000 :hung)]
+      (is (not= :hung result))
+      (is (= 0 (:exit result))))
+    (fs/delete-tree dir)))
+
+(deftest an-agent-line-too-long-to-read-never-reaches-the-client
+  ;; Regression: a line past the limit used to go on unread, so a huge
+  ;; permission request reached a client that had no say.
+  (doseq [[what line permission?] [["a permission request"
+                                     (json/generate-string {:jsonrpc "2.0" :id 9 :method "session/request_permission"
+                                                            :params {:toolCall {:rawInput {:pad (apply str (repeat 200000 "x"))}}}})
+                                     true]
+                                    ["anything else" (json/generate-string {:jsonrpc "2.0" :method "session/update"
+                                                                            :params {:pad (apply str (repeat 200000 "y"))}})
+                                     false]]]
+    (let [dir (fs/create-temp-dir {:prefix "relay-oversize"})
+          line-file (str dir "/line") got (str dir "/got")
+          _ (spit line-file (str line "\n"))
+          client-out (java.io.PipedOutputStream.)
+          out (ByteArrayOutputStream.)
+          dropped (promise)
+          run (future (dispatch/proxy! {:argv ["sh" "-c" (str "cat " line-file "; echo '{\"after\":1}';"
+                                                              (if permission? (str " read l; echo \"$l\" > " got ";") "")
+                                                              " cat >/dev/null")]}
+                                       {:in (java.io.PipedInputStream. client-out) :out out :approvals true
+                                        :line-limit 65536 :on-oversized #(deliver dropped %)}))]
+      (is (= {:size (inc (count line)) :permission? permission? :refused permission?}
+             (deref dropped 10000 :never)) what)
+      (when permission?
+        (loop [n 0] (when (and (< n 200) (not (and (fs/exists? got) (str/ends-with? (slurp got) "\n"))))
+                      (Thread/sleep 20) (recur (inc n))))
+        (is (= {"jsonrpc" "2.0" "id" 9 "result" {"outcome" {"outcome" "cancelled"}}}
+               (json/parse-string (slurp got))) "relay refused it to the agent"))
+      (.close client-out)
+      (deref run 10000 nil)
+      (let [seen (.toString out "UTF-8")]
+        (is (= "{\"after\":1}\n" seen) (str what ": only the next line reached the client")))
+      (fs/delete-tree dir))))
 
 (deftest a-stop-closes-the-agents-stdin-and-kills-it-after-the-grace
   (let [stop (promise)

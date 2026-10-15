@@ -295,7 +295,10 @@ back only if it picks an option the agent offered, or cancels; anything
 else, and a request still open when the client goes away, is a refusal.
 Without `--approvals` (an editor, say), relay refuses the call itself and
 notifies the operator. Each request and its answer are recorded in the
-log with the role, session, tool and a digest of the input.
+log with the role, session, tool and a digest of the input. A message from
+the agent too long for relay to read whole (over 8 MB) never reaches the
+client: relay refuses it if it is a permission request whose id it can
+find, drops it either way, records that, and tells the operator.
 
 ## Development
 

@@ -590,6 +590,8 @@
     (cond-> state
       asked (update-in [:permissions (:id asked)] assoc :outcome (:outcome data) :by (:by data)))))
 
+(defmethod evolve* "conversation/line-dropped" [state _] state)
+
 (defmethod evolve* "hold/requeued" [state {:keys [data]}]
   (update-in state [:holds (:hold data)] dissoc :delivered))
 
@@ -1211,6 +1213,19 @@
               (str "Its ACP client was not started with --approvals, so relay refused the call"
                    " for it. To decide such calls yourself, talk with " role " through relay chat.")
               :role role :labels (union (id-labels state role) (permission-labels tx role labels))))))
+
+(defmethod decide* :conversation/line-dropped [{:keys [state] :as tx} {{:keys [wake size permission refused]} :args}]
+  (dispatcher-only! tx)
+  (let [role (get-in state [:wakes wake :role])]
+    (-> tx
+        (emit "conversation/line-dropped" {:wake wake :role role :size size
+                                           :permission (boolean permission) :refused (boolean refused)})
+        (notify "conversation-line-dropped" (str "relay dropped a message from " role "'s agent")
+                (str "A line of " size " bytes was too long to check, so its client never saw it."
+                     (when permission " It looked like a permission request, ")
+                     (when (and permission refused) "and relay refused it.")
+                     (when (and permission (not refused)) "and relay could not tell which, so it went unanswered."))
+                :role role :labels (id-labels state role)))))
 
 ;; holds
 

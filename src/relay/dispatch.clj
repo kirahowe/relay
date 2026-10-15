@@ -338,6 +338,20 @@
   request carries one tool call's input."
   (* 8 1024 1024))
 
+(defn- iso [^bytes bs n] (String. bs 0 (int n) java.nio.charset.StandardCharsets/ISO_8859_1))
+
+(defn- note-oversized
+  "Folds a piece of an oversized line into what is kept of it: its first
+  4 KB, whether `request_permission` appears anywhere in it (looking
+  across piece boundaries), and its length."
+  [{:keys [prefix tail size] :as o} ^bytes piece n]
+  (let [text (iso piece n)]
+    (assoc o
+           :prefix (if (< (count prefix) 4096) (subs (str prefix text) 0 (min 4096 (+ (count prefix) (count text)))) prefix)
+           :permission? (or (:permission? o) (str/includes? (str tail text) "request_permission"))
+           :tail (let [t (str tail text)] (subs t (max 0 (- (count t) 32))))
+           :size (+ (or size 0) n))))
+
 (defn- pump!
   "Copies from `in` to `out`, flushing each write, and passes each complete
   line to (tap line). Once a write fails, calls (on-write-failed) and keeps
@@ -348,38 +362,44 @@
   Without `screen`, bytes are copied chunk by chunk as they come. With it,
   they are copied line by line, and (screen line) decides each: :pass
   copies it, nil drops it, and a string is written in its place. A line
-  longer than `limit` is copied unscreened as it comes. Writes to `out`
-  are made holding a lock on it, so another thread may write whole lines
-  to it too."
-  [^java.io.InputStream in out tap on-write-failed & [{:keys [screen limit] :or {limit line-limit}}]]
+  longer than `limit` cannot be screened whole. With `on-oversized` it is
+  dropped as it streams and (on-oversized {:prefix :permission? :size}) is
+  called once it ends; without, it is copied unscreened as it comes.
+  Writes to `out` are made holding a lock on it, so another thread may
+  write whole lines to it too."
+  [^java.io.InputStream in out tap on-write-failed & [{:keys [screen limit on-oversized] :or {limit line-limit}}]]
   (let [buf (byte-array 65536)
         failed? (atom false)
         write! (fn [^bytes bs n]
                  (when-not @failed?
                    (try (locking out (write-chunk! out bs n))
-                        (catch java.io.IOException _ (reset! failed? true) (on-write-failed)))))]
-    (loop [pending acp/no-rest raw? false]
+                        (catch java.io.IOException _ (reset! failed? true) (on-write-failed)))))
+        ;; An oversized line is passed on, or dropped and noted.
+        long-piece! (fn [over ^bytes bs n]
+                      (if on-oversized (note-oversized over bs n) (do (write! bs n) over)))
+        long-done! (fn [over] (when on-oversized (on-oversized (dissoc over :tail))))]
+    (loop [pending acp/no-rest over nil]
       (let [n (try (.read in buf) (catch java.io.IOException _ -1))]
         (if (neg? n)
           (let [last-bytes (acp/left-over pending)]
-            (when (pos? (alength last-bytes))
-              (when screen (write! last-bytes (alength last-bytes)))
-              (tap (acp/text last-bytes))))
+            (cond
+              over (long-done! over)
+              (pos? (alength last-bytes))
+              (do (when screen (write! last-bytes (alength last-bytes)))
+                  (tap (acp/text last-bytes)))))
           (let [chunk (java.util.Arrays/copyOf buf n)
                 [rest' lines] (acp/split pending chunk)]
             (if-not screen
               (do (write! chunk n)
                   (doseq [line lines] (tap (acp/text line)))
-                  (recur rest' false))
-              (let [;; In raw mode, the line being passed on unread ends at
-                    ;; the first newline of this chunk.
-                    nl (if raw? (let [i (.indexOf (String. chunk java.nio.charset.StandardCharsets/ISO_8859_1) 10)]
-                                  (when (>= i 0) i))
-                           nil)
-                    _ (when raw? (write! chunk (if nl (inc nl) n)))
-                    [lines raw?] (cond (not raw?) [lines false]
-                                       nl [(rest lines) false]
-                                       :else [[] true])]
+                  (recur rest' nil))
+              (let [;; An oversized line ends at the first newline of this chunk.
+                    nl (when over (let [i (.indexOf (iso chunk n) 10)] (when (>= i 0) i)))
+                    over (if over (long-piece! over chunk (if nl (inc nl) n)) over)
+                    _ (when (and over nl) (long-done! over))
+                    [lines over] (cond (nil? over) [lines nil]
+                                       nl [(rest lines) nil]
+                                       :else [[] over])]
                 (doseq [^bytes line lines
                         :let [text (acp/text line)
                               decision (screen text)]]
@@ -393,9 +413,9 @@
                                          (write! bs (alength bs)))
                     :else nil))
                 (let [left (acp/left-over rest')]
-                  (if (and (not raw?) (> (alength left) limit))
-                    (do (write! left (alength left)) (recur acp/no-rest true))
-                    (recur (if raw? acp/no-rest rest') raw?)))))))))))
+                  (if (and (nil? over) (> (alength left) limit))
+                    (recur acp/no-rest (long-piece! {} left (alength left)))
+                    (recur (if over acp/no-rest rest') over)))))))))))
 
 (defn- tracer
   "A function that writes one line of traffic to the trace file as JSON,
@@ -428,9 +448,13 @@
   :approvals, the client never sees it: relay refuses it. Each request
   and each answer is passed to (on-permission :asked req) and
   (on-permission :answered req {:outcome :by}), :by being client or
-  relay."
-  [{:keys [argv dir env]} {:keys [in out trace stop grace-ms approvals on-permission line-limit]
-                           :or {grace-ms stop-grace-ms on-permission (fn [& _]) line-limit line-limit}}]
+  relay. An agent line longer than `line-limit` is never passed on, since
+  it cannot be read whole: relay refuses it if it is a permission request
+  whose id it can find, and calls (on-oversized {:size :permission?
+  :refused}). A client line that long is passed on unread."
+  [{:keys [argv dir env]} {:keys [in out trace stop grace-ms approvals on-permission on-oversized line-limit]
+                           :or {grace-ms stop-grace-ms on-permission (fn [& _]) on-oversized (fn [_])
+                                line-limit line-limit}}]
   (let [proc (p/process (vec argv) (cond-> {:err :inherit} dir (assoc :dir (str dir)) env (assoc :env env)))
         ^Process jp (:proc proc)
         ^java.io.OutputStream agent-in (:in proc)
@@ -491,8 +515,22 @@
                             (swap! outstanding dissoc (:id req))
                             (refuse! req))
                           (deliver stop :client-gone)))
+        ;; An agent line too long to read whole could be a permission
+        ;; request, so it never reaches the client: relay refuses it when it
+        ;; can tell it is one and which, and tells the operator either way.
+        oversized (fn [{:keys [prefix permission? size]}]
+                    (let [id (when permission?
+                               (some-> (re-find #"\"id\"\s*:\s*(-?\d+|\"(?:[^\"\\\\]|\\\\.)*\")" (str prefix))
+                                       second json/parse-string))
+                          req (when (some? id) {:id id :options []})]
+                      (when req
+                        (let [bs (.getBytes (str (json/generate-string (acp/refusal req)) "\n")
+                                            java.nio.charset.StandardCharsets/UTF_8)]
+                          (try (locking agent-in (write-chunk! agent-in bs (alength bs)))
+                               (catch java.io.IOException _ nil))))
+                      (on-oversized {:size size :permission? (boolean permission?) :refused (some? req)})))
         to-client (spawn (fn [] (pump! (:out proc) out (tap :agent) #(deliver stop :client-gone)
-                                       {:screen from-agent :limit line-limit})))
+                                       {:screen from-agent :limit line-limit :on-oversized oversized})))
         exit (.waitFor jp)]
     ;; The agent's stdout ends with it, unless something it started holds
     ;; the pipe open; that cannot keep relay waiting for long.
@@ -514,6 +552,17 @@
                                    :labels labels :outcome outcome :by by}})
       (catch Exception e
         (binding [*out* *err*] (println "relay could not record a permission request:" (ex-message e)))))))
+
+(defn- oversize-recorder
+  "Records an agent line relay dropped for being too long to read, and
+  tells the operator."
+  [sys wake-id]
+  (fn [{:keys [size permission? refused]}]
+    (try
+      (inbound/submit! sys {:type :conversation/line-dropped :actor core/dispatcher
+                            :args {:wake wake-id :size size :permission permission? :refused refused}})
+      (catch Exception e
+        (binding [*out* *err*] (println "relay could not record a dropped line:" (ex-message e)))))))
 
 (defn acp!
   "Opens a conversation with a role for an ACP client on stdin and stdout,
@@ -538,7 +587,8 @@
                        (when problem (throw (ex-info problem {})))
                        (let [{:keys [exit observed]}
                              (proxy! command {:in in :out out :trace trace :stop stop :approvals approvals
-                                              :on-permission (permission-recorder sys (:wake-id request))})]
+                                              :on-permission (permission-recorder sys (:wake-id request))
+                                              :on-oversized (oversize-recorder sys (:wake-id request))})]
                          (acp/report observed exit))))))]
           (if (integer? exit) exit 1))
         (catch Exception e
