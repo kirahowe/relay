@@ -12,7 +12,6 @@
             [clojure.test.check.properties :as prop]
             [relay.acp :as acp]
             [relay.acp-client :as client]
-            [relay.config :as config]
             [relay.core :as core]
             [relay.dispatch :as dispatch]
             [relay.harness.agentloop :as agentloop]
@@ -219,22 +218,13 @@
       (is (= (set (map :name manifest)) (set (keys kinds))))
       (is (every? #{"read" "edit" "delete" "move" "search" "execute" "think" "fetch" "switch_mode" "other"}
                   (vals kinds))))
-    (testing "the ACP request carries them, and the context window only when set"
+    (testing "the ACP request carries them, and never a context window, which agentloop asks the provider for"
       (let [req {:harness {:kind :agentloop :api-key-command ["k"]} :system-prompt "s" :tools manifest
                  :tool-command ["relay"] :session-dir "/c"}]
         (is (= kinds (:tool_kinds (agentloop/acp-request-json req "/w"))))
         (is (not (contains? (agentloop/acp-request-json req "/w") :context_window)))
-        (is (= 200000 (:context_window (agentloop/acp-request-json
-                                        (assoc-in req [:harness :context-window] 200000) "/w"))))))))
-
-(deftest a-context-window-must-be-a-number-of-tokens
-  (let [cfg (fn [w] (config/resolve-config {:timezone "UTC" :default-harness :a :notify {:kind :none}
-                                            :harnesses {:a (cond-> {:kind :agentloop :api-key-command ["k"]}
-                                                             w (assoc :context-window w))}}))]
-    (is (cfg nil))
-    (is (cfg 200000))
-    (doseq [bad [0 -1 "200k" 1.5]]
-      (is (thrown? clojure.lang.ExceptionInfo (cfg bad)) (pr-str bad)))))
+        (is (not (contains? (agentloop/acp-request-json (assoc-in req [:harness :context-window] 200000) "/w")
+                            :context_window)))))))
 
 ;; --- whole conversations over ACP
 
@@ -303,7 +293,7 @@
 (deftest a-full-turn-over-acp-runs-as-the-role-and-records-its-session
   (if-not bin
     (println "SKIPPED: agentloop is not built; run make -C ../agentloop build")
-    (with-world {:context-window 100000}
+    (with-world {}
       (fn [body]
         (if (empty? (mock/last-tool-results body))
           {:tool-uses [{:name "memo_send" :input {:to "operator" :subject "Hello from a conversation"
@@ -326,8 +316,8 @@
                       updates))
             (is (= "Sent it." (apply str (for [u updates :when (= "agent_message_chunk" (get u "sessionUpdate"))]
                                            (get-in u ["content" "text"]))))))
-          (testing "the context window from relay.edn reaches the client"
-            (is (some #(and (= "usage_update" (get % "sessionUpdate")) (= 100000 (get % "size"))) updates)
+          (testing "the context window the Models API gave reaches the client"
+            (is (some #(and (= "usage_update" (get % "sessionUpdate")) (= mock/window (get % "size"))) updates)
                 (pr-str updates)))
           (client/close-input! c)
           (is (= 0 (client/wait! c 20000)))

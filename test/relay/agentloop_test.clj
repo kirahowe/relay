@@ -277,12 +277,12 @@
 ;; --- conversations are described, not run
 
 (def gen-harness
-  (gen/fmap (fn [[provider effort base-url limits retry timeout model window]]
+  (gen/fmap (fn [[provider effort base-url limits retry timeout model]]
               (cond-> {:kind :agentloop :api-key-command ["key"]}
                 provider (assoc :provider provider) effort (assoc :effort effort)
                 base-url (assoc :base-url base-url) limits (assoc :limits limits)
                 retry (assoc :retry retry) timeout (assoc :tool-timeout-seconds timeout)
-                model (assoc :model model) window (assoc :context-window window)))
+                model (assoc :model model)))
             (gen/tuple (gen/elements [nil "anthropic" "openai"])
                        (gen/elements [nil "low" "max"])
                        (gen/elements [nil "https://example.test"])
@@ -293,8 +293,7 @@
                                     (gen/map (gen/elements [:retries :backoff-seconds :max-wait-seconds])
                                              gen/nat)])
                        (gen/elements [nil 5 300])
-                       (gen/elements [nil "m"])
-                       (gen/elements [nil 200000]))))
+                       (gen/elements [nil "m"]))))
 
 (def an-acp-request-is-a-run-request-for-a-session-directory
   (prop/for-all [harness gen-harness
@@ -309,10 +308,9 @@
       (and (= "/data/runs/clerk/conversations" (:session_dir acp))
            (not-any? #(contains? acp %) [:session :prompt :timeout_seconds])
            (= {:inbox "read"} (update-keys (:tool_kinds acp) keyword))
-           (= (:context-window harness) (:context_window acp))
            (= "relay · clerk" (:title acp))
            (= (dissoc run :session :prompt :timeout_seconds)
-              (dissoc acp :session_dir :tool_kinds :context_window :title))))))
+              (dissoc acp :session_dir :tool_kinds :title))))))
 
 (deftest an-acp-request-differs-from-a-run-request-only-in-its-sessions
   (let [result (tc/quick-check 300 an-acp-request-is-a-run-request-for-a-session-directory)]

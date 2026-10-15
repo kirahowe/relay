@@ -19,11 +19,7 @@
                  :limits {:max-turns 200 :max-tool-calls 400 :max-tokens 2000000}
                  ;; stops one tool call that hangs, so it cannot eat the
                  ;; whole wake; the default is 300
-                 :tool-timeout-seconds 300
-                 ;; optional: the model's context window in tokens, so an
-                 ;; ACP client can show how full it is; without it, none is
-                 ;; shown
-                 :context-window 200000}}
+                 :tool-timeout-seconds 300}}
 
   A run stopped at the wake deadline, by agentloop (reason \"canceled\") or
   by relay killing it (exit \"timeout\"), is reported as :cut-short, so the
@@ -172,16 +168,14 @@
   "The request `agentloop acp` reads. The client opens and loads sessions,
   so the request names their directory instead of one session, and has no
   prompt and no deadline: an ACP turn ends when the client cancels it. It
-  adds what only a client shows: each tool's ACP kind, the model's
-  context window when the harness settings give one, and a title,
-  \"relay · <role id>\", for the client to name the conversation by."
-  [{:keys [session-dir tools harness role] :as request} work]
-  (let [kinds (acp/tool-kinds tools)
-        window (:context-window harness)]
+  adds what only a client shows: each tool's ACP kind, and a title,
+  \"relay · <role id>\", for the client to name the conversation by.
+  agentloop asks the provider for the model's context window itself."
+  [{:keys [session-dir tools role] :as request} work]
+  (let [kinds (acp/tool-kinds tools)]
     (cond-> (assoc (base-request request work) :session_dir (str session-dir))
       (:id role) (assoc :title (str "relay · " (:id role)))
-      (seq kinds) (assoc :tool_kinds kinds)
-      window (assoc :context_window window))))
+      (seq kinds) (assoc :tool_kinds kinds))))
 
 (defn- prepare!
   "Finds the binary and writes the request that `build` makes into the run

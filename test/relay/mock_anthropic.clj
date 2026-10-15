@@ -8,7 +8,11 @@
     {:stop-reason \"refusal\"}                     a reply that ends the way named
     {:delay-ms n}                                  any reply, after a wait
     {:status 429 :type \"rate_limit_error\" :message m :headers {...}}
-                                                   an API error"
+                                                   an API error
+
+  It also stands in for the Models API: GET /v1/models/{id} describes any
+  model, with a context window of `window` tokens. Those requests are not
+  recorded and never reach the responder."
   (:require [cheshire.core :as json]
             [org.httpkit.server :as http]))
 
@@ -43,7 +47,19 @@
        :usage {:output_tokens 5}}
       {:type "message_stop"}])))
 
-(defn- respond [requests responder req]
+(def window
+  "The context window, in tokens, of every model the Models API describes."
+  100000)
+
+(defn- describe [uri]
+  (let [id (subs uri (count "/v1/models/"))]
+    {:status 200
+     :headers {"Content-Type" "application/json" "request-id" "req_mock"}
+     :body (json/generate-string {:type "model" :id id :display_name "Mock model"
+                                  :created_at "2026-01-01T00:00:00Z"
+                                  :max_input_tokens window :max_tokens 64000 :capabilities {}})}))
+
+(defn- answer [requests responder req]
   (let [body (json/parse-string (slurp (:body req)) true)
         _ (swap! requests conj {:uri (:uri req) :headers (:headers req) :body body})
         {:keys [status type message headers delay-ms] :as reply} (responder body)
@@ -55,6 +71,11 @@
       {:status 200
        :headers {"Content-Type" "text/event-stream" "Cache-Control" "no-cache" "request-id" "req_mock"}
        :body (sse (message-events (:model body) reply))})))
+
+(defn- respond [requests responder req]
+  (if (and (= :get (:request-method req)) (.startsWith ^String (:uri req) "/v1/models/"))
+    (describe (:uri req))
+    (answer requests responder req)))
 
 (defn start!
   "Starts a server on a free port. Returns {:url :requests :stop}."

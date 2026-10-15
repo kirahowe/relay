@@ -153,9 +153,10 @@ limit that outlasts the longest wait pauses the harness until it lifts.
 `:api-key-command` is a command and its arguments. agentloop runs it
 itself and takes its output as the key, so relay never holds the key. A
 missing or wrong key shows up as a needs-attention wake. Tools get only a
-base environment (PATH, HOME and the like). `:context-window`, the
-model's context window in tokens, lets an ACP client show how full the
-context is; without it, the client is not told.
+base environment (PATH, HOME and the like). There is no setting for the
+model's context window: agentloop asks the provider for it, and an ACP
+client shows how full the context is when the provider gives one.
+Anthropic's API does; OpenAI's does not.
 
 Talk to a role with `relay chat <role>` in this terminal, or from an ACP
 client with `relay acp <role>`. `relay status` shows roles, open work,
