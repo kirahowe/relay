@@ -15,3 +15,21 @@ cache-duration: "168h"
 upstream-base-url: "https://ntfy.sh"
 
 web-root: disable
+
+# Lock the server down, so only relay can publish and only your phone can
+# read. Nothing is allowed unless a user or token says so:
+#
+#   auth-file: "/path/to/ntfy/user.db"
+#   auth-default-access: "deny-all"
+#
+# Then, with the server's config, make a user for the phone with read
+# access to the topic, and a token for relay with write access:
+#
+#   ntfy user add phone
+#   ntfy access phone <topic> read-only
+#   ntfy user add relay
+#   ntfy access relay <topic> write-only
+#   ntfy token add relay        # prints tk_...; keep it in a file only you can read
+#
+# Use a topic nobody could guess (openssl rand -hex 16), and give relay the
+# token in relay.edn with :token-file or :token-command (see README).

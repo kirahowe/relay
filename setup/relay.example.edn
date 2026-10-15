@@ -17,6 +17,8 @@
               :api-key-command ["security" "find-generic-password" "-s" "relay-anthropic" "-w"]}}
 
  ;; Where notifications go. See setup/ntfy/server.yml for the server.
+ ;; With the server locked down, give relay its write token from a file or
+ ;; a command: :token-file "/path/to/token" or :token-command [...].
  :notify {:kind :ntfy :url "http://127.0.0.1:2586" :topic "relay"}
 
  ;; The role that is sent dead letters to sort out.

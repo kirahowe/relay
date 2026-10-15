@@ -194,6 +194,15 @@ is written in Go.
    the ntfy app. Then set `:notify` in `relay.edn` to
    `{:kind :ntfy :url "http://127.0.0.1:2586" :topic "relay"}`, or choose
    ntfy when `relay init` asks.
+
+   Anyone who can reach the server can read or post to an open topic, so
+   lock it down. The end of `setup/ntfy/server.yml` shows how: deny all
+   access by default, give the phone a user that can only read the topic
+   and relay a token that can only write to it, and pick a topic nobody
+   could guess. relay sends the token as `Authorization: Bearer`, reading
+   it at each push from `:token-file "/path/to/token"` or from the output
+   of `:token-command ["cat" "/path/to/token"]` (any command, like
+   `:api-key-command`). Keep the token file readable only by you.
 7. To give roles Apple Reminders, build `tools/rem` (see its README) and
    define its two tools (`rem-read`, `rem`) and grant them in `relay.edn`.
 8. To let a role read files from one branch of a public GitHub repository,
