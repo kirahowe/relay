@@ -430,19 +430,20 @@
 
 (defn replay [events] (reduce evolve empty-state events))
 
-(defmethod evolve* "role/added" [state {:keys [at data labels]}]
+(defmethod evolve* "role/added" [state {:keys [seq at data labels]}]
   (let [{:keys [id title instructions reports-to harness model]} data]
     (assoc-in state [:roles id] {:id id :title title :instructions instructions :reports-to reports-to
                                  :harness harness :model model :status :active
-                                 :added-at (inst at)
+                                 :added-at (inst at) :version seq
                                  ;; Each piece of text carries the labels of
                                  ;; whoever wrote what it says now.
                                  :id-labels (union labels) :title-labels (union labels)
                                  :instructions-labels (union labels)})))
 
-(defmethod evolve* "role/updated" [state {:keys [data labels]}]
+(defmethod evolve* "role/updated" [state {:keys [seq data labels]}]
   (update-in state [:roles (:id data)]
              #(cond-> (merge % (select-keys data [:title :instructions :reports-to :harness :model]))
+                (or (contains? data :title) (contains? data :instructions)) (assoc :version seq)
                 (contains? data :title) (assoc :title-labels (union labels))
                 (contains? data :instructions) (assoc :instructions-labels (union labels)))))
 
@@ -501,12 +502,12 @@
                                        l)]))
                         letters))))))
 
-(defmethod evolve* "routine/written" [state {:keys [at data labels]}]
+(defmethod evolve* "routine/written" [state {:keys [seq at data labels]}]
   (let [{:keys [owner name schedule instructions]} data]
     (update-in state [:routines owner name]
                (fn [r] (assoc r :owner owner :name name :schedule schedule
                               :instructions instructions :baseline (inst at)
-                              :status :active :labels (union labels))))))
+                              :status :active :labels (union labels) :version seq)))))
 
 (defmethod evolve* "routine/removed" [state {:keys [data]}]
   (assoc-in state [:routines (:owner data) (:name data) :status] :removed))
@@ -546,16 +547,19 @@
 
 (defn- clean [labels] (vec (remove #{contaminated-label} labels)))
 
+(defn- clean-version [versions version]
+  (mapv #(cond-> % (= version (:seq %)) (update :labels clean)) versions))
+
 (defmethod evolve* "label/trusted" [state {:keys [data]}]
-  (let [{:keys [kind ref]} data
+  (let [{:keys [kind ref version]} data
         num (parse-long ref)
-        [owner nm] (str/split ref #"/" 2)
-        last-index #(dec (count (get-in state %)))]
+        [owner nm] (str/split ref #"/" 2)]
     (case kind
       "memo" (update-in state [:memos num :labels] clean)
-      "fact" (update-in state [:facts num :versions (last-index [:facts num :versions]) :labels] clean)
+      ;; The exact version the operator read, never a later one.
+      "fact" (update-in state [:facts num :versions] clean-version version)
       "doc" (-> state
-                (update-in [:docs ref :versions (last-index [:docs ref :versions]) :labels] clean)
+                (update-in [:docs ref :versions] clean-version version)
                 (update-in [:docs ref :path-labels] clean))
       "note" (update-in state [:notes owner nm :labels] clean)
       "routine" (update-in state [:routines owner nm :labels] clean)
@@ -635,10 +639,10 @@
                                            :why why :superseded-by superseded-by)
                               retracted (assoc :retracted true)))))
 
-(defmethod evolve* "note/written" [state {:keys [at data labels]}]
+(defmethod evolve* "note/written" [state {:keys [seq at data labels]}]
   (let [{:keys [owner name text]} data]
     (assoc-in state [:notes owner name] {:owner owner :name name :text text :written-at (inst at)
-                                         :labels (union labels)})))
+                                         :labels (union labels) :version seq})))
 
 (defmethod evolve* "note/removed" [state {:keys [data]}]
   (update-in state [:notes (:owner data)] dissoc (:name data)))
@@ -1102,21 +1106,33 @@
   (let [num (some-> ref str parse-long)
         [owner nm] (str/split (str ref) #"/" 2)]
     (case kind
-      "memo" (when-let [m (memo state num)] {:labels (:labels m) :text (str (:subject m) "\n\n" (:body m))})
+      "memo" (when-let [m (memo state num)]
+               {:version (:id m) :labels (:labels m) :text (str (:subject m) "\n\n" (:body m))})
       "fact" (when-let [v (some-> (fact state num) (fact-as-known nil))]
-               {:labels (:labels v) :text (str (when (:topic v) (str "[" (:topic v) "] ")) (:text v)
+               {:version (:seq v) :labels (:labels v) :text (str (when (:topic v) (str "[" (:topic v) "] ")) (:text v)
                                                (when (:why v) (str "\n\nWhy it changed: " (:why v))))})
       "doc" (when-let [v (doc-version state ref {})]
-              (when-not (:removed v) {:labels (union (:labels v) (path-labels state ref)) :text (:content v)}))
-      "note" (when-let [n (get-in state [:notes owner nm])] {:labels (:labels n) :text (:text n)})
-      "routine" (when-let [r (routine state owner nm)] {:labels (:labels r) :text (:instructions r)})
+              (when-not (:removed v)
+                {:version (:seq v) :labels (union (:labels v) (path-labels state ref)) :text (:content v)}))
+      "note" (when-let [n (get-in state [:notes owner nm])]
+               {:version (:version n) :labels (:labels n) :text (:text n)})
+      "routine" (when-let [r (routine state owner nm)]
+                  {:version (:version r) :labels (:labels r) :text (str (:schedule r) "\n" (:instructions r))})
       "role" (when-let [r (role state ref)]
-               {:labels (role-labels state ref) :text (str ref "\n" (:title r) "\n\n" (:instructions r))})
+               {:version (:version r) :labels (role-labels state ref)
+                :text (str ref "\n" (:title r) "\n\n" (:instructions r))})
       "journal" (when-let [e (first (filter #(= num (:id %)) (mapcat val (:journals state))))]
-                  {:labels (:labels e) :text (:text e)})
+                  {:version (:id e) :labels (:labels e) :text (:text e)})
       nil)))
 
-(defmethod decide* :label/trust [{:keys [state] :as tx} {{:keys [kind ref]} :args}]
+(defn sha256
+  "The hex sha256 of a text's UTF-8 bytes."
+  [s]
+  (let [d (.digest (java.security.MessageDigest/getInstance "SHA-256")
+                   (.getBytes (str s) java.nio.charset.StandardCharsets/UTF_8))]
+    (apply str (map #(format "%02x" (bit-and % 0xff)) d))))
+
+(defmethod decide* :label/trust [{:keys [state] :as tx} {{:keys [kind ref version] digest :sha256} :args}]
   ;; The operator has read it and vouches for it. That clears
   ;; contaminated from what it says now, and never private.
   (operator-only! tx "vouches for contaminated text")
@@ -1126,7 +1142,11 @@
     (when-not v (reject! :not-found (str "There is no " kind " " ref ".")))
     (when-not (contaminated? (:labels v))
       (reject! :invalid (str "The " kind " " ref " is not contaminated.")))
-    (emit tx "label/trusted" {:kind kind :ref (str ref)})))
+    ;; The operator vouches for the text they were shown, and only that:
+    ;; if it changed since, nothing is trusted.
+    (when-not (and (= version (:version v)) (= digest (sha256 (:text v))))
+      (reject! :conflict (str "The " kind " " ref " changed since you read it. Nothing was trusted; look again.")))
+    (emit tx "label/trusted" {:kind kind :ref (str ref) :version version})))
 
 ;; holds
 

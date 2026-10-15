@@ -250,7 +250,9 @@
                    "journal" (map (comp str :id) (sort-by :id (mapcat val (:journals s)))))
             ref (nth-or refs n)
             v (when ref (core/trusted-version s kind ref))
-            w' (if v (run w "operator" [] :label/trust {:kind kind :ref ref}) w)]
+            w' (if v (run w "operator" [] :label/trust {:kind kind :ref ref :version (:version v)
+                                                        :sha256 (core/sha256 (:text v))})
+                   w)]
         ;; The operator vouched for what it says now: its markers no longer
         ;; need to carry contaminated wherever they turn up from here on.
         (if (and v (not= (:state w) (:state w')))
@@ -483,12 +485,22 @@
 
 (deftest trust-clears-contaminated-and-only-that
   (let [w (-> (seed) (run "clerk" ["contaminated" "private"] :doc/put {:path "a.md" :content "x"}))
-        w' (run w "operator" [] :label/trust {:kind "doc" :ref "a.md"})]
+        trust (fn [w who] (let [v (core/trusted-version (:state w) "doc" "a.md")]
+                            (run w who [] :label/trust {:kind "doc" :ref "a.md" :version (:version v)
+                                                        :sha256 (core/sha256 (:text v))})))
+        w' (trust w "operator")]
     (is (= ["private"] (:labels (core/doc-version (:state w') "a.md" {}))))
     (testing "a role cannot vouch for anything"
-      (is (= (:state w) (:state (run w "hub" [] :label/trust {:kind "doc" :ref "a.md"})))))
+      (is (= (:state w) (:state (trust w "hub")))))
     (testing "and there is nothing to trust in clean text"
-      (is (= (:state w') (:state (run w' "operator" [] :label/trust {:kind "doc" :ref "a.md"})))))))
+      (is (= (:state w') (:state (trust w' "operator")))))
+    (testing "trust names the version it vouches for; a newer one is not trusted"
+      (let [v (core/trusted-version (:state w) "doc" "a.md")
+            w2 (run w "clerk" ["contaminated"] :doc/put {:path "a.md" :content "y"})]
+        (is (= (:state w2) (:state (run w2 "operator" [] :label/trust {:kind "doc" :ref "a.md" :version (:version v)
+                                                                          :sha256 (core/sha256 (:text v))}))))
+        (is (= (:state w) (:state (run w "operator" [] :label/trust {:kind "doc" :ref "a.md" :version (:version v)
+                                                                        :sha256 (core/sha256 "other text")}))))))))
 
 (deftest reads-withhold-contaminated-items-unless-accepted
   (let [w (-> (seed)

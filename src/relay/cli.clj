@@ -307,7 +307,10 @@ contaminated, for text you copied from somewhere you do not trust.")
                 (when-not v (fail! "usage: relay trust <kind> <ref>, naming something relay keeps"))
                 (confirm! "trust" [(str kind " " ref ":") "" (:text v) "" (labels-line (:labels v))
                                    "Trusting it clears contaminated from what it says now."])
-                (submit! sys :label/trust {:kind kind :ref ref})
+                ;; What was shown, so a change while the operator read it
+                ;; trusts nothing.
+                (submit! sys :label/trust {:kind kind :ref ref :version (:version v)
+                                           :sha256 (core/sha256 (:text v))})
                 (result 0 (str "Trusted " kind " " ref ".")))
       "tool" (run-tool sys (:role opts) (first more))
       (result 1 usage))))
