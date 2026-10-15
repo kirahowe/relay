@@ -700,7 +700,7 @@
             (is (= :unread (:status (core/memo (state) id)))))
           (testing "the role is not woken while it waits"
             (is (empty? (core/roles-to-wake (state) (:config *sys*) (Instant/now))))
-            (is (= :held (:result (dispatch/wake! *sys* "clerk" {})))))
+            (is (= :idle (:result (dispatch/wake! *sys* "clerk" {}))) "its memo waits with the held session"))
           (inbound/submit! *sys* {:type :hold/resolve :actor "operator" :args {:hold (:id hold) :verdict "allow"}})
           (is (= ["clerk"] (core/roles-to-wake (state) (:config *sys*) (Instant/now))))
           (let [second-wake (dispatch/wake! *sys* "clerk" {:dispatched true})]

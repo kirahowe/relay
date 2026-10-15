@@ -358,12 +358,15 @@ entity Role {
     wakes: Wake with role = this
 
     open_memos: inbox where status = unread
-    deliverable_memos: inbox where status = unread and not is_quarantined
+    deliverable_memos: inbox where status = unread and not is_quarantined and not is_kept
     waiting_memos: inbox where is_waiting
     holds: Hold with role = this
     open_holds: holds where status = open
     -- Decided, and not yet carried back to the held session.
     decided_holds: holds where status != open and delivered_in = null
+    -- black box: the oldest held session of the role's whose holds are
+    -- all decided, ready to be carried on with the decisions, or null.
+    ready_session: resumable_held_session(this)
     running_wakes: wakes where status = running
     -- Wakes the role got to work in, within the runaway window. A
     -- conversation counts for nothing, and neither does a wake the harness
@@ -376,8 +379,7 @@ entity Role {
     -- The tools it is offered, by name.
     offered_tools: Set<Tool>
     is_running: running_wakes.count > 0
-    is_held: open_holds.count > 0
-    has_work: waiting_memos.count > 0 or decided_holds.count > 0
+    has_work: waiting_memos.count > 0 or ready_session != null
     is_paused: harness.is_paused
     is_running_away: recent_wakes.count >= config.runaway_wakes
 
@@ -431,7 +433,10 @@ entity Memo {
     -- A contaminated memo to a role that holds an external tool able
     -- to act or send data out waits for the operator.
     is_quarantined: not is_for_operator and is_contaminated and not released and recipient.quarantines
-    is_waiting: status = unread and not is_backing_off and not is_quarantined
+    -- black box: carried by a wake whose session waits on a hold, which
+    -- keeps it until the session is carried on.
+    is_kept: kept_by_held_session(this)
+    is_waiting: status = unread and not is_backing_off and not is_quarantined and not is_kept
 }
 
 entity Routine {
@@ -1247,7 +1252,7 @@ rule RetireOneOffRoutine {
 rule WakeOnTick {
     when: DispatcherTicks(lost_wakes)
 
-    for role in Roles where status = active and has_work and not is_held and not is_running and not is_paused and not is_running_away:
+    for role in Roles where status = active and has_work and not is_running and not is_paused and not is_running_away:
         ensures: DispatchedWakeSpawned(role: role)
 
     @guidance
@@ -1269,15 +1274,48 @@ rule StartDispatchedWake {
     requires: not role.is_running
     requires: not role.is_paused
     requires: not role.is_running_away
-    requires: not role.is_held
-    requires: role.has_work
+    requires: role.ready_session = null
+    requires: role.waiting_memos.count > 0
+
+    ensures: Wake.created(
+        role: role,
+        memos: role.waiting_memos,
+        resumes: fresh_or_interrupted(role),   -- black box: see guidance
+        harness_name: role.harness.name,
+        pid: pid,
+        pid_start: pid_start,
+        chat: false,
+        started_at: now,
+        status: running
+    )
+    ensures: role.interrupted_wake = null
+
+    @guidance
+        -- A dispatched wake carries only the memos that are not
+        -- backing off and that no held session keeps. It carries on the
+        -- interrupted wake unless that wake is waiting on a hold, in
+        -- which case it starts afresh: a call held for the operator
+        -- holds up only the memos its own session carried. If nothing
+        -- is waiting any more, nothing is recorded.
+}
+
+rule ResumeHeldSession {
+    when: DispatchedWakeSpawned(role, pid, pid_start)
+
+    requires: role.status = active
+    requires: not role.is_running
+    requires: not role.is_paused
+    requires: not role.is_running_away
+    requires: role.ready_session != null
+
+    let held = role.ready_session
 
     ensures:
         let wake = Wake.created(
             role: role,
-            memos: role.waiting_memos,
-            resumes: role.interrupted_wake,
-            resolves: role.decided_holds,
+            memos: held.memos where status = unread,
+            resumes: held,
+            resolves: role.decided_holds where wake = held,
             harness_name: role.harness.name,
             pid: pid,
             pid_start: pid_start,
@@ -1286,13 +1324,13 @@ rule StartDispatchedWake {
             status: running
         )
         role.interrupted_wake = null
-        for hold in role.decided_holds:
+        for hold in role.decided_holds where wake = held:
             hold.delivered_in = wake
 
     @guidance
-        -- A dispatched wake carries only the memos that are not
-        -- backing off. If nothing is waiting any more, nothing is
-        -- recorded.
+        -- A held session whose calls are all decided is carried on at
+        -- the first chance the role is free, with the decisions and the
+        -- memos it kept. A wake asked for by hand does the same.
 }
 
 rule StartRequestedWake {
@@ -1301,26 +1339,22 @@ rule StartRequestedWake {
     requires: caller.is_operator or caller.is_dispatcher
     requires: role.status = active
     requires: not role.is_running
-    requires: not role.is_held
-    requires: role.deliverable_memos.count > 0 or role.decided_holds.count > 0 or (note != null and note != "")
+    requires: role.ready_session = null
+    requires: role.deliverable_memos.count > 0 or (note != null and note != "")
 
-    ensures:
-        let wake = Wake.created(
-            role: role,
-            memos: role.deliverable_memos,
-            note: note,
-            resumes: role.interrupted_wake,
-            resolves: role.decided_holds,
-            harness_name: role.harness.name,
-            pid: pid,
-            pid_start: pid_start,
-            chat: false,
-            started_at: now,
-            status: running
-        )
-        role.interrupted_wake = null
-        for hold in role.decided_holds:
-            hold.delivered_in = wake
+    ensures: Wake.created(
+        role: role,
+        memos: role.deliverable_memos,
+        note: note,
+        resumes: fresh_or_interrupted(role),
+        harness_name: role.harness.name,
+        pid: pid,
+        pid_start: pid_start,
+        chat: false,
+        started_at: now,
+        status: running
+    )
+    ensures: role.interrupted_wake = null
 
     @guidance
         -- A wake asked for by hand carries every open memo, including
@@ -1328,8 +1362,7 @@ rule StartRequestedWake {
         -- harness, so it doubles as a way to try a harness early. In
         -- every other way it is an ordinary wake. With no open memos and
         -- no note it records nothing. It never carries a quarantined
-        -- memo, and is refused while a call waits for the operator,
-        -- since the session would only stop at the same call.
+        -- memo, or one a held session keeps.
 }
 
 rule OpenConversation {
@@ -2248,10 +2281,14 @@ invariant AQuarantinedMemoIsNeverCarried {
         wake.memos.all(m => not m.is_quarantined)
 }
 
-invariant ARoleWaitsWhileACallOfItsIsHeld {
-    -- A conversation runs in a session of its own and may go ahead.
-    for wake in Wakes where status = running and not chat:
-        wake.role.open_holds.count = 0
+invariant AHeldSessionWaitsForItsDecisions {
+    -- No wake carries on a session with a call still waiting for the
+    -- operator, and none but the one that carries it on takes a memo
+    -- such a session keeps. The role's other work goes on in fresh
+    -- sessions, one wake at a time as ever.
+    for wake in Wakes where status = running:
+        (wake.resumes = null or (Holds where wake = wake.resumes and status = open).count = 0)
+            and wake.memos.all(m => not m.is_kept or wake.resumes = held_wake_of(m))   -- black box: the held wake that keeps it
 }
 
 invariant OnlyTheOperatorAllowsAHeldCall {

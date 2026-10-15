@@ -116,10 +116,14 @@
 
 (declare quarantined?)
 
+(declare held-memo-ids)
+
 (defn waiting-memos
-  "Open memos a role may be shown that are not waiting out a retry delay."
+  "Open memos a role may be shown that are not waiting out a retry delay,
+  and are not kept by a session with a call held for the operator."
   [state config to now]
-  (vec (remove #(or (backing-off? % now) (quarantined? config %)) (unread-memos state to))))
+  (let [held (held-memo-ids state to)]
+    (vec (remove #(or (backing-off? % now) (quarantined? config %) (held (:id %))) (unread-memos state to)))))
 
 (defn harness-of [state config role-id]
   (or (:harness (role state role-id)) (some-> (:default-harness config) name)))
@@ -185,15 +189,44 @@
        (sort-by :id)
        vec))
 
+(defn- unsettled-hold?
+  "A hold whose session is not done with it: still open, or decided and
+  not yet carried back."
+  [h]
+  (or (= :open (:status h))
+      (and (#{:allowed :denied} (:status h)) (nil? (:delivered h)) (not (:abandoned h)))))
+
+(defn held-wakes
+  "The wakes whose sessions wait on a hold of a role's."
+  [state role-id]
+  (set (keep #(when (and (= role-id (:role %)) (unsettled-hold? %)) (:wake %)) (vals (:holds state)))))
+
+(defn held-memo-ids
+  "The memos kept by a role's held sessions. Each held session keeps the
+  memos it carried; the role's other memos go on without it."
+  [state role-id]
+  (set (mapcat #(get-in state [:wakes % :memos]) (held-wakes state role-id))))
+
+(defn resumable-held-session
+  "A held session of a role's whose every hold is decided, ready to be
+  carried on with the decisions: {:wake :holds}, the oldest such, or nil."
+  [state role-id]
+  (let [hs (filter #(and (= role-id (:role %)) (unsettled-hold? %)) (vals (:holds state)))
+        by-session (group-by :session hs)]
+    (->> by-session
+         (keep (fn [[_ hs]] (when (every? #(not= :open (:status %)) hs)
+                              {:wake (apply max (map :wake hs)) :holds (vec (sort-by :id hs))})))
+         (sort-by :wake)
+         first)))
+
 (defn roles-to-wake
-  "The roles the dispatcher should wake now: with a memo waiting or a
-  decided hold to carry back, not already running, with no hold still
-  waiting for the operator, their harness not paused, and not stopped by
-  the runaway guard."
+  "The roles the dispatcher should wake now: with a memo waiting or a held
+  session whose calls are all decided, not already running, their harness
+  not paused, and not stopped by the runaway guard. A call held for the
+  operator keeps only its own session's memos waiting."
   [state config now]
   (vec (for [id (active-role-ids state)
-             :when (and (or (seq (waiting-memos state config id now)) (seq (pending-resolutions state id)))
-                        (not (held? state id))
+             :when (and (or (seq (waiting-memos state config id now)) (resumable-held-session state id))
                         (not (running? state id))
                         (not (paused-until state (harness-of state config id) now))
                         (not (running-away? state id config now)))]
@@ -1047,11 +1080,6 @@
     (reject! :forbidden "Only the operator or the dispatcher wakes a role."))
   (active-role! state role-id)
   (when (running? state role-id) (reject! :busy (str role-id " is already running.") (id-labels state role-id)))
-  ;; Resuming a session with a call still held would only stop at it again.
-  ;; A conversation uses a session of its own, so it may go ahead.
-  (when (and (not chat) (held? state role-id))
-    (reject! :held (str role-id " has a tool call waiting for the operator; see relay holds.")
-             (id-labels state role-id)))
   (let [harness (harness-of state config role-id)]
     (when dispatched
       (when (paused-until state harness now) (reject! :paused (str harness " is paused.")))
@@ -1063,12 +1091,24 @@
     ;; them when it ends.
     (when (and chat (not= operator actor))
       (reject! :forbidden "Only the operator can open a conversation."))
-    (let [memos (cond chat [] dispatched (waiting-memos state config role-id now) :else (deliverable-memos state config role-id))
+    (let [;; A held session whose calls are all decided is carried on
+          ;; first, with the decisions and the memos it kept. Otherwise a
+          ;; wake starts with the memos no held session keeps, in a fresh
+          ;; session unless the last one was cut short.
+          ready (when-not chat (resumable-held-session state role-id))
+          kept (held-memo-ids state role-id)
+          memos (cond chat []
+                      ready (filterv #(= :unread (:status %)) (map #(memo state %) (get-in state [:wakes (:wake ready) :memos])))
+                      dispatched (waiting-memos state config role-id now)
+                      :else (filterv #(not (kept (:id %))) (deliverable-memos state config role-id)))
+          held (held-wakes state role-id)
           ;; A session from before relay kept labels is never carried on:
           ;; the policy could not know what it had seen.
-          interrupted (let [w (:interrupted-wake (role state role-id))]
-                        (when-not (and w (:labels-enabled-at state) (< w (:labels-enabled-at state))) w))
-          resolves (when-not chat (mapv :id (pending-resolutions state role-id)))]
+          before-labels? #(and % (:labels-enabled-at state) (< % (:labels-enabled-at state)))
+          interrupted (cond ready (when-not (before-labels? (:wake ready)) (:wake ready))
+                            :else (let [w (:interrupted-wake (role state role-id))]
+                                    (when-not (or (before-labels? w) (held w)) w)))
+          resolves (when ready (mapv :id (:holds ready)))]
       (if (and (empty? memos) (blank? note) (not chat) (empty? resolves))
         tx
         (emit tx "wake/started" (cond-> {:role role-id :memos (mapv :id memos) :note note

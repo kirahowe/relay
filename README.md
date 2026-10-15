@@ -72,7 +72,12 @@ polices its calls, and it could claim any labels. relay refuses to put a
 role granted tools on a script harness, and `relay tool` refuses calls
 from one.
 
-An external tool normally gets the call's arguments on its command line.
+An external tool normally gets the call's arguments on its command line,
+appended after the configured command with no `--` between them. So a
+tool on this plain protocol must refuse flags in the model's part of its
+arguments, or the model could override a flag the operator pinned; `rem`
+and `github-file` read their pinned flags first and treat anything after
+as the role's command. Prefer the envelope protocol for new tools.
 With `:protocol :envelope` it speaks the same envelope protocol as `relay
 tool`: the call arrives on stdin as `{input, labels, call_id}`, the labels
 being the calling session's, and the tool prints exactly one `{content,
@@ -149,15 +154,19 @@ from something the operator has read and vouches for. It never clears
 from somewhere untrusted.
 
 When agentloop holds a call, the wake ends and relay records a hold for
-it and notifies the operator. The role is not woken again, and its memos
-wait without counting the wake against them, until every hold is
-decided. `relay holds` lists them, and `relay approve` and `relay deny`
+it and notifies the operator (with the role, the tool and its class,
+never the input). That session keeps the memos it carried, without
+counting the wake against them, until every hold in it is decided. The
+role's other memos go on meanwhile, in fresh sessions, one wake at a
+time as ever. `relay holds` lists the held calls, and `relay approve` and `relay deny`
 show the same before asking for the code: why the call was held, what
 the tool is, where its data would go, what the session has seen and
 where each label came from, any characters in the input that could pass
 for others (a Cyrillic `а` in `pаypal`), and the whole input. `relay approve
-<hold>` or `relay deny <hold> [why]` decides one. At the next tick the
-role is woken in the same session, which carries out the decisions.
+<hold>` or `relay deny <hold> [why]` decides one. Once every call in a
+held session is decided, the next tick that finds the role free carries
+that session on, with its memos, and agentloop carries out the
+decisions.
 `relay deny <hold> --end` also ends that session, so the role's next
 wake starts afresh with its open memos; the third denied call in one
 session does the same, and tells the operator. In

@@ -362,10 +362,14 @@
      ;; AQuarantinedMemoIsNeverCarried
      (for [wake (vals (:wakes s)) m (:memos wake) :when (core/quarantined? cfg (core/memo s m))]
        [:quarantined-memo-carried (:id wake) m])
-     ;; ARoleWaitsWhileACallOfItsIsHeld
+     ;; AHeldSessionWaitsForItsDecisions: no wake carries on a session
+     ;; with a call still open, or carries memos another held session keeps.
      (for [wake (vals (:wakes s))
-           :when (and (= :running (:status wake)) (not (:chat wake)) (core/held? s (:role wake)))]
-       [:running-while-held (:id wake)])
+           :when (= :running (:status wake))
+           :let [open-wakes (set (map :wake (core/open-holds s (:role wake))))
+                 kept (set (mapcat #(get-in s [:wakes % :memos]) (disj (core/held-wakes s (:role wake)) (:resumes wake))))]
+           :when (or (open-wakes (:resumes wake)) (some kept (:memos wake)))]
+       [:held-session-disturbed (:id wake)])
      ;; OnlyTheOperatorAllowsAHeldCall
      (for [h (vals (:holds s)) :when (and (= :allowed (:status h)) (not= "operator" (:resolved-by h)))]
        [:allowed-by-someone-else h])

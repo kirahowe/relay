@@ -61,10 +61,27 @@
     (is (some #(= "hold-opened" (:kind %)) (vals (:notifications s))) "the operator is told")
     (is (zero? (:attempts memo)) "a held wake does not count against its memos")
     (is (= (:wake h) (:interrupted-wake (core/role s "clerk"))) "it is kept to be resumed")
-    (testing "the role is not woken while the hold is open, by the tick or by hand"
+    (testing "the held session keeps its memo: nothing else waits, so nothing wakes"
       (is (empty? (core/roles-to-wake s cfg t0)))
-      (is (= :held (rejected w "operator" :wake/start {:role "clerk"})))
-      (is (= :held (rejected w "dispatcher" :wake/start {:role "clerk" :dispatched true}))))
+      (is (= s (:state (run w "dispatcher" :wake/start {:role "clerk" :dispatched true}))))
+      (is (= s (:state (run w "operator" :wake/start {:role "clerk"})))))
+    (testing "but the role's other work goes on, in a fresh session, while the call waits"
+      (let [w (run w "operator" :memo/send {:to "clerk" :subject "Something else" :body "b"})
+            other (:id (last (sort-by :id (core/unread-memos (:state w) "clerk"))))
+            _ (is (= ["clerk"] (core/roles-to-wake (:state w) cfg t0)))
+            w (run w "dispatcher" :wake/start {:role "clerk" :dispatched true})
+            wake (core/running-wake (:state w) "clerk")]
+        (is (= [other] (:memos wake)) "only the memo the held session does not keep")
+        (is (nil? (:resumes wake)) "and never the held session")
+        (testing "and once the call is decided, the held session is carried on when the role is free"
+          (let [w (run w "operator" :hold/resolve {:hold (:id h) :verdict "allow"})]
+            (is (empty? (core/roles-to-wake (:state w) cfg t0)) "not while it runs")
+            (let [w (run w "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :session "fresh" :said ""})
+                  w (run w "dispatcher" :wake/start {:role "clerk" :dispatched true})
+                  resumed (core/running-wake (:state w) "clerk")]
+              (is (= (:wake h) (:resumes resumed)))
+              (is (= [(:id memo)] (:memos resumed)))
+              (is (= [(:id h)] (:resolves resumed))))))))
     (testing "a conversation uses a session of its own, so it may go ahead"
       (is (core/running-wake (:state (run w "operator" :wake/start {:role "clerk" :chat true})) "clerk")))))
 
