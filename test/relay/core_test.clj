@@ -6,7 +6,8 @@
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
             [relay.config :as config]
-            [relay.core :as core])
+            [relay.core :as core]
+            [relay.dispatch :as dispatch])
   (:import (java.time Instant)))
 
 (def t0 (Instant/parse "2026-10-14T12:00:00Z"))
@@ -384,6 +385,14 @@
     [1 (gen/tuple (gen/return :chat) (gen/elements role-pool)
                   (gen/elements ["ran" "limited" "unreachable" "needs-attention"])
                   (gen/one-of [(gen/return nil) (gen/vector (gen/elements ["s1" "s2" "s3"]) 0 3)]))]
+    ;; A conversation opened and, some steps later, ended the way relay acp
+    ;; ends one: with whatever its proxy reported, through
+    ;; conversation-end-args. Everything else can happen in between.
+    [2 (gen/tuple (gen/return :chat-open) (gen/elements role-pool))]
+    [3 (gen/tuple (gen/return :chat-close) gen/nat
+                  (gen/one-of [(gen/return nil) (gen/elements [0 1 137 "x"])])
+                  (gen/one-of [(gen/return nil) (gen/vector (gen/elements ["s1" "s2" "" nil 3]) 0 3)])
+                  (gen/elements [nil "" "Conversation ended. Its last turn ended with end_turn."]))]
     ;; Knowledge. World times are dates either side of the start, so that
     ;; changes and corrections land before, between and after each other.
     [3 (gen/tuple (gen/return :fact-add) (gen/elements actors) (gen/elements [nil "home" "home/car" "work"])
@@ -424,6 +433,17 @@
                 (run w "dispatcher" :wake/end (cond-> {:wake (:id chat) :outcome outcome}
                                                 sessions (assoc :sessions sessions)))
                 w))
+      :chat-open (run w "operator" :wake/start {:role (first args) :chat true})
+      :chat-close (let [[n exit sessions said] args
+                        chat (nth-or (sort-by :id (filter #(and (:chat %) (= :running (:status %)))
+                                                          (vals (:wakes (:state w)))))
+                                     n)]
+                    (if chat
+                      (let [w' (run w "dispatcher" :wake/end
+                                    (dispatch/conversation-end-args
+                                     (:id chat) {:exit exit :sessions sessions :said said}))]
+                        (cond-> w' (:rejected w') (assoc :problem [:conversation-end-refused (:rejected-message w')])))
+                      w))
       :fact-add (let [[actor topic from to] args]
                   (run w actor :fact/add {:topic topic :text (str "f" (count (:events w)))
                                           :valid-from from :valid-to to}))
@@ -540,6 +560,10 @@
     ;; A conversation carries no memos and no attempt is counted against one.
     (doseq [w wakes :when (:chat w)]
       (when (seq (:memos w)) (fail! [:chat-with-memos (:id w)])))
+    ;; A running conversation holds its role, and ending it is never refused.
+    (doseq [w wakes :when (and (:chat w) (= :running (:status w)))]
+      (when-not (= (:id w) (:id (core/running-wake s (:role w)))) (fail! [:chat-not-holding (:id w)])))
+    (when-let [p (:problem after)] (fail! p))
     (doseq [e batch :when (= "memo/attempt-failed" (:type e))]
       (when (get-in s [:wakes (get-in e [:data :wake]) :chat]) (fail! [:chat-counted e])))
     ;; Every memo to the operator notifies, once.
@@ -592,11 +616,17 @@
                     (run "operator" :role/add {:id "hub" :instructions "c"})
                     (run "operator" :role/add {:id "clerk" :instructions "c"}))
           [final problems] (reduce (fn [[w problems] s]
-                                     (let [w' (step w s)]
+                                     (let [w (dissoc w :problem)
+                                           w' (step w s)]
                                        [w' (into problems (check-step w w'))]))
                                    [start []]
-                                   steps)]
+                                   steps)
+          ;; Every conversation still open ends, as relay acp ends it.
+          closed (reduce (fn [w _] (step (dissoc w :problem) [:chat-close 0 0 ["s1"] nil]))
+                         final role-pool)]
       (and (empty? problems)
+           (empty? (check-step final closed))
+           (not-any? #(and (:chat %) (= :running (:status %))) (vals (:wakes (:state closed))))
            (testing "replaying the log from JSON rebuilds exactly the same state"
              (= (:state final) (core/replay (json-round-trip (:events final)))))
            (testing "asking what was known at T ignores everything recorded after T"

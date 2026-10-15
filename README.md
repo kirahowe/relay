@@ -153,16 +153,43 @@ limit that outlasts the longest wait pauses the harness until it lifts.
 `:api-key-command` is a command and its arguments. agentloop runs it
 itself and takes its output as the key, so relay never holds the key. A
 missing or wrong key shows up as a needs-attention wake. Tools get only a
-base environment (PATH, HOME and the like).
+base environment (PATH, HOME and the like). `:context-window`, the
+model's context window in tokens, lets an ACP client show how full the
+context is; without it, the client is not told.
 
-Talk to a role with `relay chat <role>`. `relay status` shows roles, open
-work, harnesses and recent wakes, and `relay help` lists every command.
+Talk to a role with `relay chat <role>` in this terminal, or from an ACP
+client with `relay acp <role>`. `relay status` shows roles, open work,
+harnesses and recent wakes, and `relay help` lists every command.
+
+### ACP clients
+
+`relay acp <role>` speaks the [Agent Client Protocol](https://agentclientprotocol.com)
+on stdin and stdout, so an editor or any other ACP client can run it as
+its agent command. relay starts the role's agentloop and passes bytes
+between the client and agentloop unchanged. A connection holds the role
+like a wake: no other wake of that role runs until the client
+disconnects, and the wake records the ACP sessions the client used. Their
+logs are kept in `<data>/runs/<role>/conversations/`, apart from the
+role's wake sessions.
+
+To set up a client, give it the command `relay` with the arguments
+`acp <role> --data <dir>`, or leave out `--data` when
+`~/.config/relay/config.edn` names the data directory. The client needs
+no environment variables and no API key, since the key comes from
+`:api-key-command` as usual. relay ignores the client's working directory
+and MCP servers, because a role has only relay's tools. If the role is
+busy, relay writes the reason to stderr and exits 1 before sending
+anything.
+
+`--trace <file>` appends every line in both directions to `<file>`, one
+JSON object per line, with `from` set to `client` or `agent`.
 
 ## Development
 
 ```sh
 bb test          # every test; pass namespaces to run only those
 bb soak 5000     # the model-based property, many more times
+bb tck           # the ACP conformance kit against relay acp (needs Go, uv and ../agentloop)
 ```
 
 The tests never call the real API. The agentloop tests run the real binary against a

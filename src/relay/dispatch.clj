@@ -7,7 +7,9 @@
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [clojure.java.io :as io]
+            [cheshire.core :as json]
             [clojure.string :as str]
+            [relay.acp :as acp]
             [relay.config :as config]
             [relay.core :as core]
             [relay.harness :as harness]
@@ -214,24 +216,31 @@
         (inbound/submit! sys {:type :wake/end :actor core/dispatcher
                               :args (conversation-end-args wake-id @report)})))))
 
-(defn- ignoring-terminal-signals
-  "Calls f with SIGINT and SIGHUP ignored. The terminal sends them to relay
-  as well as to the harness, and relay has to outlive the harness to record
-  that the conversation ended. The harness decides what they mean."
-  [f]
-  (let [signals (mapv #(sun.misc.Signal. %) ["INT" "HUP"])
-        ignore (reify sun.misc.SignalHandler (handle [_ _]))
-        old (mapv #(sun.misc.Signal/handle % ignore) signals)]
+(defn- with-signals
+  "Calls f with the named signals handled by the given functions, and puts
+  the old handlers back after."
+  [handlers f]
+  (let [installed (mapv (fn [[sig handle]]
+                          (let [s (sun.misc.Signal. sig)]
+                            [s (sun.misc.Signal/handle s (reify sun.misc.SignalHandler
+                                                           (handle [_ _] (handle))))]))
+                        handlers)]
     (try (f)
-         (finally (doseq [[s h] (map vector signals old)] (sun.misc.Signal/handle s h))))))
+         (finally (doseq [[s old] installed] (sun.misc.Signal/handle s old))))))
+
+(def ^:private terminal-signals
+  "SIGINT and SIGHUP, ignored. The terminal sends them to relay as well as
+  to the harness, and relay has to outlive the harness to record that the
+  conversation ended. The harness decides what they mean."
+  {"INT" (fn []) "HUP" (fn [])})
 
 (defn- run-on-terminal!
   "Runs a described command on this terminal, sharing its stdin, stdout
   and stderr. Returns the exit code."
   [{:keys [problem argv dir env]}]
   (when problem (throw (ex-info problem {})))
-  (ignoring-terminal-signals
-   #(:exit (apply p/shell {:dir (str dir) :env env :continue true} argv))))
+  (with-signals terminal-signals
+    #(:exit (apply p/shell {:dir (str dir) :env env :continue true} argv))))
 
 (defn chat!
   "Opens an interactive session as a role on this terminal. Returns the
@@ -242,6 +251,135 @@
              (let [command (harness/chat-command request)]
                {:exit (run-on-terminal! command)
                 :sessions (some-> (:session command) vector)})))))
+
+;; --- a conversation over ACP
+
+(def stop-grace-ms
+  "How long an ACP agent has to exit after its stdin closes, before relay
+  kills it."
+  5000)
+
+(defn- spawn
+  "Runs f on a daemon thread. Returns a promise of f's value, or of the
+  exception it threw."
+  [f]
+  (let [done (promise)
+        t (Thread. ^Runnable (fn [] (deliver done (try (f) (catch Throwable e e)))))]
+    (.setDaemon t true)
+    (.start t)
+    done))
+
+(defn- write-chunk!
+  "Writes a chunk and flushes it. A PrintStream (System/out) swallows
+  write errors, so they are looked for after the flush."
+  [^java.io.OutputStream out ^bytes buf n]
+  (.write out buf 0 (int n))
+  (.flush out)
+  (when (and (instance? java.io.PrintStream out) (.checkError ^java.io.PrintStream out))
+    (throw (java.io.IOException. "the output stream failed"))))
+
+(defn- pump!
+  "Copies from `in` to `out` chunk by chunk, flushing each, and passes each
+  complete line to (tap line). Once a write fails, calls (on-write-failed)
+  and keeps reading, so the writer on the far side of `in` is never
+  blocked, but writes nothing more. Returns at the end of `in`, after
+  tapping any last unfinished line."
+  [^java.io.InputStream in out tap on-write-failed]
+  (let [buf (byte-array 65536)]
+    (loop [rest acp/no-rest writing? true]
+      (let [n (try (.read in buf) (catch java.io.IOException _ -1))]
+        (if (neg? n)
+          (let [last-bytes (acp/left-over rest)]
+            (when (pos? (alength last-bytes)) (tap (acp/text last-bytes))))
+          (let [writing? (and writing?
+                              (try (write-chunk! out buf n) true
+                                   (catch java.io.IOException _ (on-write-failed) false)))
+                [rest lines] (acp/split rest (java.util.Arrays/copyOf buf n))]
+            (doseq [line lines] (tap (acp/text line)))
+            (recur rest writing?)))))))
+
+(defn- tracer
+  "A function that writes one line of traffic to the trace file as JSON,
+  with its direction, or nil without a file. Both directions write to it,
+  so the writes are serialised."
+  [file]
+  (when file
+    (let [w (io/writer (fs/file file) :append true)]
+      (fn [direction line]
+        (locking w
+          (.write w (str (json/generate-string (acp/trace-entry direction line)) "\n"))
+          (.flush w))))))
+
+(defn proxy!
+  "Starts the described ACP agent and copies bytes between it and the
+  client unchanged: `in` to the agent's stdin and its stdout to `out`, one
+  chunk at a time, flushing each. The agent's stderr is relay's.
+
+  Every complete line in either direction goes to relay.acp/observe, and
+  to the trace file when there is one. The agent's stdin is closed when
+  the client's input ends, when writing to the client fails, or when `stop`
+  is delivered; an agent still running after `grace-ms` is killed by its
+  pid, with its descendants. Returns {:exit :observed}."
+  [{:keys [argv dir env]} {:keys [in out trace stop grace-ms] :or {grace-ms stop-grace-ms}}]
+  (let [proc (p/process (vec argv) (cond-> {:err :inherit} dir (assoc :dir (str dir)) env (assoc :env env)))
+        ^Process jp (:proc proc)
+        ^java.io.OutputStream agent-in (:in proc)
+        stop (or stop (promise))
+        observed (atom acp/observer)
+        trace (tracer trace)
+        tap (fn [direction]
+              (fn [line]
+                (swap! observed acp/observe direction line)
+                (when trace (trace direction line))))
+        stopper (spawn (fn []
+                         (when-not (= ::done @stop)
+                           (try (.close agent-in) (catch java.io.IOException _ nil))
+                           (when-not (.waitFor jp grace-ms java.util.concurrent.TimeUnit/MILLISECONDS)
+                             (let [h (java.lang.ProcessHandle/of (.pid jp))
+                                   family (concat (some-> (.orElse h nil) .descendants .iterator iterator-seq)
+                                                  [(.orElse h nil)])]
+                               (doseq [^java.lang.ProcessHandle x (remove nil? family)]
+                                 (.destroyForcibly x)))))))
+        to-agent (spawn (fn []
+                          (pump! in agent-in (tap :client) #(deliver stop :agent-gone))
+                          (deliver stop :client-gone)))
+        to-client (spawn (fn [] (pump! (:out proc) out (tap :agent) #(deliver stop :client-gone))))
+        exit (.waitFor jp)]
+    ;; The agent's stdout ends with it, unless something it started holds
+    ;; the pipe open; that cannot keep relay waiting for long.
+    (deref to-client 5000 nil)
+    (deliver stop ::done)
+    (deref stopper 1000 nil)
+    {:exit exit :observed @observed}))
+
+(defn acp!
+  "Opens a conversation with a role for an ACP client on stdin and stdout,
+  running the role's ACP agent behind a pass-through proxy (proxy!). relay
+  itself never writes to stdout: when the conversation cannot start (the
+  role is busy, say), it says why on stderr and returns 1 before any
+  traffic. SIGINT and SIGHUP are ignored, as for chat; SIGTERM closes the
+  agent's stdin and kills it if it has not gone after a few seconds.
+  Returns the agent's exit code.
+
+  Options: :trace, a file to append both directions of the traffic to; :in
+  and :out, the client's streams (stdin and stdout by default)."
+  [sys role-id {:keys [trace in out] :or {in System/in out System/out}}]
+  (binding [*out* *err*]
+    (let [stop (promise)]
+      (try
+        (let [{:keys [exit]}
+              (with-signals (assoc terminal-signals "TERM" #(deliver stop :terminated))
+                #(with-conversation! sys role-id
+                   (fn [request]
+                     (let [{:keys [problem] :as command} (harness/acp-command request)]
+                       (when problem (throw (ex-info problem {})))
+                       (let [{:keys [exit observed]}
+                             (proxy! command {:in in :out out :trace trace :stop stop})]
+                         (acp/report observed exit))))))]
+          (if (integer? exit) exit 1))
+        (catch Exception e
+          (println (or (ex-message e) (str (class e))))
+          1)))))
 
 ;; --- the tick
 

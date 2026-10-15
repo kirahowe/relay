@@ -40,6 +40,9 @@ Every command needs the data directory, from --data <dir> or from the file
   relay retry <role>                  requeue a role's dead-lettered memos
   relay wake <role> [--note <text>]   run a role now, ignoring retry delays
   relay chat <role>                   talk with a role in this terminal
+  relay acp <role> [--trace <file>]   talk with a role from an ACP client, which
+                                      runs this as its agent command; --trace
+                                      appends the traffic to <file> as JSON lines
   relay tick                          one dispatcher pass (launchd runs this)
   relay facts [<topic>] [--search <s>] [--as-of <t>] [--known-at <t>] [--all]
                                       what relay knows; times as for facts
@@ -191,7 +194,7 @@ Every command needs the data directory, from --data <dir> or from the file
    :coerce {:subject :string :message :string :title :string :reports-to :string
             :harness :string :model :string :schedule :string :note :string
             :tail :long :data :string :search :string :as-of :string :known-at :string
-            :version :long :role :string}})
+            :version :long :role :string :trace :string}})
 
 (defn run
   "Runs one command and returns the exit code."
@@ -274,6 +277,9 @@ Every command needs the data directory, from --data <dir> or from the file
               "chat" (let [[r] more]
                        (when-not r (fail! "usage: relay chat <role>"))
                        (or (dispatch/chat! sys r) 0))
+              "acp" (let [[r] more]
+                      (when-not r (fail! "usage: relay acp <role> [--trace <file>]"))
+                      (dispatch/acp! sys r {:trace (:trace opts)}))
               "tick" (do (dispatch/tick! sys)
                          0)
               "facts" (tool-output sys "facts" {:topic (first more) :search (:search opts)

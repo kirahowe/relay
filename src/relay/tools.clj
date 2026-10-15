@@ -4,8 +4,10 @@
   that changes anything goes through the inbound path as that role.
 
   Each tool has a class (see relay.config/tool-classes). relay's own tools
-  are defined here. The operator can grant further tools in relay.edn, each
-  one an external command given the call's arguments on its command line.
+  are defined here; the ones that remove something also say so as their
+  :acp-kind, which an ACP client shows. The operator can grant further
+  tools in relay.edn, each one an external command given the call's
+  arguments on its command line.
   Which tools a role is offered depends on its grants, and a call to a tool
   the role was not offered is refused, whatever the harness let through."
   (:require [babashka.process :as p]
@@ -162,7 +164,7 @@
            (str "Routine " (:name args) " is set."))}
 
    "routine_remove"
-   {:class :write
+   {:class :write :acp-kind "delete"
     :description "Remove one of your routines."
     :parameters (obj {:name text} "name")
     :run (fn [sys actor args]
@@ -242,7 +244,7 @@
            (str "Note " (:name args) " is written."))}
 
    "note_remove"
-   {:class :write
+   {:class :write :acp-kind "delete"
     :description "Remove one of your notes once it no longer helps."
     :parameters (obj {:name text} "name")
     :run (fn [sys actor args]
@@ -313,7 +315,7 @@
              (str (:path args) " already says that.")))}
 
    "doc_remove"
-   {:class :write
+   {:class :write :acp-kind "delete"
     :description "Remove a doc. Its history is kept."
     :parameters (obj {:path text} "path")
     :run (fn [sys actor args]
@@ -339,7 +341,7 @@
            (str "Updated " (:id args) "."))}
 
    "role_remove"
-   {:class :write
+   {:class :write :acp-kind "delete"
     :grant :may-add
     :description "Remove a role. Its open memos are dead-lettered and its routines stop."
     :parameters (obj {:id text} "id")
@@ -413,10 +415,12 @@
 
 (defn manifest
   "What a harness needs to present the tools: names, descriptions and
-  parameter schemas."
+  parameter schemas, each tool's class, and for some of relay's own tools
+  an :acp-kind more exact than the class gives (relay.acp/tool-kinds)."
   [config role-id]
-  (vec (for [[n {:keys [class description parameters]}] (sort-by key (offered config role-id))]
-         {:name n :class (name class) :description description :parameters parameters})))
+  (vec (for [[n {:keys [class description parameters acp-kind]}] (sort-by key (offered config role-id))]
+         (cond-> {:name n :class (name class) :description description :parameters parameters}
+           acp-kind (assoc :acp-kind acp-kind)))))
 
 (defn call!
   "Runs one tool call for a role and returns the text to give back to it.

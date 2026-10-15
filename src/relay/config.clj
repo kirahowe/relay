@@ -59,7 +59,11 @@
     (when (and (= :agentloop kind)
                (not (and (sequential? api-key-command) (seq api-key-command))))
       (problem! (str "Harness " (name h) " in relay.edn needs :api-key-command, "
-                     "the command that prints the API key."))))
+                     "the command that prints the API key.")))
+    (when-let [window (get-in harnesses [h :context-window])]
+      (when-not (pos-int? window)
+        (problem! (str "Harness " (name h) " in relay.edn has :context-window " (pr-str window)
+                       "; it must be a whole number of tokens.")))))
   (when-not (contains? harnesses default-harness)
     (problem! (str "relay.edn needs :default-harness, naming one of :harnesses"
                    (when default-harness (str "; there is no harness " (pr-str default-harness))) ".")))
