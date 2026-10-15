@@ -498,6 +498,8 @@ entity Wake {
     said: String?
     -- When a rate limit lifts, if the harness said.
     resets_at: Timestamp?
+    -- The harness session a wake ran in, which a later wake can resume.
+    session: String?
     -- For a conversation, the harness sessions it used, in the order it
     -- opened them. Empty for a wake.
     sessions: List<String>
@@ -1315,7 +1317,7 @@ rule ResumeHeldSession {
             role: role,
             memos: held.memos where status = unread,
             resumes: held,
-            resolves: role.decided_holds where wake = held,
+            resolves: role.decided_holds where session = held.session,
             harness_name: role.harness.name,
             pid: pid,
             pid_start: pid_start,
@@ -1324,7 +1326,7 @@ rule ResumeHeldSession {
             status: running
         )
         role.interrupted_wake = null
-        for hold in role.decided_holds where wake = held:
+        for hold in role.decided_holds where session = held.session:
             hold.delivered_in = wake
 
     @guidance
@@ -1521,7 +1523,7 @@ rule NotifyOperatorOfHold {
     ensures: Notification.created(
         kind: hold_opened,
         title: hold_title(hold),   -- black box: who wants to use what
-        body: hold.input,
+        body: hold_note(hold),     -- black box: the hold, role, tool and its class, never the input
         about: hold.role,
         created_at: now,
         delivery: pending
@@ -1536,12 +1538,17 @@ rule EndSessionOnDenial {
     requires: verdict = deny
     requires: end = true or (Holds where session = hold.session and status = denied).count + 1 >= config.denials_per_session
 
+    ensures:
+        for other in Holds where session = hold.session and status = open and this != hold:   -- every other open call in it
+            other.status = denied
+            other.reason = "The session was ended."
     ensures: SessionEnded(role: hold.role, session: hold.session)
 
     @guidance
         -- relay deny --end, or the third denied call in one session,
-        -- ends it: its decided holds are not carried back, and the
-        -- role's next wake starts a fresh session with its open memos.
+        -- ends it: every call still open in it is denied, no decision is
+        -- carried back to it, it is never carried on again, and the
+        -- memos it kept go on in a fresh session.
         -- The operator is told when it was the count that ended it.
 }
 
@@ -2279,6 +2286,11 @@ invariant AWakeStartsWithTheLabelsOfItsPrompts {
 invariant AQuarantinedMemoIsNeverCarried {
     for wake in Wakes:
         wake.memos.all(m => not m.is_quarantined)
+}
+
+invariant AnEndedSessionIsNeverCarriedOn {
+    for wake in Wakes where resumes != null:
+        not session_was_ended_before(wake.resumes.session, wake.started_at)   -- black box: by deny --end or the denial cap
 }
 
 invariant AHeldSessionWaitsForItsDecisions {

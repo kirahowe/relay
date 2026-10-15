@@ -370,6 +370,11 @@
                  kept (set (mapcat #(get-in s [:wakes % :memos]) (disj (core/held-wakes s (:role wake)) (:resumes wake))))]
            :when (or (open-wakes (:resumes wake)) (some kept (:memos wake)))]
        [:held-session-disturbed (:id wake)])
+     ;; AnEndedSessionIsNeverCarriedOn
+     (for [wake (vals (:wakes s))
+           :when (and (= :running (:status wake)) (:resumes wake)
+                      (get-in s [:ended-sessions (get-in s [:wakes (:resumes wake) :session])]))]
+       [:ended-session-resumed (:id wake)])
      ;; OnlyTheOperatorAllowsAHeldCall
      (for [h (vals (:holds s)) :when (and (= :allowed (:status h)) (not= "operator" (:resolved-by h)))]
        [:allowed-by-someone-else h])

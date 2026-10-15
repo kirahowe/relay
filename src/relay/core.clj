@@ -199,7 +199,10 @@
 (defn held-wakes
   "The wakes whose sessions wait on a hold of a role's."
   [state role-id]
-  (set (keep #(when (and (= role-id (:role %)) (unsettled-hold? %)) (:wake %)) (vals (:holds state)))))
+  (set (keep #(when (and (= role-id (:role %)) (unsettled-hold? %)
+                         (not (get-in state [:ended-sessions (:session %)])))
+                (:wake %))
+             (vals (:holds state)))))
 
 (defn held-memo-ids
   "The memos kept by a role's held sessions. Each held session keeps the
@@ -207,11 +210,23 @@
   [state role-id]
   (set (mapcat #(get-in state [:wakes % :memos]) (held-wakes state role-id))))
 
+(defn kept-memo-ids
+  "The memos a role's running wake may not touch: those kept by a held
+  session other than the one it carries on. All of them when it is not
+  running."
+  [state role-id]
+  (let [running (running-wake state role-id)]
+    (set (mapcat #(get-in state [:wakes % :memos])
+                 (disj (held-wakes state role-id) (:resumes running))))))
+
 (defn resumable-held-session
   "A held session of a role's whose every hold is decided, ready to be
-  carried on with the decisions: {:wake :holds}, the oldest such, or nil."
+  carried on with the decisions: {:wake :holds}, the oldest such, or nil.
+  An ended session is never carried on."
   [state role-id]
-  (let [hs (filter #(and (= role-id (:role %)) (unsettled-hold? %)) (vals (:holds state)))
+  (let [hs (filter #(and (= role-id (:role %)) (unsettled-hold? %)
+                         (not (get-in state [:ended-sessions (:session %)])))
+                   (vals (:holds state)))
         by-session (group-by :session hs)]
     (->> by-session
          (keep (fn [[_ hs]] (when (every? #(not= :open (:status %)) hs)
@@ -624,8 +639,11 @@
                                           :pid-start pid-start :started-at (inst at)
                                           :status :running :chat (boolean chat)
                                           :resolves (vec resolves)})
-      ;; A conversation leaves an interrupted wake to be resumed later.
-      (not chat) (assoc-in [:roles role :interrupted-wake] nil)
+      ;; A conversation leaves an interrupted wake to be resumed later, and
+      ;; so does carrying on a held session: only the wake that carries
+      ;; it on, or a wake that carries on no held session, clears it.
+      (and (not chat) (or (empty? resolves) (= resumes (get-in state [:roles role :interrupted-wake]))))
+      (assoc-in [:roles role :interrupted-wake] nil)
       ;; The holds whose decisions this wake carries back to the session.
       true (update :holds (fn [hs] (reduce #(assoc-in %1 [%2 :delivered] seq) hs resolves))))))
 
@@ -695,10 +713,12 @@
 (defmethod evolve* "hold/session-ended" [state {:keys [data]}]
   (let [{:keys [role session]} data
         interrupted (get-in state [:roles role :interrupted-wake])]
-    (cond-> (update state :holds
+    (cond-> (-> state
+                (assoc-in [:ended-sessions session] true)
+                (update :holds
                     (fn [hs] (update-vals hs #(cond-> % (and (= session (:session %)) (not= :open (:status %))
                                                               (nil? (:delivered %)))
-                                                     (assoc :abandoned true)))))
+                                                     (assoc :abandoned true))))))
       ;; The next wake starts afresh, carrying the role's open memos.
       (= session (get-in state [:wakes interrupted :session]))
       (assoc-in [:roles role :interrupted-wake] nil))))
@@ -1006,10 +1026,19 @@
     (when (> (count subject) 200) (reject! "A memo's subject is at most 200 characters."))
     (send-memo tx {:from actor :to to :subject subject :body body})))
 
+(defn- not-kept!
+  "Refuses a role's change to a memo a held session keeps, unless the role
+  is carrying that session on."
+  [{:keys [state actor]} id]
+  (when (and (not= operator actor) ((kept-memo-ids state actor) id))
+    (reject! :held (str "Memo " id " is kept by a session waiting for the operator;"
+                        " it goes on once the held call is decided."))))
+
 (defmethod decide* :memo/close [{:keys [actor] :as tx} {{:keys [memo outcome]} :args}]
   (let [m (open-memo! tx memo)]
     (when-not (or (= actor (:to m)) (= operator actor))
       (reject! :forbidden (str "Memo " memo " is not addressed to " actor ".")))
+    (not-kept! tx memo)
     (emit tx "memo/closed" {:memo memo :outcome (require-text outcome "The outcome")})))
 
 (defmethod decide* :memo/block [{:keys [actor] :as tx} {{:keys [memo explanation]} :args}]
@@ -1017,6 +1046,7 @@
   (let [m (open-memo! tx memo)]
     (when-not (= actor (:to m))
       (reject! :forbidden (str "Memo " memo " is not addressed to " actor ".")))
+    (not-kept! tx memo)
     (dead-letter tx memo "blocked" [] :explanation (require-text explanation "The explanation"))))
 
 (defmethod decide* :memo/retry [{:keys [state config actor] :as tx} {{:keys [role]} :args}]
@@ -1399,7 +1429,14 @@
                       (str denied " of its calls were denied"))]
       (if-not ended
         tx
-        (cond-> (emit tx "hold/session-ended" {:role (:role h) :session (:session h) :why ended})
+        (cond-> (as-> tx tx
+                  ;; Every other call still open in it is denied: the
+                  ;; session will not be carried on to run it.
+                  (reduce (fn [tx {other :id}]
+                            (emit tx "hold/resolved" {:hold other :verdict "deny" :reason "The session was ended."}))
+                          tx (filter #(and (= (:session h) (:session %)) (= :open (:status %)))
+                                     (vals (:holds (:state tx)))))
+                  (emit tx "hold/session-ended" {:role (:role h) :session (:session h) :why ended}))
           (not end)
           (notify "session-ended" (str (:role h) "'s session will not be carried on")
                   (str "Its calls were denied " denied " times, so its next wake starts afresh,"

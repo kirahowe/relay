@@ -151,18 +151,26 @@
                       " has quarantined is listed but not shown until they release it.")
     :parameters (obj {:accept_contamination accept})
     :read (fn [{:keys [state config]} actor _]
-            (let [memos (core/unread-memos state actor)]
+            (let [memos (core/unread-memos state actor)
+                  kept (core/kept-memo-ids state actor)]
               (if (empty? memos)
                 "Nothing is waiting for you."
                 (show (for [m memos
                             :let [[who who-labels] (author state (:from m))]]
-                        (if (core/quarantined? config m)
+                        (cond
+                          ;; Another session's, waiting with it for the operator.
+                          (kept (:id m))
+                          (item (str "Memo " (:id m) " from " who ": kept by a session waiting for the"
+                                     " operator to decide a held call. It goes on there; leave it.\n")
+                                who-labels "")
+                          (core/quarantined? config m)
                           (assoc (item nil (:labels m)
                                        (str "Memo " (:id m) " from " who ": quarantined. It is contaminated,"
                                             " and the operator has to release it before you can read it.\n")
                                        who-labels)
                                  :always-withhold true)
                           ;; A released memo was delivered by the operator.
+                          :else
                           (item (fmt-memo (core/shown-memo state m)) (core/memo-labels state m)
                                 (str "Memo " (:id m) " from " who ": contaminated.\n") who-labels)))
                       ;; A contaminated memo shown here was released by the
