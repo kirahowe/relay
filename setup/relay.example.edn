@@ -25,7 +25,9 @@
  :dead-letter-handler "hub"
 
  ;; Tools beyond relay's own, each an external command given the call's
- ;; arguments after its own. Every tool has a :class, which says what a
+ ;; arguments after its own, with no -- in between: such a tool must
+ ;; refuse flags in the model's part, as rem and github-file do. New tools
+ ;; are better written for the envelope protocol (see below). Every tool has a :class, which says what a
  ;; call can do:
  ;;   :read    returns content and sends nothing out
  ;;   :write   changes relay's own data only
