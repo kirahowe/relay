@@ -300,7 +300,7 @@
   (prop/for-all [harness gen-harness
                  timeout-ms (gen/elements [nil 60000 3600000])
                  model (gen/elements [nil "role-model"])]
-    (let [request {:harness harness :model model :system-prompt "s" :prompt "hello"
+    (let [request {:harness harness :role {:id "clerk"} :model model :system-prompt "s" :prompt "hello"
                    :tools [{:name "inbox" :description "d" :parameters {} :class :read}]
                    :tool-command ["relay" "tool"] :session-dir "/data/runs/clerk/conversations"
                    :timeout-ms timeout-ms}
@@ -310,8 +310,9 @@
            (not-any? #(contains? acp %) [:session :prompt :timeout_seconds])
            (= {:inbox "read"} (update-keys (:tool_kinds acp) keyword))
            (= (:context-window harness) (:context_window acp))
+           (= "relay · clerk" (:title acp))
            (= (dissoc run :session :prompt :timeout_seconds)
-              (dissoc acp :session_dir :tool_kinds :context_window))))))
+              (dissoc acp :session_dir :tool_kinds :context_window :title))))))
 
 (deftest an-acp-request-differs-from-a-run-request-only-in-its-sessions
   (let [result (tc/quick-check 300 an-acp-request-is-a-run-request-for-a-session-directory)]

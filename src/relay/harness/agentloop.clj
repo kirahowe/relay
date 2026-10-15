@@ -172,12 +172,14 @@
   "The request `agentloop acp` reads. The client opens and loads sessions,
   so the request names their directory instead of one session, and has no
   prompt and no deadline: an ACP turn ends when the client cancels it. It
-  adds what only a client shows: each tool's ACP kind, and the model's
-  context window when the harness settings give one."
-  [{:keys [session-dir tools harness] :as request} work]
+  adds what only a client shows: each tool's ACP kind, the model's
+  context window when the harness settings give one, and a title,
+  \"relay · <role id>\", for the client to name the conversation by."
+  [{:keys [session-dir tools harness role] :as request} work]
   (let [kinds (acp/tool-kinds tools)
         window (:context-window harness)]
     (cond-> (assoc (base-request request work) :session_dir (str session-dir))
+      (:id role) (assoc :title (str "relay · " (:id role)))
       (seq kinds) (assoc :tool_kinds kinds)
       window (assoc :context_window window))))
 
