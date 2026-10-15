@@ -4,7 +4,8 @@
   granted, and only the operator edits them. No role has a tool that can
   read or write the file."
   (:require [babashka.fs :as fs]
-            [clojure.edn :as edn])
+            [clojure.edn :as edn]
+            [clojure.string :as str])
   (:import (java.time ZoneId)))
 
 (def tool-classes
@@ -38,6 +39,9 @@
    ;; A last resort against a role stuck in a loop, far above ordinary use.
    :runaway-wakes 30
    :runaway-window-minutes 60
+   ;; The ACP client `relay chat` runs, given `-- relay acp <role>` after
+   ;; these arguments.
+   :chat-client ["acp-tui"]
    :tools {}
    :grants {}})
 
@@ -78,8 +82,12 @@
 
 (defn validate
   "Returns the config, or throws describing the first problem found."
-  [{:keys [tools grants max-attempts] :as config}]
+  [{:keys [tools grants max-attempts chat-client] :as config}]
   (check-required config)
+  (when-not (and (sequential? chat-client) (seq chat-client)
+                 (every? #(and (string? %) (not (str/blank? %))) chat-client))
+    (problem! (str "relay.edn has :chat-client " (pr-str chat-client)
+                   "; it must be a command, such as [\"acp-tui\"].")))
   (doseq [[tool-name {:keys [class]}] tools]
     (when-not (tool-classes class)
       (throw (ex-info (str "Tool " tool-name " needs a :class, one of "

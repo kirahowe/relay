@@ -38,16 +38,12 @@
 
   A clean exit is not a verdict on the memos. Only the role closing them is.
 
-  A conversation is not run by the harness. The harness describes the
-  command for it, as data, and relay's dispatcher starts the process:
-
-    chat-command  the program that talks to the operator on this terminal
-    acp-command   the program that speaks ACP on stdin and stdout
-
-  Each returns {:argv :dir :env :session-dir}, plus :session for the
-  session it opens when it knows it, or {:problem text} when it cannot
-  run. Either may write files (a request file, say) into the run
-  directory, but neither starts a process."
+  A conversation is not run by the harness. The harness describes, as
+  data, the program that speaks ACP on stdin and stdout for it
+  (`acp-command`), and relay's dispatcher starts the process. It returns
+  {:argv :dir :env :session-dir}, or {:problem text} when it cannot run.
+  It may write files (a request file, say) into the run directory, but it
+  starts no process."
   (:refer-clojure :exclude [run!])
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
@@ -59,24 +55,14 @@
 (defmethod run! :default [request]
   (throw (ex-info (str "No harness kind " (pr-str (get-in request [:harness :kind])) ".") {})))
 
-(defn- no-mode [request mode]
-  {:problem (str "The " (pr-str (get-in request [:harness :kind])) " harness has no " mode ".")})
-
-(defmulti chat-command
-  "Describes an interactive session on the terminal with a conversation
-  request (no prompt): the operator talks to the role directly. The
-  session-dir is where the conversation's sessions go."
-  (fn [request] (get-in request [:harness :kind])))
-
-(defmethod chat-command :default [request] (no-mode request "interactive mode"))
-
 (defmulti acp-command
   "Describes an ACP agent for a conversation request: a program that
   speaks the Agent Client Protocol on stdin and stdout and keeps each ACP
   session it opens in the session-dir."
   (fn [request] (get-in request [:harness :kind])))
 
-(defmethod acp-command :default [request] (no-mode request "ACP mode"))
+(defmethod acp-command :default [request]
+  {:problem (str "The " (pr-str (get-in request [:harness :kind])) " harness has no ACP mode.")})
 
 (defn base-env
   "A minimal environment for a harness: enough to find programs and a home,

@@ -41,9 +41,8 @@
   one JSON line per session entry, then an outcome line. The session itself
   is a file in the role's session directory, named by the session id.
 
-  A conversation writes its request the same way and is described, not run:
-  `agentloop chat request.json` for the terminal, and `agentloop acp
-  request.json` for an ACP client, whose request names the conversations
+  A conversation writes its request the same way and is described, not
+  run: `agentloop acp request.json`, whose request names the conversations
   directory instead of one session.
 
   How a run ended is read from the outcome line, never from the exit code:
@@ -161,12 +160,12 @@
       (seq retry) (assoc :retry (into {} (keep (fn [[k v]] (when-let [k2 (retry-keys k)] [k2 v])) retry))))))
 
 (defn request-json
-  "The request `agentloop run` and `agentloop chat` read: one session, the
-  file named by `id` in the session directory. `prompt` is nil for an
-  interactive session."
+  "The request `agentloop run` reads: the wake's prompt, and one session,
+  the file named by `id` in the session directory."
   [{:keys [prompt session-dir timeout-ms] :as request} id work]
-  (cond-> (assoc (base-request request work) :session (str (fs/path session-dir (str id ".jsonl"))))
-    prompt (assoc :prompt prompt)
+  (cond-> (assoc (base-request request work)
+                 :session (str (fs/path session-dir (str id ".jsonl")))
+                 :prompt prompt)
     timeout-ms (assoc :timeout_seconds (max 1 (- (quot timeout-ms 1000) 10)))))
 
 (defn acp-request-json
@@ -217,13 +216,6 @@
                           :session id
                           :now (Instant/now)})
                :transcript out)))))
-
-(defmethod harness/chat-command :agentloop [{:keys [session-dir] :as request}]
-  (let [request (dissoc request :prompt)
-        {:keys [problem id work file bin env] :as prepared} (prepare! request #(request-json request %1 %2))]
-    (if problem
-      prepared
-      {:argv [bin "chat" file] :dir work :env env :session id :session-dir session-dir})))
 
 (defmethod harness/acp-command :agentloop [{:keys [session-dir] :as request}]
   (let [{:keys [problem work file bin env] :as prepared} (prepare! request (fn [_ work] (acp-request-json request work)))]

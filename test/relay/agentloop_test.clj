@@ -298,10 +298,9 @@
 
 (def an-acp-request-is-a-run-request-for-a-session-directory
   (prop/for-all [harness gen-harness
-                 prompt (gen/elements [nil "hello"])
                  timeout-ms (gen/elements [nil 60000 3600000])
                  model (gen/elements [nil "role-model"])]
-    (let [request {:harness harness :model model :system-prompt "s" :prompt prompt
+    (let [request {:harness harness :model model :system-prompt "s" :prompt "hello"
                    :tools [{:name "inbox" :description "d" :parameters {} :class :read}]
                    :tool-command ["relay" "tool"] :session-dir "/data/runs/clerk/conversations"
                    :timeout-ms timeout-ms}
@@ -330,14 +329,6 @@
     (try
       (spit bin "#!/bin/sh\ntouch \"$0.ran\"\nexit 9\n")
       (fs/set-posix-file-permissions bin "rwxr-xr-x")
-      (testing "chat: the terminal program, with the session it opens"
-        (let [{:keys [argv dir session session-dir] :as cmd} (harness/chat-command request)
-              written (read-request)]
-          (is (= [bin "chat" (str (fs/path (:run-dir request) "request.json"))] argv) (pr-str cmd))
-          (is (= (str (fs/path (:run-dir request) "work")) dir))
-          (is (= (:session-dir request) session-dir))
-          (is (= (str (fs/path session-dir (str session ".jsonl"))) (:session written)))
-          (is (not (contains? written :prompt)))))
       (testing "acp: the ACP agent, with a directory of sessions"
         (let [{:keys [argv session-dir] :as cmd} (harness/acp-command request)
               written (read-request)]
@@ -346,10 +337,9 @@
           (is (= session-dir (:session_dir written)))
           (is (not-any? #(contains? written %) [:session :prompt :timeout_seconds]))
           (is (fs/directory? session-dir))))
-      (testing "neither starts a process"
+      (testing "describing it starts no process"
         (is (not (fs/exists? (str bin ".ran")))))
       (testing "what cannot run is a problem, not an exception"
         (is (string? (:problem (harness/acp-command (assoc-in request [:harness :api-key-command] [])))))
-        (is (string? (:problem (harness/chat-command (assoc-in request [:harness :api-key-command] [])))))
         (is (string? (:problem (harness/acp-command (assoc-in request [:harness :kind] :script))))))
       (finally (fs/delete-tree dir)))))

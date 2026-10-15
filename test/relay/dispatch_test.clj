@@ -337,12 +337,38 @@
     (is (false? @called))
     (is (= [:ended true] ((juxt :status :crashed) (first (chat-wakes)))))))
 
-(deftest chat-on-a-harness-with-no-interactive-mode-ends-the-conversation
-  ;; The script harness describes no chat command, so relay starts nothing.
-  (let [e (try (dispatch/chat! *sys* "clerk") (catch clojure.lang.ExceptionInfo e e))]
-    (is (str/includes? (ex-message e) "harness has no interactive mode"))
-    (is (= :ended (:status (first (chat-wakes)))))
-    (is (not (core/running? (state) "clerk")))))
+(def gen-arg (gen/such-that #(not= "--" %) gen/string-alphanumeric))
+
+(def chat-gives-the-client-relay-acp-as-its-agent
+  (prop/for-all [client (gen/not-empty (gen/vector gen-arg 1 4))
+                 relay gen-arg
+                 role gen-arg
+                 data (gen/one-of [(gen/return nil) gen-arg])]
+    (let [argv (dispatch/chat-argv client relay role data)
+          [before [_ & agent]] (split-with #(not= "--" %) argv)]
+      (and (= client before)
+           (= (concat [relay "acp" role] (when data ["--data" data])) agent)))))
+
+(deftest chat-runs-the-client-with-relay-acp-after-the-double-dash
+  (let [result (tc/quick-check 300 chat-gives-the-client-relay-acp-as-its-agent)]
+    (is (:pass? result) (pr-str (select-keys result [:seed :shrunk :fail])))))
+
+(deftest chat-without-its-client-says-so-and-opens-no-conversation
+  (write-config! {:chat-client [(str *dir* "/no-such-client")]})
+  (let [err (java.io.StringWriter.)
+        exit (binding [*err* err] (dispatch/chat! (system) "clerk" {}))]
+    (is (= 1 exit))
+    (is (str/includes? (str err) "no-such-client, and it is not installed") (str err))
+    (is (empty? (chat-wakes)))))
+
+(deftest the-chat-client-must-be-a-command
+  (let [cfg (fn [c] (config/resolve-config (cond-> {:timezone "UTC" :default-harness :a :notify {:kind :none}
+                                                    :harnesses {:a {:kind :script}}}
+                                             (some? c) (assoc :chat-client c))))]
+    (is (= ["acp-tui"] (:chat-client (cfg nil))) "acp-tui by default")
+    (is (= ["/opt/bin/tui" "--agent-log" "/tmp/x"] (:chat-client (cfg ["/opt/bin/tui" "--agent-log" "/tmp/x"]))))
+    (doseq [bad [[] "acp-tui" [""] [:acp-tui] ["acp-tui" nil] {}]]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":chat-client" (cfg bad)) (pr-str bad)))))
 
 (deftest a-conversation-killed-earlier-is-reaped-before-the-next-one-starts
   (let [dead (p/process ["true"])

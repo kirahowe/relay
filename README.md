@@ -161,6 +161,26 @@ Talk to a role with `relay chat <role>` in this terminal, or from an ACP
 client with `relay acp <role>`. `relay status` shows roles, open work,
 harnesses and recent wakes, and `relay help` lists every command.
 
+### relay chat
+
+`relay chat <role>` needs [acp-tui](https://github.com/kirahowe/acp-tui),
+a terminal client for ACP agents. Build it with `make -C ../acp-tui build`
+and put `bin/acp-tui` on your PATH. relay runs it as
+`acp-tui -- relay acp <role>`, adding `--data <dir>` when you gave
+`relay chat` one, so a chat is an ordinary ACP conversation: `relay acp`
+opens it, holds the role and records its sessions.
+
+To use another client, or acp-tui somewhere other than PATH, set
+`:chat-client` in `relay.edn` to the command and any arguments that come
+before `--`:
+
+```clojure
+:chat-client ["/opt/acp-tui/bin/acp-tui" "--agent-log" "/tmp/relay-agent.log"]
+```
+
+The client gets `--` and then the agent command as its last arguments. If
+relay cannot find the client, it says so on stderr and exits 1.
+
 ### ACP clients
 
 `relay acp <role>` speaks the [Agent Client Protocol](https://agentclientprotocol.com)

@@ -39,7 +39,9 @@ Every command needs the data directory, from --data <dir> or from the file
   relay unroutine <role> <name>       remove a routine
   relay retry <role>                  requeue a role's dead-lettered memos
   relay wake <role> [--note <text>]   run a role now, ignoring retry delays
-  relay chat <role>                   talk with a role in this terminal
+  relay chat <role>                   talk with a role in this terminal, through
+                                      the chat client (acp-tui unless relay.edn
+                                      names another with :chat-client)
   relay acp <role> [--trace <file>]   talk with a role from an ACP client, which
                                       runs this as its agent command; --trace
                                       appends the traffic to <file> as JSON lines
@@ -276,7 +278,7 @@ Every command needs the data directory, from --data <dir> or from the file
                        (if (#{:ran :idle} (:result result)) 0 1))
               "chat" (let [[r] more]
                        (when-not r (fail! "usage: relay chat <role>"))
-                       (or (dispatch/chat! sys r) 0))
+                       (dispatch/chat! sys r {:data (when (:data opts) (str (fs/absolutize dir)))}))
               "acp" (let [[r] more]
                       (when-not r (fail! "usage: relay acp <role> [--trace <file>]"))
                       (dispatch/acp! sys r {:trace (:trace opts)}))

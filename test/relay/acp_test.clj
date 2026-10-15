@@ -414,3 +414,103 @@
         (is (= "" out))
         (is (not (str/blank? err)))
         (is (= [:ended true] ((juxt :status :crashed) (first (chat-wakes)))))))))
+
+;; --- relay chat: a chat client on the terminal, running relay acp
+
+(defn- fake-tui!
+  "A stand-in for acp-tui: it writes its argv to argv.json, runs the agent
+  command after `--`, opens a session, sends one prompt, writes what it saw
+  to seen.json and quits. Returns its path."
+  []
+  (let [path (str *dir* "/fake-tui")]
+    (spit path (str "#!/usr/bin/env bb\n"
+                    (pr-str
+                     `(do (require '[babashka.classpath :as ~'cp])
+                          (~'cp/add-classpath ~(str (fs/absolutize "test")))
+                          (require '[relay.acp-client :as ~'client] '[cheshire.core :as ~'json])
+                          (let [~'args *command-line-args*
+                                ~'_ (spit ~(str *dir* "/argv.json") (~'json/generate-string ~'args))
+                                ~'c (~'client/start! (rest (drop-while #(not= "--" %) ~'args)) {:err :inherit})
+                                ~'sid (~'client/handshake! ~'c ~*dir*)
+                                ~'resp (~'client/request! ~'c "session/prompt" (~'client/prompt-params ~'sid "hello relay"))]
+                            (spit ~(str *dir* "/seen.json")
+                                  (~'json/generate-string {:session ~'sid :stop (get-in ~'resp ["result" "stopReason"])
+                                                           :updates (~'client/updates ~'c)}))
+                            (~'client/close-input! ~'c)
+                            (System/exit (let [~'e (~'client/wait! ~'c 20000)] (if (integer? ~'e) ~'e 3))))))))
+    (fs/set-posix-file-permissions path "rwxr-xr-x")
+    path))
+
+(defn- set-chat-client! [client]
+  (let [file (str (data) "/relay.edn")]
+    (spit file (pr-str (assoc (read-string (slurp file)) :chat-client client)))))
+
+(deftest chat-runs-the-client-with-relay-acp-and-opens-one-conversation
+  (if-not bin
+    (println "SKIPPED: agentloop is not built; run make -C ../agentloop build")
+    (with-world {} (fn [body] {:text (str "You said: " (str/includes? (pr-str body) "hello relay"))})
+      (fn []
+        (set-chat-client! [(fake-tui!)])
+        (let [{:keys [exit out err]} @(p/process [relay-bin "chat" "clerk" "--data" (data)]
+                                                 {:in "" :out :string :err :string :dir *dir*})
+              argv (json/parse-string (slurp (str *dir* "/argv.json")))
+              seen (json/parse-string (slurp (str *dir* "/seen.json")) true)]
+          (is (= 0 exit) (str out err))
+          (testing "the client gets relay acp for the role, with the data directory"
+            (is (= ["--" relay-bin "acp" "clerk" "--data" (str (fs/absolutize (data)))] argv)))
+          (testing "the conversation went through"
+            (is (= "end_turn" (:stop seen)) (pr-str seen))
+            (is (= "You said: true" (apply str (for [u (:updates seen)
+                                                     :when (= "agent_message_chunk" (:sessionUpdate u))]
+                                                 (get-in u [:content :text]))))))
+          (testing "exactly one wake, the conversation, started and ended, recording its session"
+            (let [wakes (vals (:wakes (state)))
+                  starts (filter #(= "wake/started" (:type %)) (log/read-events (data)))
+                  ends (filter #(= "wake/ended" (:type %)) (log/read-events (data)))]
+              (is (= 1 (count wakes)) (pr-str wakes))
+              (is (= 1 (count starts)))
+              (is (= 1 (count ends)))
+              (is (= [:ended true "ran" [(:session seen)]]
+                     ((juxt :status :chat :outcome :sessions) (first wakes))))
+              (is (fs/exists? (session-file (:session seen)))))))))))
+
+(defn- wait-for [pred timeout-ms]
+  (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
+    (loop []
+      (or (pred)
+          (when (< (System/currentTimeMillis) deadline)
+            (Thread/sleep 50)
+            (recur))))))
+
+(def acp-tui (some-> (fs/which "acp-tui") str))
+
+(deftest chat-with-the-real-acp-tui-on-a-pty
+  ;; script(1) gives relay chat a pseudo-terminal, as a person's terminal
+  ;; would; the keys go in through its stdin.
+  (if-not (and bin acp-tui (fs/which "script"))
+    (println "SKIPPED: needs agentloop, acp-tui and script(1)")
+    (with-world {} (fn [body] {:text (str "You said: " (str/includes? (pr-str body) "hello relay"))})
+      (fn []
+        (let [proc (p/process ["script" "-q" "/dev/null" relay-bin "chat" "clerk" "--data" (data)]
+                              {:out :string :err :string :dir *dir*})
+              keys! (fn [s] (doto ^java.io.OutputStream (:in proc) (.write (.getBytes ^String s)) (.flush)))
+              conversation #(first (filter :chat (vals (:wakes (state)))))]
+          (try
+            (is (wait-for #(= :running (:status (conversation))) 30000) "the conversation opened")
+            (Thread/sleep 500)
+            (keys! "hello relay\r")
+            (is (wait-for #(seq @(:requests *mock*)) 30000) "the prompt reached the model")
+            (Thread/sleep 1000)
+            (keys! "\u0003")
+            (let [{:keys [exit out]} (deref proc 30000 {:exit :timeout})]
+              (is (= 0 exit) (str (subs (str out) (max 0 (- (count (str out)) 2000))))))
+            (let [wakes (vals (:wakes (state)))
+                  [session] (:sessions (first wakes))]
+              (is (= 1 (count wakes)))
+              (is (= [:ended true "ran"] ((juxt :status :chat :outcome) (first wakes))) (pr-str wakes))
+              (is (some? session))
+              (is (str/includes? (slurp (session-file session)) "You said: true")
+                  "the reply to what was typed is in the session"))
+            (finally
+              (when (.isAlive ^Process (:proc proc))
+                (.destroyForcibly ^Process (:proc proc))))))))))

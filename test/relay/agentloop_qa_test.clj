@@ -8,7 +8,6 @@
     environment
   - a wake whose agentloop is killed at a random moment, over and over,
     leaves the memos consistent and runs no tool call twice
-  - an interactive session with piped input
 
   The kill trials run three times."
   (:require [babashka.fs :as fs]
@@ -643,27 +642,3 @@
                     (frequencies (mapcat :outcomes trials))))
       (doseq [t trials]
         (is (empty? (:problems t)) (pr-str t))))))
-
-;; --- an interactive session
-
-(deftest chat-with-piped-input-talks-and-lets-go-of-the-role
-  (when bin
-    (with-world {} (fn [body] {:text (str "You said: " (str/includes? (all-text body) "hello relay"))})
-      (fn []
-        (let [id (memo! "Untouched by a conversation")
-              proc (p/process [relay-bin "chat" "clerk" "--data" (str *dir* "/data")]
-                              {:in "hello relay\n" :out :string :err :string
-                               :dir *dir*})
-              {:keys [exit out err]} (deref proc 90000 {:exit :timeout})
-              wakes (vals (:wakes (state)))]
-          (is (= 0 exit) (str out err))
-          (is (str/includes? (str out) "You said: true") (str out err))
-          (is (= 1 (count wakes)))
-          (is (= [:ended true "ran"] ((juxt :status :chat :outcome) (first wakes))))
-          (is (= "Conversation ended." (:said (first wakes))))
-          (testing "the log records the session the conversation used, kept apart from wake sessions"
-            (let [[session :as sessions] (:sessions (first wakes))]
-              (is (= 1 (count sessions)) (pr-str (first wakes)))
-              (is (fs/exists? (str *dir* "/data/runs/clerk/conversations/" session ".jsonl")))))
-          (is (zero? (:attempts (memo id))))
-          (is (= [] (find-secret *dir*))))))))

@@ -1096,6 +1096,8 @@ rule OpenConversation {
         -- the role does with them there is up to the conversation, and
         -- nothing counts against them when it ends. It does not resume
         -- an interrupted wake and leaves it to be resumed later.
+        -- A conversation runs over ACP, so any ACP client can hold one;
+        -- relay chat is one such client, on the operator's terminal.
 }
 
 rule RunWake {
@@ -1109,7 +1111,8 @@ rule RunWake {
         -- earlier wakes left it open, and the note if there is one. A
         -- wake that resumes another continues that wake's session where
         -- the harness can and is told it was cut short. A conversation
-        -- runs on the operator's terminal instead of headless.
+        -- has no prompt and does not run headless: it runs over ACP, and
+        -- the client sends each turn.
 }
 
 rule EndWake {
@@ -1131,7 +1134,8 @@ rule EndWake {
     @guidance
         -- Only the dispatcher ends wakes. Wakes end by the harness
         -- reporting, by the tick finding the process gone, or, for a
-        -- conversation, when the terminal session ends. A wake reports
+        -- conversation, when its ACP client goes away or relay is told
+        -- to stop it. A wake reports
         -- the one session a later wake can resume. A conversation
         -- reports every session it used instead, so the log says which
         -- sessions a conversation held.

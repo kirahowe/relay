@@ -230,27 +230,10 @@
 
 (def ^:private terminal-signals
   "SIGINT and SIGHUP, ignored. The terminal sends them to relay as well as
-  to the harness, and relay has to outlive the harness to record that the
-  conversation ended. The harness decides what they mean."
+  to the program relay runs on it, and relay has to outlive that program:
+  `relay acp` to record that the conversation ended, `relay chat` to wait
+  for its client. The program decides what they mean."
   {"INT" (fn []) "HUP" (fn [])})
-
-(defn- run-on-terminal!
-  "Runs a described command on this terminal, sharing its stdin, stdout
-  and stderr. Returns the exit code."
-  [{:keys [problem argv dir env]}]
-  (when problem (throw (ex-info problem {})))
-  (with-signals terminal-signals
-    #(:exit (apply p/shell {:dir (str dir) :env env :continue true} argv))))
-
-(defn chat!
-  "Opens an interactive session as a role on this terminal. Returns the
-  harness's exit code."
-  [sys role-id]
-  (:exit (with-conversation! sys role-id
-           (fn [request]
-             (let [command (harness/chat-command request)]
-               {:exit (run-on-terminal! command)
-                :sessions (some-> (:session command) vector)})))))
 
 ;; --- a conversation over ACP
 
@@ -380,6 +363,32 @@
         (catch Exception e
           (println (or (ex-message e) (str (class e))))
           1)))))
+
+;; --- a conversation on this terminal
+
+(defn chat-argv
+  "The command `relay chat` runs: the chat client, given relay's own `acp`
+  command for the role as its agent, with the data directory when one was
+  named."
+  [client relay role data]
+  (vec (concat client ["--" relay "acp" role] (when data ["--data" data]))))
+
+(defn chat!
+  "Talks with a role on this terminal by running the chat client (the
+  :chat-client setting, acp-tui by default) with `relay acp <role>` as its
+  agent. relay acp opens and ends the conversation; this only waits for the
+  client. Returns the client's exit code, or 1 when there is no client."
+  [{:keys [config]} role-id {:keys [data]}]
+  (let [[program & args] (:chat-client config)
+        found (some-> (fs/which program) str)]
+    (if-not found
+      (binding [*out* *err*]
+        (println (str "relay chat needs the chat client " program ", and it is not installed. "
+                      "Install acp-tui, or name another ACP client with :chat-client in relay.edn."))
+        1)
+      (with-signals terminal-signals
+        #(:exit (apply p/shell {:continue true}
+                       (chat-argv (cons found args) (relay-bin) role-id data)))))))
 
 ;; --- the tick
 
