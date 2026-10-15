@@ -391,6 +391,9 @@ entity Wake {
     said: String?
     -- When a rate limit lifts, if the harness said.
     resets_at: Timestamp?
+    -- For a conversation, the harness sessions it used, in the order it
+    -- opened them. Empty for a wake.
+    sessions: List<String>
     -- The earlier wake this one carries on from, if any.
     resumes: Wake?
 
@@ -1110,9 +1113,10 @@ rule RunWake {
 }
 
 rule EndWake {
-    when: WakeReported(wake, outcome, exit?, crashed, cut_short, session?, said?, transcript?, resets_at?)
+    when: WakeReported(wake, outcome, exit?, crashed, cut_short, session?, sessions?, said?, transcript?, resets_at?)
 
     requires: wake.status = running
+    requires: sessions = null or wake.chat
 
     ensures:
         wake.status = ended
@@ -1122,11 +1126,15 @@ rule EndWake {
         wake.cut_short = cut_short
         wake.said = said
         wake.resets_at = resets_at
+        wake.sessions = sessions ?? []
 
     @guidance
         -- Only the dispatcher ends wakes. Wakes end by the harness
         -- reporting, by the tick finding the process gone, or, for a
-        -- conversation, when the terminal session ends.
+        -- conversation, when the terminal session ends. A wake reports
+        -- the one session a later wake can resume. A conversation
+        -- reports every session it used instead, so the log says which
+        -- sessions a conversation held.
 }
 
 rule InterruptedWakeIsKept {

@@ -13,9 +13,10 @@
     :tools          the tools the role is offered (relay.tools/manifest)
     :tool-command   the command a harness runs for a tool call, given the
                     tool's name as its last argument: relay's own `tool`
-                    command with the data directory, role and wake already
-                    named. Tool calls get base-env and nothing else.
-    :run-dir        an empty directory for this wake's transcript and files
+                    command with the data directory and role already named.
+                    Tool calls get base-env and nothing else.
+    :run-dir        a directory for this wake's transcript and files, which
+                    the harness creates
     :session-dir    where the harness keeps sessions for this role
     :resume         a session to carry on from, if the last wake was cut short
     :timeout-ms     how long the run may take
@@ -35,7 +36,18 @@
     :resets-at   when a rate limit lifts, if the harness said
     :transcript  where the full transcript is
 
-  A clean exit is not a verdict on the memos. Only the role closing them is."
+  A clean exit is not a verdict on the memos. Only the role closing them is.
+
+  A conversation is not run by the harness. The harness describes the
+  command for it, as data, and relay's dispatcher starts the process:
+
+    chat-command  the program that talks to the operator on this terminal
+    acp-command   the program that speaks ACP on stdin and stdout
+
+  Each returns {:argv :dir :env :session-dir}, plus :session for the
+  session it opens when it knows it, or {:problem text} when it cannot
+  run. Either may write files (a request file, say) into the run
+  directory, but neither starts a process."
   (:refer-clojure :exclude [run!])
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
@@ -47,15 +59,24 @@
 (defmethod run! :default [request]
   (throw (ex-info (str "No harness kind " (pr-str (get-in request [:harness :kind])) ".") {})))
 
-(defmulti chat!
-  "Runs an interactive session on the terminal with the same request, less
-  the prompt: the operator talks to the role directly. Returns the exit
-  code."
+(defn- no-mode [request mode]
+  {:problem (str "The " (pr-str (get-in request [:harness :kind])) " harness has no " mode ".")})
+
+(defmulti chat-command
+  "Describes an interactive session on the terminal with a conversation
+  request (no prompt): the operator talks to the role directly. The
+  session-dir is where the conversation's sessions go."
   (fn [request] (get-in request [:harness :kind])))
 
-(defmethod chat! :default [request]
-  (throw (ex-info (str "The " (pr-str (get-in request [:harness :kind]))
-                       " harness has no interactive mode.") {})))
+(defmethod chat-command :default [request] (no-mode request "interactive mode"))
+
+(defmulti acp-command
+  "Describes an ACP agent for a conversation request: a program that
+  speaks the Agent Client Protocol on stdin and stdout and keeps each ACP
+  session it opens in the session-dir."
+  (fn [request] (get-in request [:harness :kind])))
+
+(defmethod acp-command :default [request] (no-mode request "ACP mode"))
 
 (defn base-env
   "A minimal environment for a harness: enough to find programs and a home,
@@ -115,6 +136,7 @@
 (defmethod run! :script
   [{:keys [harness system-prompt prompt tools tool-command run-dir resume timeout-ms]}]
   (let [file #(str (fs/path run-dir %))
+        _ (fs/create-dirs run-dir)
         _ (spit (file "system-prompt.md") system-prompt)
         _ (spit (file "tools.json") (json/generate-string tools))
         out (file "transcript.log")

@@ -32,15 +32,19 @@
   Each wake writes request.json in its run directory and runs
   `agentloop run request.json`. The model gets relay's tools and nothing
   else. A tool call runs relay's `tool` command (the request's :tool-command,
-  with the data directory, role and wake named) with only the base
+  with the data directory and role named) with only the base
   environment, which never holds the API key. The transcript is agentloop's output:
   one JSON line per session entry, then an outcome line. The session itself
   is a file in the role's session directory, named by the session id.
 
+  A conversation writes its request the same way and is described, not run:
+  `agentloop chat request.json` for the terminal, and `agentloop acp
+  request.json` for an ACP client, whose request names the conversations
+  directory instead of one session.
+
   How a run ended is read from the outcome line, never from the exit code:
   agentloop exits 0 whenever it reaches an outcome."
   (:require [babashka.fs :as fs]
-            [babashka.process :as p]
             [cheshire.core :as json]
             [clojure.string :as str]
             [relay.harness :as harness])
@@ -130,9 +134,9 @@
 (def ^:private no-bin
   "agentloop not found: set :bin, put agentloop on PATH, or run `make -C ../agentloop build`.")
 
-(defn request-json
-  "The request agentloop reads. `prompt` is nil for an interactive session."
-  [{:keys [harness model system-prompt prompt tools tool-command session-dir timeout-ms]} id work]
+(defn- base-request
+  "What every agentloop request holds, whatever the mode."
+  [{:keys [harness model system-prompt tools tool-command]} work]
   (let [{:keys [provider effort base-url retry limits tool-timeout-seconds api-key-command]} harness
         limit-keys {:max-turns :max_turns :max-tool-calls :max_tool_calls :max-tokens :max_tokens}
         retry-keys {:retries :retries :backoff-seconds :backoff_seconds
@@ -142,22 +146,36 @@
              :effort (or effort default-effort)
              :api_key_command (vec api-key-command)
              :system system-prompt
-             :session (str (fs/path session-dir (str id ".jsonl")))
              :tools (mapv #(select-keys % [:name :description :parameters]) tools)
              :tool_command (vec tool-command)
              :tool_env (harness/base-env {})
              :tool_dir (str work)
              :tool_timeout_seconds (or tool-timeout-seconds default-tool-timeout-seconds)}
       base-url (assoc :base_url base-url)
-      prompt (assoc :prompt prompt)
-      timeout-ms (assoc :timeout_seconds (max 1 (- (quot timeout-ms 1000) 10)))
       (seq limits) (assoc :limits (into {} (keep (fn [[k v]] (when-let [k2 (limit-keys k)] [k2 v])) limits)))
       (seq retry) (assoc :retry (into {} (keep (fn [[k v]] (when-let [k2 (retry-keys k)] [k2 v])) retry))))))
 
+(defn request-json
+  "The request `agentloop run` and `agentloop chat` read: one session, the
+  file named by `id` in the session directory. `prompt` is nil for an
+  interactive session."
+  [{:keys [prompt session-dir timeout-ms] :as request} id work]
+  (cond-> (assoc (base-request request work) :session (str (fs/path session-dir (str id ".jsonl"))))
+    prompt (assoc :prompt prompt)
+    timeout-ms (assoc :timeout_seconds (max 1 (- (quot timeout-ms 1000) 10)))))
+
+(defn acp-request-json
+  "The request `agentloop acp` reads. The client opens and loads sessions,
+  so the request names their directory instead of one session, and has no
+  prompt and no deadline: an ACP turn ends when the client cancels it."
+  [{:keys [session-dir] :as request} work]
+  (assoc (base-request request work) :session_dir (str session-dir)))
+
 (defn- prepare!
-  "Writes request.json into the run directory. Returns {:id :work :file :bin
-  :env}, or {:problem text} when it cannot run."
-  [{:keys [harness run-dir session-dir resume] :as request}]
+  "Finds the binary and writes the request that `build` makes into the run
+  directory. Returns {:id :work :file :bin :env}, or {:problem text} when
+  agentloop cannot run."
+  [{:keys [harness run-dir session-dir resume]} build]
   (let [bin (agentloop-bin harness)
         key (not-empty (:api-key-command harness))]
     (cond
@@ -169,13 +187,13 @@
             file (str (fs/path run-dir "request.json"))]
         (fs/create-dirs work)
         (fs/create-dirs session-dir)
-        (spit file (json/generate-string (request-json request id work)))
+        (spit file (json/generate-string (build id work)))
         {:id id :work work :file file :bin bin
          :env (harness/base-env {})}))))
 
 (defmethod harness/run! :agentloop
   [{:keys [run-dir timeout-ms] :as request}]
-  (let [{:keys [problem id work file bin env]} (prepare! request)]
+  (let [{:keys [problem id work file bin env]} (prepare! request #(request-json request %1 %2))]
     (if problem
       {:outcome "needs-attention" :exit nil :crashed false :said problem}
       (let [out (str (fs/path run-dir "transcript.jsonl"))
@@ -189,7 +207,15 @@
                           :now (Instant/now)})
                :transcript out)))))
 
-(defmethod harness/chat! :agentloop [request]
-  (let [{:keys [problem work file bin env]} (prepare! (dissoc request :prompt))]
-    (when problem (throw (ex-info problem {})))
-    (:exit (p/shell {:dir work :env env :continue true} bin "chat" file))))
+(defmethod harness/chat-command :agentloop [{:keys [session-dir] :as request}]
+  (let [request (dissoc request :prompt)
+        {:keys [problem id work file bin env] :as prepared} (prepare! request #(request-json request %1 %2))]
+    (if problem
+      prepared
+      {:argv [bin "chat" file] :dir work :env env :session id :session-dir session-dir})))
+
+(defmethod harness/acp-command :agentloop [{:keys [session-dir] :as request}]
+  (let [{:keys [problem work file bin env] :as prepared} (prepare! request (fn [_ work] (acp-request-json request work)))]
+    (if problem
+      prepared
+      {:argv [bin "acp" file] :dir work :env env :session-dir session-dir})))

@@ -7,8 +7,12 @@
             [cheshire.core :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [clojure.test.check :as tc]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]
             [relay.core :as core]
             [relay.dispatch :as dispatch]
+            [relay.harness :as harness]
             [relay.harness.agentloop :as agentloop]
             [relay.inbound :as inbound]
             [relay.log :as log]
@@ -269,3 +273,79 @@
                                       "id" "/tmp/work"))]
     (is (= 300 (:tool_timeout_seconds (req {}))))
     (is (= 45 (:tool_timeout_seconds (req {:tool-timeout-seconds 45}))))))
+
+;; --- conversations are described, not run
+
+(def gen-harness
+  (gen/fmap (fn [[provider effort base-url limits retry timeout model]]
+              (cond-> {:kind :agentloop :api-key-command ["key"]}
+                provider (assoc :provider provider) effort (assoc :effort effort)
+                base-url (assoc :base-url base-url) limits (assoc :limits limits)
+                retry (assoc :retry retry) timeout (assoc :tool-timeout-seconds timeout)
+                model (assoc :model model)))
+            (gen/tuple (gen/elements [nil "anthropic" "openai"])
+                       (gen/elements [nil "low" "max"])
+                       (gen/elements [nil "https://example.test"])
+                       (gen/one-of [(gen/return nil)
+                                    (gen/map (gen/elements [:max-turns :max-tool-calls :max-tokens :junk])
+                                             gen/nat)])
+                       (gen/one-of [(gen/return nil)
+                                    (gen/map (gen/elements [:retries :backoff-seconds :max-wait-seconds])
+                                             gen/nat)])
+                       (gen/elements [nil 5 300])
+                       (gen/elements [nil "m"]))))
+
+(def an-acp-request-is-a-run-request-for-a-session-directory
+  (prop/for-all [harness gen-harness
+                 prompt (gen/elements [nil "hello"])
+                 timeout-ms (gen/elements [nil 60000 3600000])
+                 model (gen/elements [nil "role-model"])]
+    (let [request {:harness harness :model model :system-prompt "s" :prompt prompt
+                   :tools [{:name "inbox" :description "d" :parameters {} :class :read}]
+                   :tool-command ["relay" "tool"] :session-dir "/data/runs/clerk/conversations"
+                   :timeout-ms timeout-ms}
+          run (agentloop/request-json request "id" "/w")
+          acp (agentloop/acp-request-json request "/w")]
+      (and (= "/data/runs/clerk/conversations" (:session_dir acp))
+           (not-any? #(contains? acp %) [:session :prompt :timeout_seconds])
+           (= (dissoc run :session :prompt :timeout_seconds) (dissoc acp :session_dir))))))
+
+(deftest an-acp-request-differs-from-a-run-request-only-in-its-sessions
+  (let [result (tc/quick-check 300 an-acp-request-is-a-run-request-for-a-session-directory)]
+    (is (:pass? result) (pr-str (select-keys result [:seed :shrunk :fail])))))
+
+(deftest conversations-are-described-as-commands-for-relay-to-start
+  (let [dir (str (fs/create-temp-dir {:prefix "relay-agentloop-describe"}))
+        ;; A binary that leaves a mark if anything runs it.
+        bin (str (fs/path dir "agentloop"))
+        request {:harness {:kind :agentloop :bin bin :api-key-command ["key"]}
+                 :system-prompt "s" :tools [] :tool-command ["relay" "tool" "--role" "clerk"]
+                 :run-dir (str (fs/path dir "run")) :session-dir (str (fs/path dir "conversations"))
+                 :timeout-ms 60000}
+        read-request #(json/parse-string (slurp (str (fs/path dir "run" "request.json"))) true)]
+    (try
+      (spit bin "#!/bin/sh\ntouch \"$0.ran\"\nexit 9\n")
+      (fs/set-posix-file-permissions bin "rwxr-xr-x")
+      (testing "chat: the terminal program, with the session it opens"
+        (let [{:keys [argv dir session session-dir] :as cmd} (harness/chat-command request)
+              written (read-request)]
+          (is (= [bin "chat" (str (fs/path (:run-dir request) "request.json"))] argv) (pr-str cmd))
+          (is (= (str (fs/path (:run-dir request) "work")) dir))
+          (is (= (:session-dir request) session-dir))
+          (is (= (str (fs/path session-dir (str session ".jsonl"))) (:session written)))
+          (is (not (contains? written :prompt)))))
+      (testing "acp: the ACP agent, with a directory of sessions"
+        (let [{:keys [argv session-dir] :as cmd} (harness/acp-command request)
+              written (read-request)]
+          (is (= [bin "acp" (str (fs/path (:run-dir request) "request.json"))] argv) (pr-str cmd))
+          (is (not (contains? cmd :session)))
+          (is (= session-dir (:session_dir written)))
+          (is (not-any? #(contains? written %) [:session :prompt :timeout_seconds]))
+          (is (fs/directory? session-dir))))
+      (testing "neither starts a process"
+        (is (not (fs/exists? (str bin ".ran")))))
+      (testing "what cannot run is a problem, not an exception"
+        (is (string? (:problem (harness/acp-command (assoc-in request [:harness :api-key-command] [])))))
+        (is (string? (:problem (harness/chat-command (assoc-in request [:harness :api-key-command] [])))))
+        (is (string? (:problem (harness/acp-command (assoc-in request [:harness :kind] :script))))))
+      (finally (fs/delete-tree dir)))))

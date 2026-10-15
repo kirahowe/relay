@@ -324,12 +324,13 @@
       (not chat) (assoc-in [:roles role :interrupted-wake] nil))))
 
 (defmethod evolve* "wake/ended" [state {:keys [at data]}]
-  (let [{:keys [wake outcome exit crashed cut-short session said transcript]} data
+  (let [{:keys [wake outcome exit crashed cut-short session sessions said transcript]} data
         role-id (get-in state [:wakes wake :role])]
     (cond-> (update-in state [:wakes wake] assoc
                        :status :ended :ended-at (inst at) :outcome outcome :exit exit
                        :crashed (boolean crashed) :cut-short (boolean cut-short)
                        :session session :said said :transcript transcript)
+      sessions (assoc-in [:wakes wake :sessions] (vec sessions))
       ;; A wake the harness failed, or one cut short at its deadline, is
       ;; kept to be resumed. A conversation is not.
       (and (or (not= "ran" outcome) cut-short) (not (get-in state [:wakes wake :chat])))
@@ -727,14 +728,23 @@
                   :harness harness)
           :else tx)))))
 
-(defn- end-wake [{:keys [state] :as tx} wake-id {:keys [outcome exit crashed cut-short session said transcript
-                                                       resets-at]}]
+(defn- end-wake [{:keys [state] :as tx} wake-id {:keys [outcome exit crashed cut-short session sessions said
+                                                       transcript resets-at]}]
   (let [wake (get-in state [:wakes wake-id])]
     (when-not (harness-outcomes outcome)
       (reject! (str "Unknown harness outcome " (pr-str outcome) ".")))
+    ;; A conversation records every session it used, in order, instead of
+    ;; the one session a wake resumes from.
+    (when (some? sessions)
+      (when-not (and (sequential? sessions) (every? #(and (string? %) (not (blank? %))) sessions))
+        (reject! (str "Sessions must be a list of session ids, not " (pr-str sessions) ".")))
+      (when-not (:chat wake)
+        (reject! "Only a conversation records a list of sessions.")))
     (as-> tx tx
-      (emit tx "wake/ended" {:wake wake-id :outcome outcome :exit exit :crashed (boolean crashed)
-                             :cut-short (boolean cut-short) :session session :said said :transcript transcript})
+      (emit tx "wake/ended" (cond-> {:wake wake-id :outcome outcome :exit exit :crashed (boolean crashed)
+                                     :cut-short (boolean cut-short) :session session :said said
+                                     :transcript transcript}
+                              (some? sessions) (assoc :sessions (vec sessions))))
       (note-harness tx (:harness wake) outcome resets-at said)
       (if (= "ran" outcome) (settle-memos tx wake said) tx))))
 

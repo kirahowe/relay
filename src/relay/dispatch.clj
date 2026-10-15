@@ -7,6 +7,7 @@
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [clojure.java.io :as io]
+            [clojure.string :as str]
             [relay.config :as config]
             [relay.core :as core]
             [relay.harness :as harness]
@@ -62,12 +63,12 @@
     (if (and (:last-at state) (.isBefore t (:last-at state))) (:last-at state) t)))
 
 (defn wake-request
-  "Everything a harness needs for one wake."
+  "Everything a harness needs for one wake. Writes nothing: the harness
+  creates the run directory."
   [{:keys [data-dir config] :as sys} state {:keys [id role memos note resumes harness]}]
   (let [role-row (core/role state role)
         run-dir (fs/path data-dir "runs" role (str id))
         resumed (when resumes (get-in state [:wakes resumes]))]
-    (fs/create-dirs run-dir)
     {:harness (get-in config [:harnesses (keyword harness)])
      :harness-name harness
      :role role-row
@@ -84,8 +85,7 @@
                            :zone (config/zone config)
                            :resumed? (some? resumes)})
      :tools (tools/manifest config role)
-     :tool-command [(relay-bin) "tool" "--data" (str (fs/absolutize data-dir))
-                    "--role" role "--wake" (str id)]
+     :tool-command [(relay-bin) "tool" "--data" (str (fs/absolutize data-dir)) "--role" role]
      :run-dir (str run-dir)
      :session-dir (str (fs/path data-dir "runs" role "sessions"))
      :resume (:session resumed)
@@ -103,6 +103,20 @@
     (catch Exception e
       {:outcome "ran" :exit nil :crashed true :cut-short false
        :said (str "The harness adapter failed: " (or (ex-message e) (class e)))})))
+
+(defn- exit-field
+  "An exit code as the log keeps it: a number, or a word such as \"timeout\"."
+  [exit]
+  (if (number? exit) exit (some-> exit str)))
+
+(defn wake-end-args
+  "The :wake/end args for a harness's report on a wake."
+  [wake-id report]
+  (-> (select-keys report [:outcome :exit :crashed :cut-short :session :said :resets-at])
+      (update :exit exit-field)
+      (update :resets-at #(some-> % str))
+      (assoc :wake wake-id
+             :transcript (some-> (:transcript report) str))))
 
 (defn wake!
   "Starts a wake of a role, runs it and ends it. Returns {:result ...}:
@@ -127,12 +141,7 @@
             state (inbound/current-state sys)
             report (run-harness (wake-request sys state (get-in state [:wakes wake-id])))]
         (inbound/submit! sys {:type :wake/end :actor core/dispatcher
-                              :args (-> (select-keys report [:outcome :exit :crashed :cut-short :session
-                                                             :said :resets-at])
-                                        (update :exit #(if (number? %) % (some-> % str)))
-                                        (update :resets-at #(some-> % str))
-                                        (assoc :wake wake-id
-                                               :transcript (some-> (:transcript report) str)))})
+                              :args (wake-end-args wake-id report)})
         (let [state (inbound/current-state sys)]
           {:result :ran
            :wake wake-id
@@ -142,10 +151,68 @@
 
 (defn- reap-lost-wakes!
   "Ends the running wakes whose process has gone, as a tick would, so a
-  chat that was killed does not hold its role until the next tick."
+  conversation that was killed does not hold its role until the next tick."
   [sys]
   (when-let [lost (seq (lost-wakes (inbound/current-state sys)))]
     (inbound/submit! sys {:type :tick :actor core/dispatcher :args {:lost-wakes (vec lost)}})))
+
+;; --- a conversation
+
+(def ^:private conversation-note
+  "The operator has opened a conversation with you. Talk with them directly;
+  use your tools as you would in a wake.")
+
+(defn conversation-request
+  "The harness request for a conversation: a wake's request with no prompt,
+  told it is a conversation, keeping its sessions apart from the role's
+  wake sessions, so that a client listing or loading sessions can reach
+  only conversations."
+  [{:keys [data-dir] :as sys} state wake]
+  (-> (wake-request sys state wake)
+      (update :system-prompt str "\n\n" conversation-note "\n")
+      (dissoc :prompt)
+      (assoc :session-dir (str (fs/path data-dir "runs" (:role wake) "conversations")))))
+
+(defn conversation-end-args
+  "The :wake/end args for a conversation, from what the code that ran it
+  reported: {:exit :sessions :said :crashed}, any of which may be missing.
+  Total: whatever the report holds, core accepts the result, so a
+  conversation that started always ends."
+  [wake-id {:keys [exit sessions said crashed]}]
+  (let [sessions (when (sequential? sessions)
+                   (filterv #(and (string? %) (not (str/blank? %))) sessions))]
+    (cond-> {:wake wake-id :outcome "ran" :exit (exit-field exit) :crashed (true? crashed)
+             :cut-short false
+             :said (if (and (string? said) (not (str/blank? said))) said "Conversation ended.")}
+      (seq sessions) (assoc :sessions sessions))))
+
+(defn with-conversation!
+  "Opens a conversation with a role and calls (f request) with its harness
+  request. The conversation holds the role like a wake, so no wake runs
+  alongside it, and carries no memos. f returns a report for
+  conversation-end-args, and the wake always ends with it. When f throws,
+  the wake ends saying why and the exception goes on to the caller.
+  Returns f's report."
+  [sys role-id f]
+  (reap-lost-wakes! sys)
+  (let [started (inbound/submit! sys {:type :wake/start :actor core/operator
+                                      :args (merge {:role role-id :chat true
+                                                    :note conversation-note}
+                                                   (current-process))})
+        wake-id (:seq (first started))
+        report (volatile! nil)]
+    (try
+      (let [state (inbound/current-state sys)
+            request (conversation-request sys state (get-in state [:wakes wake-id]))]
+        (when-not (:harness request)
+          (throw (ex-info (str "relay.edn has no harness called " (:harness-name request) ".") {})))
+        (vreset! report (f request)))
+      (catch Exception e
+        (vreset! report {:crashed true :said (or (ex-message e) (str (class e)))})
+        (throw e))
+      (finally
+        (inbound/submit! sys {:type :wake/end :actor core/dispatcher
+                              :args (conversation-end-args wake-id @report)})))))
 
 (defn- ignoring-terminal-signals
   "Calls f with SIGINT and SIGHUP ignored. The terminal sends them to relay
@@ -158,33 +225,23 @@
     (try (f)
          (finally (doseq [[s h] (map vector signals old)] (sun.misc.Signal/handle s h))))))
 
-(def ^:private conversation-note
-  "The operator has opened a conversation with you. Talk with them directly;
-  use your tools as you would in a wake.")
+(defn- run-on-terminal!
+  "Runs a described command on this terminal, sharing its stdin, stdout
+  and stderr. Returns the exit code."
+  [{:keys [problem argv dir env]}]
+  (when problem (throw (ex-info problem {})))
+  (ignoring-terminal-signals
+   #(:exit (apply p/shell {:dir (str dir) :env env :continue true} argv))))
 
 (defn chat!
-  "Opens an interactive session as a role on this terminal. It holds the role
-  like a wake, so no wake runs alongside it, and carries no memos. Returns
-  the harness's exit code."
+  "Opens an interactive session as a role on this terminal. Returns the
+  harness's exit code."
   [sys role-id]
-  (reap-lost-wakes! sys)
-  (let [started (inbound/submit! sys {:type :wake/start :actor core/operator
-                                      :args (merge {:role role-id :chat true
-                                                    :note conversation-note}
-                                                   (current-process))})
-        wake-id (:seq (first started))
-        state (inbound/current-state sys)
-        request (wake-request sys state (get-in state [:wakes wake-id]))
-        exit (try
-               (if (:harness request)
-                 (ignoring-terminal-signals
-                  #(harness/chat! (update request :system-prompt str "\n\n" conversation-note "\n")))
-                 (throw (ex-info (str "relay.edn has no harness called " (:harness-name request) ".") {})))
-               (finally
-                 (inbound/submit! sys {:type :wake/end :actor core/dispatcher
-                                       :args {:wake wake-id :outcome "ran" :exit nil :crashed false
-                                              :said "Conversation ended."}})))]
-    exit))
+  (:exit (with-conversation! sys role-id
+           (fn [request]
+             (let [command (harness/chat-command request)]
+               {:exit (run-on-terminal! command)
+                :sessions (some-> (:session command) vector)})))))
 
 ;; --- the tick
 

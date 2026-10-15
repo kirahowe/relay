@@ -661,5 +661,9 @@
           (is (= 1 (count wakes)))
           (is (= [:ended true "ran"] ((juxt :status :chat :outcome) (first wakes))))
           (is (= "Conversation ended." (:said (first wakes))))
+          (testing "the log records the session the conversation used, kept apart from wake sessions"
+            (let [[session :as sessions] (:sessions (first wakes))]
+              (is (= 1 (count sessions)) (pr-str (first wakes)))
+              (is (fs/exists? (str *dir* "/data/runs/clerk/conversations/" session ".jsonl")))))
           (is (zero? (:attempts (memo id))))
           (is (= [] (find-secret *dir*))))))))

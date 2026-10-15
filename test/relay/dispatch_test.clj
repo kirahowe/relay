@@ -8,7 +8,11 @@
             [cheshire.core :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
+            [clojure.test.check :as tc]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]
             [relay.cli :as cli]
+            [relay.config :as config]
             [relay.core :as core]
             [relay.dispatch :as dispatch]
             [relay.inbound :as inbound]
@@ -108,9 +112,9 @@
     (is (= #{:system_prompt :tools_file :report :resume :tool_command} (set (keys args))))
     (is (str/includes? (slurp (:system_prompt args)) "File things."))
     (is (sequential? (json/parse-string (slurp (:tools_file args)))))
-    (is (= (str (get-in (state) [:wakes (:wake result) :id])) (last (:tool_command args))))
-    (is (= [relay-bin "tool" "--data" (str (fs/absolutize (str *dir* "/data"))) "--role" "clerk" "--wake"]
-           (butlast (:tool_command args))))
+    (is (= [relay-bin "tool" "--data" (str (fs/absolutize (str *dir* "/data"))) "--role" "clerk"]
+           (:tool_command args))
+        "a tool call names the role, not the wake")
     (testing "no RELAY_ variables, and nothing leaks in from whoever started relay"
       (is (not-any? #(str/starts-with? % "RELAY_") (keys env)))
       (is (not-any? #(re-find #"^(CLAUDE|ANTHROPIC|OPENAI|AWS_|GITHUB)" %) (keys env))))))
@@ -249,7 +253,7 @@
   (let [run (fn [role tool args]
               (p/shell {:out :string :err :string :continue true :in (json/generate-string args)
                         }
-                       relay-bin "tool" "--data" (str *dir* "/data") "--role" role "--wake" "1" tool))]
+                       relay-bin "tool" "--data" (str *dir* "/data") "--role" role tool))]
     (is (= "said: hi" (str/trim (:out (run "hub" "echo" {:args ["hi"]})))))
     (let [{:keys [exit out]} (run "clerk" "echo" {:args ["hi"]})]
       (is (= 1 exit))
@@ -268,7 +272,7 @@
   (let [run (fn [tool args]
               (p/shell {:out :string :err :string :continue true :in (json/generate-string args)
                         }
-                       relay-bin "tool" "--data" (str *dir* "/data") "--role" "clerk" "--wake" "1" tool))]
+                       relay-bin "tool" "--data" (str *dir* "/data") "--role" "clerk" tool))]
     (is (str/starts-with? (:out (run "fact_add" {:text "The cabinet key is in the drawer."
                                                  :topic "office" :valid_from "2026-01-01"}))
                           "Recorded fact"))
@@ -284,3 +288,120 @@
         (let [hub (dispatch/wake-request *sys* state {:id 1 :role "hub" :memos [] :harness "fake"})]
           (is (str/includes? (:system-prompt hub) "`role_add`"))
           (is (str/includes? (:system-prompt hub) "comes to you as dead letters")))))))
+
+;; --- a conversation
+
+(defn- chat-wakes [] (filter :chat (vals (:wakes (state)))))
+
+(deftest a-conversation-ends-with-what-its-runner-reported
+  (let [id (memo! "clerk" "Untouched by a conversation")
+        seen (atom nil)
+        report (dispatch/with-conversation! *sys* "clerk"
+                 (fn [request]
+                   (reset! seen {:request request :running (core/running? (state) "clerk")})
+                   {:exit 0 :sessions ["s-1"]}))
+        [wake] (chat-wakes)]
+    (is (= {:exit 0 :sessions ["s-1"]} report))
+    (is (:running @seen) "the conversation holds the role while it runs")
+    (is (= [:ended "ran" 0 ["s-1"] "Conversation ended."]
+           ((juxt :status :outcome :exit :sessions :said) wake)))
+    (is (not (core/running? (state) "clerk")))
+    (is (zero? (:attempts (core/memo (state) id))))
+    (testing "the request has no prompt, says it is a conversation, and keeps its sessions apart"
+      (let [{:keys [request]} @seen]
+        (is (not (contains? request :prompt)))
+        (is (str/includes? (:system-prompt request) "The operator has opened a conversation with you."))
+        (is (= (str (fs/path *dir* "data" "runs" "clerk" "conversations")) (:session-dir request)))
+        (is (= [relay-bin "tool" "--data" (str (fs/absolutize (str *dir* "/data"))) "--role" "clerk"]
+               (:tool-command request)))))
+    (testing "building the request wrote nothing: the harness makes its own directories"
+      (is (not (fs/exists? (fs/path *dir* "data" "runs" "clerk" (str (:id wake)))))))))
+
+(deftest a-conversation-whose-runner-throws-still-ends-and-says-why
+  (let [e (try (dispatch/with-conversation! *sys* "clerk" (fn [_] (throw (ex-info "the line dropped" {}))))
+               nil
+               (catch clojure.lang.ExceptionInfo e e))
+        [wake] (chat-wakes)]
+    (is (= "the line dropped" (ex-message e)))
+    (is (= [:ended true "the line dropped"] ((juxt :status :crashed :said) wake)))
+    (is (not (core/running? (state) "clerk")))))
+
+(deftest a-conversation-with-no-such-harness-ends-before-it-runs-anything
+  ;; The role names a harness that relay.edn has since lost.
+  (inbound/submit! *sys* {:type :role/update :actor "operator" :args {:id "clerk" :harness "fake"}})
+  (write-config! {:default-harness :other :harnesses {:other {:kind :script :command ["true"]}}})
+  (let [called (atom false)
+        e (try (dispatch/with-conversation! (system) "clerk" (fn [_] (reset! called true) {}))
+               (catch clojure.lang.ExceptionInfo e e))]
+    (is (= "relay.edn has no harness called fake." (ex-message e)))
+    (is (false? @called))
+    (is (= [:ended true] ((juxt :status :crashed) (first (chat-wakes)))))))
+
+(deftest chat-on-a-harness-with-no-interactive-mode-ends-the-conversation
+  ;; The script harness describes no chat command, so relay starts nothing.
+  (let [e (try (dispatch/chat! *sys* "clerk") (catch clojure.lang.ExceptionInfo e e))]
+    (is (str/includes? (ex-message e) "harness has no interactive mode"))
+    (is (= :ended (:status (first (chat-wakes)))))
+    (is (not (core/running? (state) "clerk")))))
+
+(deftest a-conversation-killed-earlier-is-reaped-before-the-next-one-starts
+  (let [dead (p/process ["true"])
+        _ @dead]
+    (inbound/submit! *sys* {:type :wake/start :actor "operator"
+                            :args {:role "clerk" :chat true :pid (.pid ^Process (:proc dead))
+                                   :pid-start "1970-01-01T00:00:00Z"}})
+    (dispatch/with-conversation! *sys* "clerk" (fn [_] {}))
+    (is (= 2 (count (chat-wakes))))
+    (is (every? #(= :ended (:status %)) (chat-wakes)))))
+
+;; Whatever a runner reports, the conversation's end is one core accepts:
+;; a conversation that started always ends.
+
+(def gen-junk
+  (gen/one-of [(gen/return nil) gen/string gen/small-integer gen/boolean gen/keyword
+               (gen/vector gen/any-printable-equatable 0 3) (gen/return {}) (gen/return [])]))
+
+(def gen-report
+  (gen/one-of
+   [gen-junk
+    (gen/fmap (fn [[exit sessions said crashed extra]]
+                (cond-> {} exit (assoc :exit exit) sessions (assoc :sessions sessions)
+                        said (assoc :said said) crashed (assoc :crashed crashed) extra (assoc :extra extra)))
+              (gen/tuple (gen/one-of [gen/small-integer (gen/return "timeout") gen-junk])
+                         (gen/one-of [(gen/vector (gen/one-of [gen/string-alphanumeric gen-junk]) 0 4)
+                                      gen-junk])
+                         (gen/one-of [gen/string gen-junk])
+                         gen-junk gen-junk))]))
+
+(def conversation-end-is-always-accepted
+  (let [cfg (config/resolve-config {:timezone "UTC" :default-harness :x :harnesses {:x {:kind :script}}
+                                    :notify {:kind :none}})
+        now (Instant/parse "2026-10-15T12:00:00Z")
+        cmd (fn [state actor type args]
+              (first (core/run-command state {:type type :actor actor :args args} {:now now :config cfg})))
+        started (-> core/empty-state
+                    (cmd "operator" :role/add {:id "clerk" :title "Clerk" :instructions "x"})
+                    (cmd "operator" :wake/start {:role "clerk" :chat true}))
+        wake-id (:id (core/running-wake started "clerk"))]
+    (prop/for-all [report gen-report]
+      (let [args (dispatch/conversation-end-args wake-id report)
+            ended (get-in (cmd started "dispatcher" :wake/end args) [:wakes wake-id])
+            sessions (:sessions report)
+            kept (when (sequential? sessions) (filter #(and (string? %) (not (str/blank? %))) sessions))]
+        (and (= :ended (:status ended))
+             (= "ran" (:outcome ended))
+             (string? (:said ended))
+             (not (str/blank? (:said ended)))
+             ;; the session ids it reported, in order, and nothing else
+             (= (seq kept) (seq (:sessions ended))))))))
+
+(deftest a-conversation-always-ends-whatever-its-runner-reported
+  (let [result (tc/quick-check 500 conversation-end-is-always-accepted)]
+    (is (:pass? result) (pr-str (select-keys result [:seed :shrunk :fail])))))
+
+(deftest a-wake-report-becomes-its-end
+  (is (= {:wake 7 :outcome "ran" :exit "timeout" :crashed true :cut-short true :session "s"
+          :said "x" :resets-at "2026-10-15T12:00:00Z" :transcript "/t/transcript.jsonl"}
+         (dispatch/wake-end-args 7 {:outcome "ran" :exit "timeout" :crashed true :cut-short true
+                                    :session "s" :said "x" :resets-at (Instant/parse "2026-10-15T12:00:00Z")
+                                    :transcript (fs/path "/t/transcript.jsonl") :ignored 1}))))

@@ -60,6 +60,8 @@
                                        :crashed (boolean cut-short) :cut-short cut-short
                                        :resets-at resets-at :said "the end"})))))
 
+(declare json-round-trip)
+
 (defn- notifications [w] (map :kind (sort-by :id (vals (:notifications (:state w))))))
 
 ;; --- examples
@@ -260,6 +262,25 @@
       (let [w (-> w (advance 7200) (run "dispatcher" :tick {}) (advance 60) (run "dispatcher" :tick {}))]
         (is (= ["harness-unreachable"] (notifications w)))))))
 
+(deftest a-conversation-records-the-sessions-it-used-in-order
+  (let [w (run (seed) "operator" :wake/start {:role "clerk" :chat true})
+        chat (core/running-wake (:state w) "clerk")
+        end #(run w "dispatcher" :wake/end (merge {:wake (:id chat) :outcome "ran"} %))]
+    (is (= ["b" "a"] (get-in (:state (end {:sessions ["b" "a"]})) [:wakes (:id chat) :sessions])))
+    (is (= ["b" "a"] (get-in (core/replay (json-round-trip (:events (end {:sessions '("b" "a")}))))
+                             [:wakes (:id chat) :sessions]))
+        "kept in order through the log")
+    (is (nil? (get-in (:state (end {})) [:wakes (:id chat) :sessions])))
+    (testing "anything but a list of session ids is refused"
+      (doseq [bad ["s1" [nil] [""] [1] {:a 1}]]
+        (is (= :invalid (:rejected (end {:sessions bad}))) (pr-str bad)))))
+  (testing "a wake has one session, not a list"
+    (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "a" :body "b"})
+                (run "dispatcher" :wake/start {:role "clerk"}))
+          wake-id (:id (core/running-wake (:state w) "clerk"))]
+      (is (= :invalid (:rejected (run w "dispatcher" :wake/end {:wake wake-id :outcome "ran"
+                                                                 :sessions ["s"]})))))))
+
 (deftest a-conversation-holds-the-role-but-carries-no-memos
   (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "a" :body "b"}))
         id (last-memo-id w)
@@ -361,7 +382,8 @@
                   (gen/vector gen/nat 0 3) gen/boolean gen/boolean)]
     [1 (gen/tuple (gen/return :start-only) (gen/elements role-pool))]
     [1 (gen/tuple (gen/return :chat) (gen/elements role-pool)
-                  (gen/elements ["ran" "limited" "unreachable" "needs-attention"]))]
+                  (gen/elements ["ran" "limited" "unreachable" "needs-attention"])
+                  (gen/one-of [(gen/return nil) (gen/vector (gen/elements ["s1" "s2" "s3"]) 0 3)]))]
     ;; Knowledge. World times are dates either side of the start, so that
     ;; changes and corrections land before, between and after each other.
     [3 (gen/tuple (gen/return :fact-add) (gen/elements actors) (gen/elements [nil "home" "home/car" "work"])
@@ -395,11 +417,12 @@
                   running (keep #(when (= :running (:status %)) (:id %)) (vals (:wakes (:state w))))]
               (run w "dispatcher" :tick {:lost-wakes (if lose? running [])}))
       :start-only (run w "dispatcher" :wake/start {:role (first args) :dispatched true})
-      :chat (let [[r outcome] args
+      :chat (let [[r outcome sessions] args
                   w (run w "operator" :wake/start {:role r :chat true})
                   chat (core/running-wake (:state w) r)]
               (if (and chat (:chat chat))
-                (run w "dispatcher" :wake/end {:wake (:id chat) :outcome outcome})
+                (run w "dispatcher" :wake/end (cond-> {:wake (:id chat) :outcome outcome}
+                                                sessions (assoc :sessions sessions)))
                 w))
       :fact-add (let [[actor topic from to] args]
                   (run w actor :fact/add {:topic topic :text (str "f" (count (:events w)))

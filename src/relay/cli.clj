@@ -52,7 +52,7 @@ Every command needs the data directory, from --data <dir> or from the file
   relay put <path>                    write a doc from stdin
   relay export <dir>                  write a read-only snapshot of the knowledge
   relay log [--tail <n>] [--json]     the events, newest last
-  relay tool --data <dir> --role <r> --wake <id> <name>
+  relay tool --data <dir> --role <r> <name>
                                       run a role's tool call (harnesses use this)")
 
 (defn- fail! [& msg]
@@ -191,7 +191,7 @@ Every command needs the data directory, from --data <dir> or from the file
    :coerce {:subject :string :message :string :title :string :reports-to :string
             :harness :string :model :string :schedule :string :note :string
             :tail :long :data :string :search :string :as-of :string :known-at :string
-            :version :long :role :string :wake :string}})
+            :version :long :role :string}})
 
 (defn run
   "Runs one command and returns the exit code."
@@ -204,7 +204,7 @@ Every command needs the data directory, from --data <dir> or from the file
     (if (or (nil? cmd) (#{"help" "-h" "--help"} cmd))
       (do (println usage) 0)
       (let [_ (when (and (= "tool" cmd) (or (str/blank? (:role opts)) (str/blank? (:data opts))))
-                (fail! "usage: relay tool --data <dir> --role <role> --wake <id> <tool name>"))
+                (fail! "usage: relay tool --data <dir> --role <role> <tool name>"))
             dir (data-dir opts)]
         (if (= "init" cmd)
           (init! dir)
