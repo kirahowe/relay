@@ -160,7 +160,7 @@
   only the data directory."
   #{"status" "inbox" "memo" "close" "roles" "add" "update" "remove" "routines" "routine" "unroutine"
     "retry" "wake" "facts" "fact" "notes" "journal" "docs" "doc" "put" "log" "holds"
-    "approve" "deny" "release" "trust"})
+    "approve" "deny" "release" "trust" "declassify"})
 
 (defn path-option?
   "Whether a command-line argument picks a path: the data directory, the

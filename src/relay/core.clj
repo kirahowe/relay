@@ -14,12 +14,13 @@
   memo that event 42 sent."
   (:require [clojure.string :as str]
             [relay.config :as config]
-            [relay.schedule :as schedule])
+            [relay.schedule :as schedule]
+            [relay.text :as text])
   (:import (java.time Duration Instant LocalDate LocalDateTime)))
 
 (def operator "operator")
 (def dispatcher "dispatcher")
-(def reserved-ids #{operator dispatcher "relay" "all" "none"})
+(def reserved-ids config/reserved-role-ids)
 
 (def private-label
   "Seen the operator's private data. Reading the text of anything relay
@@ -40,6 +41,19 @@
   "The labels of relay content: its writers' labels and private."
   [& colls]
   (apply union [private-label] colls))
+
+(defn private? [labels] (boolean (some #{private-label} labels)))
+
+(defn item-labels
+  "What reading one item of relay content (a memo, a version of a fact or
+  doc, a note, a journal entry, a routine) adds: its writers' labels, and
+  private unless the item is public. A public item was written by the
+  operator with --public, by a public role's session, or declassified by
+  the operator, and its labels never hold private."
+  [item & colls]
+  (if (:public item)
+    (apply union (:labels item) colls)
+    (apply content-labels (:labels item) colls)))
 
 (def harness-outcomes
   "How a wake's harness run ended. Only \"ran\" means the role got to work;
@@ -114,7 +128,7 @@
 (defn backing-off? [memo ^Instant now]
   (boolean (some-> (:retry-at memo) (after? now))))
 
-(declare quarantined?)
+(declare quarantined? awaiting-declassification?)
 
 (declare held-memo-ids)
 
@@ -123,7 +137,9 @@
   and are not kept by a session with a call held for the operator."
   [state config to now]
   (let [held (held-memo-ids state to)]
-    (vec (remove #(or (backing-off? % now) (quarantined? config %) (held (:id %))) (unread-memos state to)))))
+    (vec (remove #(or (backing-off? % now) (quarantined? config %) (awaiting-declassification? config %)
+                      (held (:id %)))
+                 (unread-memos state to)))))
 
 (defn harness-of [state config role-id]
   (or (:harness (role state role-id)) (some-> (:default-harness config) name)))
@@ -234,17 +250,23 @@
          (sort-by :wake)
          first)))
 
+(declare unwakeable-public-role? sessions-from-before-public)
+
 (defn roles-to-wake
   "The roles the dispatcher should wake now: with a memo waiting or a held
   session whose calls are all decided, not already running, their harness
   not paused, and not stopped by the runaway guard. A call held for the
-  operator keeps only its own session's memos waiting."
+  operator keeps only its own session's memos waiting. A public role whose
+  own text holds private is never woken (unwakeable-public-role?)."
   [state config now]
   (vec (for [id (active-role-ids state)
-             :when (and (or (seq (waiting-memos state config id now)) (resumable-held-session state id))
+             :when (and (or (seq (waiting-memos state config id now)) (resumable-held-session state id)
+                            ;; Woken to end them, so their memos go on.
+                            (seq (sessions-from-before-public state config id)))
                         (not (running? state id))
                         (not (paused-until state (harness-of state config id) now))
-                        (not (running-away? state id config now)))]
+                        (not (running-away? state id config now))
+                        (not (unwakeable-public-role? state config id)))]
          id)))
 
 ;; knowledge
@@ -298,17 +320,25 @@
           (assoc (merge (select-keys f [:id :supersedes]) v) :newer-withheld true)
           latest)))))
 
+(declare fact-shown-to-public?)
+
 (defn facts
   "The facts holding at world time :as-of, as recorded at :known-at, by id.
   With :all, every fact recorded by then and not retracted, whatever its
   validity. :topic keeps that topic and the topics under it; :search keeps
   facts whose text contains it, ignoring case. With :clean, each fact as
-  fact-as-shown gives it, so a contaminated change does not hide it."
-  [state {:keys [as-of known-at topic search all clean]}]
+  fact-as-shown gives it, so a contaminated change does not hide it. With
+  :public-only, only facts a public role can see now (fact-shown-to-public?
+  of the current version, as fact_history asks) whose version shown is
+  public too, before any search, so a search or an earlier known_at says
+  nothing about the others."
+  [state {:keys [as-of known-at topic search all clean public-only]}]
   (let [as-of (or as-of known-at (:last-at state))
         needle (some-> search str/lower-case)]
     (->> (vals (:facts state))
+         (filter #(or (not public-only) (fact-shown-to-public? state (fact-as-known % nil))))
          (keep #(fact-as-shown % known-at clean))
+         (filter #(or (not public-only) (and (:public %) (not (private? (item-labels %))))))
          (filter #(and (if all (not (:retracted %)) (holds-at? % as-of))
                        (under-topic? topic (:topic %))
                        (or (nil? needle) (str/includes? (str/lower-case (:text %)) needle))))
@@ -405,10 +435,11 @@
     (if (contaminated? ls) ["a role whose id is withheld" []] [id ls])))
 
 (defn memo-labels
-  "What reading a memo addressed to you adds: its writers' labels, private,
-  and the labels of its sender's id as shown (shown-id)."
+  "What reading a memo addressed to you adds: its writers' labels, private
+  unless it is public, and the labels of its sender's id as shown
+  (shown-id), or for a declassified memo, those the operator left on it."
   [state m]
-  (content-labels (:labels m) (second (shown-id state (:from m)))))
+  (item-labels m (or (:from-labels m) (second (shown-id state (:from m))))))
 
 (defn shown-memo
   "A memo as its recipient is shown it, its sender per shown-id."
@@ -426,16 +457,53 @@
   (boolean (some #(#{:act :egress} (get-in config [:tools % :class]))
                  (:tools (config/grants config role-id)))))
 
+(defn public-role?
+  "Whether a role is public (relay.config/public?). Its sessions never hold
+  private, so it is shown only public items and has nothing private to
+  leak: no memo to it is quarantined, and its contaminated notes are not
+  withheld from it."
+  [config role-id]
+  (config/public? config role-id))
+
 (defn quarantined?
-  "A contaminated memo to a role that quarantines, not yet released."
+  "A contaminated memo to a role that quarantines, not yet released. A
+  memo to a public role is never quarantined: that role holds no private
+  data for the memo's writer to make it send out."
   [config m]
   (and (not= operator (:to m)) (contaminated? (:labels m)) (not (:released m))
+       (not (public-role? config (:to m)))
        (quarantines? config (:to m))))
+
+(defn awaiting-declassification?
+  "A memo to a public role that is not public: it waits, unseen by the
+  role, until the operator declassifies it (relay declassify) or closes
+  it."
+  [config m]
+  (and (not= operator (:to m)) (not (:public m)) (public-role? config (:to m))))
+
+(defn public-caller?
+  "Whether a role's call is to be treated as a public role's: shown only
+  public items and refused anything private. It is when relay.edn makes
+  the role public now, or when the wake that made the call (named in the
+  tool command relay gave the harness) began public, so that changing
+  relay.edn while a session runs never widens what that session sees."
+  [state config actor wake-id]
+  (boolean
+   (and (not= operator actor) (not= dispatcher actor)
+        (or (public-role? config actor)
+            (let [w (get-in state [:wakes wake-id])]
+              (and (= actor (:role w)) (:public-session w)))))))
+
+(defn shown-to-public?
+  "Whether a public role may be shown an item: public, and nothing it
+  shows carries private (`labels`, its labels as read)."
+  [item labels]
+  (and (:public item) (not (private? labels))))
 
 (defn deliverable-memos
   "Open memos to a role that it may be shown, oldest first."
   [state config to]
-  (filterv #(not (quarantined? config %)) (unread-memos state to)))
+  (filterv #(not (or (quarantined? config %) (awaiting-declassification? config %))) (unread-memos state to)))
 
 (defn version-labels
   "What showing one version of a fact or doc adds, with who wrote it."
@@ -447,13 +515,26 @@
   [state path]
   (or (get-in state [:docs path :path-labels]) []))
 
+(defn doc-shown-to-public?
+  "Whether a public role may be shown a version of a doc: the version is
+  public, and neither it, its writer's id nor the doc's path carries
+  private."
+  [state path v]
+  (boolean (and v (get-in state [:docs path :path-public])
+                (shown-to-public? v (union (item-labels v) (version-labels state v) (path-labels state path))))))
+
+(defn fact-shown-to-public?
+  "Whether a public role may be shown a version of a fact."
+  [state v]
+  (boolean (and v (shown-to-public? v (union (item-labels v) (version-labels state v))))))
+
 (defn notes-labels
   "What showing these notes adds."
   [notes]
-  (if (seq notes) (content-labels (mapcat :labels notes)) []))
+  (apply union (map item-labels notes)))
 
 (defn journal-labels [entries]
-  (if (seq entries) (content-labels (mapcat :labels entries)) []))
+  (apply union (map item-labels entries)))
 
 (defn routine-labels [state owner name] (or (:labels (routine state owner name)) []))
 
@@ -474,25 +555,80 @@
 
 (defn prompt-notes
   "A role's notes as its system prompt shows them: the clean ones, and how
-  many are withheld as contaminated."
-  [state owner]
-  (let [{withheld true shown false} (group-by #(contaminated? (:labels %)) (notes state owner))]
-    {:shown (vec shown) :withheld (count withheld)}))
+  many are withheld as contaminated. A public role is shown its public
+  notes, contaminated or not, since it has nothing private to leak, and
+  its other notes are not even counted."
+  [state config owner]
+  (if (public-role? config owner)
+    {:shown (filterv #(shown-to-public? % (item-labels %)) (notes state owner)) :withheld 0}
+    (let [{withheld true shown false} (group-by #(contaminated? (:labels %)) (notes state owner))]
+      {:shown (vec shown) :withheld (count withheld)})))
 
 (defn wake-labels
   "The labels of everything a wake's prompts are made of: the role's id,
   title and instructions, the notes shown, the memos it carries and the
   ids of their senders, the routines they are runs of, the note from
-  whoever woke it, and the operator's reasons on the holds it carries back.
-  A conversation has no prompt, only the instructions and notes."
-  [state {:keys [role memos note chat resolves]}]
+  whoever woke it unless it was public, and the operator's reasons on the
+  holds it carries back, unless the operator gave them knowing the role
+  was public. A conversation has no prompt, only the instructions and
+  notes."
+  [state config {:keys [role memos note note-public chat resolves]}]
   (let [ms (keep #(memo state %) memos)]
     (union (role-labels state role)
-           (notes-labels (:shown (prompt-notes state role)))
+           (notes-labels (:shown (prompt-notes state config role)))
            (mapcat #(memo-labels state %) ms)
-           (mapcat #(when (:routine %) (routine-labels state (:to %) (:routine %))) ms)
-           (when (and (not chat) (not (blank? note))) [private-label])
-           (when (some #(not (blank? (:reason (hold state %)))) resolves) [private-label]))))
+           ;; A public memo shows only its own text (a run's subject is the
+           ;; routine's name), which its labels already cover.
+           (mapcat #(when (and (:routine %) (not (:public %))) (routine-labels state (:to %) (:routine %))) ms)
+           (when (and (not chat) (not (blank? note)) (not note-public)) [private-label])
+           (when (some #(let [h (hold state %)]
+                          ;; A reason the operator gave knowing the role was
+                          ;; public is public; any other may be private.
+                          (and (not (blank? (:reason h))) (not (:reason-public h))))
+                       resolves)
+             [private-label]))))
+
+(defn role-id-public?
+  "Whether a role's id may be shown to a public role: the operator wrote
+  it with --public, or vouched for it so by rewriting the role's title and
+  instructions with --public. Role text is not content and carries no
+  private floor, and any role's session may have taken in the operator's
+  own unlabelled AGENTS.md, so only what the operator marked public is."
+  [state id]
+  (let [r (role state id)]
+    (boolean (and r (contains? (:public-text r) :id) (not (private? (:id-labels r)))))))
+
+(defn role-text-public?
+  "Whether a role's id, title and instructions may be shown to a public
+  role: all three are public (role-id-public?), and none carries private."
+  [state id]
+  (let [r (role state id)]
+    (boolean (and r (= #{:id :title :instructions} (:public-text r)) (not (private? (role-labels state id)))))))
+
+(defn unwakeable-reason
+  "Why a public role cannot run as one, saying what fixes it, or nil when it
+  can. Its own id, title and instructions are in every prompt, so all must
+  be public; and a :script harness is any program, which could claim any
+  labels with no agentloop to refuse private for it."
+  [state config role-id]
+  (when (public-role? config role-id)
+    (let [r (role state role-id)]
+      (cond
+        (= :script (get-in config [:harnesses (keyword (harness-of state config role-id)) :kind]))
+        (str role-id " runs on a :script harness. Give it an agentloop harness with relay update "
+             role-id " --harness <name>.")
+        (private? (:id-labels r))
+        (str "the id " role-id " was chosen by a session holding private data, so it can never be"
+             " public. Add the role again under a new id with relay add <id> --public, and remove this one.")
+        (not (role-text-public? state role-id))
+        (str "its id, title and instructions were not all written with --public. Run relay update "
+             role-id " --public --title <title> --instructions, with its instructions on stdin.")))))
+
+(defn unwakeable-public-role?
+  "A public role that cannot be run as one (unwakeable-reason). It is not
+  woken until that is put right, and the tick tells the operator once."
+  [state config role-id]
+  (some? (unwakeable-reason state config role-id)))
 
 ;; --- evolve
 
@@ -514,14 +650,27 @@
   seen. The operator can trust what they have read."
   [{:keys [legacy-before]} {:keys [seq actor] :as event}]
   (if (and legacy-before (< seq legacy-before) (not= operator actor))
-    (update event :labels union legacy-labels)
+    (-> event (update :labels union legacy-labels) (dissoc :public))
     event))
+
+(def public-item-events
+  "The events that write an item a public role may be shown: these carry
+  :public when their writer was public (decide sets it, never a role's
+  input), and the item keeps it."
+  #{"memo/sent" "routine/written" "fact/added" "fact/superseded" "fact/corrected"
+    "note/written" "journal/written" "doc/put" "doc/removed" "role/added" "role/updated"})
 
 (defn evolve [state {:keys [seq at] :as event}]
   (when-not (= seq (:next-seq state))
     (throw (ex-info (str "Event " seq " is out of order; expected " (:next-seq state) ".")
                     {:event event})))
   (let [{:keys [labels] :as event} (with-legacy-labels state event)]
+  ;; A public item never carries private: decide refuses what would make
+  ;; one, so this can only be a bug, and nothing is folded past it.
+  (when (and (:public event) (or (private? labels) (not (public-item-events (:type event)))))
+    (throw (ex-info (str "Event " seq " is public and carries private, or is not an item a public role"
+                         " may read. relay refuses to read it.")
+                    {:event event})))
   (-> (evolve* state event)
       (update :seen-labels union labels)
       (assoc :next-seq (inc seq) :last-at (inst at)))))
@@ -544,7 +693,7 @@
   [state]
   (nil? (:labels-enabled-at state)))
 
-(defmethod evolve* "role/added" [state {:keys [seq at data labels]}]
+(defmethod evolve* "role/added" [state {:keys [seq at data labels public]}]
   (let [{:keys [id title instructions reports-to harness model]} data]
     (assoc-in state [:roles id] {:id id :title title :instructions instructions :reports-to reports-to
                                  :harness harness :model model :status :active
@@ -552,23 +701,31 @@
                                  ;; Each piece of text carries the labels of
                                  ;; whoever wrote what it says now.
                                  :id-labels (union labels) :title-labels (union labels)
-                                 :instructions-labels (union labels)})))
+                                 :instructions-labels (union labels)
+                                 ;; Which of its texts the operator wrote
+                                 ;; with --public.
+                                 :public-text (if public #{:id :title :instructions} #{})})))
 
-(defmethod evolve* "role/updated" [state {:keys [seq data labels]}]
-  (update-in state [:roles (:id data)]
-             #(cond-> (merge % (select-keys data [:title :instructions :reports-to :harness :model]))
-                (or (contains? data :title) (contains? data :instructions)) (assoc :version seq)
-                (contains? data :title) (assoc :title-labels (union labels))
-                (contains? data :instructions) (assoc :instructions-labels (union labels)))))
+(defmethod evolve* "role/updated" [state {:keys [seq data labels public]}]
+  (let [mark (fn [r k] (update r :public-text (fnil (if public conj disj) #{}) k))]
+    (update-in state [:roles (:id data)]
+               #(cond-> (merge % (select-keys data [:title :instructions :reports-to :harness :model]))
+                  (or (contains? data :title) (contains? data :instructions)) (assoc :version seq)
+                  (contains? data :title) (-> (assoc :title-labels (union labels)) (mark :title))
+                  (contains? data :instructions) (-> (assoc :instructions-labels (union labels)) (mark :instructions))
+                  ;; Rewriting both with --public, the operator has the id in
+                  ;; front of them too, and vouches for it.
+                  (and public (contains? data :title) (contains? data :instructions)) (mark :id)))))
 
 (defmethod evolve* "role/removed" [state {:keys [at data]}]
   (update-in state [:roles (:id data)] assoc :status :removed :removed-at (inst at)))
 
-(defmethod evolve* "memo/sent" [state {:keys [seq at data labels]}]
+(defmethod evolve* "memo/sent" [state {:keys [seq at data labels public]}]
   (let [{:keys [from to subject body routine]} data]
     (assoc-in state [:memos seq] {:id seq :from from :to to :subject subject :body body
                                   :routine routine :sent-at (inst at) :status :unread
-                                  :attempts 0 :retry-at nil :labels (union labels)})))
+                                  :attempts 0 :retry-at nil :labels (union labels)
+                                  :public (true? public)})))
 
 (defmethod evolve* "memo/closed" [state {:keys [at actor data labels]}]
   (update-in state [:memos (:memo data)] assoc
@@ -577,6 +734,16 @@
 
 (defmethod evolve* "memo/released" [state {:keys [data]}]
   (assoc-in state [:memos (:memo data) :released] true))
+
+(defmethod evolve* "memo/declassified" [state {:keys [data]}]
+  ;; The operator read it and vouches that it holds nothing private, its
+  ;; sender's id included. Contaminated stays.
+  (update-in state [:memos (:memo data)]
+             #(assoc % :public true :declassified true
+                     ;; The text as the operator was shown it.
+                     :subject (or (:subject data) (:subject %)) :body (or (:body data) (:body %))
+                     :labels (vec (remove #{private-label} (:labels %)))
+                     :from-labels (vec (remove #{private-label} (:from-labels data))))))
 
 (defmethod evolve* "memo/attempt-failed" [state {:keys [data]}]
   (update-in state [:memos (:memo data)] assoc
@@ -616,12 +783,13 @@
                                        l)]))
                         letters))))))
 
-(defmethod evolve* "routine/written" [state {:keys [seq at data labels]}]
+(defmethod evolve* "routine/written" [state {:keys [seq at data labels public]}]
   (let [{:keys [owner name schedule instructions]} data]
     (update-in state [:routines owner name]
                (fn [r] (assoc r :owner owner :name name :schedule schedule
                               :instructions instructions :baseline (inst at)
-                              :status :active :labels (union labels) :version seq)))))
+                              :status :active :labels (union labels) :version seq
+                              :public (true? public))))))
 
 (defmethod evolve* "routine/removed" [state {:keys [data]}]
   (assoc-in state [:routines (:owner data) (:name data) :status] :removed))
@@ -633,8 +801,10 @@
                :status (if one-off :retired :active))))
 
 (defmethod evolve* "wake/started" [state {:keys [seq at data]}]
-  (let [{:keys [role memos note resumes harness pid pid-start chat resolves]} data]
+  (let [{:keys [role memos note note-public public-session resumes harness pid pid-start chat resolves]} data]
     (cond-> (assoc-in state [:wakes seq] {:id seq :role role :memos (vec memos) :note note
+                                          :note-public (true? note-public)
+                                          :public-session (true? public-session)
                                           :resumes resumes :harness harness :pid pid
                                           :pid-start pid-start :started-at (inst at)
                                           :status :running :chat (boolean chat)
@@ -693,9 +863,9 @@
                                   :status :open :opened-at (inst at) :labels (union labels)})))
 
 (defmethod evolve* "hold/resolved" [state {:keys [at actor data]}]
-  (let [{:keys [hold verdict reason]} data]
+  (let [{:keys [hold verdict reason reason-public]} data]
     (update-in state [:holds hold] assoc
-               :status (if (= "allow" verdict) :allowed :denied) :reason reason
+               :status (if (= "allow" verdict) :allowed :denied) :reason reason :reason-public (true? reason-public)
                :resolved-at (inst at) :resolved-by actor)))
 
 (defmethod evolve* "permission/asked" [state {:keys [seq data]}]
@@ -742,7 +912,11 @@
       (#{"harness-needs-attention" "harness-unreachable"} kind)
       (assoc-in [:harnesses harness :operator-told] true)
       (= "runaway-guard-tripped" kind)
-      (assoc-in [:guards role] (inst at)))))
+      (assoc-in [:guards role] (inst at))
+      (= "public-role-cannot-run" kind)
+      (assoc-in [:unwakeable-told role] (:reason data))
+      (= "public-role-can-run" kind)
+      (update :unwakeable-told dissoc role))))
 
 (defmethod evolve* "notification/delivered" [state {:keys [data]}]
   (assoc-in state [:notifications (:notification data) :delivery] :delivered))
@@ -752,8 +926,8 @@
              :delivery :failed :error (:error data)
              :attempts (:attempt data) :retry-at (inst (:retry-at data))))
 
-(defn- fact-version [{:keys [seq at actor labels]} change {:keys [topic text valid-from valid-to]}]
-  {:seq seq :recorded-at (inst at) :actor actor :change change :labels (union labels)
+(defn- fact-version [{:keys [seq at actor labels public]} change {:keys [topic text valid-from valid-to]}]
+  {:seq seq :recorded-at (inst at) :actor actor :change change :labels (union labels) :public (true? public)
    :topic topic :text text :valid-from (inst valid-from) :valid-to (inst valid-to)})
 
 (defn- add-version [state id version]
@@ -771,6 +945,8 @@
                      ;; It still says what the old version said.
                      :change :superseded :labels (union (:labels (peek (get-in state [:facts old :versions])))
                                                         (:labels event))
+                     ;; decide marks it public only when the old version was.
+                     :public (true? (:public event))
                      :valid-to (inst (:valid-from data)) :superseded-by seq)]
     (-> state
         (add-version old ended)
@@ -783,25 +959,28 @@
                                            :why why :superseded-by superseded-by)
                               retracted (assoc :retracted true)))))
 
-(defmethod evolve* "note/written" [state {:keys [seq at data labels]}]
+(defmethod evolve* "note/written" [state {:keys [seq at data labels public]}]
   (let [{:keys [owner name text]} data]
     (assoc-in state [:notes owner name] {:owner owner :name name :text text :written-at (inst at)
-                                         :labels (union labels) :version seq})))
+                                         :labels (union labels) :version seq :public (true? public)})))
 
 (defmethod evolve* "note/removed" [state {:keys [data]}]
   (update-in state [:notes (:owner data)] dissoc (:name data)))
 
-(defmethod evolve* "journal/written" [state {:keys [seq at data labels]}]
+(defmethod evolve* "journal/written" [state {:keys [seq at data labels public]}]
   (update-in state [:journals (:owner data)] (fnil conj [])
-             {:id seq :owner (:owner data) :text (:text data) :at (inst at) :labels (union labels)}))
+             {:id seq :owner (:owner data) :text (:text data) :at (inst at) :labels (union labels)
+              :public (true? public)}))
 
-(defn- add-doc-version [state {:keys [seq at actor labels]} path more]
+(defn- add-doc-version [state {:keys [seq at actor labels public]} path more]
   (update-in state [:docs path]
              (fn [d] (-> (assoc d :path path)
                          ;; The path is text too, chosen by whoever first wrote it.
                          (update :path-labels #(or % (union labels)))
+                         (update :path-public #(if (some? %) % (true? public)))
                          (update :versions (fnil conj [])
-                                 (merge {:seq seq :path path :at (inst at) :actor actor :labels (union labels)}
+                                 (merge {:seq seq :path path :at (inst at) :actor actor :labels (union labels)
+                                         :public (true? public)}
                                         more))))))
 
 (defmethod evolve* "doc/put" [state {:keys [data] :as event}]
@@ -819,23 +998,43 @@
   elsewhere."
   ([tx type data] (emit tx type data []))
   ([{:keys [state now actor] :as tx} type data copied]
-   (let [event {:seq (:next-seq state) :at (str now) :type type :actor actor
-                :labels (union (:labels tx) copied) :data data}]
+   (let [event (cond-> {:seq (:next-seq state) :at (str now) :type type :actor actor
+                        :labels (union (:labels tx) copied) :data data}
+                 ;; Only an item, and only from a public writer (decide).
+                 (and (:public tx) (public-item-events type)) (assoc :public true))]
      (-> tx
          (assoc :state (evolve state event))
          (update :events conj event)))))
 
 (defn- last-id [tx] (:seq (peek (:events tx))))
 
+(defn- with-public
+  "Runs (f tx) with the transaction's writer taken as public or not, as
+  for text the dispatcher copies from elsewhere, and puts the writer back
+  after."
+  [tx public f]
+  (assoc (f (assoc tx :public public)) :public (:public tx)))
+
+(defn- copying!
+  "The transaction for an item that copies text from `source`, an item:
+  public only when both its writer and the source are. A writer who asked
+  for public, such as the operator with --public, is refused rather than
+  given a private item."
+  [tx source what]
+  (when (and (:public tx) (not (:public source)))
+    (reject! :invalid (str what " would copy text that is not public, so it cannot be public."
+                           " Write it again in full with --public instead.")))
+  (assoc tx :public (boolean (and (:public tx) (:public source)))))
+
+(def ^:private public-means
+  "--public says that what you write may leave this machine: a public role's session can put it in a web search.")
+
 
 (defn- require-text [value what]
   (when (blank? value) (reject! (str what " must not be empty.")))
   (str/trim value))
 
-(def ^:private id-pattern #"[a-z][a-z0-9-]{0,39}")
-
-(defn usable-id? [id]
-  (boolean (and (string? id) (re-matches id-pattern id) (not (reserved-ids id)))))
+(defn usable-id? [id] (config/role-id? id))
 
 (defn- notify [tx kind title body & {:as about}]
   (emit tx "notification/created" (merge {:kind kind :title title :body body} (dissoc about :labels))
@@ -872,6 +1071,13 @@
                (str "It is contaminated, so " to " is not shown it until you release it. relay release "
                     (last-id tx) " shows it to you first.")
                :role to :memo (last-id tx) :labels (ids-labels (:state tx) [to]))
+       ;; Nor of one waiting to be declassified: it may be private.
+       (awaiting-declassification? (:config tx) (memo (:state tx) (last-id tx)))
+       (notify tx "memo-awaiting-declassification"
+               (str "Memo " (last-id tx) " from " from " to " to " waits for you")
+               (str to " is a public role and the memo is not public, so " to " is not shown it until"
+                    " you declassify it. relay declassify " (last-id tx) " shows it to you first.")
+               :role to :memo (last-id tx) :labels (ids-labels (:state tx) [from to]))
        :else tx))))
 
 (defn- escalate
@@ -889,9 +1095,11 @@
         copied (union (memo-labels state m) (ids-labels state [(:from m) to]) (:labels letter))]
     (if (and handler (active-role? state handler) (not= handler to))
       ;; Through send-memo, so a contaminated dead letter is quarantined
-      ;; and the operator told, as for any memo.
-      (send-memo tx {:from dispatcher :to handler :subject (str "Dead letter: " title) :body report}
-                 copied)
+      ;; and the operator told, as for any memo. The dispatcher writes it,
+      ;; so it is never public, whoever's call set it off.
+      (with-public tx false
+        #(send-memo % {:from dispatcher :to handler :subject (str "Dead letter: " title) :body report}
+                    copied))
       (notify tx "work-abandoned" title report :role to :dead-letter letter-id :labels copied))))
 
 (defn- dead-letter
@@ -905,7 +1113,16 @@
                  copied)]
     (escalate tx (last-id tx))))
 
-(defn- authorize-registry! [{:keys [config actor]}]
+(declare public-actor?)
+
+(defn- authorize-registry!
+  "Refuses a registry change from anyone but the operator or a role granted
+  :may-add. A public role's session never changes the registry, whatever
+  relay.edn says now, and is told so before anything is looked up, so the
+  refusal says nothing about which roles exist."
+  [{:keys [config actor] :as tx}]
+  (when (public-actor? tx)
+    (reject! :forbidden (str actor " is a public role, and a public role may not add, change or remove roles.")))
   (when-not (or (= operator actor) (config/may-add? config actor))
     (reject! :forbidden (str actor " may not add, change or remove roles."))))
 
@@ -918,9 +1135,15 @@
   (when-not (active-role? state actor)
     (reject! :forbidden (str "Only a role can do that, and " actor " is not one."))))
 
-(defn- open-memo! [{:keys [state]} id]
+(defn- public-actor? [{:keys [state config actor session-wake]}]
+  (public-caller? state config actor session-wake))
+
+(defn- open-memo! [{:keys [state] :as tx} id]
   (let [m (memo state id)]
-    (when-not m (reject! :not-found (str "There is no memo " id ".")))
+    ;; A public role cannot see a memo that is not public, so for it there
+    ;; is no such memo.
+    (when (or (nil? m) (and (public-actor? tx) (not (shown-to-public? m (memo-labels state m)))))
+      (reject! :not-found (str "There is no memo " id ".")))
     (when-not (= :unread (:status m))
       (reject! :invalid (str "Memo " id " is not open; it is " (name (:status m)) ".")))
     m))
@@ -944,9 +1167,29 @@
   (when-not (and (or (nil? labels) (sequential? labels)) (every? label-names labels))
     (reject! (str "Unknown labels " (pr-str labels) "; relay knows only "
                   (str/join " and " (sort label-names)) ".")))
-  (:events (decide* {:state state :events [] :now now :config config :actor actor
-                     :labels (union labels)}
-                    command)))
+  (let [public-role (and (active-role? state actor) (public-caller? state config actor (:session-wake command)))]
+    ;; A public role's session never holds private (agentloop forbids it),
+    ;; so a call claiming it is refused before it can write anything.
+    (when (and public-role (private? labels))
+      (reject! :forbidden (str actor " is a public role, and this call came from a session holding private."
+                               " relay refused it.")))
+    (:events (decide* {:state state :events [] :now now :config config :actor actor
+                       :labels (union labels) :session-wake (:session-wake command)
+                       ;; Whether what this command writes is public: the
+                       ;; operator says so with --public, a public role's
+                       ;; session is when it started public, and nobody
+                       ;; else's ever is. A session that began before the
+                       ;; role was made public may hold private text no
+                       ;; label records, so its writes are not public.
+                       ;; The wake is the one relay named in the tool
+                       ;; command it gave the harness, so an old process
+                       ;; cannot borrow a newer public wake's standing.
+                       :public (boolean (cond (= operator actor) (true? (:public command))
+                                              public-role (let [w (get-in state [:wakes (:session-wake command)])]
+                                                            (and (= actor (:role w)) (= :running (:status w))
+                                                                 (:public-session w)))
+                                              :else false))}
+                      command))))
 
 (defn run-command
   "decide, then fold the events into the state. Returns [state events]."
@@ -961,9 +1204,19 @@
   [config id harness]
   (let [g (config/grants config id)]
     (when (and (= :script (get-in config [:harnesses (keyword harness) :kind]))
-               (or (seq (:tools g)) (:may-add g)))
-      (reject! (str id " is granted tools in relay.edn, and a :script harness gets none."
-                    " Choose another harness or take the grants away.")))))
+               (or (seq (:tools g)) (:may-add g) (:public g)))
+      (reject! (str id " is granted tools or made public in relay.edn, and a :script harness gets no"
+                    " tools and can claim any labels. Choose another harness or take the grants away.")))))
+
+(defn- public-role-text!
+  "Refuses a public role's id, title or instructions unless the operator
+  writes them with --public: the role is shown them in every wake, and a
+  role's session may carry private details it was never labelled for (the
+  operator's AGENTS.md)."
+  [{:keys [config actor public]} id]
+  (when (and (public-role? config id) (not (and (= operator actor) public)))
+    (reject! :forbidden (str id " is a public role, so only the operator writes its id, title and instructions,"
+                             " with --public. " public-means))))
 
 (defmethod decide* :role/add [{:keys [state config actor] :as tx}
                               {{:keys [id title reports-to harness model] :as args} :args}]
@@ -980,6 +1233,7 @@
     (when (and harness (not (contains? (:harnesses config) (keyword harness))))
       (reject! (str "No harness called " harness " is configured.")))
     (script-without-grants! config id (or harness (some-> (:default-harness config) name)))
+    (public-role-text! tx id)
     (emit tx "role/added" {:id id
                            :title (if (blank? title) id (str/trim title))
                            :instructions (require-text (:instructions args) "A role's instructions")
@@ -997,6 +1251,8 @@
         (reject! (str "No harness called " h " is configured.")))
       (script-without-grants! config id h))
     (when-let [r (:reports-to changes)] (active-role! state r))
+    (when (or (contains? changes :title) (contains? changes :instructions))
+      (public-role-text! tx id))
     (emit tx "role/updated" (assoc changes :id id))))
 
 (defmethod decide* :role/remove [{:keys [state actor] :as tx} {{:keys [id]} :args}]
@@ -1017,13 +1273,25 @@
 
 ;; memos
 
+(defn- operator-public!
+  "Refuses what the operator writes for a public role without --public:
+  the role may send it out, so the operator has to say it may."
+  [{:keys [actor config] :as tx} role what]
+  (when (and (= operator actor) (public-role? config role) (not (:public tx)))
+    (reject! :invalid (str role " is a public role, so " (str/lower-case what) " for it needs --public. "
+                           public-means))))
+
 (defmethod decide* :memo/send [{:keys [state actor] :as tx} {{:keys [to subject body]} :args}]
+  ;; A public role knows only the roles whose text the operator wrote.
+  (when (and (public-actor? tx) (not= operator to) (not (role-text-public? state to)))
+    (reject! :not-found (str "There is no role called " to ".")))
   (when-not (or (= operator to) (active-role? state to))
     (reject! :not-found (str "There is no role called " to ".") (id-labels state to)))
   (let [subject (require-text subject "A memo's subject")
         body (require-text body "A memo's body")]
     (when (str/includes? subject "\n") (reject! "A memo's subject is one line."))
     (when (> (count subject) 200) (reject! "A memo's subject is at most 200 characters."))
+    (operator-public! tx to "A memo")
     (send-memo tx {:from actor :to to :subject subject :body body})))
 
 (defn- not-kept!
@@ -1050,6 +1318,10 @@
     (dead-letter tx memo "blocked" [] :explanation (require-text explanation "The explanation"))))
 
 (defmethod decide* :memo/retry [{:keys [state config actor] :as tx} {{:keys [role]} :args}]
+  ;; Dead letters quote other roles' memos, so a public session never
+  ;; handles them, whatever relay.edn says now.
+  (when (public-actor? tx)
+    (reject! :forbidden (str actor " is a public role, and a public role may not requeue dead letters.")))
   (when-not (or (= operator actor) (= actor (:dead-letter-handler config))
                 (config/may-add? config actor))
     (reject! :forbidden (str actor " may not requeue dead letters.")))
@@ -1083,18 +1355,31 @@
 
 (defmethod decide* :routine/write [tx {{:keys [owner name schedule instructions]} :args}]
   (let [owner (routine-owner tx owner)]
+    (operator-public! tx owner "A routine")
     (when-not (and (string? name) (re-matches routine-name-pattern name))
       (reject! "A routine name is lower case letters, digits and hyphens."))
     (when-not (schedule/parse schedule)
       (reject! (str "Not a schedule relay understands: " (pr-str schedule) ". Use every 30m, "
                     "every 2h, every 1d, daily 07:30, weekly mon 09:00 or once 2026-10-08 09:00.")))
-    (emit tx "routine/written" {:owner owner :name name
-                                :schedule (schedule/render (schedule/parse schedule))
-                                :instructions (require-text instructions "A routine's instructions")})))
+    (let [last-run (memo (:state tx) (:last-memo (routine (:state tx) owner name)))
+          tx (emit tx "routine/written" {:owner owner :name name
+                                         :schedule (schedule/render (schedule/parse schedule))
+                                         :instructions (require-text instructions "A routine's instructions")})]
+      ;; A public role cannot see or close an open run that is not public,
+      ;; which would keep the rewritten routine from firing. The rewrite
+      ;; replaces it.
+      (if (and last-run (= :unread (:status last-run)) (awaiting-declassification? (:config tx) last-run))
+        (emit tx "memo/closed" {:memo (:id last-run)
+                                :outcome (str "Replaced when the routine " name " was rewritten: this run was"
+                                              " not public, so " owner " could not see it.")})
+        tx))))
 
 (defmethod decide* :routine/remove [{:keys [state] :as tx} {{:keys [owner name]} :args}]
-  (let [owner (routine-owner tx owner)]
-    (when-not (= :active (:status (routine state owner name)))
+  (let [owner (routine-owner tx owner)
+        r (routine state owner name)]
+    (when-not (and (= :active (:status r))
+                   ;; A public role knows only its public routines.
+                   (or (not (public-actor? tx)) (shown-to-public? r (item-labels r))))
       (reject! :not-found (str owner " has no routine called " name ".")))
     (emit tx "routine/removed" {:owner owner :name name})))
 
@@ -1104,12 +1389,47 @@
   (when-not (= dispatcher actor)
     (reject! :forbidden "Only the dispatcher does that.")))
 
-(defmethod decide* :wake/start [{:keys [state config now actor] :as tx}
-                                {{role-id :role :keys [note dispatched chat pid pid-start]} :args}]
-  (when-not (#{dispatcher operator} actor)
-    (reject! :forbidden "Only the operator or the dispatcher wakes a role."))
-  (active-role! state role-id)
-  (when (running? state role-id) (reject! :busy (str role-id " is already running.") (id-labels state role-id)))
+(defn sessions-from-before-public
+  "A public role's held sessions that cannot be carried on as a public
+  role's, not yet ended: those from before it was public, and those whose
+  decided calls carry a reason the operator gave while it was not."
+  [state config role-id]
+  (if-not (public-role? config role-id)
+    []
+    (let [hs (filter #(and (= role-id (:role %)) (unsettled-hold? %)
+                           (not (get-in state [:ended-sessions (:session %)])))
+                     (vals (:holds state)))]
+      (->> (group-by :session hs)
+           (keep (fn [[session hs]]
+                   (when (some #(or (not (get-in state [:wakes (:wake %) :public-session]))
+                                    ;; A reason given while the role was not
+                                    ;; public could not be carried back to it.
+                                    (and (not (blank? (:reason %))) (not (:reason-public %))))
+                               hs)
+                     session)))
+           sort vec))))
+
+(defn- end-sessions-from-before-public
+  "Ends a public role's held sessions from before it was public: they may
+  hold private text no label records (the operator's AGENTS.md, what was
+  said in them), so none is carried on. Its open calls are denied, and the
+  memos they kept go on in fresh sessions. roles-to-wake wakes the role for
+  this, so a session whose calls nobody decides cannot strand them."
+  [{:keys [state config] :as tx} role-id]
+  (let [sessions (sessions-from-before-public state config role-id)]
+    (reduce (fn [tx session]
+              (as-> tx tx
+                (reduce (fn [tx {h :id}]
+                          (emit tx "hold/resolved" {:hold h :verdict "deny"
+                                                    :reason "The role was made public, so this session was ended."}))
+                        tx (sort-by :id (filter #(and (= session (:session %)) (= :open (:status %)))
+                                                (vals (:holds (:state tx))))))
+                (emit tx "hold/session-ended" {:role role-id :session session :why "the role was made public"})))
+            tx sessions)))
+
+(defn- start-wake
+  "What :wake/start does once the role is known to be free."
+  [{:keys [state config now actor] :as tx} {{role-id :role :keys [note dispatched chat pid pid-start]} :args}]
   (let [harness (harness-of state config role-id)]
     (when dispatched
       (when (paused-until state harness now) (reject! :paused (str harness " is paused.")))
@@ -1128,24 +1448,54 @@
           ready (when-not chat (resumable-held-session state role-id))
           kept (held-memo-ids state role-id)
           memos (cond chat []
-                      ready (filterv #(= :unread (:status %)) (map #(memo state %) (get-in state [:wakes (:wake ready) :memos])))
+                      ready (filterv #(and (= :unread (:status %)) (not (awaiting-declassification? config %)))
+                                     (map #(memo state %) (get-in state [:wakes (:wake ready) :memos])))
                       dispatched (waiting-memos state config role-id now)
                       :else (filterv #(not (kept (:id %))) (deliverable-memos state config role-id)))
           held (held-wakes state role-id)
           ;; A session from before relay kept labels is never carried on:
           ;; the policy could not know what it had seen.
           before-labels? #(and % (:labels-enabled-at state) (< % (:labels-enabled-at state)))
+          public (public-role? config role-id)
+          ;; Nor is a session from before a public role was public carried
+          ;; on as one: it may hold private text that no label records.
+          before-public? #(and public % (not (get-in state [:wakes % :public-session])))
           interrupted (cond ready (when-not (before-labels? (:wake ready)) (:wake ready))
                             :else (let [w (:interrupted-wake (role state role-id))]
-                                    (when-not (or (before-labels? w) (held w)) w)))
-          resolves (when ready (mapv :id (:holds ready)))]
+                                    (when-not (or (before-labels? w) (held w) (before-public? w)) w)))
+          resolves (when ready (mapv :id (:holds ready)))
+          ;; A note the operator wrote with --public may go where the role
+          ;; sends things; the conversation's own note is relay's.
+          note-public (boolean (and (not chat) (not (blank? note)) (:public tx)))]
+      (when (and public (not chat) (not (blank? note)) (not note-public))
+        (reject! :invalid (str role-id " is a public role, so a note for it needs --public. " public-means)))
+      (when-let [why (unwakeable-reason state config role-id)]
+        (reject! :invalid (str role-id " is a public role and cannot run as one: " why)))
+      ;; The last line: nothing private goes into a public role's prompts.
+      (when (and public (private? (wake-labels state config {:role role-id :memos (mapv :id memos) :note note
+                                                             :note-public note-public :chat chat
+                                                             :resolves resolves})))
+        (reject! :invalid (str role-id " is a public role, and its prompts would hold private data.")))
       (if (and (empty? memos) (blank? note) (not chat) (empty? resolves))
         tx
         (emit tx "wake/started" (cond-> {:role role-id :memos (mapv :id memos) :note note
                                          :resumes (when-not chat interrupted)
                                          :harness harness :pid pid :pid-start pid-start}
+                                  note-public (assoc :note-public true)
+                                  public (assoc :public-session true)
                                   chat (assoc :chat true)
                                   (seq resolves) (assoc :resolves resolves)))))))
+
+(defmethod decide* :wake/start [{:keys [config actor] :as tx} {{role-id :role :keys [chat]} :args :as command}]
+  (when-not (#{dispatcher operator} actor)
+    (reject! :forbidden "Only the operator or the dispatcher wakes a role."))
+  (active-role! (:state tx) role-id)
+  (when (running? (:state tx) role-id)
+    (reject! :busy (str role-id " is already running.") (id-labels (:state tx) role-id)))
+  (when (and chat (not= operator actor))
+    (reject! :forbidden "Only the operator can open a conversation."))
+  (start-wake (cond-> tx (public-role? config role-id) (end-sessions-from-before-public role-id))
+              command))
 
 (defn- settle-memos
   "Deals with each memo a wake carried that is still open. The role never
@@ -1236,8 +1586,28 @@
       (emit tx "hold/requeued" {:hold (:id known)})
       :else tx)))
 
+(defn- tell-refusals
+  "Tells the operator about what agentloop kept from a wake's session for
+  carrying a label it may not hold: a session that would not start, and
+  tool results it refused. Names the tools, never what they returned."
+  [{:keys [state] :as tx} wake {:keys [refused forbidden]}]
+  (let [role (:role wake)
+        tools (sort (distinct (keep #(when (and (map? %) (string? (:tool %))) (:tool %)) (when (sequential? refused) refused))))
+        forbidden (when (sequential? forbidden) (filterv label-names forbidden))]
+    (cond-> tx
+      (seq forbidden)
+      (notify "session-forbidden" (str role "'s session did not start")
+              (str "It holds " (str/join " and " forbidden) ", which a public role's session may not hold, so"
+                   " agentloop did not run it. Its next wake starts a fresh session.")
+              :role role :labels (id-labels state role))
+      (seq tools)
+      (notify "result-refused" (str "A result was kept from " role)
+              (str "agentloop refused " (count refused) " tool result(s) from " (str/join ", " tools)
+                   " because they carried private data, which " role " may not see.")
+              :role role :labels (id-labels state role)))))
+
 (defn- end-wake [{:keys [state config] :as tx} wake-id {:keys [outcome exit crashed cut-short session sessions said
-                                                              transcript resets-at held labels]}]
+                                                              transcript resets-at held labels] :as report}]
   (let [wake (get-in state [:wakes wake-id])
         ;; What the session said, and the input of any call it left held,
         ;; are its own text, with the labels it had gathered by the end:
@@ -1272,6 +1642,7 @@
       ;; A wake stopped for the operator has not failed its memos: it is
       ;; resumed once they decide.
       (if (and (= "ran" outcome) (empty? held)) (settle-memos tx wake said) tx)
+      (tell-refusals tx wake report)
       (dissoc tx :said-labels)))))
 
 ;; the operator's say over contaminated text
@@ -1286,6 +1657,70 @@
     (when-not (quarantined? config m)
       (reject! :invalid (str "Memo " id " is not quarantined.")))
     (emit tx "memo/released" {:memo id})))
+
+(defn plain-spacing
+  "Text with its spacing made plain: every run of spaces, tabs and other
+  blanks within a line becomes one space, lines lose the blanks at their
+  start and end, and runs of blank lines become one, none at the start or
+  end. What is left is what a reader sees, so nothing can ride in the
+  spacing (trailing spaces and tabs as bits, say) past someone who read
+  it. Anything that draws as nothing or as an empty space
+  (text/blank-glyph?) counts as a blank, and every kind of line break as
+  one."
+  [s]
+  (->> (str/split (-> (apply str (map #(if (text/blank-glyph? %) " " (String. (Character/toChars (int %))))
+                                      (iterator-seq (.iterator (.codePoints (str s))))))
+                      (str/replace #"\r\n?|[\u0085\u2028\u2029]" "\n"))
+                  #"\n")
+       (map #(str/trim (str/replace % #"[\p{Zs}\t\x0B\f\u001C-\u001F]+" " ")))
+       (partition-by str/blank?)
+       (mapcat #(if (str/blank? (first %)) [""] %))
+       (drop-while str/blank?)
+       reverse (drop-while str/blank?) reverse
+       (str/join "\n")))
+
+(defn declassified
+  "A memo as declassifying makes it, and the role is given: its subject and
+  body defanged if it is contaminated (text/defang), with plain spacing
+  (plain-spacing), in Unicode NFC. relay declassify shows exactly this
+  text, adding only the [contaminated] marker, so what the operator
+  vouches for and what the role gets are one text. Defanging folds
+  several texts into one (http and HtTp, a dot and [.]), so the role
+  must get the folded text, or the difference could carry bits the
+  operator never saw."
+  [m]
+  (let [fix (fn [s] (-> (str s)
+                        (cond-> (contaminated? (:labels m)) text/defang)
+                        plain-spacing
+                        (java.text.Normalizer/normalize java.text.Normalizer$Form/NFC)))]
+    (-> m
+        ;; A subject is one line, however it was written.
+        (update :subject #(fix (str/replace (plain-spacing %) "\n" " ")))
+        (update :body fix))))
+
+(defmethod decide* :memo/declassify [{:keys [state config] :as tx} {{id :memo} :args}]
+  ;; The operator has read the memo, its sender's id included, and says it
+  ;; may leave this machine. Only a person at the terminal does that.
+  (operator-only! tx "declassifies a memo")
+  (let [m (open-memo! tx id)]
+    (when-not (awaiting-declassification? config m)
+      (reject! :invalid (str "Memo " id " is not waiting to be declassified.")))
+    (let [{:keys [subject body]} (declassified m)]
+      (emit tx "memo/declassified" {:memo id :subject subject :body body
+                                    :from-labels (vec (remove #{private-label} (second (shown-id state (:from m)))))}
+            ;; It holds the memo's text, without the private it vouches away.
+            (remove #{private-label} (:labels m))))))
+
+(defmethod decide* :result/refused [{:keys [state actor] :as tx} {{:keys [tool]} :args}]
+  ;; relay kept a tool's result from a public role's session for carrying
+  ;; private. The role's own call reports it; the operator is told which
+  ;; tool, never what it returned.
+  (caller-role! tx)
+  (when-not (public-actor? tx) (reject! :forbidden "Only a public role's results are refused."))
+  (notify tx "result-refused" (str "A result was kept from " actor)
+          (str "relay refused a result from " tool " because it carried private data, which " actor
+               " may not see.")
+          :role actor :labels (id-labels state actor)))
 
 (def trust-kinds #{"memo" "fact" "doc" "note" "routine" "role" "journal"})
 
@@ -1421,7 +1856,11 @@
     (when-not (#{"allow" "deny"} verdict)
       (reject! (str "A hold is resolved with allow or deny, not " (pr-str verdict) ".")))
     (let [tx (emit tx "hold/resolved" (cond-> {:hold hold-id :verdict verdict}
-                                        (not (blank? reason)) (assoc :reason (str/trim reason))))
+                                        (not (blank? reason)) (assoc :reason (str/trim reason))
+                                        ;; The operator is told, as they type it,
+                                        ;; that a public role's reason is public.
+                                        (and (not (blank? reason)) (public-role? (:config tx) (:role h)))
+                                        (assoc :reason-public true)))
           denied (count (filter #(and (= (:session h) (:session %)) (= :denied (:status %)))
                                 (vals (:holds (:state tx)))))
           ended (cond (and (= "deny" verdict) end) "the operator ended it"
@@ -1454,9 +1893,12 @@
 (defn- fire-routines [{:keys [state config now] :as tx}]
   (reduce (fn [tx {:keys [owner name instructions schedule] :as r}]
             (if (routine-due? (:state tx) config r now)
-              (let [tx (send-memo tx {:from dispatcher :to owner :subject name :body instructions
-                                      :routine name}
-                                  (:labels r))
+              (let [;; A run copies the routine, so it is public when the
+                    ;; routine is.
+                    tx (with-public tx (:public r)
+                         #(send-memo % {:from dispatcher :to owner :subject name :body instructions
+                                        :routine name}
+                                     (:labels r)))
                     memo-id (:seq (first (filter #(= "memo/sent" (:type %))
                                                  (rseq (:events tx)))))]
                 (emit tx "routine/fired" {:owner owner :name name :memo memo-id
@@ -1479,6 +1921,25 @@
                              "explains. Its work is waiting and nothing was dropped.")
                         :role id :labels (id-labels state id))
                 tx)))
+          tx (active-role-ids state)))
+
+(defn- report-unwakeable
+  "Tells the operator, once for each reason, about a public role that cannot
+  run as one, and how to fix it."
+  [{:keys [state config] :as tx}]
+  (reduce (fn [tx id]
+            (let [why (unwakeable-reason (:state tx) config id)
+                  told (get-in (:state tx) [:unwakeable-told id])]
+              (cond
+                (and why (not= why told))
+                (notify tx "public-role-cannot-run" (str id " cannot run as a public role")
+                        (str "It is not woken until this is put right: " why)
+                        :role id :reason why :labels (id-labels state id))
+                ;; Put right, so a later breakage is told again.
+                (and told (not why))
+                (notify tx "public-role-can-run" (str id " can run as a public role again")
+                        "It is woken as usual from now on." :role id :labels (id-labels state id))
+                :else tx)))
           tx (active-role-ids state)))
 
 (defn- report-outages [{:keys [state config ^Instant now] :as tx}]
@@ -1520,6 +1981,7 @@
             tx (sort lost-wakes))
     (fire-routines tx)
     (trip-guards tx)
+    (report-unwakeable tx)
     (report-outages tx)))
 
 ;; notifications
@@ -1596,9 +2058,13 @@
 (defn- core-fact! [state id]
   (or (fact state id) (reject! :not-found (str "There is no fact " id "."))))
 
-(defn- known-fact! [state id]
+(defn- known-fact!
+  "A fact's current version. For a public role, a fact whose current version
+  it cannot be shown does not exist."
+  [{:keys [state] :as tx} id]
   (let [f (fact state id)]
-    (when-not f (reject! :not-found (str "There is no fact " id ".")))
+    (when (or (nil? f) (and (public-actor? tx) (not (fact-shown-to-public? state (fact-as-known f nil)))))
+      (reject! :not-found (str "There is no fact " id ".")))
     (let [v (fact-as-known f nil)]
       (when (:retracted v) (reject! :invalid (str "Fact " id " was retracted.")))
       v)))
@@ -1608,20 +2074,21 @@
                                (validity! (world-time config valid-from "valid-from")
                                           (world-time config valid-to "valid-to")))))
 
-(defmethod decide* :fact/supersede [{:keys [state config now] :as tx}
+(defmethod decide* :fact/supersede [{:keys [config now] :as tx}
                                     {{:keys [fact topic text valid-from valid-to]} :args}]
-  (let [old (known-fact! state fact)
+  (let [old (known-fact! tx fact)
+        tx (copying! tx old (str "Superseding fact " fact))
         from (or (world-time config valid-from "valid-from") now)]
     (when-let [by (:superseded-by old)]
       (reject! :conflict (str "Fact " fact " was already superseded by fact " by "; supersede that one.")))
     (when (and (:valid-from old) (not (after? from (:valid-from old))))
       (reject! :invalid (str "The change must come after fact " fact " began to hold, at " (:valid-from old)
                              ". If the fact was wrong from the start, correct it instead.")
-               (content-labels (:labels old))))
+               (item-labels old)))
     (when (and (:valid-to old) (after? from (:valid-to old)))
       (reject! :invalid (str "Fact " fact " had already stopped holding at " (:valid-to old)
                              "; add a new fact instead.")
-               (content-labels (:labels old))))
+               (item-labels old)))
     (emit tx "fact/superseded"
           (merge {:fact fact
                   :topic (if (blank? topic) (:topic old) (fact-topic topic))
@@ -1647,18 +2114,20 @@
         current (peek versions)
         before (last (take-while #(not= retracted-id (:superseded-by %)) versions))]
     (if (and before (= retracted-id (:superseded-by current)))
-      (emit tx "fact/corrected"
+      ;; It puts back the old fact's own text, public only if that was.
+      (with-public tx (and (:public tx) (:public current)) #(emit % "fact/corrected"
             (merge (select-keys current [:topic :text])
                    {:fact old-id :superseded-by nil
                     :valid-from (some-> (:valid-from current) str)
                     :valid-to (some-> (:valid-to before) str)
                     :why (str "Fact " retracted-id ", which superseded it, was retracted.")})
-            (:labels current))
+            (:labels current)))
       tx)))
 
-(defmethod decide* :fact/correct [{:keys [state config] :as tx}
+(defmethod decide* :fact/correct [{:keys [config] :as tx}
                                   {{:keys [fact topic text valid-from valid-to retract why]} :args}]
-  (let [cur (known-fact! state fact)
+  (let [cur (known-fact! tx fact)
+        tx (copying! tx cur (str "Correcting fact " fact))
         why (require-text why "Saying why the record was wrong")]
     (when (and retract (:supersedes cur) (:superseded-by cur))
       ;; In the middle of a chain of changes, putting back the fact it
@@ -1680,7 +2149,7 @@
                                         (bound config valid-to (:valid-to cur) "valid-to")))]
         (when (= corrected (merge (select-keys cur [:topic :text])
                                   (validity! (:valid-from cur) (:valid-to cur))))
-          (reject! :invalid "That correction changes nothing." (content-labels (:labels cur))))
+          (reject! :invalid "That correction changes nothing." (item-labels cur)))
         ;; A correction keeps whatever it does not change (the times, the
         ;; topic, the text, the link to its successor), so it carries the
         ;; labels of the version it corrects.
@@ -1696,7 +2165,9 @@
   (let [f (core-fact! state fact)
         v (first (filter #(= version (:seq %)) (:versions f)))]
     (when-not v (reject! :not-found (str "Fact " fact " has no version " version ".")))
-    (emit tx "fact/corrected"
+    ;; The restored version is public when the one it restores was.
+    (emit (assoc (copying! tx v (str "Version " version " of fact " fact)) :public (true? (:public v)))
+          "fact/corrected"
           (cond-> (merge (select-keys v [:topic :text])
                          {:fact fact :why (str "The operator reverted it to version " version ".")
                           :superseded-by (:superseded-by v)}
@@ -1708,32 +2179,39 @@
   (operator-only! tx "reverts a doc")
   (let [v (doc-version state path {:version version})]
     (when-not v (reject! :not-found (str "There is no version " version " of " path ".")))
-    (if (:removed v)
-      (emit tx "doc/removed" {:path path} (:labels v))
-      (emit tx "doc/put" {:path path :content (:content v)} (:labels v)))))
+    (let [tx (assoc (copying! tx v (str "Version " version " of " path)) :public (true? (:public v)))]
+      (if (:removed v)
+        (emit tx "doc/removed" {:path path} (:labels v))
+        (emit tx "doc/put" {:path path :content (:content v)} (:labels v))))))
 
 (def ^:private note-name-pattern #"[a-z0-9][a-z0-9-]{0,47}")
 
 (defmethod decide* :note/write [tx {{:keys [owner name text]} :args}]
   (let [owner (owner-for tx owner "note")
-        text (require-text text "A note")]
+        text (require-text text "A note")
+        _ (operator-public! tx owner "A note")
+        old (get-in (:state tx) [:notes owner name])]
     (when-not (and (string? name) (re-matches note-name-pattern name))
       (reject! "A note's name is lower case letters, digits and hyphens."))
     (when (> (count text) 4000)
       (reject! "A note is at most 4000 characters, since notes go into every wake. Put more in a doc."))
-    (if (= text (get-in (:state tx) [:notes owner name :text]))
+    ;; Unchanged text writes nothing, unless that would tell a public role
+    ;; what a note it cannot see says, or leave a note it wrote private.
+    (if (and (= text (:text old)) (= (true? (:public old)) (:public tx)))
       tx
       (emit tx "note/written" {:owner owner :name name :text text}))))
 
 (defmethod decide* :note/remove [{:keys [state] :as tx} {{:keys [owner name]} :args}]
-  (let [owner (owner-for tx owner "note")]
-    (when-not (get-in state [:notes owner name])
+  (let [owner (owner-for tx owner "note")
+        n (get-in state [:notes owner name])]
+    (when-not (and n (or (not (public-actor? tx)) (shown-to-public? n (item-labels n))))
       (reject! :not-found (str owner " has no note called " name ".")))
     (emit tx "note/removed" {:owner owner :name name})))
 
 (defmethod decide* :journal/write [tx {{:keys [owner text]} :args}]
   (let [owner (owner-for tx owner "journal")
         text (require-text text "A journal entry")]
+    (operator-public! tx owner "A journal entry")
     (when (> (count text) 20000) (reject! "A journal entry is at most 20000 characters."))
     (emit tx "journal/written" {:owner owner :text text})))
 
@@ -1753,15 +2231,39 @@
     (when-let [clash (first (filter #(or (str/starts-with? (:path %) (str path "/"))
                                          (str/starts-with? path (str (:path %) "/")))
                                     (docs state nil)))]
-      (reject! :conflict (str path " would sit where " (:path clash) " is, as a file and a"
-                              " folder at once. Choose another path.")
-               (union (version-labels state clash) (path-labels state (:path clash)))))
-    (if (= content (:content (doc-version state path {})))
-      tx
-      (emit tx "doc/put" {:path path :content content}))))
+      (if (and (public-actor? tx) (not (doc-shown-to-public? state (:path clash) clash)))
+        ;; A public role is not told the path of a doc it cannot see, only
+        ;; that the path cannot be used.
+        (reject! :conflict (str path " cannot be used: it would sit where another doc is, as a file and"
+                                " a folder at once. Choose another path."))
+        (reject! :conflict (str path " would sit where " (:path clash) " is, as a file and a"
+                                " folder at once. Choose another path.")
+                 (union (version-labels state clash) (path-labels state (:path clash))))))
+    (let [latest (doc-version state path {})]
+      ;; A path is public only when it was first chosen in public, so a
+      ;; public write there could never be seen by a public role.
+      (when (and (:public tx) (not (public-actor? tx)) (get-in state [:docs path]) (not (get-in state [:docs path :path-public])))
+        (reject! :invalid (str path " was first written without --public, so its path is not public and no public"
+                               " role can see a doc there. Put it at a new path with --public.")))
+      ;; A public role does not write over a doc it cannot see: it could not
+      ;; see what it wrote, and its path was not chosen in public. That this
+      ;; and the clash above are refused tells it a path is taken, never
+      ;; what is there or who wrote it. Docs share one tree, so the only
+      ;; alternative is a namespace of their own for public roles, which
+      ;; would cut them off from public docs the operator writes.
+      (when (and latest (public-actor? tx) (not (doc-shown-to-public? state path latest)))
+        (reject! :conflict (str path " cannot be used. Choose another path.")))
+      ;; Unchanged content writes nothing, unless saying so would tell a
+      ;; public role what a doc it cannot see says, or leave its own write
+      ;; private.
+      (if (and (= content (:content latest)) (= (true? (:public latest)) (:public tx))
+               (or (not (public-actor? tx)) (doc-shown-to-public? state path latest)))
+        tx
+        (emit tx "doc/put" {:path path :content content})))))
 
 (defmethod decide* :doc/remove [{:keys [state] :as tx} {{:keys [path]} :args}]
   (let [path (doc-path path)
         v (doc-version state path {})]
-    (when (or (nil? v) (:removed v)) (reject! :not-found (str "There is no doc at " path ".")))
+    (when (or (nil? v) (:removed v) (and (public-actor? tx) (not (doc-shown-to-public? state path v))))
+      (reject! :not-found (str "There is no doc at " path ".")))
     (emit tx "doc/removed" {:path path})))

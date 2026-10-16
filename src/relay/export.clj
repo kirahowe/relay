@@ -37,7 +37,7 @@
         zone (config/zone (:config sys))
         now (core/facts state {:as-of ((:clock sys))})
         all (core/facts state {:all true})]
-    (page (apply core/union (map #(core/content-labels (:labels %)) (concat now all)))
+    (page (apply core/union (map core/item-labels (concat now all)))
           (concat ["# Facts" "" "What holds now, then everything else recorded, ended or not yet begun." ""
                    "## Holding now" ""]
                   (render/facts state zone now)
@@ -58,12 +58,12 @@
                                   " in relay.\n")]
                 ["facts.md" (facts-page sys)]]
                (for [{:keys [path content] :as v} (core/docs state nil)]
-                 [(str "docs/" path) (with-labels (core/content-labels (core/version-labels state v)
-                                                                       (core/path-labels state path))
+                 [(str "docs/" path) (with-labels (core/item-labels v (core/version-labels state v)
+                                                                    (core/path-labels state path))
                                        content)])
                (for [id (sort (keys (:roles state)))
-                     {:keys [name text labels]} (core/notes state id)]
-                 [(str "roles/" id "/notes/" name ".md") (with-labels (core/content-labels labels) (str text "\n"))])
+                     {:keys [name text] :as n} (core/notes state id)]
+                 [(str "roles/" id "/notes/" name ".md") (with-labels (core/item-labels n) (str text "\n"))])
                (for [id (sort (keys (:journals state)))
                      :let [entries (core/journal state id nil)]]
                  [(str "roles/" id "/journal.md")

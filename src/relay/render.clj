@@ -41,6 +41,19 @@
     (str "    from " from ", " (local sent-at zone))]
    (text/block labels body)))
 
+(defn declassify
+  "What relay declassify shows of a memo `d` already as declassifying makes
+  it (relay.core/declassified): that text exactly, with the
+  [contaminated] marker as the only thing added. It is not defanged again:
+  core did that, and the role gets the same text."
+  [zone {:keys [id from subject body sent-at labels]}]
+  (concat
+   ["" (str "[" id "] " (when (text/contaminated? labels) "[contaminated] ") subject)
+    (str "    from " from ", " (local sent-at zone))]
+   (when (text/contaminated? labels) ["  [contaminated]"])
+   ;; Behind the gutter, but not defanged again: core did that.
+   (text/block [] body)))
+
 (defn inbox [zone memos]
   (if (empty? memos)
     ["Nothing waiting."]
@@ -92,6 +105,12 @@
      [(format "Held tool calls: %d (relay holds)" (count hs))])
    (when-let [qs (seq (filter #(core/quarantined? config %) (filter #(= :unread (:status %)) (vals (:memos state)))))]
      [(format "Quarantined memos: %s (relay release <memo>)" (str/join ", " (sort (map :id qs))))])
+   (for [id (core/active-role-ids state)
+         :let [why (when config (core/unwakeable-reason state config id))]
+         :when why]
+     (text/for-operator (core/id-labels state id) (str "Public role " id " cannot run: " why)))
+   (when-let [ds (seq (filter #(core/awaiting-declassification? config %) (filter #(= :unread (:status %)) (vals (:memos state)))))]
+     [(format "Memos waiting to be declassified: %s (relay declassify <memo>)" (str/join ", " (sort (map :id ds))))])
    (when-let [recent (seq (take-last 5 (sort-by :id (vals (:wakes state)))))]
      (list* "" "Recent wakes"
            (for [{:keys [id role started-at status outcome crashed]} recent]

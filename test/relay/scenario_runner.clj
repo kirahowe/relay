@@ -34,7 +34,8 @@
             [relay.log :as log]
             [relay.mock-anthropic :as mock]
             [relay.scenario :as scenario]
-            [relay.staging :as staging])
+            [relay.staging :as staging]
+            [relay.test-support :as support])
   (:import (java.time Duration Instant)))
 
 (def scenario-dir "test/scenarios")
@@ -203,14 +204,16 @@
 ;; --- the harness: mock or real
 
 (defn- use-mock!
-  "Points the staging harness at a mock server and a made-up key."
+  "Points the staging harness at a mock server and a made-up key, and at
+  the agentloop the tests run (test-support, --agentloop) when there is one."
   [dir mock-url]
   (let [file (str (fs/path dir "relay.edn"))
         settings (edn/read-string (slurp file))]
-    (spit file (pr-str (update-in settings [:harnesses :agentloop] assoc
-                                  :base-url mock-url
-                                  :api-key-command ["echo" "sk-mock-key"]
-                                  :retry {:retries 0})))))
+    (spit file (pr-str (update-in settings [:harnesses :agentloop]
+                                  #(cond-> (assoc % :base-url mock-url
+                                                  :api-key-command ["echo" "sk-mock-key"]
+                                                  :retry {:retries 0})
+                                     support/agentloop-bin (assoc :bin support/agentloop-bin)))))))
 
 (defn- scripted-model
   "A mock-anthropic responder playing the scenario's script. Returns it with
@@ -314,8 +317,13 @@
             (report! name r)
             (System/exit (if (:pass? r) 0 1)))))))
 
-(defn scenarios-main [& _]
-  (let [results (for [f (scenario-files)]
+(defn scenarios-main
+  "bb scenarios [--agentloop <path>]: every scenario against the mock model,
+  with that agentloop build instead of ../agentloop's."
+  [& args]
+  (let [[flag path] *command-line-args*
+        _ (when (= "--agentloop" flag) (support/use-agentloop! path))
+        results (for [f (scenario-files)]
                   (let [r (try (run-scenario! f {})
                                (catch Exception e {:pass? false :failures [(ex-message e)]}))]
                     (report! (scenario-name f) r)

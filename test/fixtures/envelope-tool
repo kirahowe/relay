@@ -10,6 +10,7 @@
     "echo" (reply {:content (str "asked " (get-in call ["input" "question"])
                                  " with " (pr-str (get call "labels")) " as " (get call "call_id"))
                    :is_error false :labels ["contaminated"]})
+    "private" (reply {:content "SECRET-FROM-THE-TOOL" :is_error false :labels ["private"]})
     "refuse" (reply {:content "No such source." :is_error true :labels ["private"]})
     "exit" (do (reply {:content "secret" :labels []}) (binding [*out* *err*] (println "boom")) (System/exit 3))
     "two" (do (reply {:content "a" :labels []}) (reply {:content "b" :labels []}))

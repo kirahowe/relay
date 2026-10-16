@@ -125,9 +125,10 @@
     (is (= [] (json/parse-string (slurp (:tools_file args)))))
     (is (str/includes? (slurp (:system_prompt args)) "File things."))
     (is (sequential? (json/parse-string (slurp (:tools_file args)))))
-    (is (= [relay-bin "tool" "--data" (str (fs/absolutize (str *dir* "/data"))) "--role" "clerk"]
+    (is (= [relay-bin "tool" "--data" (str (fs/absolutize (str *dir* "/data"))) "--role" "clerk"
+            "--wake" (str (apply max (keys (:wakes (state)))))]
            (:tool_command args))
-        "a tool call names the role, not the wake")
+        "a tool call names the role and the wake whose session made it")
     (testing "no RELAY_ variables, and nothing leaks in from whoever started relay"
       (is (not-any? #(str/starts-with? % "RELAY_") (keys env)))
       (is (not-any? #(re-find #"^(CLAUDE|ANTHROPIC|OPENAI|AWS_|GITHUB)" %) (keys env))))))
@@ -403,7 +404,8 @@
         (is (not (contains? request :prompt)))
         (is (str/includes? (:system-prompt request) "The operator has opened a conversation with you."))
         (is (= (str (fs/path *dir* "data" "runs" "clerk" "conversations-labelled")) (:session-dir request)))
-        (is (= [relay-bin "tool" "--data" (str (fs/absolutize (str *dir* "/data"))) "--role" "clerk"]
+        (is (= [relay-bin "tool" "--data" (str (fs/absolutize (str *dir* "/data"))) "--role" "clerk"
+                "--wake" (str (:id wake))]
                (:tool-command request)))))
     (testing "building the request wrote nothing: the harness makes its own directories"
       (is (not (fs/exists? (fs/path *dir* "data" "runs" "clerk" (str (:id wake)))))))))
@@ -559,7 +561,7 @@
             later (if (.isBefore ^Instant now last-at) last-at now)]
         (and (= request (dispatch/wake-request sys state wake inputs))
              (str/includes? (:prompt request) (str "It is " (shown later) "."))
-             (= [relay-bin "tool" "--data" data-path "--role" "clerk"] (:tool-command request))
+             (= [relay-bin "tool" "--data" data-path "--role" "clerk" "--wake" (str (:id wake))] (:tool-command request))
              (not (fs/exists? data-dir)))))))
 
 (deftest a-wake-request-depends-only-on-its-arguments-and-never-goes-back-in-time

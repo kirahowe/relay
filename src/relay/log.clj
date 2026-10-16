@@ -8,6 +8,9 @@
     {\"seq\": 41, \"at\": \"2026-10-14T17:03:22.118Z\", \"type\": \"memo/sent\",
      \"actor\": \"operator\", \"labels\": [], \"data\": {...}}
 
+  An event that wrote an item a public role may read also has
+  \"public\": true.
+
   `seq` counts from 1 with no gaps across segments, so it is both the order
   and the identity of an event. `at` is when relay recorded the event, which
   never decreases. When a thing was true in the world is a separate matter,
@@ -148,7 +151,7 @@
 (defn transact!
   "The only way anything is written. Under the lock, calls `(decide events)`
   with every event so far; it returns a sequence of new events as maps of
-  :type, :actor, :data and optionally :labels. They are given their seq and
+  :type, :actor, :data and optionally :labels and :public. They are given their seq and
   recording time and appended together, and are returned. A decide function
   that throws appends nothing.
 
@@ -188,12 +191,15 @@
                                            (.isBefore (Instant/parse (str (:at draft))) floor))
                                   (throw (ex-info "A draft's time is earlier than the log's last event."
                                                   {:draft draft})))
-                                {:seq (+ start i)
-                                 :at (str (or (some-> (:at draft) str Instant/parse) at))
-                                 :type type
-                                 :actor actor
-                                 :labels (vec (sort (distinct labels)))
-                                 :data (or data {})})
+                                (cond-> {:seq (+ start i)
+                                         :at (str (or (some-> (:at draft) str Instant/parse) at))
+                                         :type type
+                                         :actor actor
+                                         :labels (vec (sort (distinct labels)))
+                                         :data (or data {})}
+                                  ;; Set by relay.core on an item a public
+                                  ;; writer wrote; absent means not public.
+                                  (true? (:public draft)) (assoc :public true)))
                               drafts))
                 ;; Round trip through JSON so the caller gets back exactly
                 ;; what a later read will see.

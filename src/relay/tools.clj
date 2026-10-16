@@ -48,8 +48,11 @@
        (when (pos? attempts) (str " Left open by " attempts " earlier wake(s)."))
        "\n\n" (str/replace body #"(?m)^" "  ") "\n"))
 
+(declare ^:dynamic *wake*)
+
 (defn- submit [sys actor labels type args]
-  (inbound/submit! sys {:type type :actor actor :args args :labels labels}))
+  (inbound/submit! sys (cond-> {:type type :actor actor :args args :labels labels}
+                         *wake* (assoc :session-wake *wake*))))
 
 (defn- created-memo [events]
   (:seq (first (filter #(= "memo/sent" (:type %)) events))))
@@ -144,6 +147,17 @@
 
 (defn- withheld [what] (str what ": contaminated, withheld. Pass accept_contamination to read it."))
 
+(defn- public-reader?
+  "Whether a read is a public role's. It is shown public items only, and
+  nothing else of what relay keeps: not shown, not counted, with no
+  placeholder, since even a placeholder says that something is there and
+  who wrote it. It has no private data to leak, so contaminated items are
+  not withheld from it. A role is read for as public when relay.edn says it
+  is, or when the wake that made the call (*wake*) began public, so a
+  change to relay.edn while a session runs never widens what it sees."
+  [state config actor]
+  (core/public-caller? state config actor *wake*))
+
 (def builtin
   "relay's own tools, by name."
   {"inbox"
@@ -152,12 +166,17 @@
                       " has quarantined is listed but not shown until they release it.")
     :parameters (obj {:accept_contamination accept})
     :read (fn [{:keys [state config]} actor _]
-            (let [memos (core/unread-memos state actor)
+            (let [memos (cond->> (core/unread-memos state actor)
+                          (public-reader? state config actor)
+                          (filter #(core/shown-to-public? % (core/memo-labels state %))))
                   kept (core/kept-memo-ids state actor)]
               (if (empty? memos)
                 "Nothing is waiting for you."
                 (show (for [m memos
-                            :let [[who who-labels] (author state (:from m))]]
+                            :let [[who who-labels] (author state (:from m))
+                                  ;; A declassified memo's sender as the
+                                  ;; operator vouched for it.
+                                  who-labels (or (:from-labels m) who-labels)]]
                         (cond
                           ;; Another session's, waiting with it for the operator.
                           (kept (:id m))
@@ -182,17 +201,24 @@
    {:class :read
     :description "List the roles in relay: who exists, what each is for, and who it reports to. Send a memo to `operator` to reach the operator."
     :parameters (obj {:accept_contamination accept})
-    :read (fn [{:keys [state]} _ {:keys [accept_contamination]}]
-            (show (for [id (core/active-role-ids state)
-                        :let [{:keys [title reports-to title-labels]} (core/role state id)
-                              id-ls (core/id-labels state id)]]
-                    (item (str id ": " title (when reports-to (str ", reports to " reports-to)))
-                          (core/union id-ls title-labels (core/id-labels state reports-to))
-                          (if (core/contaminated? id-ls)
-                            (withheld "A role")
-                            (withheld (str id ": its title")))
-                          (when-not (core/contaminated? id-ls) id-ls)))
-                  "\n" accept_contamination))}
+    :read (fn [{:keys [state config]} actor {:keys [accept_contamination]}]
+            (let [public (public-reader? state config actor)]
+              (show (for [id (core/active-role-ids state)
+                          ;; A public role sees the roles whose text the
+                          ;; operator wrote, and whom they report to only
+                          ;; when the operator chose that id too.
+                          :when (or (not public) (core/role-text-public? state id))
+                          :let [{:keys [title reports-to title-labels]} (core/role state id)
+                                reports-to (when (or (not public) (core/role-id-public? state reports-to)) reports-to)
+                                id-ls (core/id-labels state id)
+                                labels (core/union id-ls title-labels (core/id-labels state reports-to))]]
+                      (item (str id ": " title (when reports-to (str ", reports to " reports-to)))
+                            labels
+                            (if (core/contaminated? id-ls)
+                              (withheld "A role")
+                              (withheld (str id ": its title")))
+                            (when-not (core/contaminated? id-ls) id-ls)))
+                    "\n" (or public accept_contamination))))}
 
    "clock"
    {:class :read
@@ -243,17 +269,19 @@
    {:class :read
     :description "List your routines and their schedules."
     :parameters (obj {:accept_contamination accept})
-    :read (fn [{:keys [state]} actor {:keys [accept_contamination]}]
-            (let [rs (core/active-routines state actor)]
+    :read (fn [{:keys [state config]} actor {:keys [accept_contamination]}]
+            (let [public (public-reader? state config actor)
+                  rs (cond->> (core/active-routines state actor)
+                       public (filter #(core/shown-to-public? % (core/item-labels %))))]
               (if (empty? rs)
                 "You have no routines."
                 ;; A routine's instructions become a memo's body when it
                 ;; fires, so they are content like a memo's.
-                (show (for [{:keys [name schedule instructions labels]} rs]
+                (show (for [{:keys [name schedule instructions] :as r} rs]
                         (item (str name " (" schedule ")\n  " instructions)
-                              (core/content-labels labels)
+                              (core/item-labels r)
                               (withheld "A routine")))
-                      "\n\n" accept_contamination))))}
+                      "\n\n" (or public accept_contamination)))))}
 
    "routine_write"
    {:class :act
@@ -282,11 +310,12 @@
                       " future too.")
     :parameters (obj {:topic text :search text :as_of world-time :known_at world-time :all flag
                       :accept_contamination accept})
-    :read (fn [{:keys [state config] :as ctx} _ {:keys [accept_contamination] :as args}]
-            (let [q (merge (times ctx args) (select-keys args [:all])
+    :read (fn [{:keys [state config] :as ctx} actor args]
+            (let [public (public-reader? state config actor)
+                  accept_contamination (or public (:accept_contamination args))
+                  q (merge (times ctx args) (select-keys args [:all])
                            ;; A contaminated change never hides a clean record.
-                           {:clean (not accept_contamination)})
-                  tainted (filter #(core/contaminated? (:labels %)) (core/facts state q))
+                           {:clean (not accept_contamination) :public-only public})
                   ;; A contaminated fact's text is not even searched unless
                   ;; it is accepted, since a match would say something about it.
                   found (core/facts state (merge q (select-keys args [:topic :search])))
@@ -299,7 +328,7 @@
               (if (and (empty? found) (nil? note))
                 "No facts match."
                 (update (show (for [f found]
-                                (item (fmt-fact config f) (core/content-labels (:labels f))
+                                (item (fmt-fact config f) (core/item-labels f)
                                       (withheld (str "Fact " (:id f)))))
                               "\n" true)
                         :content #(str/join "\n" (remove str/blank? [(if (empty? found) "No facts match." %) note]))))))}
@@ -308,17 +337,19 @@
    {:class :read
     :description "Every recorded version of a fact: when it was recorded, changed or corrected, by whom and why."
     :parameters (obj {:fact fact-id :accept_contamination accept} "fact")
-    :read (fn [{:keys [state config]} _ {:keys [fact accept_contamination]}]
-            (let [f (core/fact state fact)]
-              (if-not f
+    :read (fn [{:keys [state config]} actor {:keys [fact accept_contamination]}]
+            (let [public (public-reader? state config actor)
+                  f (core/fact state fact)]
+              (if (or (nil? f) (and public (not (core/fact-shown-to-public? state (core/fact-as-known f nil)))))
                 (throw (ex-info (str "There is no fact " fact ".") {}))
                 (update (show (for [v (:versions f)
+                                    :when (or (not public) (core/fact-shown-to-public? state v))
                                     :let [[who who-labels] (author state (:actor v))]]
                                 (item (str "- " (fmt-version config v))
-                                      (core/content-labels (core/version-labels state v))
+                                      (core/item-labels v (core/version-labels state v))
                                       (withheld (str "- " (local-time config (:recorded-at v)) " by " who))
                                       who-labels))
-                              "\n" accept_contamination)
+                              "\n" (or public accept_contamination))
                         :content #(str "Fact " fact (when (:supersedes f) (str ", which replaced fact " (:supersedes f)))
                                        "\n" %)))))}
 
@@ -382,13 +413,18 @@
     :parameters (obj {:limit {:type "integer" :description "How many, 10 by default."}
                       :accept_contamination accept})
     :read (fn [{:keys [state config]} actor {:keys [accept_contamination] :as args}]
-            (let [entries (core/journal state (own actor args) (or (:limit args) 10))]
+            (let [public (public-reader? state config actor)
+                  limit (or (:limit args) 10)
+                  entries (if public
+                            (vec (take-last limit (filter #(core/shown-to-public? % (core/item-labels %))
+                                                          (core/journal state (own actor args) nil))))
+                            (core/journal state (own actor args) limit))]
               (if (empty? entries)
                 "The journal is empty."
-                (show (for [{:keys [id at text labels]} entries]
-                        (item (str (local-time config at) "\n" text) (core/content-labels labels)
+                (show (for [{:keys [id at text] :as e} entries]
+                        (item (str (local-time config at) "\n" text) (core/item-labels e)
                               (withheld (str (local-time config at) "\nEntry " id))))
-                      "\n\n" accept_contamination))))}
+                      "\n\n" (or public accept_contamination)))))}
 
    "journal_write"
    {:class :write
@@ -404,20 +440,25 @@
                       " except contaminated ones, which are withheld there and here unless you"
                       " accept them.")
     :parameters (obj {:accept_contamination accept})
-    :read (fn [{:keys [state]} actor {:keys [accept_contamination] :as args}]
-            (let [ns (core/notes state (own actor args))]
+    :read (fn [{:keys [state config]} actor {:keys [accept_contamination] :as args}]
+            (let [public (public-reader? state config actor)
+                  ns (cond->> (core/notes state (own actor args))
+                       public (filter #(core/shown-to-public? % (core/item-labels %))))]
               (if (empty? ns)
                 "You have no notes."
-                (show (for [{:keys [name text labels]} ns]
-                        (item (str "## " name "\n\n" text) (core/content-labels labels) (withheld "A note")))
-                      "\n\n" accept_contamination))))}
+                (show (for [{:keys [name text] :as n} ns]
+                        (item (str "## " name "\n\n" text) (core/item-labels n) (withheld "A note")))
+                      "\n\n" (or public accept_contamination)))))}
 
    "docs"
    {:class :read
     :description "List the docs: longer shared content that is really a file, by path."
     :parameters (obj {:accept_contamination accept})
-    :read (fn [{:keys [state config]} _ {:keys [accept_contamination]}]
-            (let [ds (core/docs state nil (not accept_contamination))]
+    :read (fn [{:keys [state config]} actor {:keys [accept_contamination]}]
+            (let [public (public-reader? state config actor)
+                  accept_contamination (or public accept_contamination)
+                  ds (cond->> (core/docs state nil (not accept_contamination))
+                       public (filterv #(core/doc-shown-to-public? state (:path %) %)))]
               (if (empty? ds)
                 "There are no docs."
                 (show (for [{:keys [path at actor content seq] :as v} ds
@@ -434,16 +475,24 @@
    {:class :read
     :description "Read a doc, the latest version unless you give one from its history."
     :parameters (obj {:path text :version {:type "integer"} :accept_contamination accept} "path")
-    :read (fn [{:keys [state]} _ {:keys [path version accept_contamination]}]
-            (let [v (if (or version accept_contamination)
+    :read (fn [{:keys [state config]} actor {:keys [path version accept_contamination]}]
+            (let [public (public-reader? state config actor)
+                  accept_contamination (or public accept_contamination)
+                  v (if (or version accept_contamination)
                       (core/doc-version state path {:version version})
-                      (core/doc-as-shown state path true))]
+                      (core/doc-as-shown state path true))
+                  ;; For a public role a doc it cannot see does not exist,
+                  ;; nor does a version it cannot see.
+                  v (if (and public (not (and (core/doc-shown-to-public? state path v)
+                                              (core/doc-shown-to-public? state path (core/doc-version state path {})))))
+                      nil
+                      v)]
               (cond (nil? v) (throw (ex-info (str "There is no doc at " path
                                                   (when version (str " with version " version)) ".") {}))
                     (:removed v) (throw (ex-info (str path " was removed in version " (:seq v) ".") {}))
                     :else (show [(item (str (:content v)
                                             (when (:newer-withheld v) (str "\n\n[relay: " newer-withheld "]")))
-                                       (core/content-labels (:labels v))
+                                       (core/item-labels v)
                                        (withheld (str "Version " (:seq v) " of the doc")))]
                                 "" accept_contamination))))}
 
@@ -451,18 +500,20 @@
    {:class :read
     :description "The versions of a doc: when each was written and by whom."
     :parameters (obj {:path text :accept_contamination accept} "path")
-    :read (fn [{:keys [state config]} _ {:keys [path accept_contamination]}]
-            (let [vs (get-in state [:docs path :versions])]
-              (if (empty? vs)
+    :read (fn [{:keys [state config]} actor {:keys [path accept_contamination]}]
+            (let [public (public-reader? state config actor)
+                  vs (get-in state [:docs path :versions])]
+              (if (or (empty? vs) (and public (not (core/doc-shown-to-public? state path (peek vs)))))
                 (throw (ex-info (str "There is no doc at " path ".") {}))
                 (show (for [{:keys [seq at actor content removed] :as v} vs
+                            :when (or (not public) (core/doc-shown-to-public? state path v))
                             :let [[who who-labels] (author state actor)]]
                         (item (str "version " seq ", " (local-time config at) " by " actor
                                    (if removed ": removed" (str ", " (count content) " characters")))
                               (core/version-labels state v)
                               (withheld (str "version " seq ", " (local-time config at) " by " who))
                               who-labels))
-                      "\n" accept_contamination))))}
+                      "\n" (or public accept_contamination)))))}
 
    "doc_put"
    {:class :write
@@ -475,8 +526,8 @@
              (labelled (str (:path args) " already says that.")
                        (let [state (inbound/current-state sys)
                              path (str/trim (:path args))]
-                         (core/content-labels (:labels (core/doc-version state path {}))
-                                              (core/path-labels state path))))))}
+                         (core/item-labels (core/doc-version state path {})
+                                           (core/path-labels state path))))))}
 
    "doc_remove"
    {:class :write :acp-kind "delete"
@@ -525,6 +576,12 @@
   "The id of the call being run, which an envelope tool is given."
   nil)
 
+(def ^:dynamic *wake*
+  "The wake whose session made the call being run, as relay named it in the
+  harness's tool command. A public role's call writes public items only
+  when that wake is running and began public."
+  nil)
+
 (def ^:private strict-json
   (json-factory/make-json-factory {:strict-duplicate-detection true}))
 
@@ -564,6 +621,12 @@
   envelope) tells the model only that it failed, and what it printed goes
   to the operator's log."
   [tool-name command static labels args timeout-ms]
+  ;; What a failed tool printed goes to stderr whatever labels it claimed,
+  ;; even for a public role, whose harness keeps it in the session's
+  ;; operator-only log (agentloop's ToolResult.Log). That log never reaches
+  ;; the model or a client, and sits in the operator's data directory with
+  ;; everything private relay keeps; hiding it would cost the operator the
+  ;; only record of why a tool failed.
   (let [failed (fn [why out err]
                  (binding [*out* *err*] (println (str tool-name ": " why)) (print err out) (flush))
                  (throw (ex-info (str "The tool " tool-name " failed.") {:relay/labels static})))
@@ -657,6 +720,10 @@
                 (conj "Work that other roles could not finish comes to you as dead letters.")
                 (contains? offered "dead_letters_retry")
                 (conj "You can put a role's dead letters back in its inbox with `dead_letters_retry`.")
+                (core/public-role? config role-id)
+                (conj (str "You are a public role: you may search and browse the web, so you are shown only what"
+                           " is public, and whatever you write is public. The operator's private data never"
+                           " reaches you."))
                 :always
                 (conj (if (seq external)
                         (str "Beyond relay's own tools, the operator has granted you: "
@@ -682,14 +749,18 @@
 
 (defn policy
   "agentloop's policy for a role's tools and a session seeded with
-  `labels`: each tool's class and static labels, by name."
-  [manifest labels]
-  {:labels (core/union labels)
-   :tools (into (sorted-map)
-                (for [{:keys [name class labels always-hold]} manifest]
-                  [name (cond-> {:class class}
-                          (seq labels) (assoc :labels (vec labels))
-                          always-hold (assoc :always_hold true))]))})
+  `labels`: each tool's class and static labels, by name. A public role's
+  session may never hold private, which agentloop enforces too:
+  forbid_labels."
+  ([manifest labels] (policy manifest labels {}))
+  ([manifest labels {:keys [public?]}]
+   (cond-> {:labels (core/union labels)
+            :tools (into (sorted-map)
+                         (for [{:keys [name class labels always-hold]} manifest]
+                           [name (cond-> {:class class}
+                                   (seq labels) (assoc :labels (vec labels))
+                                   always-hold (assoc :always_hold true))]))}
+     public? (assoc :forbid_labels [core/private-label]))))
 
 (defn- result
   "A tool's text and labels from what its function returned."
@@ -725,12 +796,32 @@
 
 (declare coerce-input input-problem)
 
+(def refused-result
+  "What a public role is told in place of a result that carried private."
+  "This result was refused: it carries private data, which a public role may not see.")
+
+(defn- refuse-private
+  "A public role's result as it may have it: one that carries private (an
+  envelope tool can say any labels, and a refusal can quote anything) is
+  replaced by a refusal, and the operator is told which tool it was.
+  agentloop refuses it too, with forbid_labels."
+  [sys role-id tool-name result]
+  (if (and (core/private? (:labels result))
+           (core/public-caller? (inbound/current-state sys) (:config sys) role-id *wake*))
+    (do (try (inbound/submit! sys (cond-> {:type :result/refused :actor role-id :args {:tool tool-name} :labels []}
+                                    *wake* (assoc :session-wake *wake*)))
+             (catch Exception e
+               (binding [*out* *err*] (println "relay could not record a refused result:" (ex-message e)))))
+        {:error refused-result :labels []})
+    result))
+
 (defn call!
   "Runs one tool call for a role, made by a session holding `labels`, and
   returns {:ok text :labels} or {:error text :labels}: the text to give
   back to it and the labels of what that text shows. Refusals come back as
-  text too, so the role can read why and adjust."
-  [sys role-id tool-name args labels & [call-id]]
+  text too, so the role can read why and adjust. `wake` is the wake whose
+  session made the call, from the tool command relay gave the harness."
+  [sys role-id tool-name args labels & [call-id wake]]
   (let [state (inbound/current-state sys)
         config (:config sys)
         tool (get (offered config role-id) tool-name)
@@ -749,8 +840,8 @@
       (let [args (coerce-input (or args {}))]
         (if-let [problem (input-problem (:parameters tool) args)]
           {:error problem :labels []}
-          (binding [*call-id* call-id]
-            (run-tool sys role-id tool args labels)))))))
+          (binding [*call-id* call-id *wake* wake]
+            (refuse-private sys role-id tool-name (run-tool sys role-id tool args labels))))))))
 
 ;; --- the envelope a harness sends for each call
 

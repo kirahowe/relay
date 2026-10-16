@@ -48,7 +48,10 @@
                           :description "Pretend to set a reminder. It only echoes its arguments."
                           :command ["echo" "reminder noted:"]}}
    :grants {"hub" {:may-add true}
-            "clerk" {:tools ["remind-demo"]}}})
+            "clerk" {:tools ["remind-demo"]}
+            ;; A public role: shown only public text, never the operator's
+            ;; private data, so it may send data out unheld.
+            "scout" {:public true}}})
 
 (defn render-settings
   "relay.edn's text for `settings`."
@@ -63,12 +66,17 @@
        "tool with the reminder text, then close the memo saying what you did.\n"
        "Be brief.\n"))
 
+(def scout-instructions
+  (str "You are the scout, a public role in a staging copy of relay with made-up data.\n"
+       "You look things up. Close each memo saying what you found. Be brief.\n"))
+
 (defn seed
   "The commands that put the artificial roles and facts in a new log. Pure.
   `hub-instructions` is the text the hub runs on."
   [hub-instructions]
   [{:type :role/add :args {:id "hub" :title "Hub" :instructions hub-instructions}}
    {:type :role/add :args {:id "clerk" :title "Clerk" :reports-to "hub" :instructions clerk-instructions}}
+   {:type :role/add :public true :args {:id "scout" :title "Scout" :reports-to "hub" :instructions scout-instructions}}
    {:type :fact/add :args {:text "The staging office is closed on Mondays." :topic "office"}}
    {:type :fact/add :args {:text "The operator likes memos of three lines or fewer." :topic "preferences"}}
    {:type :fact/add :args {:text "The demo project is called Lighthouse." :topic "projects"}}])

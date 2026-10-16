@@ -89,16 +89,24 @@
   (let [role-row (core/role state role)
         run-dir (fs/path data-dir "runs" role (str id))
         resumed (when resumes (get-in state [:wakes resumes]))
-        {shown-notes :shown withheld-notes :withheld} (core/prompt-notes state role)
+        {shown-notes :shown withheld-notes :withheld} (core/prompt-notes state config role)
         holds (map #(core/hold state %) resolves)
         script {:script? (tools/script-role? state config role)}
-        manifest (tools/manifest config role script)]
+        manifest (tools/manifest config role script)
+        public? (core/public-role? config role)
+        labels (core/wake-labels state config wake)]
+    ;; decide refuses a wake whose prompts would give a public role
+    ;; private; this is the last check before anything reaches a harness.
+    (when (and public? (core/private? labels))
+      (throw (ex-info (str role " is a public role, and its prompts would hold private data.") {})))
     {:harness (get-in config [:harnesses (keyword harness)])
      :harness-name harness
      :role role-row
      :model (or (:model role-row) (get-in config [:harnesses (keyword harness) :model]))
+     ;; The operator's own additions are unlabelled text that may hold
+     ;; private details, so a public role is never given them.
      :system-prompt (prompt/instructions {:shared shared
-                                          :operator-additions operator-additions
+                                          :operator-additions (when-not public? operator-additions)
                                           :notes shown-notes
                                           :withheld-notes withheld-notes
                                           :granted (tools/grants-summary config role script)}
@@ -113,12 +121,13 @@
      :tools manifest
      ;; The session starts with the labels of everything in its prompts,
      ;; and each tool is policed by its class and static labels.
-     :policy (tools/policy manifest (core/wake-labels state wake))
+     :policy (tools/policy manifest labels {:public? public?})
      :resolve (vec (for [{:keys [call status reason input-sha256]} holds]
                      (cond-> {:call_id call :verdict (if (= :allowed status) "allow" "deny")}
                        (not (str/blank? reason)) (assoc :reason reason)
                        input-sha256 (assoc :input_sha256 input-sha256))))
-     :tool-command [relay-bin "tool" "--data" data-path "--role" role]
+     ;; The wake is named so a call is tied to the session that made it.
+     :tool-command [relay-bin "tool" "--data" data-path "--role" role "--wake" (str id)]
      :run-dir (str run-dir)
      :session-dir (str (fs/path data-dir "runs" role "sessions"))
      :resume (:session resumed)
@@ -183,7 +192,8 @@
 (defn wake-end-args
   "The :wake/end args for a harness's report on a wake."
   [wake-id report]
-  (-> (select-keys report [:outcome :exit :crashed :cut-short :session :said :resets-at :held :labels])
+  (-> (select-keys report [:outcome :exit :crashed :cut-short :session :said :resets-at :held :labels
+                           :refused :forbidden])
       (update :exit exit-field)
       (update :resets-at #(some-> % str))
       (assoc :wake wake-id
@@ -192,10 +202,12 @@
 (defn wake!
   "Starts a wake of a role, runs it and ends it. Returns {:result ...}:
   :idle when there was nothing to do, :busy, :paused or :runaway when it was
-  not started, and otherwise the wake's id and outcome."
-  [sys role-id {:keys [note dispatched]}]
+  not started, and otherwise the wake's id and outcome. :public says the
+  operator's note may go out, as a public role's needs."
+  [sys role-id {:keys [note dispatched public]}]
   (let [started (try
                   (inbound/submit! sys {:type :wake/start
+                                        :public (boolean public)
                                         :actor (if dispatched core/dispatcher core/operator)
                                         :args (merge {:role role-id :note note
                                                       :dispatched (boolean dispatched)}
@@ -206,9 +218,11 @@
                       (throw e))))]
     (cond
       (map? started) started
-      (empty? started) {:result :idle}
+      ;; Starting can write other events first (ending a public role's
+      ;; sessions from before it was public) and then find nothing to do.
+      (not-any? #(= "wake/started" (:type %)) started) {:result :idle}
       :else
-      (let [wake-id (:seq (first started))
+      (let [wake-id (:seq (first (filter #(= "wake/started" (:type %)) started)))
             state (inbound/current-state sys)
             report (run-harness! sys (wake-request sys state (get-in state [:wakes wake-id])
                                                    (wake-inputs sys)))]
@@ -247,7 +261,12 @@
       (dissoc :prompt)
       ;; A directory of its own, kept apart from any conversation from
       ;; before relay kept labels, so a client cannot load one of those.
-      (assoc :session-dir (str (fs/path data-dir "runs" (:role wake) "conversations-labelled")))))
+      ;; A public role's are kept apart again, since one from before it
+      ;; was public may hold private text that no label records.
+      (assoc :session-dir (str (fs/path data-dir "runs" (:role wake)
+                                        (if (core/public-role? (:config sys) (:role wake))
+                                          "conversations-public"
+                                          "conversations-labelled"))))))
 
 (defn conversation-end-args
   "The :wake/end args for a conversation, from what the code that ran it
@@ -275,7 +294,8 @@
                                       :args (merge {:role role-id :chat true
                                                     :note conversation-note}
                                                    (current-process))})
-        wake-id (:seq (first started))
+        wake-id (or (:seq (first (filter #(= "wake/started" (:type %)) started)))
+                    (throw (ex-info (str "relay could not open a conversation with " role-id ".") {})))
         report (volatile! nil)]
     (try
       (let [state (inbound/current-state sys)

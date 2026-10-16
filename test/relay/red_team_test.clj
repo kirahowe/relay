@@ -79,7 +79,7 @@
       (let [sys (inbound/system data)
             submit #(inbound/submit! sys %)]
         (testing "a role granted tools may not run on a :script harness"
-          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"script harness gets none"
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"script harness gets no"
                                 (submit {:type :role/add :actor "operator"
                                          :args {:id "clerk" :title "C" :instructions "x" :harness "bot"}}))))
         (submit {:type :role/add :actor "operator" :args {:id "scraper" :title "S" :instructions "x" :harness "bot"}})

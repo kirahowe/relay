@@ -75,18 +75,28 @@ Every command needs the data directory, from --data <dir> or from the file
   relay deny <hold> [why] [--end]     refuse a held tool call; --end also starts the
                                       role's next wake afresh instead of in that session
   relay release <memo>                deliver a quarantined memo to its role
+  relay declassify <memo>             make a memo to a public role public, so the
+                                      role is shown it
   relay trust <kind> <ref>            vouch for contaminated text you have read:
                                       memo <n>, fact <n>, doc <path>, note <role>/<name>,
                                       routine <role>/<name>, role <id> or journal <n>
-  relay tool --data <dir> --role <r> <name>
+  relay tool --data <dir> --role <r> [--wake <w>] <name>
                                       run a role's tool call (harnesses use this)
 
-approve, deny, release, trust and revert show you what they are about on the
-terminal and ask you to type a code back there, so only a person at the
-terminal can make those decisions.
+approve, deny, release, declassify, trust and revert show you what they are
+about on the terminal and ask you to type a code back there, so only a
+person at the terminal can make those decisions.
 
 --untrusted on memo, put, add, update and routine marks what you write as
-contaminated, for text you copied from somewhere you do not trust.")
+contaminated, for text you copied from somewhere you do not trust.
+
+--public on memo, routine, fact, put, add, update and wake --note marks what
+you write as public: it may leave this machine, since a public role can put
+it in a web search. A public role is shown only public text, so anything you
+write for one needs it. It goes with --untrusted. On add and update it marks
+the role's text public: a public role's own id, title and instructions must
+be, and it sees only roles whose text is. update --public with both --title
+and --instructions marks the id public too.")
 
 (defn- fail! [& msg]
   (throw (ex-info (str/join " " msg) {:relay/usage true})))
@@ -178,8 +188,12 @@ contaminated, for text you copied from somewhere you do not trust.")
   "Labels for what the operator writes: contaminated with --untrusted."
   [])
 
+(def ^:dynamic *public*
+  "Whether what the operator writes is public: --public."
+  false)
+
 (defn- submit! [sys type args]
-  (inbound/submit! sys {:type type :actor core/operator :args args :labels *untrusted*}))
+  (inbound/submit! sys {:type type :actor core/operator :args args :labels *untrusted* :public *public*}))
 
 (defn- run-tool
   "A harness runs this for each tool call: an envelope on stdin, {input,
@@ -187,7 +201,7 @@ contaminated, for text you copied from somewhere you do not trust.")
   labels}. A refusal is an ordinary result with is_error set, so the model
   can read why. A call that is not an exact envelope exits 1, with the
   reason on stderr only, and the harness tells the model the tool failed."
-  [sys role tool-name]
+  [sys role tool-name wake]
   (let [{:keys [problem input labels call-id]} (tools/parse-envelope (stdin-text))]
     (cond
       problem
@@ -196,7 +210,7 @@ contaminated, for text you copied from somewhere you do not trust.")
       (tools/script-role? (inbound/current-state sys) (:config sys) role)
       {:exit 1 :out [] :err [(str role " runs on a :script harness, which gets no tools.")]}
       :else
-      (result 0 (tools/envelope (tools/call! sys role tool-name input labels call-id))))))
+      (result 0 (tools/envelope (tools/call! sys role tool-name input labels call-id wake))))))
 
 (defn- knowledge
   "The operator's views of what relay knows. The operator sees everything,
@@ -269,7 +283,11 @@ contaminated, for text you copied from somewhere you do not trust.")
     (when-not (= :open (:status h))
       (fail! (str "Hold " hold-id " was already decided: " (name (:status h)) ".")))
     (confirm! verb (concat (render/hold h (:config sys))
-                           (when end ["" "The session will not be carried on: the role's next wake starts afresh."])))
+                           (when end ["" "The session will not be carried on: the role's next wake starts afresh."])
+                           ;; The role is shown the reason, and may send it out.
+                           (when (and (= "deny" verdict) (core/public-role? (:config sys) (:role h)))
+                             ["" (str (:role h) " is a public role: your reason is shown to it as public, and"
+                                      " may leave this machine in a web search.")])))
     (submit! sys :hold/resolve {:hold hold-id :verdict verdict :reason reason :end (boolean end)})
     (result 0 (str (if (= "allow" verdict) "Approved" "Denied") " hold " hold-id ". "
                    (:role h) " carries on at the next tick."))))
@@ -279,7 +297,7 @@ contaminated, for text you copied from somewhere you do not trust.")
    :coerce {:subject :string :message :string :title :string :reports-to :string
             :harness :string :model :string :schedule :string :note :string
             :tail :long :data :string :search :string :as-of :string :known-at :string
-            :version :long :role :string :trace :string :untrusted :boolean :approvals :boolean
+            :version :long :wake :long :role :string :trace :string :untrusted :boolean :public :boolean :approvals :boolean
             :topic :string :from :string :to :string :why :string :text :string :end :boolean
             :pause-file :string}})
 
@@ -327,7 +345,8 @@ contaminated, for text you copied from somewhere you do not trust.")
       "retry" (let [[r] more]
                 (result 0 (str (count (submit! sys :memo/retry {:role r})) " memo(s) requeued")))
       "wake" (let [[r] more
-                   woke (dispatch/wake! sys r {:note (:note opts) :dispatched (:dispatched opts)})]
+                   woke (dispatch/wake! sys r {:note (:note opts) :dispatched (:dispatched opts)
+                                               :public (:public opts)})]
                {:exit (if (#{:ran :idle} (:result woke)) 0 1) :out (render/wake-result woke)})
       "chat" (let [[r] more]
                (when-not r (fail! "usage: relay chat <role>"))
@@ -405,6 +424,29 @@ contaminated, for text you copied from somewhere you do not trust.")
                                                                          ", which then counts as contaminated.")]))
                   (submit! sys :memo/release {:memo id})
                   (result 0 (str "Released memo " id " to " (:to m) ".")))
+      "declassify" (let [id (some-> (first more) parse-long)
+                         m (core/memo (state) id)]
+                     (when-not (and m (= :unread (:status m)) (core/awaiting-declassification? (:config sys) m))
+                       (fail! (str "Memo " (first more) " is not waiting to be declassified.")))
+                     ;; The role gets exactly what the operator is shown: the
+                     ;; memo as declassifying makes it (defanged if
+                     ;; contaminated, spacing plain, NFC), with only the
+                     ;; [contaminated] marker added here.
+                     (confirm! "declassify"
+                               (concat (render/declassify zone (core/declassified m))
+                                       ;; As for a held call: what could pass
+                                       ;; for something else, or hide.
+                                       (when-let [odd (seq (let [d (core/declassified m)] (text/lookalikes (str (:subject d) " " (:body d)))))]
+                                         (cons "" (cons "Look closely, it has characters that can pass for others or hide text:"
+                                                        (map #(str "  " %) odd))))
+                                       ["" (labels-line (:labels m))
+                                        (str "Declassifying it shows it to " (:to m) ", a public role, exactly as it"
+                                             " is shown here. Say so only if nothing in it, its sender"
+                                             " included, is private, not even in its choice of words: it may leave"
+                                             " this machine in a web search.")]))
+                     (binding [*public* false]
+                       (submit! sys :memo/declassify {:memo id}))
+                     (result 0 (str "Declassified memo " id "; " (:to m) " is shown it at its next wake.")))
       "trust" (let [[kind ref] more
                     v (core/trusted-version (state) kind ref)]
                 (when-not v (fail! "usage: relay trust <kind> <ref>, naming something relay keeps"))
@@ -419,7 +461,7 @@ contaminated, for text you copied from somewhere you do not trust.")
                 (submit! sys :label/trust {:kind kind :ref ref :version (:version v)
                                            :sha256 (core/sha256 (:text v))})
                 (result 0 (str "Trusted " kind " " ref ".")))
-      "tool" (run-tool sys (:role opts) (first more))
+      "tool" (run-tool sys (:role opts) (first more) (:wake opts))
       (apply result 1 (str/split-lines usage)))))
 
 (defn- report-broken-settings!
@@ -479,7 +521,8 @@ contaminated, for text you copied from somewhere you do not trust.")
                                       (when (= "tick" cmd) (report-broken-settings! dir (ex-message e)))
                                       (throw e)))]
                        (when (= "tick" cmd) (fs/delete-if-exists (fs/path dir ".settings-problem")))
-                       (binding [*untrusted* (if (:untrusted opts) [core/contaminated-label] [])]
+                       (binding [*untrusted* (if (:untrusted opts) [core/contaminated-label] [])
+                                 *public* (true? (:public opts))]
                          (command sys dir cmd more opts))))]
         ;; Everything printed may hold text a role wrote, so nothing
         ;; that could drive the terminal is printed raw. relay tool's

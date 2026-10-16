@@ -18,7 +18,9 @@
                                  :notify {:kind :none}
                                  :max-attempts 3
                                  :runaway-wakes 6
-                                 :grants {"hub" {:may-add true}}}))
+                                 ;; courier is public: memos to it from anyone
+                                 ;; but itself wait for the operator.
+                                 :grants {"hub" {:may-add true} "courier" {:public true}}}))
 
 ;; --- a small driver: a world is a state, a clock and the events so far
 
@@ -27,9 +29,9 @@
 (defn run
   "Runs a command, returning the world after it. A rejection leaves the world
   as it was and is recorded under :rejected."
-  [{:keys [state now] :as w} actor type args]
+  [{:keys [state now] :as w} actor type args & [public]]
   (try
-    (let [[state' events] (core/run-command state {:type type :actor actor :args args}
+    (let [[state' events] (core/run-command state {:type type :actor actor :args args :public public}
                                             {:now now :config cfg})]
       (-> w (assoc :state state' :rejected nil :last events) (update :events into events)))
     (catch clojure.lang.ExceptionInfo e
@@ -415,6 +417,8 @@
     [3 (gen/tuple (gen/return :note) (gen/elements actors) (gen/elements role-pool)
                   (gen/elements ["a" "b"]) (gen/elements ["x" "y" nil]))]
     [1 (gen/tuple (gen/return :journal) (gen/elements actors) (gen/elements role-pool))]
+    [3 (gen/tuple (gen/return :declassify) (gen/elements ["operator" "operator" "hub" "courier" "dispatcher"]) gen/nat)]
+    [2 (gen/tuple (gen/return :send-public) (gen/elements (conj role-pool "operator")))]
     [2 (gen/tuple (gen/return :doc) (gen/elements actors) (gen/elements ["a.md" "dir/b.md"])
                   (gen/elements ["one" "two" nil]))]]))
 
@@ -426,10 +430,19 @@
       :advance (advance w (first args))
       :send (let [[from to] args]
               (run w from :memo/send {:to to :subject (str "s" (count ids)) :body "b"}))
+      :send-public (run w "operator" :memo/send {:to (first args) :subject (str "s" (count ids)) :body "b"} true)
+      :declassify (let [[actor n] args
+                        waiting (filter #(core/awaiting-declassification? cfg %) (core/unread-memos (:state w) "courier"))
+                        id (if (seq waiting) (:id (nth-or (vec waiting) n)) (nth-or ids n))
+                        w' (run w actor :memo/declassify {:memo id})]
+                    ;; A declassified memo is deliverable from then on.
+                    (if (and (seq (:last w')) (not (some #(= id (:id %)) (core/deliverable-memos (:state w') cfg "courier"))))
+                      (assoc w' :problem [:declassified-not-deliverable id])
+                      w'))
       :close (let [[actor n] args] (run w actor :memo/close {:memo (nth-or ids n) :outcome "done"}))
       :block (let [[actor n] args] (run w actor :memo/block {:memo (nth-or ids n) :explanation "can't"}))
       :retry (let [[actor r] args] (run w actor :memo/retry {:role r}))
-      :add (let [[actor id] args] (run w actor :role/add {:id id :instructions "c"}))
+      :add (let [[actor id] args] (run w actor :role/add {:id id :instructions "c"} (= "operator" actor)))
       :remove (let [[actor id] args] (run w actor :role/remove {:id id}))
       :routine (let [[owner n s] args]
                  (run w owner :routine/write {:name n :schedule s :instructions "i"}))
@@ -584,6 +597,26 @@
     (doseq [w wakes :when (and (:chat w) (= :running (:status w)))]
       (when-not (= (:id w) (:id (core/running-wake s (:role w)))) (fail! [:chat-not-holding (:id w)])))
     (when-let [p (:problem after)] (fail! p))
+    ;; OnlyTheOperatorDeclassifies, and only a memo that was waiting.
+    (doseq [e batch :when (and (= "memo/declassified" (:type e)) (not= (:state before) s))]
+      (when-not (and (= "operator" (:actor e))
+                     (core/awaiting-declassification? cfg (core/memo (:state before) (get-in e [:data :memo]))))
+        (fail! [:declassified-by (:actor e)])))
+    (doseq [m memos :when (:declassified m)]
+      (when-not (some #(and (= "memo/declassified" (:type %)) (= (:id m) (get-in % [:data :memo]))
+                            (= "operator" (:actor %)))
+                      (:events after))
+        (fail! [:declassified-without-the-operator (:id m)])))
+    ;; A memo waiting to be declassified is never carried in a wake.
+    (doseq [e batch :when (= "wake/started" (:type e)) m (get-in e [:data :memos])]
+      (when (core/awaiting-declassification? cfg (core/memo s m)) (fail! [:pending-memo-carried m])))
+    ;; NoSessionOfAPublicRoleHoldsPrivate: a public role's wake starts
+    ;; with nothing private.
+    (doseq [e batch :when (and (= "wake/started" (:type e)) (core/public-role? cfg (get-in e [:data :role])))]
+      (when (core/private? (core/wake-labels s cfg (get-in s [:wakes (:seq e)]))) (fail! [:public-wake-private (:seq e)])))
+    ;; APublicItemNeverCarriesPrivate.
+    (doseq [e batch :when (:public e)]
+      (when (core/private? (:labels e)) (fail! [:public-event-private (:seq e)])))
     (doseq [e batch :when (= "memo/attempt-failed" (:type e))]
       (when (get-in s [:wakes (get-in e [:data :wake]) :chat]) (fail! [:chat-counted e])))
     ;; Every memo to the operator notifies, once.

@@ -81,7 +81,7 @@
             (is (core/quarantines? c "clerk") "the clerk holds an act tool, so contaminated memos to it wait")
             (is (not (core/quarantines? c "hub")))))
         (testing "artificial roles and facts"
-          (is (= #{"hub" "clerk"} (set (core/active-role-ids state))))
+          (is (= #{"hub" "clerk" "scout"} (set (core/active-role-ids state))))
           (is (= 3 (count (:facts state)))))
         (testing "it is marked, so --force may empty it again"
           (is (fs/exists? (fs/path made staging/marker)))))

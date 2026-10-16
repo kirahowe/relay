@@ -3,7 +3,7 @@
  :tasks
  {tck {:doc "Run the ACP conformance kit against relay acp (needs Go, uv and ../agentloop)."
        :task (shell "scripts/tck.sh")}
-  test {:doc "Run the tests. Pass namespace names to run only those."
+  test {:doc "Run the tests. Pass namespace names to run only those, and --agentloop <path> to use that agentloop build."
         :extra-paths ["test"]
         :requires ([relay.test-runner :as runner])
         :task (runner/run! *command-line-args*)}

@@ -6,7 +6,14 @@
   holds a marker unique to it, tied to the labels of whoever wrote it.
   Wherever a marker turns up later (in an event, a read tool's output, a
   prompt relay builds), what came with it must carry at least its writer's
-  labels, and private as well when it is relay content."
+  labels, and private as well when it is relay content.
+
+  Among the roles is a public one, scout, with a tool that sends data out.
+  Text that is public (scout's own, the operator's with --public, and
+  memos the operator declassified) needs no private, and whatever scout
+  is given (its prompts, its reads) must never carry private: anything
+  private that reached it would show up there as a marker whose writer's
+  labels need private."
   (:require [clojure.set :as set]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
@@ -27,8 +34,13 @@
                                  :notify {:kind :none}
                                  :max-attempts 2
                                  :tools {"fetch" {:class :egress :labels ["contaminated"]
-                                                  :description "Fetch a page." :command ["true"]}}
-                                 :grants {"hub" {:may-add true :tools ["fetch"]}}}))
+                                                  :description "Fetch a page." :command ["true"]}
+                                         "search" {:class :egress :labels ["contaminated"]
+                                                   :description "Search the web." :command ["true"]}}
+                                 :grants {"hub" {:may-add true :tools ["fetch"]}
+                                          "scout" {:public true :tools ["search"]}}}))
+
+(def public-role "scout")
 
 ;; --- a world: the state, the clock, the events, and the markers written
 
@@ -38,6 +50,8 @@
 
 (defn- world []
   {:state core/empty-state :now t0 :events [] :n 0
+   ;; Role ids the operator vouched for when declassifying a memo they sent.
+   :vouched-ids #{}
    ;; marker -> {:labels the writer's, :content? whether reading it is reading relay content}
    :markers {}})
 
@@ -48,13 +62,35 @@
     [(-> w (update :n inc) (assoc-in [:markers m] {:labels (core/union labels) :content? content?}))
      m]))
 
-(defn- run [{:keys [state now] :as w} actor labels type args]
+(defn- as-harness
+  "A role's command as a harness sends it: naming the wake whose session
+  made it, as relay's tool command does."
+  [state {:keys [actor] :as command}]
+  (if-let [w (and (not (contains? command :session-wake)) (core/running-wake state actor))]
+    (assoc command :session-wake (:id w))
+    command))
+
+(defn- run* [{:keys [state now] :as w} command]
   (try
-    (let [[state' events] (core/run-command state {:type type :actor actor :args args :labels labels}
-                                            {:now now :config cfg})]
+    (let [[state' events] (core/run-command state (as-harness state command) {:now now :config cfg})]
       (-> w (assoc :state state') (update :events into events)))
     (catch clojure.lang.ExceptionInfo e
       (if (core/rejection e) w (throw e)))))
+
+(defn- run [w actor labels type args]
+  (run* w {:type type :actor actor :args args :labels labels}))
+
+(defn- run-public
+  "The operator writing with --public."
+  [w labels type args]
+  (run* w {:type type :actor "operator" :args args :labels labels :public true}))
+
+(defn- content?
+  "Whether text `actor` writes is relay content that reading adds private
+  to: anything but what a public role writes in a session that began
+  public."
+  [w actor]
+  (not (and (= public-role actor) (:public-session (core/running-wake (:state w) actor)))))
 
 (defn- advance [w seconds] (update w :now #(.plusSeconds ^Instant % seconds)))
 
@@ -96,7 +132,14 @@
     [2 (gen/tuple (gen/return :release) gen/nat)]
     [2 (gen/tuple (gen/return :trust) (gen/elements ["memo" "fact" "doc" "note" "routine" "role" "journal"])
                   gen/nat)]
-    [1 (gen/tuple (gen/return :remove) gen/nat)]]))
+    [1 (gen/tuple (gen/return :remove) gen/nat)]
+    [4 (gen/tuple (gen/return :public-write)
+                  (gen/elements [:memo :memo-to-scout :fact :doc :note :routine :journal :wake])
+                  gen-labels gen/nat)]
+    [3 (gen/tuple (gen/return :declassify) gen/nat)]
+    ;; Opens a wake of the public role and leaves it running, so its calls
+    ;; until a :wake step ends it are a public session's.
+    [3 (gen/tuple (gen/return :start-public) gen/boolean)]]))
 
 (defn- step [w [kind & args]]
   (let [s (:state w)]
@@ -119,8 +162,8 @@
       (let [[who labels to-n to-operator?] args
             [actor labels] (writer w who labels)
             to (if to-operator? "operator" (nth-or (roles w) to-n))
-            [w subj] (mark w labels true)
-            [w body] (mark w labels true)]
+            [w subj] (mark w labels (content? w actor))
+            [w body] (mark w labels (content? w actor))]
         (run w actor labels :memo/send {:to to :subject (str "About " subj) :body (str "Please " body)}))
 
       :close
@@ -143,7 +186,7 @@
       (let [[n labels] args
             owner (nth-or (roles w) n)
             [w nm] (mark w labels false)
-            [w instr] (mark w labels true)]
+            [w instr] (mark w labels (content? w owner))]
         (run w owner labels :routine/write {:name nm :schedule "every 10m" :instructions (str "Check " instr)}))
 
       :tick
@@ -152,16 +195,16 @@
       :fact-add
       (let [[who labels topic?] args
             [actor labels] (writer w who labels)
-            [w text] (mark w labels true)
-            [w topic] (mark w labels true)]
+            [w text] (mark w labels (content? w actor))
+            [w topic] (mark w labels (content? w actor))]
         (run w actor labels :fact/add (cond-> {:text (str "It is " text)} topic? (assoc :topic topic))))
 
       :fact-supersede
       (let [[who labels n topic?] args
             [actor labels] (writer w who labels)
             id (nth-or (sort (keys (:facts s))) n)
-            [w text] (mark w labels true)
-            [w topic] (mark w labels true)]
+            [w text] (mark w labels (content? w actor))
+            [w topic] (mark w labels (content? w actor))]
         (run w actor labels :fact/supersede (cond-> {:fact id :text (str "Now " text)
                                                       :valid-from (str (.plusSeconds ^Instant (:now w) 1))}
                                                topic? (assoc :topic topic))))
@@ -170,8 +213,8 @@
       (let [[who labels n how] args
             [actor labels] (writer w who labels)
             id (nth-or (sort (keys (:facts s))) n)
-            [w text] (mark w labels true)
-            [w why] (mark w labels true)]
+            [w text] (mark w labels (content? w actor))
+            [w why] (mark w labels (content? w actor))]
         (run w actor labels :fact/correct (merge {:fact id :why (str "Because " why)}
                                                  (case how
                                                    :text {:text (str "Really " text)}
@@ -182,13 +225,13 @@
       (let [[n labels which] args
             owner (nth-or (roles w) n)
             [w nm] (mark w labels false)
-            [w text] (mark w labels true)]
+            [w text] (mark w labels (content? w owner))]
         (run w owner labels :note/write {:name (if (= :same which) "plan" nm) :text (str "Remember " text)}))
 
       :journal
       (let [[n labels] args
             owner (nth-or (roles w) n)
-            [w text] (mark w labels true)]
+            [w text] (mark w labels (content? w owner))]
         (run w owner labels :journal/write {:text (str "Today " text)}))
 
       :doc
@@ -196,7 +239,7 @@
             [actor labels] (writer w who labels)
             existing (nth-or (sort (keys (:docs s))) n)
             [w p] (mark w labels false)
-            [w content] (mark w labels true)]
+            [w content] (mark w labels (content? w actor))]
         (run w actor labels :doc/put {:path (if (or new-path? (nil? existing)) (str p ".md") existing)
                                       :content (str "Content " content)}))
 
@@ -228,7 +271,8 @@
       :decide
       (let [[n allow?] args
             h (nth-or (core/open-holds s) n)
-            [w why] (mark w [] true)]
+            ;; The operator's reason to a public role is public.
+            [w why] (mark w [] (and h (not= public-role (:role h))))]
         (if h
           (run w "operator" [] :hold/resolve {:hold (:id h) :verdict (if allow? "allow" "deny")
                                               :reason (when-not allow? (str "No " why))})
@@ -262,23 +306,77 @@
           w'))
 
       :remove
-      (let [r (nth-or (remove #{"hub"} (roles w)) (first args))]
-        (if r (run w "hub" [] :role/remove {:id r}) w)))))
+      (let [r (nth-or (remove #{"hub" public-role} (roles w)) (first args))]
+        (if r (run w "hub" [] :role/remove {:id r}) w))
+
+      ;; The operator writes with --public: public text, which needs no
+      ;; private wherever it turns up.
+      :public-write
+      (let [[kind labels n] args
+            labels (if (core/contaminated? labels) ["contaminated"] [])
+            [w a] (mark w labels false)
+            [w b] (mark w labels false)]
+        (case kind
+          :memo (run-public w labels :memo/send {:to (nth-or (roles w) n) :subject (str "About " a) :body (str "Please " b)})
+          :memo-to-scout (run-public w labels :memo/send {:to public-role :subject (str "About " a) :body (str "Please " b)})
+          :fact (run-public w labels :fact/add {:text (str "It is " a) :topic b})
+          :doc (let [existing (nth-or (sort (keys (:docs s))) n)]
+                 (run-public w labels :doc/put {:path (if (even? n) (str a ".md") (or existing (str a ".md")))
+                                                :content (str "Content " b)}))
+          :note (run-public w labels :note/write {:owner public-role :name (if (even? n) "plan" a) :text (str "Remember " b)})
+          :routine (run-public w labels :routine/write {:owner public-role :name a :schedule "every 10m"
+                                                         :instructions (str "Check " b)})
+          :journal (run-public w labels :journal/write {:owner public-role :text (str "Today " b)})
+          ;; A public note on a wake carries nothing private into it.
+          :wake (if (core/running? s public-role)
+                  w
+                  (let [w (run-public w labels :wake/start {:role public-role :note (str "Look at " a)})
+                        wake (core/running-wake (:state w) public-role)]
+                    (if wake
+                      (run w "dispatcher" [] :wake/end {:wake (:id wake) :outcome "ran" :exit 0
+                                                        :session (str "s" (:id wake)) :said "ok" :labels labels})
+                      w)))))
+
+      :start-public
+      (let [w (run-public w [] :memo/send {:to public-role :subject "Go" :body "Look."})]
+        (run w (if (first args) "dispatcher" "operator") [] :wake/start (cond-> {:role public-role}
+                                                                          (first args) (assoc :dispatched true))))
+
+      ;; The operator vouches that a memo to the public role holds nothing
+      ;; private, its sender's id as shown included.
+      :declassify
+      (let [m (nth-or (sort-by :id (filter #(and (= :unread (:status %)) (core/awaiting-declassification? cfg %))
+                                           (vals (:memos s))))
+                      (first args))
+            w' (if m (run w "operator" [] :memo/declassify {:memo (:id m)}) w)]
+        (if (and m (not= (:state w) (:state w')))
+          (as-> w' w
+            (reduce (fn [w mk] (-> w
+                                   (update-in [:markers mk :labels] #(vec (remove #{"private"} %)))
+                                   (assoc-in [:markers mk :content?] false)))
+                    w (markers-in [(:subject m) (:body m)]))
+            (update w :vouched-ids into (markers-in [(:from m)])))
+          w')))))
 
 (defn- seed []
   (-> (world)
       (run "operator" [] :role/add {:id "hub" :title "Hub" :instructions "Run relay."})
-      (run "operator" [] :role/add {:id "clerk" :title "Clerk" :instructions "File things."})))
+      (run "operator" [] :role/add {:id "clerk" :title "Clerk" :instructions "File things."})
+      (run-public [] :role/add {:id public-role :title "Scout" :instructions "Search the web."})))
 
 ;; --- what must hold
 
 (defn- missing
   "The markers in `text` whose writers' labels `labels` lacks, with private
   for content when `content?` is checked."
-  [w text labels {:keys [private-for-content?]}]
+  [w text labels {:keys [private-for-content? public-reader?]}]
   (vec (for [m (markers-in text)
              :let [{need :labels content? :content?} (get-in w [:markers m])
-                   need (cond-> (set need) (and private-for-content? content?) (conj "private"))]
+                   need (cond-> (set need)
+                          (and private-for-content? content?) (conj "private")
+                          ;; A sender's id the operator vouched for in a
+                          ;; memo they declassified for the public role.
+                          (and public-reader? ((:vouched-ids w) m)) (disj "private"))]
              :when (not (set/subset? need (set labels)))]
          [m need labels])))
 
@@ -292,10 +390,23 @@
   (into {} (filter (fn [[k _]] (free-text-keys k)) data)))
 
 (defn- event-problems [w]
-  (vec (for [e (:events w)
-             :let [ms (missing w (free-text (:data e)) (:labels e) {})]
-             :when (seq ms)]
-         [:event (:seq e) (:type e) ms])))
+  (vec (concat
+        (for [e (:events w)
+              :let [ms (missing w (free-text (:data e)) (:labels e) {})]
+              :when (seq ms)]
+          [:event (:seq e) (:type e) ms])
+        ;; APublicItemNeverCarriesPrivate: a public event never carries
+        ;; private, nor text that was not public when it was written.
+        (for [e (:events w)
+              :when (:public e)
+              :let [private (filterv #(get-in w [:markers % :content?]) (markers-in (free-text (:data e))))]
+              :when (or (core/private? (:labels e)) (seq private))]
+          [:public-event (:seq e) (:type e) (:labels e) private])
+        ;; Only the operator marks anything public; a role's call can
+        ;; never set it on an item another role wrote.
+        (for [e (:events w)
+              :when (and (:public e) (not (#{"operator" "dispatcher" public-role} (:actor e))))]
+          [:public-by (:seq e) (:actor e)]))))
 
 (defn- read-calls
   "Every read tool call worth making as a role, with and without accepting
@@ -303,7 +414,7 @@
   [state]
   (let [paths (sort (keys (:docs state)))]
     (for [accept [false true]
-          [tool args] (concat [["inbox" {}] ["roles" {}] ["routines" {}] ["facts" {}]
+          [tool args] (concat [["inbox" {}] ["roles" {}] ["routines" {}] ["facts" {}] ["clock" {:op "now"}]
                                ["facts" {:all true}] ["journal" {:limit 50}] ["notes" {}] ["docs" {}]]
                               (for [id (sort (keys (:facts state)))] ["fact_history" {:fact id}])
                               (for [p paths] ["doc_get" {:path p}])
@@ -318,21 +429,27 @@
         ctx {:state state :config cfg :now (:now w)}]
     (vec (for [role (core/active-role-ids state)
                [tool args] (read-calls state)
-               :let [{:keys [ok labels]} (try (let [r ((:read (get tools/builtin tool)) ctx role args)]
+               :let [public? (= public-role role)
+                     {:keys [ok labels]} (try (let [r ((:read (get tools/builtin tool)) ctx role args)]
                                                 (if (map? r) {:ok (:content r) :labels (:labels r)} {:ok r :labels []}))
                                               (catch clojure.lang.ExceptionInfo _ {:ok "" :labels []}))
-                     ms (missing w ok labels {:private-for-content? true})
+                     ms (missing w ok labels {:private-for-content? true :public-reader? public?})
                      ;; Read without accepting, nothing contaminated comes
                      ;; back, except in an inbox a contaminated memo the
                      ;; role may take in: released, or to a role holding
                      ;; no external tool that acts or sends data out.
-                     tainted? (and (not (:accept_contamination args)) (core/contaminated? labels)
+                     ;; NoSessionOfAPublicRoleHoldsPrivate, for its reads.
+                     leaked? (and public? (core/private? labels))
+                     ;; A public role accepts contamination by default.
+                     tainted? (and (not public?) (not (:accept_contamination args)) (core/contaminated? labels)
                                    (not (and (= "inbox" tool)
                                              (some #(and (core/contaminated? (:labels %))
                                                          (not (core/quarantined? cfg %)))
                                                    (core/unread-memos state role)))))]
-               :when (or (seq ms) tainted?)]
-           [:read role tool args (if tainted? :tainted-by-default ms)]))))
+               :when (or (seq ms) tainted? leaked?)]
+           [:read role tool args (cond leaked? [:private-for-a-public-role labels]
+                                       tainted? :tainted-by-default
+                                       :else ms)]))))
 
 (defn- prompt-problems [w]
   (let [state (:state w)
@@ -340,19 +457,31 @@
         inputs {:shared "Shared." :operator-additions nil :now (:now w) :relay-bin "relay" :data-path "/nowhere"}]
     (vec (for [role (core/active-role-ids state)
                chat [false true]
-               :let [[w note] (mark w [] true)
+               :let [public? (= public-role role)
+                     ;; A note for a public role is public, or not given.
+                     [w note] (mark w [] (not public?))
                      wake {:id 999999 :role role :harness "agentloop" :chat chat
                            :note (if chat dispatch/conversation-note (str "Look at " note))
+                           :note-public (and public? (not chat))
                            :memos (if chat [] (mapv :id (core/deliverable-memos state cfg role)))
                            :resolves (if chat [] (mapv :id (core/pending-resolutions state role)))
                            :resumes (when-not chat (:interrupted-wake (core/role state role)))}
                      request (if chat
                                (dispatch/conversation-request sys state wake inputs)
                                (dispatch/wake-request sys state wake inputs))
-                     text (str (:system-prompt request) "\n" (:prompt request))
-                     ms (missing w text (get-in request [:policy :labels]) {:private-for-content? true})]
-               :when (seq ms)]
-           [:prompt role chat ms]))))
+                     ;; The reasons carried back reach the model too.
+                     text (str (:system-prompt request) "\n" (:prompt request) "\n" (pr-str (:resolve request)))
+                     labels (get-in request [:policy :labels])
+                     ms (missing w text labels {:private-for-content? true :public-reader? public?})
+                     ;; NoSessionOfAPublicRoleHoldsPrivate, for its prompts,
+                     ;; and agentloop is told to refuse private as well.
+                     leaked (when (and public? (or (core/private? labels)
+                                                   (not= ["private"] (get-in request [:policy :forbid_labels]))))
+                              [:public-role-policy (:policy request)])
+                     wrongly-forbidden (when (and (not public?) (contains? (:policy request) :forbid_labels))
+                                         [:forbid-for-a-private-role])]
+               :when (or (seq ms) leaked wrongly-forbidden)]
+           [:prompt role chat (or leaked wrongly-forbidden ms)]))))
 
 (defn- hold-problems
   "The spec's invariants on quarantine and holds."

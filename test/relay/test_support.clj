@@ -10,9 +10,19 @@
 
 (def agentloop-bin
   "agentloop built in the sibling checkout (make -C ../agentloop build), or
-  nil when it is not built, which skips the tests that need it."
+  nil when it is not built, which skips the tests that need it. `bb test
+  --agentloop <path>` names another build instead (use-agentloop!)."
   (let [sibling (fs/absolutize "../agentloop/bin/agentloop")]
     (when (fs/executable? sibling) (str (fs/normalize sibling)))))
+
+(defn use-agentloop!
+  "Runs the tests against the agentloop binary at `path`, which must exist,
+  in place of the sibling checkout's."
+  [path]
+  (let [p (fs/absolutize path)]
+    (when-not (fs/executable? p)
+      (throw (ex-info (str "No agentloop binary at " p ".") {})))
+    (alter-var-root #'agentloop-bin (constantly (str (fs/normalize p))))))
 
 (defn isolate!
   "Points relay away from anything real for the rest of the run: the

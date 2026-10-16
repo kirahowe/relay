@@ -106,7 +106,7 @@
   "How a run ended. Pure: takes the parsed outcome line (nil when there was
   none), the exit code, stderr, the session id and the time."
   [{:keys [outcome exit stderr session now]}]
-  (let [{:keys [reason text error held labels label_sources]} (when (map? outcome) outcome)
+  (let [{:keys [reason text error held labels label_sources refused forbidden]} (when (map? outcome) outcome)
         error (when (map? error) error)
         ;; Whatever the outcome line held, only strings are shown to a person.
         said-from (fn [x] (when (and (string? x) (not (str/blank? x))) x))
@@ -118,7 +118,12 @@
                                 more)
                    ;; The session's labels at the end, which what it said
                    ;; carries. Without them relay assumes the worst.
-                   (sequential? labels) (assoc :labels (vec labels))))]
+                   (sequential? labels) (assoc :labels (vec labels))
+                   ;; Results agentloop kept from the session for carrying
+                   ;; a label it may not hold, for the operator.
+                   (and (sequential? refused) (seq refused))
+                   (assoc :refused (vec (for [r refused :when (map? r)]
+                                          (select-keys r [:call_id :tool :labels]))))))]
     (cond
       (= "timeout" exit) (report "ran" :said "Stopped at the wake deadline.")
       ;; agentloop ran and said how it ended, but relay could not read it:
@@ -138,6 +143,11 @@
         "held" (report "ran" :held (mapv #(cond-> % (map? label_sources) (assoc :label-sources label_sources))
                                          (held-calls held)))
         "refused" (report "ran" :crashed true)
+        ;; The session holds a label it may not, so agentloop ran nothing.
+        ;; The next wake starts a fresh session.
+        "forbidden" (report "ran" :crashed true
+                            :said "agentloop did not run the session: it holds a label it may not hold."
+                            :forbidden (if (sequential? forbidden) (vec forbidden) []))
         "canceled" (report "ran" :crashed true :said "Stopped at the wake deadline.")
         "model_error"
         (case (:kind error)

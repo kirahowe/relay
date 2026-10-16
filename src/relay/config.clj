@@ -105,6 +105,60 @@
                    (when default-harness (str "; there is no harness " (pr-str default-harness))) ".")))
   (check-notify notify))
 
+(def reserved-role-ids
+  "Names no role may have: the operator, the dispatcher, and words relay
+  uses for groups."
+  #{"operator" "dispatcher" "relay" "all" "none"})
+
+(defn role-id?
+  "Whether a string can be a role's id: lower case letters, digits and
+  hyphens, starting with a letter, at most 40 characters, and not reserved."
+  [id]
+  (boolean (and (string? id) (re-matches #"[a-z][a-z0-9-]{0,39}" id) (not (reserved-role-ids id)))))
+
+(def grant-keys
+  "What a role can be granted. Anything else is refused, so a typo such as
+  :pubic cannot leave a role able to hold private data."
+  #{:tools :may-add :public})
+
+(defn- check-grants
+  "Checks each role's grants, and what a public role may not have. A public
+  role's session never holds private, so it is granted nothing whose
+  output is private, nothing that adds or changes roles, and no dead
+  letters, which quote other roles' memos."
+  [{:keys [tools grants dead-letter-handler harnesses default-harness]}]
+  (when-not (map? grants)
+    (problem! "relay.edn has :grants that is not a map of role ids to grants."))
+  (doseq [[role g] grants]
+    ;; Roles are looked up by their id as a string, so a keyword or
+    ;; symbol here would grant nothing, :public included.
+    (when-not (role-id? role)
+      (problem! (str "relay.edn grants to " (pr-str role) ", which is not a role id: a string of lower case"
+                     " letters, digits and hyphens, starting with a letter, such as \"hub\", and not one of "
+                     (str/join ", " (sort reserved-role-ids)) ".")))
+    (when-not (map? g)
+      (problem! (str "The grants for " role " in relay.edn are not a map, such as {:tools [\"fetch\"]}.")))
+    (when-let [unknown (seq (remove grant-keys (keys g)))]
+      (problem! (str "The grants for " role " in relay.edn name " (str/join ", " (map pr-str (sort-by str unknown)))
+                     ", which relay does not know. A role can be granted "
+                     (str/join ", " (sort (map str grant-keys))) ".")))
+    (when-not (or (nil? (:public g)) (boolean? (:public g)))
+      (problem! (str "Role " role " has :public " (pr-str (:public g)) " in relay.edn; it must be true or false.")))
+    (when (:public g)
+      (when (:may-add g)
+        (problem! (str "Role " role " is :public, so it may not have :may-add: it could write"
+                       " roles' instructions and read what other roles wrote.")))
+      (doseq [t (:tools g)
+              :when (some #{"private"} (get-in tools [t :labels]))]
+        (problem! (str "Role " role " is :public, so it may not be granted " t
+                       ", whose output is private.")))
+      (when (= role dead-letter-handler)
+        (problem! (str "Role " role " is :public, so it may not be the :dead-letter-handler:"
+                       " dead letters quote other roles' private memos.")))
+      (when (= :script (get-in harnesses [default-harness :kind]))
+        (problem! (str "Role " role " is :public, and the default harness is a :script harness,"
+                       " whose program can claim any labels. A public role needs agentloop."))))))
+
 (defn validate
   "Returns the config, or throws describing the first problem found."
   [{:keys [tools grants max-attempts chat-client] :as config}]
@@ -147,6 +201,7 @@
              (some (fn [[_ g]] (or (seq (:tools g)) (:may-add g))) grants))
     (problem! (str "The default harness in relay.edn is a :script harness, which gets no tools,"
                    " so no role may be granted :tools or :may-add.")))
+  (check-grants config)
   (doseq [[role {granted :tools}] grants
           t granted]
     (when-not (contains? tools t)
@@ -179,6 +234,12 @@
 
 (defn may-add? [config actor]
   (boolean (:may-add (grants config actor))))
+
+(defn public?
+  "Whether a role is public: its sessions never hold private, so what it
+  writes is public, and it sees only what is public."
+  [config role]
+  (true? (:public (grants config role))))
 
 (defn retry-delay-seconds
   "The wait after the nth failure: the base, doubled for each failure after
