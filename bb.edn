@@ -22,6 +22,12 @@
              :extra-paths ["test"]
              :requires ([relay.scenario-runner :as runner])
              :task (runner/scenarios-main)}
+  deploy {:doc "For the operator: move the live checkouts to main, build, check. See README."
+          :requires ([relay.deploy-run :as deploy-run])
+          :task (apply deploy-run/deploy-main *command-line-args*)}
+  rollback {:doc "For the operator: put the live checkouts back where the last deploy found them."
+            :requires ([relay.deploy-run :as deploy-run])
+            :task (apply deploy-run/rollback-main *command-line-args*)}
   soak {:doc "Run the model-based property many more times: bb soak [trials]"
         :extra-paths ["test"]
         :requires ([relay.core-test :as core-test]

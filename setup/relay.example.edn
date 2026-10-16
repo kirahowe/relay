@@ -22,6 +22,10 @@
  ;;   :token-command ["security" "find-generic-password" "-s" "relay-ntfy" "-w"]
  ;; or from a file only you can read, with :token-file "/path/to/token".
  :notify {:kind :ntfy :url "http://127.0.0.1:2586" :topic "relay"}
+ ;; Other kinds: {:kind :macos}, {:kind :command :command [...]},
+ ;; {:kind :none}, and {:kind :file :path "/path/to/notifications.log"},
+ ;; which appends one JSON line per notification and reaches nobody (used
+ ;; by staging data).
 
  ;; The role that is sent dead letters to sort out.
  :dead-letter-handler "hub"

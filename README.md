@@ -376,23 +376,87 @@ bb tck           # the ACP conformance kit against relay acp (needs Go, uv and .
 The tests never call the real API. The agentloop tests run the real binary against a
 mock Anthropic server in `test/relay/mock_anthropic.clj`.
 
-`relay.core` holds the rules as two pure functions. `evolve` folds an
-event into the state. `decide` turns a command into events or refuses it.
-Every write goes through `relay.inbound`, which decides and appends under
-the log's lock. The model test in `test/relay/core_test.clj` drives random
-sequences of every command and checks the rules after each step. The
-property in `test/relay/labels_test.clj` writes random histories in which
-every piece of text holds a marker tied to its writer's labels, and checks
-that wherever a marker turns up later, in an event, a tool's output or a
-prompt, its writer's labels came with it.
+### Staging data and scenarios
 
-If `relay tick` cannot load `relay.edn`, nothing runs. It says why on
-stderr, which launchd keeps, and once per problem through `:notify`, if
-that section alone is sound.
+To check a feature end to end without touching your own data, make a staging
+directory and run scenarios against it:
 
-The tests never read `~/.config/relay/config.edn`, run the `relay` on
-PATH, or run the `agentloop` on PATH: they take agentloop only from
-`../agentloop/bin/agentloop`.
+```sh
+bb staging init [<dir>]            # artificial roles, facts and settings; default ~/code/projects/.relay-staging
+bb scenario <name> [--live]        # one scenario from test/scenarios/
+bb scenarios                       # every scenario, against the mock model
+```
+
+`staging init` refuses a directory in or around `~/Sync` or the data
+directory named in `~/.config/relay/config.edn`, and a directory that is not
+empty. `--force` empties a directory only if an earlier `staging init` made
+it. The staging `relay.edn` uses a `:file` notifier, which appends each
+notification to `notifications.log` in the directory and reaches nobody.
+
+A scenario is a data file: relay commands to run as the operator, dispatcher
+ticks, clock moves, and assertions over the log and state. The header of
+`test/relay/scenario.clj` describes the format. Each run makes its own staging
+directory and passes `--data` to every command. The ticks run in the runner,
+not under launchd. Without `--live`, the model is the mock server answering
+from a script in the scenario. With `--live` it is the real model, using the
+keychain key, so it costs a little. `bb test` runs the mock scenarios too.
+
+### Deploy and rollback
+
+These are for you to run, not an agent. Run `bb deploy` from a relay working
+copy that has no changes:
+
+```sh
+bb deploy [--relay <dir>] [--agentloop <dir>] [--acp-tui <dir>] [--bookmark main] [--record <file>] [--data <dir>] [--paused-externally]
+bb rollback                        # same flags
+```
+
+The paths default to the live checkouts under `~/code/projects` and must be
+three different directories. `--data` defaults to the data directory in
+`~/.config/relay/config.edn` and must be a relay data directory (it needs
+`relay.edn` and a `log` directory), since it is how the deploy sees running
+wakes. A deploy names the
+commit `main` points to in each repository and uses only those commits from
+then on. It builds them in fresh jj workspaces in a temporary directory and
+runs `bb test` and `bb scenarios` there, lists what it will do, and asks you
+to type a code on the terminal.
+
+After you confirm, it pauses relay: while
+`~/Library/Application Support/relay/paused` exists, `relay tick` does nothing,
+and `relay status` shows the file's path, why it is there and how to lift it
+(`rm '<path>'`, and `bb rollback` when a deploy made it). It waits until no wake or tick is running (read
+from the live log, which `--data` must point at, and from markers the ticks
+leave), writes a record, and for each checkout runs `jj new <commit>`, builds
+agentloop and acp-tui with `make build`, and finally runs `relay status`
+against that data directory. Just before it moves a checkout it looks at it
+again, and it stops if anything changed since the plan or jj cannot read it.
+It refuses to start if any checkout has changes in its working copy or sits on
+a merge. When it all works it removes the pause file. If a step fails after a
+checkout was touched (a move that errors or a build that starts counts), relay
+stays paused and the message says so. If every checkout got to its target and
+only `relay status` failed, the message says that and gives the `rm` command
+that lifts the pause. Ctrl-C before any checkout is touched lifts the pause it
+made and forgets the check workspaces. Only one deploy or rollback runs at a
+time, through a lock on `~/Library/Application Support/relay/deploy.lock`.
+
+A relay from before the pause file does not know it. If the relay now running,
+or the one a deploy or rollback would leave in place, has no
+`src/relay/pause.clj`, the command refuses until you stop the tick job yourself
+(`launchctl bootout gui/$(id -u)/relay.tick`), run it with `--paused-externally`,
+and start the job again afterwards.
+
+Records go to `~/Library/Application Support/relay/deploys.edn`, one line each
+time something changes: before the first move, after each checkout, and at the
+end. `bb rollback` reads the latest deploy record that moved a checkout, or
+that failed after touching one, and that no finished rollback has undone. It
+moves each checkout back with `jj new <previous>`, but only if the checkout is
+still where that deploy left it; a deploy that failed in a rebuild without
+moving anything is undone by rebuilding in place. It rebuilds, runs `relay
+status`, and lifts the pause. Run it again and it undoes the deploy before. Every run writes its first record before it
+pauses relay, so if one is killed before it touched anything (while waiting for
+wakes, say), `bb rollback` sees that and only lifts the pause; nothing is moved.
+After a partial failure, run it again to finish; it does not lift a pause left
+by an earlier failure until it has worked.
 
 ## Pentests
 
