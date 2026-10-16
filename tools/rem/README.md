@@ -75,6 +75,13 @@ return as `\t`, `\n`, `\r`; a backslash as `\\`. A title therefore cannot
 add a field or a line. Notes in `show` are printed one escaped line each,
 prefixed with `> `.
 
+## Sections
+
+`rem` cannot see or set list sections. EventKit, AppleScript and the
+built-in Shortcuts actions have no section support, and the Reminders
+database is not readable without Full Disk Access. `SECTIONS.md` has the
+evidence and the options.
+
 ## Relay configuration
 
 Two tools over the one binary, so reads and writes get different classes
