@@ -12,6 +12,7 @@
             [relay.inbound :as inbound]
             [relay.log :as log]
             [relay.notify :as notify]
+            [relay.pause :as pause]
             [relay.render :as render]
             [relay.setup :as setup]
             [relay.text :as text]
@@ -49,7 +50,9 @@ Every command needs the data directory, from --data <dir> or from the file
                                       appends the traffic to <file> as JSON lines;
                                       --approvals lets the client answer held tool
                                       calls, which relay otherwise refuses
-  relay tick                          one dispatcher pass (launchd runs this)
+  relay tick [--pause-file <f>]       one dispatcher pass (launchd runs this); does
+                                      nothing while the pause file exists, which
+                                      bb deploy makes
   relay facts [<topic>] [--search <s>] [--as-of <t>] [--known-at <t>] [--all]
                                       what relay knows; times as for facts
   relay fact <id>                     every version of a fact
@@ -91,6 +94,17 @@ contaminated, for text you copied from somewhere you do not trust.")
 (def ^:dynamic *config-file*
   "The per-user config file. Bound in tests."
   nil)
+
+(def ^:dynamic *pause-file*
+  "The pause file (relay.pause) in place of the default. Bound in tests."
+  nil)
+
+(defn pause-file
+  "The pause file: --pause-file, else the default under the user's home."
+  [opts]
+  (or (when-not (str/blank? (:pause-file opts)) (:pause-file opts))
+      *pause-file*
+      (pause/default-file (System/getProperty "user.home"))))
 
 (defn config-file []
   (or *config-file* (str (fs/path (System/getProperty "user.home") ".config" "relay" "config.edn"))))
@@ -249,7 +263,8 @@ contaminated, for text you copied from somewhere you do not trust.")
             :harness :string :model :string :schedule :string :note :string
             :tail :long :data :string :search :string :as-of :string :known-at :string
             :version :long :role :string :trace :string :untrusted :boolean :approvals :boolean
-            :topic :string :from :string :to :string :why :string :text :string :end :boolean}})
+            :topic :string :from :string :to :string :why :string :text :string :end :boolean
+            :pause-file :string}})
 
 (defn- command
   "Runs one command with the data directory's system. Returns {:exit :out},
@@ -259,7 +274,7 @@ contaminated, for text you copied from somewhere you do not trust.")
         state #(inbound/current-state sys)
         lines (fn [ls] {:exit 0 :out ls})]
     (case cmd
-      "status" (lines (render/status (state) zone ((:clock sys)) (:config sys)))
+      "status" (lines (render/status (state) zone ((:clock sys)) (:config sys) (pause/recovery-lines (pause-file opts))))
       "inbox" (lines (render/inbox zone (core/unread-memos (state) core/operator)))
       "memo" (let [[to] more
                    body (or (:message opts) (stdin-text))]
@@ -431,36 +446,52 @@ contaminated, for text you copied from somewhere you do not trust.")
   [args]
   (data-dir (:opts (parse-line args))))
 
+(defn- run-command
+  "Runs a command with its data directory's system, and returns what it
+  says, made safe for a terminal."
+  [cmd more opts]
+  (do (when (and (= "tool" cmd) (or (str/blank? (:role opts)) (str/blank? (:data opts))))
+        (fail! "usage: relay tool --data <dir> --role <role> <tool name>"))
+      (let [dir (data-dir opts)
+            result (if (= "init" cmd)
+                     (init! dir)
+                     (let [sys (try (inbound/system dir (cond-> {} *clock* (assoc :clock *clock*)))
+                                    (catch clojure.lang.ExceptionInfo e
+                                      (when (= "tick" cmd) (report-broken-settings! dir (ex-message e)))
+                                      (throw e)))]
+                       (when (= "tick" cmd) (fs/delete-if-exists (fs/path dir ".settings-problem")))
+                       (binding [*untrusted* (if (:untrusted opts) [core/contaminated-label] [])]
+                         (command sys dir cmd more opts))))]
+        ;; Everything printed may hold text a role wrote, so nothing
+        ;; that could drive the terminal is printed raw. relay tool's
+        ;; output is a JSON envelope for the harness, not a terminal.
+        (if (or (= "tool" cmd) (and (= "log" cmd) (:json opts)))
+          ;; JSON escaped by its encoder, not by visible, which would
+          ;; break it.
+          result
+          (cond-> result
+            (:out result) (update :out #(mapv text/visible %))
+            (:err result) (update :err #(mapv text/visible %)))))))
+
 (defn execute
   "Runs one command line. Returns {:exit :out}, :out being the lines to
   print. Prints nothing itself, except what a command that talks with the
   operator directly (init, chat, acp) prints along the way."
   [args]
   (let [{:keys [cmd more opts]} (parse-line args)]
-    (if (or (nil? cmd) (#{"help" "-h" "--help"} cmd))
+    (cond
+      (or (nil? cmd) (#{"help" "-h" "--help"} cmd))
       (result 0 usage)
-      (do (when (and (= "tool" cmd) (or (str/blank? (:role opts)) (str/blank? (:data opts))))
-            (fail! "usage: relay tool --data <dir> --role <role> <tool name>"))
-          (let [dir (data-dir opts)
-                result (if (= "init" cmd)
-                         (init! dir)
-                         (let [sys (try (inbound/system dir (cond-> {} *clock* (assoc :clock *clock*)))
-                                        (catch clojure.lang.ExceptionInfo e
-                                          (when (= "tick" cmd) (report-broken-settings! dir (ex-message e)))
-                                          (throw e)))]
-                           (when (= "tick" cmd) (fs/delete-if-exists (fs/path dir ".settings-problem")))
-                           (binding [*untrusted* (if (:untrusted opts) [core/contaminated-label] [])]
-                             (command sys dir cmd more opts))))]
-            ;; Everything printed may hold text a role wrote, so nothing
-            ;; that could drive the terminal is printed raw. relay tool's
-            ;; output is a JSON envelope for the harness, not a terminal.
-            (if (or (= "tool" cmd) (and (= "log" cmd) (:json opts)))
-              ;; JSON escaped by its encoder, not by visible, which would
-              ;; break it.
-              result
-              (cond-> result
-                (:out result) (update :out #(mapv text/visible %))
-                (:err result) (update :err #(mapv text/visible %)))))))))
+      ;; A tick marks itself as running before it looks for the pause file,
+      ;; and a paused tick touches nothing else (see relay.pause).
+      (= "tick" cmd)
+      (pause/while-ticking
+       (pause-file opts)
+       #(if-let [why (pause/reason (pause-file opts))]
+          (result 0 (str "relay tick: paused (" (pause-file opts) "): " why))
+          (run-command cmd more opts)))
+      :else
+      (run-command cmd more opts))))
 
 (defn run
   "Runs one command line, prints what it says, and returns the exit code."

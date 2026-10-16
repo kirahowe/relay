@@ -16,11 +16,13 @@
 
 (defn isolate!
   "Points relay away from anything real for the rest of the run: the
-  per-user config file at a path that does not exist, and the relay command
+  per-user config file and the pause file at paths that do not exist, and the relay command
   harnesses run at this checkout's bin/relay."
   []
   (alter-var-root #'cli/*config-file*
                   (constantly (str (fs/path (fs/create-temp-dir {:prefix "relay-test-home"})
                                             "no-config.edn"))))
+  (alter-var-root #'cli/*pause-file*
+                  (constantly (str (fs/path (fs/create-temp-dir {:prefix "relay-test-pause"}) "paused"))))
   (when-not (System/getProperty "relay.bin")
     (System/setProperty "relay.bin" relay-bin)))

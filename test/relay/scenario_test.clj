@@ -230,6 +230,23 @@
           (swap! bad conj [args opts]))))
     (is (empty? @bad) (pr-str (take 5 @bad)))))
 
+(deftest a-status-in-a-scenario-reads-no-file-outside-staging
+  (let [staging (str (fs/create-temp-dir {:prefix "relay-scenario-own"}))
+        outside (str (fs/create-temp-dir {:prefix "relay-scenario-secret"}))
+        secret (str outside "/paused")]
+    (try
+      (spit secret "the secret reason")
+      (staging/init! {:dir (str staging "/data") :check? false})
+      (let [run #(#'runner/run-command! {:dir (str staging "/data") :clock (constantly (java.time.Instant/now))} % nil)
+            shown (fn [r] (str/join "\n" (concat (:out r) (:err r))))]
+        (testing "a step that names the file is refused before it reads it"
+          (is (not (str/includes? (shown (run ["status" "--pause-file" secret])) "secret reason"))))
+        (testing "an ordinary status looks only in staging, whatever the operator's own default is"
+          (let [r (run ["status"])]
+            (is (= 0 (:exit r)))
+            (is (not (str/includes? (shown r) "paused"))))))
+      (finally (fs/delete-tree staging) (fs/delete-tree outside)))))
+
 (deftest the-runner-refuses-any-command-that-would-reach-another-data-directory
   (let [staging (str (fs/create-temp-dir {:prefix "relay-scenario-own"}))
         other (str (fs/create-temp-dir {:prefix "relay-scenario-other"}))]

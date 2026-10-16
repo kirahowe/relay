@@ -121,7 +121,9 @@
       (binding [relay/*tty* operator-tty
                 relay/*stdin* stdin
                 relay/*clock* clock
-                relay/*config-file* no-config]
+                relay/*config-file* no-config
+                ;; status reads the pause file; not the operator's real one.
+                relay/*pause-file* (str (fs/path dir "no-pause-file"))]
         (try (relay/execute line)
              (catch clojure.lang.ExceptionInfo e
                {:exit 1 :out [] :err [(ex-message e)]}))))))

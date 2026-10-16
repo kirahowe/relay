@@ -55,9 +55,12 @@
 
 (defn status
   "Roles with their routines and open work, harnesses, the operator's
-  inbox and the latest wakes, as of `now`."
-  [state zone ^Instant now & [config]]
+  inbox and the latest wakes, as of `now`. `paused` is the lines to show
+  when relay is paused (relay.pause/recovery-lines), or nil."
+  [state zone ^Instant now & [config paused]]
   (concat
+   (when paused
+     (concat paused [""]))
    ["Roles"]
    (mapcat #(role-status state zone %) (core/active-role-ids state))
    (for [[h {:keys [condition paused-until]}] (sort-by key (:harnesses state))]
