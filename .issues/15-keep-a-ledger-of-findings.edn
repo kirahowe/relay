@@ -1,0 +1,11 @@
+{:id 15
+ :title "Keep a ledger of findings"
+ :status :blocked
+ :type :feature
+ :priority :p2
+ :created "2026-10-16"
+ :updated "2026-10-16"
+ :tags #{"stop-4"}
+ :blocked-by #{13}
+ :related #{}
+ :details "15-keep-a-ledger-of-findings.md"}

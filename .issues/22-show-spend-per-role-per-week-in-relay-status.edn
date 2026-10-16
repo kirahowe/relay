@@ -1,0 +1,11 @@
+{:id 22
+ :title "Show spend per role per week in relay status"
+ :status :ready
+ :type :feature
+ :priority :p3
+ :created "2026-10-16"
+ :updated "2026-10-16"
+ :tags #{"stop-5"}
+ :blocked-by #{}
+ :related #{}
+ :details "22-show-spend-per-role-per-week-in-relay-status.md"}

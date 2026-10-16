@@ -1,0 +1,11 @@
+{:id 16
+ :title "Build a red-team corpus for research roles"
+ :status :blocked
+ :type :feature
+ :priority :p1
+ :created "2026-10-16"
+ :updated "2026-10-16"
+ :tags #{"stop-4"}
+ :blocked-by #{6 12}
+ :related #{}
+ :details "16-build-a-red-team-corpus-for-research-roles.md"}

@@ -1,0 +1,11 @@
+{:id 12
+ :title "Verify every report with code, not a model"
+ :status :blocked
+ :type :feature
+ :priority :p1
+ :created "2026-10-16"
+ :updated "2026-10-16"
+ :tags #{"stop-4"}
+ :blocked-by #{10 11}
+ :related #{}
+ :details "12-verify-every-report-with-code-not-a-model.md"}

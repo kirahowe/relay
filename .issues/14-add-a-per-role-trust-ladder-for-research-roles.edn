@@ -1,0 +1,11 @@
+{:id 14
+ :title "Add a per-role trust ladder for research roles"
+ :status :blocked
+ :type :feature
+ :priority :p2
+ :created "2026-10-16"
+ :updated "2026-10-16"
+ :tags #{"stop-4"}
+ :blocked-by #{13}
+ :related #{}
+ :details "14-add-a-per-role-trust-ladder-for-research-roles.md"}

@@ -1,0 +1,11 @@
+{:id 21
+ :title "Make agentloop cleanroom's reader"
+ :status :ready
+ :type :feature
+ :priority :p3
+ :created "2026-10-16"
+ :updated "2026-10-16"
+ :tags #{"stop-5"}
+ :blocked-by #{}
+ :related #{}
+ :details "21-make-agentloop-cleanroom-s-reader.md"}

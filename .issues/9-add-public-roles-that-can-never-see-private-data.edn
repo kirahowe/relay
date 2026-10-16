@@ -1,0 +1,11 @@
+{:id 9
+ :title "Add public roles that can never see private data"
+ :status :ready
+ :type :feature
+ :priority :p1
+ :created "2026-10-16"
+ :updated "2026-10-16"
+ :tags #{"stop-4"}
+ :blocked-by #{}
+ :related #{}
+ :details "9-add-public-roles-that-can-never-see-private-data.md"}

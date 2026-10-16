@@ -1,0 +1,11 @@
+{:id 7
+ :title "Add bb deploy and bb rollback for Kira to run"
+ :status :ready
+ :type :feature
+ :priority :p2
+ :created "2026-10-16"
+ :updated "2026-10-16"
+ :tags #{"stop-3"}
+ :blocked-by #{}
+ :related #{}
+ :details "7-add-bb-deploy-and-bb-rollback-for-kira-to-run.md"}

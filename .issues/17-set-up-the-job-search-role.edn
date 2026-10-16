@@ -1,0 +1,11 @@
+{:id 17
+ :title "Set up the job search role"
+ :status :blocked
+ :type :feature
+ :priority :p2
+ :created "2026-10-16"
+ :updated "2026-10-16"
+ :tags #{"needs-kira" "stop-4"}
+ :blocked-by #{14 15}
+ :related #{}
+ :details "17-set-up-the-job-search-role.md"}

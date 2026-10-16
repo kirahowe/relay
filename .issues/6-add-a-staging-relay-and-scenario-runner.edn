@@ -1,0 +1,11 @@
+{:id 6
+ :title "Add a staging relay and scenario runner"
+ :status :ready
+ :type :feature
+ :priority :p1
+ :created "2026-10-16"
+ :updated "2026-10-16"
+ :tags #{"stop-3"}
+ :blocked-by #{}
+ :related #{}
+ :details "6-add-a-staging-relay-and-scenario-runner.md"}

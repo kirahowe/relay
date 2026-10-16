@@ -1,0 +1,11 @@
+{:id 3
+ :title "Run agentloop's live smoke tests from a flag, not an env var"
+ :status :ready
+ :type :chore
+ :priority :p2
+ :created "2026-10-16"
+ :updated "2026-10-16"
+ :tags #{"stop-0"}
+ :blocked-by #{}
+ :related #{}
+ :details "3-run-agentloop-s-live-smoke-tests-from-a-flag-not-an-env-var.md"}

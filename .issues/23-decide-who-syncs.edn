@@ -1,0 +1,11 @@
+{:id 23
+ :title "Decide who syncs ~/Sync/relay"
+ :status :ready
+ :type :chore
+ :priority :p3
+ :created "2026-10-16"
+ :updated "2026-10-16"
+ :tags #{"needs-kira" "stop-5"}
+ :blocked-by #{}
+ :related #{}
+ :details "23-decide-who-syncs.md"}

@@ -1,0 +1,11 @@
+{:id 10
+ :title "Create a web tool for search and guarded fetch"
+ :status :ready
+ :type :feature
+ :priority :p1
+ :created "2026-10-16"
+ :updated "2026-10-16"
+ :tags #{"stop-4"}
+ :blocked-by #{}
+ :related #{}
+ :details "10-create-a-web-tool-for-search-and-guarded-fetch.md"}

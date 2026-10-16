@@ -1,0 +1,11 @@
+{:id 1
+ :title "Lock down the ntfy server"
+ :status :ready
+ :type :feature
+ :priority :p1
+ :created "2026-10-16"
+ :updated "2026-10-16"
+ :tags #{"needs-kira" "stop-0"}
+ :blocked-by #{}
+ :related #{}
+ :details "1-lock-down-the-ntfy-server.md"}

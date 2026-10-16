@@ -1,0 +1,11 @@
+{:id 4
+ :title "Give conversations the time, and add a clock tool"
+ :status :ready
+ :type :feature
+ :priority :p1
+ :created "2026-10-16"
+ :updated "2026-10-16"
+ :tags #{"stop-1"}
+ :blocked-by #{}
+ :related #{}
+ :details "4-give-conversations-the-time-and-add-a-clock-tool.md"}

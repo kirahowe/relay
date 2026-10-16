@@ -1,0 +1,11 @@
+{:id 8
+ :title "Write the escalation rules for development agents"
+ :status :review
+ :type :feature
+ :priority :p1
+ :created "2026-10-16"
+ :updated "2026-10-16"
+ :tags #{"stop-3"}
+ :blocked-by #{}
+ :related #{}
+ :details "8-write-the-escalation-rules-for-development-agents.md"}

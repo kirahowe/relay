@@ -1,0 +1,11 @@
+{:id 5
+ :title "Support reminder sections in rem"
+ :status :ready
+ :type :feature
+ :priority :p2
+ :created "2026-10-16"
+ :updated "2026-10-16"
+ :tags #{"stop-2"}
+ :blocked-by #{}
+ :related #{}
+ :details "5-support-reminder-sections-in-rem.md"}

@@ -1,0 +1,11 @@
+{:id 20
+ :title "Send one morning brief"
+ :status :ready
+ :type :feature
+ :priority :p2
+ :created "2026-10-16"
+ :updated "2026-10-16"
+ :tags #{"stop-5"}
+ :blocked-by #{}
+ :related #{}
+ :details "20-send-one-morning-brief.md"}

@@ -1,0 +1,11 @@
+{:id 11
+ :title "Let research roles submit structured reports"
+ :status :blocked
+ :type :feature
+ :priority :p1
+ :created "2026-10-16"
+ :updated "2026-10-16"
+ :tags #{"stop-4"}
+ :blocked-by #{9}
+ :related #{}
+ :details "11-let-research-roles-submit-structured-reports.md"}
