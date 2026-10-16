@@ -251,7 +251,9 @@ is written in Go.
    ntfy when `relay init` asks.
 
    Anyone who can reach the server can read or post to an open topic, so
-   lock it down. The end of `setup/ntfy/server.yml` shows how: deny all
+   lock it down. `setup/ntfy/lockdown <server.yml> <ntfy>` does it for a
+   running server and prints the settings to use. The end of
+   `setup/ntfy/server.yml` shows the steps: deny all
    access by default, give the phone a user that can only read the topic
    and relay a token that can only write to it, and pick a topic nobody
    could guess. relay sends the token as `Authorization: Bearer`, reading

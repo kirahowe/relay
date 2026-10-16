@@ -1,0 +1,79 @@
+#!/bin/bash
+# Lock down relay's ntfy server, so only relay can publish and only your
+# phone can read. Run it yourself, in a terminal: it changes the live
+# server, asks for the phone's password, and restarts the launchd job.
+#
+#   setup/ntfy/lockdown <server.yml> <ntfy-binary>
+#
+# It refuses a config that already has an auth-file. When it finishes it
+# prints the :notify settings for relay.edn and what to change on the
+# phone. Until you do both, notifications stop reaching the phone.
+set -euo pipefail
+
+conf=${1:?usage: lockdown <server.yml> <ntfy-binary>}
+ntfy=${2:?usage: lockdown <server.yml> <ntfy-binary>}
+dir=$(cd "$(dirname "$conf")" && pwd)
+conf="$dir/$(basename "$conf")"
+authdb="$dir/user.db"
+tokenfile="$dir/relay.token"
+
+[ -t 0 ] || { echo "Run this in a terminal: it asks for a password." >&2; exit 1; }
+[ -x "$ntfy" ] || { echo "No ntfy binary at $ntfy." >&2; exit 1; }
+if grep -Eq '^[[:space:]]*auth-file:' "$conf"; then
+  echo "$conf already has an auth-file. Nothing changed." >&2
+  exit 1
+fi
+
+topic=$(openssl rand -hex 16)
+cp -p "$conf" "$conf.pre-lockdown"
+{
+  echo
+  echo "# Locked down by relay's setup/ntfy/lockdown on $(date +%F)."
+  echo "auth-file: \"$authdb\""
+  echo "auth-default-access: \"deny-all\""
+} >> "$conf"
+
+# ntfy creates the user database when it starts with an auth-file, and
+# its user commands refuse to run before that.
+launchctl kickstart -k "gui/$(id -u)/relay.ntfy"
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -f "$authdb" ] && break; sleep 1; done
+[ -f "$authdb" ] || { echo "ntfy did not create $authdb; see its log. To undo, put back $conf.pre-lockdown." >&2; exit 1; }
+
+echo "Choose a password for the phone's ntfy user (you type it into the ntfy app):"
+"$ntfy" user --config "$conf" add phone
+"$ntfy" access --config "$conf" phone "$topic" read-only
+
+# relay signs in with a token, never this password, so it is random and
+# thrown away. ntfy takes a scripted password only from NTFY_PASSWORD.
+NTFY_PASSWORD=$(openssl rand -hex 24) "$ntfy" user --config "$conf" add relay
+"$ntfy" access --config "$conf" relay "$topic" write-only
+umask 077
+"$ntfy" token --config "$conf" add relay | grep -Eo 'tk_[A-Za-z0-9]+' > "$tokenfile"
+[ -s "$tokenfile" ] || { echo "ntfy printed no token; see $conf.pre-lockdown to undo." >&2; exit 1; }
+chmod 600 "$tokenfile"
+
+url=$(grep -E '^listen-http:' "$conf" | sed -E 's/.*"([^"]+)".*/\1/')
+code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+anon=$(code -d "lockdown check" "http://$url/$topic")
+anonget=$(code "http://$url/$topic/publish?message=lockdown+check")
+withtoken=$(code -H "Authorization: Bearer $(cat "$tokenfile")" -d "relay can publish" "http://$url/$topic")
+echo
+echo "Publish without a token: $anon (want 401 or 403)"
+echo "Publish over GET without a token: $anonget (want 401 or 403)"
+echo "Publish with relay's token: $withtoken (want 200)"
+
+cat <<EOF
+
+Set :notify in relay.edn to:
+
+  :notify {:kind :ntfy :url "http://$url" :topic "$topic"
+           :token-file "$tokenfile"}
+
+On the phone, in the ntfy app: sign in to your server as "phone" with the
+password you chose, unsubscribe from "relay", and subscribe to:
+
+  $topic
+
+To undo: put $conf.pre-lockdown back and run
+launchctl kickstart -k gui/$(id -u)/relay.ntfy
+EOF

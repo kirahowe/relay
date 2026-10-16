@@ -17,7 +17,8 @@ upstream-base-url: "https://ntfy.sh"
 web-root: disable
 
 # Lock the server down, so only relay can publish and only your phone can
-# read. Nothing is allowed unless a user or token says so:
+# read. setup/ntfy/lockdown does all of this for a running server.
+# Nothing is allowed unless a user or token says so:
 #
 #   auth-file: "/path/to/ntfy/user.db"
 #   auth-default-access: "deny-all"
