@@ -408,8 +408,9 @@ It takes agentloop, acp-tui and cleanroom from the sibling checkouts
 (`../agentloop/bin/agentloop` and so on), or from `--agentloop`,
 `--acp-tui` and `--cleanroom`, never from PATH. `--build` builds a
 sibling that is missing. A scenario that needs a missing piece, or a
-cleanroom without `relay-tool`, is reported as SKIP with the reason. The
-pty driver needs a python3 (`/usr/bin/python3`, or `--python`). `--keep`
+cleanroom without `relay-tool`, is reported as SKIP with the reason. It
+needs a python3 (`/usr/bin/python3`, or `--python`) for `pty/drive.py`,
+which starts its processes and drives terminals. `--keep`
 keeps each scenario's directory to look at afterwards, and `--verbose`
 prints every check. Each scenario prints PASS, FAIL or SKIP, with the
 checks that failed, and the command exits 1 if any failed.
@@ -421,17 +422,22 @@ stand-in ntfy server, and stand-in tools (`pentest/standins/`) for
 Reminders, the web and the mail source, which only write to files in that
 directory. It never calls a model, touches Reminders, the keychain or
 launchctl, or reads `~/.config/relay`, and it refuses to start if any
-path it would use lies under `~/Sync` or `~/.config/relay`. It kills
-processes only by PID, and only those whose command line names the
-scenario's own directory, and it removes the directory when the scenario
-ends.
+path it would use lies under `~/Sync` or `~/.config/relay`. Every
+process it starts leads a process group of its own, and what relay forks
+from it (a tick's wakes, agentloop) stays in that group. When a scenario
+ends, the harness signals only the groups it recorded (TERM, then KILL),
+fails the scenario if `ps` still shows a process in one of them, and
+removes the directory. It never chooses a process to kill by its command
+line. The one other kill is the crash scenario's: agentloop, by PID,
+found as the child of a relay process the harness knows.
 
 The code is in `pentest/`. `relay/pentest/env.clj` builds a scenario's
 world and drives relay, `relay/pentest/acp.clj` is an ACP client that can
-misbehave, `pty/drive.py` runs commands on a pseudo-terminal (babashka
-cannot open one), and `relay/pentest/scenarios/` holds the attacks. To
-add a scenario, add a map to the `scenarios` vector of one of those
-namespaces, or of a new one listed in `relay/pentest/main.clj`:
+misbehave, `pty/drive.py` starts processes in new groups and runs commands
+on a pseudo-terminal (babashka can do neither), and
+`relay/pentest/scenarios/` holds the attacks. To add a scenario, add a
+map to the `scenarios` vector of one of those namespaces, or of a new one
+listed in `relay/pentest/main.clj`:
 
 ```clojure
 {:id "s11-my-attack"            ; the name bb pentest takes
