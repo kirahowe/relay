@@ -57,7 +57,7 @@
    :tools {}
    :grants {}})
 
-(def notify-kinds #{:ntfy :command :macos :none})
+(def notify-kinds #{:ntfy :command :macos :file :none})
 
 (defn- problem! [msg] (throw (ex-info msg {:relay/usage true})))
 
@@ -80,7 +80,10 @@
       (when (and token-command token-file)
         (problem! "The ntfy :notify in relay.edn takes :token-command or :token-file, not both.")))
     (when (and (= :command kind) (not (and (sequential? command) (seq command))))
-      (problem! "The command :notify in relay.edn needs a :command."))))
+      (problem! "The command :notify in relay.edn needs a :command."))
+    ;; Absolute, so that where it writes never depends on whoever runs relay.
+    (when (and (= :file kind) (not (and (string? (:path notify)) (fs/absolute? (:path notify)))))
+      (problem! "The file :notify in relay.edn needs a :path, the absolute path of the file to append to."))))
 
 (defn- check-required
   [{:keys [timezone default-harness harnesses notify]}]

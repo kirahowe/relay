@@ -6,14 +6,20 @@
     {:kind :ntfy :url ... :topic ... :token-file \"/path/to/token\"}
     {:kind :command :command [\"/path/to/script\"]}   ; title as last arg, body on stdin
     {:kind :macos}                                   ; a notification on this Mac
+    {:kind :file :path \"/path/to/notifications.log\"}  ; one JSON line per notification
     {:kind :none}                                    ; record only
 
+  :file reaches nobody. It is for staging data, where an agent checks that a
+  notification was sent without any being pushed to the operator's phone.
+
   relay.edn must say which; see relay.config."
-  (:require [babashka.http-client :as http]
+  (:require [babashka.fs :as fs]
+            [babashka.http-client :as http]
             [babashka.process :as p]
             [cheshire.core :as json]
             [clojure.string :as str]
-            [relay.text :as text]))
+            [relay.text :as text])
+  (:import (java.time Instant)))
 
 (def ntfy-message-limit
   ;; ntfy rejects messages over 4096 bytes; the whole text is in the log.
@@ -68,4 +74,16 @@
                     (format "display notification %s with title %s"
                             (json/generate-string (clip body 240))
                             (json/generate-string (str title))))
+    ;; Private: the body may be the operator's private text. A directory
+    ;; made for it, and the file itself, are owner-only.
+    :file (let [file (fs/path (:path settings))]
+            (fs/create-dirs (fs/parent file) {:posix-file-permissions "rwx------"})
+            (when-not (fs/exists? file)
+              (fs/create-file file {:posix-file-permissions "rw-------"}))
+            (fs/set-posix-file-permissions file "rw-------")
+            (spit (str file)
+                  (str (json/generate-string {:at (str (Instant/now)) :title (str title) :body (str body)
+                                              :labels (vec labels)})
+                       "\n")
+                  :append true))
     :none nil)))

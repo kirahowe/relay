@@ -62,3 +62,37 @@
         (is (= "[contaminated] Open hxxps://evil[.]example" (:title bad)))
         (is (= "[contaminated] Go to www[.]evil[.]example/x \\u{202e}now" (:message bad)))
         (is (= "https://ok.example" (:message ok)))))))
+
+(deftest the-file-notifier-appends-a-line-and-reaches-nobody
+  (let [dir (str (fs/create-temp-dir {:prefix "relay-notify-file"}))
+        file (str dir "/sub/notifications.log")
+        settings {:kind :file :path file}]
+    (notify/push! settings {:title "First" :body "One"})
+    (notify/push! settings {:title "Second" :body "Two https://evil.example now" :labels ["contaminated"]})
+    (let [lines (map #(json/parse-string % true) (str/split-lines (slurp file)))]
+      (is (= [{:title "First" :body "One" :labels []}
+              {:title "[contaminated] Second" :body "[contaminated] Two hxxps://evil[.]example now"
+               :labels ["contaminated"]}]
+             (map #(select-keys % [:title :body :labels]) lines))
+          "marked and defanged, as for any other kind")
+      (is (every? string? (map :at lines))))
+    (testing "the file and the directory made for it are private to the owner"
+      (is (= "rw-------" (fs/posix->str (fs/posix-file-permissions file))))
+      (is (= "rwx------" (fs/posix->str (fs/posix-file-permissions (str dir "/sub"))))))
+    (testing "a file that already exists with looser permissions is tightened"
+      (let [loose (str dir "/loose.log")]
+        (spit loose "")
+        (fs/set-posix-file-permissions loose "rw-r--r--")
+        (notify/push! {:kind :file :path loose} {:title "T" :body "B"})
+        (is (= "rw-------" (fs/posix->str (fs/posix-file-permissions loose))))))
+    (testing "relay.edn needs an absolute path for it"
+      (let [base {:timezone "UTC" :default-harness :a
+                  :harnesses {:a {:kind :agentloop :api-key-command ["true"]}}}
+            problem (fn [notify] (try (config/resolve-config (assoc base :notify notify)) nil
+                                      (catch clojure.lang.ExceptionInfo e (ex-message e))))]
+        (is (nil? (problem {:kind :file :path file})))
+        (is (str/includes? (problem {:kind :file}) ":path"))
+        (is (str/includes? (problem {:kind :file :path ""}) ":path"))
+        (is (str/includes? (problem {:kind :file :path "notifications.log"}) "absolute"))
+        (is (str/includes? (problem {:kind :file :path "~/notifications.log"}) "absolute"))))
+    (fs/delete-tree dir)))
