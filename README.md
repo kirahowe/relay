@@ -262,6 +262,11 @@ is written in Go.
    `:api-key-command`). Keep the token file readable only by you.
 7. To give roles Apple Reminders, build `tools/rem` (see its README) and
    define its two tools (`rem-read`, `rem`) and grant them in `relay.edn`.
+8. To let roles read your Apple Calendar, build `tools/cal` (see its README),
+   run `tools/cal/cal calendars` once in a terminal to accept the Calendar
+   prompt, define the `cal` tool in `relay.edn` with class `:read` and labels
+   `["private" "contaminated"]`, and grant it. Invites carry other people's
+   text, which is why it is contaminated.
 
 The harness settings in `relay.edn` are `:kind :agentloop`, `:model`,
 `:effort`, `:provider` (`"anthropic"` by default, or `"openai"`),

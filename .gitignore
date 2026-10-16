@@ -3,6 +3,7 @@
 .lsp/
 .nrepl-port
 tools/rem/rem
+tools/cal/cal
 .jj/
 .clj-kondo/
 out/

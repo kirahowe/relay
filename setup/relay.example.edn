@@ -56,6 +56,16 @@
          :description "Change Apple Reminders. Run with [\"help\"] for the commands."
          :command ["/path/to/relay/tools/rem/rem" "--mode" "write"]}}
 
+ ;; Calendar is one read-only tool; cal cannot create, change or delete
+ ;; anything and takes no operator-pinned option, so the command is just the
+ ;; binary. Invites and shared calendars carry text other people wrote, so its
+ ;; output is both private and contaminated. Grant it with :tools ["cal"].
+ ;; See tools/cal/README.md.
+ ;; "cal" {:class :read
+ ;;        :labels ["private" "contaminated"]
+ ;;        :description "Read Apple Calendar. Run with [\"help\"] for the commands."
+ ;;        :command ["/path/to/relay/tools/cal/cal"]}
+
  ;; A tool can speak relay's envelope protocol instead of taking arguments
  ;; on its command line: it gets the call as JSON on stdin, with the
  ;; session's labels, and answers with {content, is_error, labels}, its
