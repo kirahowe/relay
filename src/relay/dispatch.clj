@@ -238,10 +238,12 @@
   "The harness request for a conversation: a wake's request with no prompt,
   told it is a conversation, keeping its sessions apart from the role's
   wake sessions, so that a client listing or loading sessions can reach
-  only conversations."
-  [{:keys [data-dir] :as sys} state wake inputs]
+  only conversations. Its system prompt says when it started."
+  [{:keys [data-dir config] :as sys} state wake inputs]
   (-> (wake-request sys state wake inputs)
-      (update :system-prompt str "\n\n" conversation-note "\n")
+      (update :system-prompt str "\n\n" conversation-note " "
+              (prompt/conversation-start (not-before (:now inputs) (:last-at state)) (config/zone config))
+              "\n")
       (dissoc :prompt)
       ;; A directory of its own, kept apart from any conversation from
       ;; before relay kept labels, so a client cannot load one of those.

@@ -26,6 +26,7 @@ A role has no files and no shell. It works only through tools, each one a
 
 - memos: `inbox`, `roles`, `memo_send`, `memo_close`, `memo_block`
 - routines: `routines`, `routine_write`, `routine_remove`
+- time: `clock`, for the current time and for date arithmetic
 - knowledge: `facts`, `fact_history`, `fact_add`, `fact_supersede`,
   `fact_correct`, `notes`, `note_write`, `note_remove`, `journal`,
   `journal_write`, `docs`, `doc_get`, `doc_history`, `doc_put`,
@@ -40,6 +41,19 @@ Every memo stays open until its recipient closes it, saying what it did,
 or blocks it, saying why it can't. A memo left open is retried after a
 growing wait, and after enough tries it becomes a dead letter and goes to
 the hub. A memo to `operator` is pushed to the operator's phone.
+
+### Time
+
+A wake's prompt starts with the time. A conversation's system prompt says
+when the conversation started, in the `:timezone` from `relay.edn`, and
+points the role at `clock` for the rest. `clock` takes an `op`: `now`,
+`add` (a date plus a span such as `3w`, `2d`, `90m`, `1mo` or `-1d`),
+`between` (the days, hours and minutes from one date to another) or `next`
+(the next `mon` to `sun` on or after a date, or the nth one). Every answer
+names the weekday. A date without an offset is in `:timezone`. The tool is
+class read and its answers carry no labels, because they show nothing
+relay keeps. The arithmetic is in `relay.clock`, which is pure; only the
+tool's edge reads the system clock.
 
 ### Knowledge
 

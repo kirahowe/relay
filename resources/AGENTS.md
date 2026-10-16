@@ -131,6 +131,15 @@ Docs are for content that really is a file: a plan, a checklist, a long
 reference, anything with structure longer than a fact. Every version of a
 doc is kept, and `doc_history` shows who wrote what.
 
+## Time
+
+A wake's prompt starts with the time, and a conversation's system prompt
+says when it started. Neither stays current, and you are poor at calendar
+arithmetic. For the time now, for adding a span to a date, for the days
+between two dates and for the next Monday (or any weekday), call `clock`
+rather than working it out. Every answer names the weekday, so use that
+instead of guessing one.
+
 ## Routines
 
 To wake yourself later, use `routine_write`. A routine has a schedule and

@@ -3,10 +3,25 @@
   wake. Pure."
   (:require [clojure.string :as str])
   (:import (java.time Instant ZoneId)
-           (java.time.format DateTimeFormatter)))
+           (java.time.format DateTimeFormatter)
+           (java.util Locale)))
 
 (defn- local [^Instant at ^ZoneId zone]
   (.format (.atZone at zone) (DateTimeFormatter/ofPattern "EEE d MMM yyyy, HH:mm")))
+
+(defn conversation-start
+  "What a conversation is told about time: when it started, in the
+  operator's zone, and where to get the time after that. The time here
+  goes stale as the conversation runs, so the `clock` tool is the source
+  for the current time and for any date arithmetic."
+  [^Instant now ^ZoneId zone]
+  (let [at (.atZone now zone)]
+    (str "This conversation started on "
+         (.format at (DateTimeFormatter/ofPattern "EEEE d MMMM yyyy 'at' HH:mm" Locale/ENGLISH))
+         ", " zone " time (UTC" (.format at (DateTimeFormatter/ofPattern "xxx")) "). It may run for"
+         " hours, so for the current time and date, and for any date arithmetic (adding days to a date,"
+         " the days between two dates, the next Monday), call the `clock` tool instead of working"
+         " it out yourself.")))
 
 (defn- fmt-notes [notes withheld]
   (str "\n# Your notes\n\n"

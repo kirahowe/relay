@@ -187,6 +187,22 @@ contract Tools {
         -- environment, so nothing the harness or relay was started
         -- with, such as credentials, reaches it.
 
+    @invariant TheClockToolShowsNothingRelayKeeps
+        -- clock is a read tool that answers from the time now, the
+        -- operator's time zone and its arguments alone: the time, a
+        -- date plus a span, the gap between two dates, or the next
+        -- given weekday. A date without an offset is in the operator's
+        -- zone. Days and months move the calendar, so a day is one
+        -- wall-clock day across a daylight saving change; hours and
+        -- minutes move the clock. Date-times are read to the second.
+        -- The nth weekday counts dates that happen: a date a zone
+        -- skipped is not counted.
+        -- It reads nothing relay keeps, so its result, and an error from
+        -- it, carry no labels. So that an error cannot hand a session's
+        -- text back unlabelled, its explanations are fixed text that
+        -- never quotes the call, and a number outside the range an
+        -- argument allows is refused rather than cast.
+
     @invariant KnowledgeToolsReadForTheCaller
         -- A role reads and writes its own notes and journal. Facts and
         -- docs are shared by every role.
@@ -1396,6 +1412,9 @@ rule OpenConversation {
         -- since it runs in a session of its own.
         -- A conversation runs over ACP, so any ACP client can hold one;
         -- relay chat is one such client, on the operator's terminal.
+        -- Its system prompt says when the conversation started, with the
+        -- weekday, in the operator's time zone, and points the role at the
+        -- clock tool for the time after that and for date arithmetic.
 }
 
 rule RunWake {
