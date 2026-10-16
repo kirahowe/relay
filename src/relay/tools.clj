@@ -23,6 +23,7 @@
             [cheshire.factory :as json-factory]
             [clojure.set :as set]
             [clojure.string :as str]
+            [relay.clock :as clock]
             [relay.config :as config]
             [relay.core :as core]
             [relay.harness :as harness]
@@ -192,6 +193,28 @@
                             (withheld (str id ": its title")))
                           (when-not (core/contaminated? id-ls) id-ls)))
                   "\n" accept_contamination))}
+
+   "clock"
+   {:class :read
+    :description (str "The time and date arithmetic, which you should not do in your head. op `now` gives"
+                      " the current date and time. `add` adds a span (3w, 2d, 90m, 1mo, 1y, negative allowed)"
+                      " to a date, or to now. `between` gives the days, hours and minutes from one date to"
+                      " another. `next` gives the next mon..sun on or after a date, or the nth one. A date is"
+                      " 2026-10-14, 2026-10-14 09:00 or an ISO date-time with an offset; without an offset it"
+                      " is in the operator's time zone. now and today also work as dates. Every answer names"
+                      " the weekday.")
+    :parameters (obj {:op {:type "string" :enum ["now" "add" "between" "next"]}
+                      :date {:type "string" :description "add, next: the date to start from. Defaults to now for add and today for next."}
+                      :span {:type "string" :description "add: what to add, such as 3w, 2d, 90m, 1mo, 1y or -1d."}
+                      :from {:type "string" :description "between: the first date."}
+                      :to {:type "string" :description "between: the second date."}
+                      :weekday {:type "string" :description "next: mon, tue, wed, thu, fri, sat or sun."}
+                      :nth {:type "integer" :description "next: 2 for the second such day on or after the date. Defaults to 1."}}
+                     "op")
+    ;; It shows nothing relay keeps, so it carries no labels: the plain
+    ;; text a read returns is unlabelled.
+    :read (fn [{:keys [config now]} _ args]
+            (clock/answer now (config/zone config) args))}
 
    "memo_send"
    {:class :write
@@ -758,7 +781,10 @@
                        :when (or (nil? schema) (not (type-ok? schema v)))]
                    (if schema
                      (str (name k) " must be " (if (= "array" (:type schema)) "a list of strings" (str "a " (:type schema))) ".")
-                     (str "There is no argument called " (name k) "."))))))))
+                     ;; Fixed text: a tool's refusal carries no labels, so it
+                     ;; must not quote the call's own key.
+                     (str "The input has an argument this tool does not take. It takes "
+                          (if (seq props) (str/join ", " (sort (keys props))) "none") "."))))))))
 
 (defn coerce-input
   "A model sometimes quotes a number."

@@ -38,7 +38,7 @@
         (is (= "asked When? with [\"private\"] as toolu_7" ok) "the input, the session's labels and the call id")
         (is (= ["contaminated" "private"] labels) "its static labels and the ones it reported"))
       (testing "relay checks the input against the tool's schema first"
-        (is (= "There is no argument called q." (:error (tools/call! sys "clerk" "mail" {:question "q" :q "x"} [] "c"))))
+        (is (= "The input has an argument this tool does not take. It takes question." (:error (tools/call! sys "clerk" "mail" {:question "q" :q "x"} [] "c"))))
         (is (= "The input needs question." (:error (tools/call! sys "clerk" "mail" {} [] "c")))))
       (testing "the policy and the harness see the configured schema"
         (is (= schema (:parameters (first (filter #(= "mail" (:name %)) (tools/manifest (:config sys) "clerk")))))))))) 
