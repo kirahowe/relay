@@ -7,6 +7,10 @@
         :extra-paths ["test"]
         :requires ([relay.test-runner :as runner])
         :task (runner/run! *command-line-args*)}
+  pentest {:doc "Attack relay, agentloop, acp-tui and cleanroom together on artificial data: bb pentest --help"
+           :extra-paths ["test" "pentest"]
+           :requires ([relay.pentest.main :as pentest])
+           :task (pentest/run! *command-line-args*)}
   soak {:doc "Run the model-based property many more times: bb soak [trials]"
         :extra-paths ["test"]
         :requires ([relay.core-test :as core-test]
