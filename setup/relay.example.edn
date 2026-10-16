@@ -88,6 +88,28 @@
  ;;         :parameters {:type "object" ...}   ; from cleanroom relay-tool --schema
  ;;         :command ["/path/to/bin/cleanroom" "relay-tool" "--policy" "/path/to/policy.jsonc"]}
 
- ;; What each role is granted beyond relay's own tools.
+ ;; Tools for a public role that searches the web. No web tool comes with
+ ;; relay yet; these show the shape. Their output is contaminated, never
+ ;; private.
+ ;; "web-search" {:class :egress
+ ;;               :labels ["contaminated"]
+ ;;               :protocol :envelope
+ ;;               :description "Search the web."
+ ;;               :command ["/path/to/web-search"]}
+ ;; "web-fetch" {:class :egress
+ ;;              :labels ["contaminated"]
+ ;;              :protocol :envelope
+ ;;              :description "Fetch a page."
+ ;;              :command ["/path/to/web-fetch"]}
+
+ ;; What each role is granted beyond relay's own tools: :tools, :may-add
+ ;; and :public, and nothing else. A public role never holds your private
+ ;; data, so it may search and browse without asking you. It is shown only
+ ;; what is public (written with --public, by a public role, or
+ ;; declassified), and it may not have :may-add, a tool whose :labels
+ ;; include "private", or the dead letter handler's job.
  :grants
- {"hub" {:may-add true :tools ["rem-read" "rem"]}}}
+ {"hub" {:may-add true :tools ["rem-read" "rem"]}
+  ;; Add it with relay add grant-search --public, so its own text is public.
+  ;; "grant-search" {:public true :tools ["web-search" "web-fetch"]}
+  }}

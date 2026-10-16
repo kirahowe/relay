@@ -33,7 +33,9 @@
 -- reads and agentloop polices its calls by them, so that no session holds
 -- the operator's private data, an outsider's text and a way out at once
 -- without a person saying yes. A call that needs a person ends the wake
--- held, and the role waits until the operator decides.
+-- held, and the role waits until the operator decides. A public role's
+-- session never holds private at all, so it may send data out unheld:
+-- it is shown only public text.
 --
 -- This file says what relay does and when. It does not say how the log is
 -- stored. The code that decides is the pure function `decide` in core.clj,
@@ -49,7 +51,9 @@ contract HarnessAdapter {
     @invariant RunsAsTheRole
         -- The harness is given the role's standing instructions: the
         -- shared instructions (AGENTS.md), anything the operator added
-        -- to them, the role's own instructions, and the role's notes. It knows
+        -- to them (never for a public role: they carry no labels and may
+        -- hold private details), the role's own instructions, and the
+        -- role's notes. It knows
         -- which role it is acting as and tells relay so on every tool
         -- call.
 
@@ -192,7 +196,8 @@ contract Tools {
         -- operator's time zone and its arguments alone: the time, a
         -- date plus a span, the gap between two dates, or the next
         -- given weekday. A date without an offset is in the operator's
-        -- zone. Days and months move the calendar, so a day is one
+        -- zone, for every role: the operator's time zone is not kept
+        -- from a public role. Days and months move the calendar, so a day is one
         -- wall-clock day across a daylight saving change; hours and
         -- minutes move the clock. Date-times are read to the second.
         -- The nth weekday counts dates that happen: a date a zone
@@ -300,6 +305,12 @@ entity Event {
     copied_labels: Set<Label>
     -- Written before the log's labels/enabled marker.
     before_labels: Boolean
+    -- Set by decide on an event that writes an item (a memo, routine,
+    -- version of a fact or doc, note or journal entry) whose writer was
+    -- public: the operator with --public, or a public role's session.
+    -- Never taken from a role's input. An event from before the labels
+    -- marker is never public.
+    public: Boolean
 }
 
 entity Caller {
@@ -358,6 +369,11 @@ entity Role {
     -- Granted by the operator's settings and by nobody else, not by
     -- anything a role can write.
     may_add: Boolean
+    -- Granted :public in the settings. Its sessions never hold private,
+    -- so it is shown only public items, its egress runs unheld, and it
+    -- may not have may_add, a tool whose output is private, the dead
+    -- letter handler's job or a script harness.
+    is_public: Boolean
     -- Whether the settings grant it an external tool of class act or
     -- egress. relay's own act tools do not count: agentloop holds them
     -- anyway once the session is contaminated. A role that does not
@@ -374,7 +390,8 @@ entity Role {
     wakes: Wake with role = this
 
     open_memos: inbox where status = unread
-    deliverable_memos: inbox where status = unread and not is_quarantined and not is_kept
+    deliverable_memos: inbox where status = unread and not is_quarantined and not is_awaiting_declassification
+        and not is_kept
     waiting_memos: inbox where is_waiting
     holds: Hold with role = this
     open_holds: holds where status = open
@@ -432,6 +449,9 @@ entity Memo {
     labels: Set<Label>
     -- Set when the operator delivered it despite its being contaminated.
     released: Boolean
+    -- Its sending event was public, or the operator declassified it.
+    public: Boolean
+    declassified: Boolean
 
     transitions status {
         unread -> read
@@ -447,12 +467,18 @@ entity Memo {
     -- black box: whether a set of labels holds contaminated.
     is_contaminated: has_contaminated(labels)
     -- A contaminated memo to a role that holds an external tool able
-    -- to act or send data out waits for the operator.
+    -- to act or send data out waits for the operator. A public role holds
+    -- nothing private for it to send out, so none to one is quarantined.
     is_quarantined: not is_for_operator and is_contaminated and not released and recipient.quarantines
+        and not recipient.is_public
+    -- A memo to a public role that is not public waits, unseen by the
+    -- role, for the operator to declassify it.
+    is_awaiting_declassification: not is_for_operator and not public and recipient.is_public
     -- black box: carried by a wake whose session waits on a hold, which
     -- keeps it until the session is carried on.
     is_kept: kept_by_held_session(this)
-    is_waiting: status = unread and not is_backing_off and not is_quarantined and not is_kept
+    is_waiting: status = unread and not is_backing_off and not is_quarantined
+        and not is_awaiting_declassification and not is_kept
 }
 
 entity Routine {
@@ -918,6 +944,118 @@ rule ReleaseMemo {
         -- operator's terminal and asks for a fresh code typed back
         -- there. The role then reads it like any other memo and takes
         -- on its labels.
+}
+
+rule NotifyOperatorOfDeclassification {
+    when: memo: Memo.created
+
+    requires: memo.is_awaiting_declassification
+
+    ensures: Notification.created(
+        kind: memo_awaiting_declassification,
+        title: declassification_title(memo),   -- black box: which memo, from whom, to whom
+        body: declassification_note(memo),     -- black box: none of the memo's text
+        about: memo.recipient,
+        memo: memo,
+        created_at: now,
+        delivery: pending
+    )
+}
+
+rule DeclassifyMemo {
+    when: MemoDeclassifyRequested(caller, memo)
+
+    requires: caller.is_operator
+    requires: memo.status = unread
+    requires: memo.is_awaiting_declassification
+
+    ensures: memo.public = true
+    ensures: memo.declassified = true
+    ensures: memo.labels = without_private(memo.labels)   -- black box: contaminated stays
+    ensures: memo.body = declassified_text(memo)   -- black box: NFC(plain_spacing(defanged if contaminated))
+    ensures: memo.subject = declassified_subject(memo)   -- black box: the same, on one line
+
+    @guidance
+        -- relay declassify shows the memo in full, sender included, and
+        -- the role gets exactly what the operator was shown, less the
+        -- [contaminated] marker: defanged if contaminated, its spacing
+        -- made plain, in Unicode NFC, so nothing rides in whitespace, in
+        -- accents written two ways or in what defanging folds together.
+        -- It asks for a fresh code typed back on the terminal. The operator says it holds nothing private: it may
+        -- leave this machine in a web search. Its sender's id is shown
+        -- to the role without private from then on.
+}
+
+rule PublicItem {
+    when: event: Event.created
+
+    requires: writes_an_item(event)   -- black box: a memo, routine, fact or doc version, note or journal entry
+
+    ensures: event.public = ((event.actor.is_operator and asked_for_public(event))   -- black box: --public
+                             or (event.actor.kind = role
+                                 and calling_wake_began_public(event)))   -- black box: see guidance
+                            and copies_only_public_text(event)   -- black box: what it copies is public
+
+    @guidance
+        -- A role's id, title and instructions are public when the
+        -- operator wrote them with --public; rewriting both title and
+        -- instructions so vouches for the id. A public role sees only
+        -- roles whose text is public, and its own must be, or it is not
+        -- woken and the operator is told once how to fix it.
+        -- A role's call is a public writer's only when it comes from the
+        -- wake relay named in the harness's tool command, that wake is
+        -- running, and it began while the role was public, whether or not
+        -- relay.edn still says so: such a session only ever saw public
+        -- text. It is read for as public, and refused private, as long
+        -- as relay.edn or that wake says it is public. A session
+        -- from before the role was public may hold private text no label
+        -- records (the operator's AGENTS.md, what was said in it).
+        -- A public item's read labels are its own, with no private
+        -- floor. An item that copies text (a supersession or correction
+        -- of a fact, a revert, a routine's run) is public only when what
+        -- it copies is; a writer who asked for public is refused rather
+        -- than given a private item, and a revert is as public as the
+        -- version it restores. The dispatcher writes nothing public of
+        -- its own: a dead letter never is, and a routine's run is when
+        -- the routine is.
+}
+
+rule RefuseWhatAPublicRoleMayNotHold {
+    when: CommandRequested(caller, command)   -- black box: any command
+
+    requires: refused_for_a_public_role(caller, command)
+
+    ensures: Rejected(command)
+
+    @guidance
+        -- Everything that would put private into a public role's session
+        -- is refused where it would happen, never dropped or quietly made
+        -- private: a public role's call from a session holding private;
+        -- a memo, routine, note, journal entry or wake note for it from
+        -- the operator without --public; a role id, title or
+        -- instructions for it from anyone but the operator, since any
+        -- other role's session may carry the operator's unlabelled
+        -- AGENTS.md; a wake of it whose own text the operator did not
+        -- write, or whose prompts would hold private; a doc it would
+        -- write over that it cannot see. A memo to it from anyone
+        -- else is not refused but waits (is_awaiting_declassification).
+        -- Its reads show only public items, the roles whose text the
+        -- operator wrote, and docs whose path was chosen in public, and
+        -- leave out everything else without a trace: a fact, doc or memo it cannot see does
+        -- not exist for it, and a search does not look in one. relay's
+        -- tool command replaces any result for it that carries private
+        -- with a refusal, and the request tells agentloop to forbid
+        -- private as well, so agentloop refuses such a result, refuses a
+        -- session that holds private, and reports both. A reason the
+        -- operator gives when denying its held call is public: the deny
+        -- prompt says so. One given before the role was public is not.
+        -- The operator's time zone is not private: a public role is told
+        -- times in it, in its prompts and by the clock tool, and its
+        -- routines follow it, as for any role.
+        -- No session from before a role was public is carried on once it
+        -- is, since such a session may hold private text no label
+        -- records: its held sessions are ended, an interrupted wake
+        -- starts afresh, and its conversations are kept apart.
 }
 
 rule RevertFact {
@@ -1413,8 +1551,9 @@ rule OpenConversation {
         -- A conversation runs over ACP, so any ACP client can hold one;
         -- relay chat is one such client, on the operator's terminal.
         -- Its system prompt says when the conversation started, with the
-        -- weekday, in the operator's time zone, and points the role at the
-        -- clock tool for the time after that and for date arithmetic.
+        -- weekday, in the operator's time zone (a public role's too: the
+        -- zone is not private), and points the role at the clock tool for
+        -- the time after that and for date arithmetic.
 }
 
 rule RunWake {
@@ -2305,6 +2444,24 @@ invariant AWakeStartsWithTheLabelsOfItsPrompts {
 invariant AQuarantinedMemoIsNeverCarried {
     for wake in Wakes:
         wake.memos.all(m => not m.is_quarantined)
+}
+
+invariant NoSessionOfAPublicRoleHoldsPrivate {
+    -- Its wakes and conversations start without private, and nothing it
+    -- reads carries private.
+    for wake in Wakes where wake.role.is_public:
+        not has_private(wake.seed_labels)   -- black box: whether a set of labels holds private
+            and wake.memos.all(m => not m.is_awaiting_declassification)
+}
+
+invariant APublicItemNeverCarriesPrivate {
+    for event in Events where public:
+        not has_private(event.labels)
+}
+
+invariant OnlyTheOperatorDeclassifies {
+    for memo in Memos where declassified:
+        declassified_by(memo).is_operator   -- black box: who wrote its memo/declassified event
 }
 
 invariant AnEndedSessionIsNeverCarriedOn {

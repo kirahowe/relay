@@ -53,7 +53,8 @@ points the role at `clock` for the rest. `clock` takes an `op`: `now`,
 names the weekday. A date without an offset is in `:timezone`. The tool is
 class read and its answers carry no labels, because they show nothing
 relay keeps. The arithmetic is in `relay.clock`, which is pure; only the
-tool's edge reads the system clock.
+tool's edge reads the system clock. Every role, a public one included,
+is told times in the operator's zone.
 
 ### Knowledge
 
@@ -113,7 +114,10 @@ it is. Do not trust such a value for integrity. When it will feed an
 outsider can do is pick the wrong one of your options.
 
 An optional `<data>/AGENTS.md` adds the operator's own instructions to
-every role's system prompt.
+every role's system prompt, except a public role's (see below).
+
+A role's grants are `:tools`, `:may-add` and `:public`, and relay refuses
+any other key, so a typo cannot change what a role may hold.
 
 ### Labels and holds
 
@@ -187,10 +191,85 @@ session does the same, and tells the operator. In
 a conversation agentloop asks the ACP client instead, and `relay acp`
 passes the request through.
 
-`relay approve`, `deny`, `release` and `trust` print what they are about
-on the terminal (`/dev/tty`, never stdin) and ask for a four-character
-code to be typed back there, so no harness or pipe can answer for the
-operator.
+`relay approve`, `deny`, `release`, `declassify` and `trust` print what
+they are about on the terminal (`/dev/tty`, never stdin) and ask for a
+four-character code to be typed back there, so no harness or pipe can
+answer for the operator.
+
+#### Public roles
+
+A role that searches or browses the web on a schedule, for jobs or
+grants say, would stall under these rules: the first memo it read would
+make it private, the first page contaminated, and every search after
+that would wait for the operator. Granting it `:public true` in
+relay.edn makes it a public role instead. Its session never holds
+`private`, so its egress calls run without asking. It still becomes
+contaminated, and its `act` calls are still held.
+
+A public role is shown only public items. An item is public when the
+operator wrote it with `--public`, a public role wrote it, or the
+operator declassified it. Everything else is invisible to it: not
+shown, not counted, with no placeholder, and a fact, doc or memo it
+cannot see does not exist for it. It is never given the operator's
+`<data>/AGENTS.md`, which may hold private details, and since any other
+role's session may have read that file, text a role wrote is never
+public: a public role sees, and can send memos to, only the roles
+whose id, title and instructions the operator wrote with `--public`,
+and its own must be written that way too. `relay add --public` does it
+for a new role; `relay update <id> --public --title <t> --instructions`
+does it for an existing one, id included. A public role whose own text
+is not public is not woken, and the operator is told once, with what to
+run; `relay status` says so too. What it writes is public only when it comes
+from a session that began while the role was public: relay names the
+wake in the tool command it gives the harness. A session that began
+public is read for as public even if relay.edn changes while it runs.
+It sees a doc only when its path was chosen in public. It may not write
+where a doc it cannot see sits, so it can tell that such a path is
+taken. The operator cannot put a public doc at a
+path first chosen without `--public` either, since no public role could
+see it there. Memos, facts, docs and other items are numbered by the
+log's one sequence, so the gaps in the numbers a public role sees tell
+it roughly how much else happens that it cannot see. And an item it
+could see vanishes for it once a session that is not public changes it
+(a fact corrected, a doc rewritten), and a fact it can see may say it
+was superseded by one it cannot: both say that something changed, never
+what. A public role is told times in the operator's time zone, in its
+prompts, its tools and `clock`, like any role, and its routines follow
+that zone: the zone is not kept from it, so it may go out in a search. Its
+own contaminated notes and reads are not withheld from it, since it
+has nothing private to leak, and memos to it are never quarantined.
+
+`--public` on `relay memo`, `routine`, `fact`, `put`, `add`, `update` and
+on `relay wake --note` marks what the operator writes as public: it may
+leave this machine in a web search. A memo, routine, note, journal entry
+or wake note for a public role is refused without it. A memo to a public
+role from anyone else waits, and the operator is told who sent it to
+whom. `relay declassify <memo>` shows it in full and, with the code,
+makes it public, minus `private`; `contaminated` stays. The role gets
+exactly what you were shown, less the `[contaminated]` marker: the memo
+with its URLs broken if it is contaminated, its spacing made plain (runs
+of spaces, tabs and anything else that draws as an empty space become one
+space, blank lines are trimmed, and the subject is one line), and in
+Unicode NFC. So nothing can ride in whitespace, in accents written two
+ways, or in what breaking a URL folds together. Declassifying vouches for the visible text
+only: a secret spelled out in the choice of words is visible text, and
+only reading for it finds it, so declassified memos are best kept
+short. A reason given
+with `relay deny` to a public role's held call is public too, and the
+prompt says so.
+
+relay refuses any tool result for a public role that carries `private`,
+and tells agentloop to refuse one too (`forbid_labels`), so a public
+role is not granted a tool whose `:labels` include `private`, nor
+`:may-add`, nor the dead letter handler's job, nor a `:script` harness.
+Either refusal is reported to the operator. A session from before a
+role was made public may hold private text that no label records, so
+none is carried on once it is: an interrupted wake starts afresh, a held
+session is ended with its open calls denied, and conversations are kept
+in a directory of their own. A reason the operator gave before the role
+was public stays private. A conversation with a
+public role is under the same rules, but what the operator types in it
+goes to the role as it is, and the role may send it out to the web.
 
 ## Setup
 
@@ -384,14 +463,15 @@ directory and run scenarios against it:
 ```sh
 bb staging init [<dir>]            # artificial roles, facts and settings; default ~/code/projects/.relay-staging
 bb scenario <name> [--live]        # one scenario from test/scenarios/
-bb scenarios                       # every scenario, against the mock model
+bb scenarios [--agentloop <path>]  # every scenario, against the mock model
 ```
 
 `staging init` refuses a directory in or around `~/Sync` or the data
 directory named in `~/.config/relay/config.edn`, and a directory that is not
 empty. `--force` empties a directory only if an earlier `staging init` made
 it. The staging `relay.edn` uses a `:file` notifier, which appends each
-notification to `notifications.log` in the directory and reaches nobody.
+notification to `notifications.log` in the directory and reaches nobody. Its
+roles are the hub, the clerk and the scout, a public role.
 
 A scenario is a data file: relay commands to run as the operator, dispatcher
 ticks, clock moves, and assertions over the log and state. The header of
