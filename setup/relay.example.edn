@@ -26,7 +26,7 @@
 
  ;; Tools beyond relay's own, each an external command given the call's
  ;; arguments after its own, with no -- in between: such a tool must
- ;; refuse flags in the model's part, as rem and github-file do. New tools
+ ;; refuse flags in the model's part, as rem does. New tools
  ;; are better written for the envelope protocol (see below). Every tool has a :class, which says what a
  ;; call can do:
  ;;   :read    returns content and sends nothing out
@@ -42,11 +42,13 @@
  ;; (relay holds, relay approve). :always-hold true asks every time.
  :tools
  ;; Reminders is two tools over one binary. The operator fixes --mode here;
- ;; the model's arguments come after it and cannot change it. Reading brings
- ;; in text other people may have written (shared lists); writing can send
- ;; text to them. See tools/rem/README.md.
+ ;; the model's arguments come after it and cannot change it. Reading is
+ ;; labelled private only, which trusts every list's text. If any list is
+ ;; shared with other people, add "contaminated": their text could carry
+ ;; instructions, and writing can send text to them. See
+ ;; tools/rem/README.md.
  {"rem-read" {:class :read
-              :labels ["private" "contaminated"]
+              :labels ["private"]
               :description "Read Apple Reminders. Run with [\"help\"] for the commands."
               :command ["/path/to/relay/tools/rem/rem" "--mode" "read"]}
   "rem" {:class :act

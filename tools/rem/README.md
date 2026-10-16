@@ -61,9 +61,9 @@ that has any marker.
 EventKit has no public property that says an ordinary iCloud list is
 shared with other people. Such a list looks the same as a private one, so
 a `-` marker does not mean nobody else can see it, and `write` mode cannot
-refuse it. Do not rely on the markers for that. Class the read tool as
-contaminated (below) and treat every write as possibly reaching other
-people.
+refuse it. Do not rely on the markers for that. If any of your lists is shared,
+label the read tool contaminated as well as private (below) and treat
+every write as possibly reaching other people.
 
 ## Output
 
@@ -78,12 +78,14 @@ prefixed with `> `.
 ## Relay configuration
 
 Two tools over the one binary, so reads and writes get different classes
-and labels (see `setup/relay.example.edn`):
+and labels (see `setup/relay.example.edn`). This trusts the text in your
+lists; with any shared list, make `rem-read`'s labels `["private"
+"contaminated"]`.
 
 ```clojure
 :tools
 {"rem-read" {:class :read
-             :labels ["private" "contaminated"]
+             :labels ["private"]
              :description "Read Apple Reminders. Run with [\"help\"]."
              :command ["/path/to/relay/tools/rem/rem" "--mode" "read"]}
  "rem"      {:class :act

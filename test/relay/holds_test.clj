@@ -335,7 +335,7 @@
 
 (deftest the-example-settings-are-valid
   (let [c (config/resolve-config (clojure.edn/read-string (slurp "setup/relay.example.edn")))]
-    (is (= ["contaminated" "private"] (get-in c [:tools "rem-read" :labels])))
+    (is (= ["private"] (get-in c [:tools "rem-read" :labels])) "reminders are trusted text")
     (is (core/quarantines? c "hub") "the hub can act through rem, so contaminated memos to it wait")))
 
 (deftest a-tick-that-cannot-load-its-settings-tells-the-operator-once

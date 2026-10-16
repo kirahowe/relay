@@ -76,7 +76,7 @@ An external tool normally gets the call's arguments on its command line,
 appended after the configured command with no `--` between them. So a
 tool on this plain protocol must refuse flags in the model's part of its
 arguments, or the model could override a flag the operator pinned; `rem`
-and `github-file` read their pinned flags first and treat anything after
+reads its pinned flags first and treat anything after
 as the role's command. Prefer the envelope protocol for new tools.
 With `:protocol :envelope` it speaks the same envelope protocol as `relay
 tool`: the call arrives on stdin as `{input, labels, call_id}`, the labels
@@ -260,10 +260,6 @@ is written in Go.
    `:api-key-command`). Keep the token file readable only by you.
 7. To give roles Apple Reminders, build `tools/rem` (see its README) and
    define its two tools (`rem-read`, `rem`) and grant them in `relay.edn`.
-8. To let a role read files from one branch of a public GitHub repository,
-   such as reports another agent writes there, define `tools/github-file`
-   in `relay.edn` with the repository and ref pinned (see its README) and
-   grant it.
 
 The harness settings in `relay.edn` are `:kind :agentloop`, `:model`,
 `:effort`, `:provider` (`"anthropic"` by default, or `"openai"`),
