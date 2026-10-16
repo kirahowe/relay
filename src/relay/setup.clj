@@ -13,7 +13,7 @@
 
 (def default-models {"anthropic" "claude-opus-5-5"})
 
-(defn- key-command [provider]
+(defn key-command [provider]
   ["security" "find-generic-password" "-s" (str "relay-" provider) "-w"])
 
 (defn- one-of [choices]
