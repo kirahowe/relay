@@ -168,9 +168,12 @@
 (defn init!
   "Makes a staging data directory and returns its path. `repo-root` is the
   relay checkout whose sibling agentloop the harness runs. Options as for
-  check-target!. The clock is the real one."
-  [{:keys [repo-root force?] :as opts}]
-  (let [dir (check-target! opts)
+  check-target!, and :check? false skips the checks for a directory the
+  caller has just made empty itself. The clock is the real one."
+  [{:keys [repo-root force? check?] :as opts}]
+  (let [dir (if (false? check?)
+              (canonical (:dir opts) (System/getProperty "user.home"))
+              (check-target! opts))
         root (str (fs/absolutize (or repo-root ".")))
         agentloop-bin (str (fs/normalize (fs/path root ".." "agentloop" "bin" "agentloop")))
         hub-file (fs/path root "setup" "hub.md")

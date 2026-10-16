@@ -14,6 +14,14 @@
   staging {:doc "Make a data directory of artificial data: bb staging init [<dir>] [--force]"
            :requires ([relay.staging :as staging])
            :task (apply staging/-main *command-line-args*)}
+  scenario {:doc "Run one scenario: bb scenario <name> [--live] [--data <dir>] [--force]"
+            :extra-paths ["test"]
+            :requires ([relay.scenario-runner :as runner])
+            :task (apply runner/scenario-main *command-line-args*)}
+  scenarios {:doc "Run every scenario against the mock model."
+             :extra-paths ["test"]
+             :requires ([relay.scenario-runner :as runner])
+             :task (runner/scenarios-main)}
   soak {:doc "Run the model-based property many more times: bb soak [trials]"
         :extra-paths ["test"]
         :requires ([relay.core-test :as core-test]

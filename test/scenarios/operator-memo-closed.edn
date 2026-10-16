@@ -1,0 +1,22 @@
+;; The simplest path: the operator sends the hub a memo, a tick wakes the
+;; hub, and the hub closes it. Also runs against the real model.
+{:doc "An operator memo to the hub is woken on, read and closed."
+ :live? true
+
+ :model
+ {"hub" [{:text "Let me look." :tool-uses [{:name "inbox" :input {}}]}
+         {:tool-uses [{:name "memo_close"
+                       :input {:memo {:memo-id {:subject "Where is the office?"}}
+                               :outcome "The staging office is closed on Mondays."}}]}
+         {:text "Closed it."}]}
+
+ :steps
+ [{:run ["memo" "hub" "-s" "Where is the office?"
+         "-m" "Close this memo, saying in one sentence that the staging office is closed on Mondays."]}
+  {:tick 2}]
+
+ :assert
+ [[:has :memo {:from "operator" :to "hub" :subject "Where is the office?" :status :read :closed-by "hub"}]
+  [:has :wake {:role "hub" :outcome "ran"}]
+  [:none :memo {:status :unread}]
+  [:none :dead-letter {}]]}

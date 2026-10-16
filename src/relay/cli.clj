@@ -144,8 +144,21 @@ contaminated, for text you copied from somewhere you do not trust.")
       (ready)
       :else (result 1))))
 
+(def ^:dynamic *stdin*
+  "Text to read as stdin instead of the process's, or nil. Bound by the
+  scenario runner, which has no terminal to pipe from."
+  nil)
+
+(def ^:dynamic *clock*
+  "A clock (a function returning an Instant) to run commands with instead
+  of the real one, or nil. Bound by the scenario runner, which moves time
+  by hand."
+  nil)
+
 (defn- stdin-text []
-  (if (System/console) "" (slurp *in*)))
+  (cond *stdin* *stdin*
+        (System/console) ""
+        :else (slurp *in*)))
 
 (def ^:dynamic *untrusted*
   "Labels for what the operator writes: contaminated with --untrusted."
@@ -393,16 +406,37 @@ contaminated, for text you copied from somewhere you do not trust.")
     (catch Exception e
       (binding [*out* *err*] (println (str "relay tick: could not tell the operator: " (ex-message e)))))))
 
+(defn- parse-line [args]
+  ;; Options may come before the command (--data) and after it, and
+  ;; babashka.cli stops at the first argument, so parse in two passes.
+  (let [{global :opts rest-args :args} (cli/parse-args args spec)
+        {[cmd & more] :args local-opts :opts} (cli/parse-args rest-args spec)]
+    {:cmd cmd :more more :opts (merge global local-opts)}))
+
+(defn parsed-options
+  "The options relay would read from these arguments, as a map. Whatever
+  spelling picked them (--x v, -x v, :x v, --x=v, --no-x), they are here."
+  [args]
+  (:opts (parse-line args)))
+
+(defn command-of
+  "The command name in a command line, as `execute` finds it, or nil."
+  [args]
+  (:cmd (parse-line args)))
+
+(defn effective-data-dir
+  "The data directory `execute` would use for these arguments, exactly as it
+  would choose it, including a --data after the command, which wins over
+  one before it. Throws when there is none."
+  [args]
+  (data-dir (:opts (parse-line args))))
+
 (defn execute
   "Runs one command line. Returns {:exit :out}, :out being the lines to
   print. Prints nothing itself, except what a command that talks with the
   operator directly (init, chat, acp) prints along the way."
   [args]
-  ;; Options may come before the command (--data) and after it, and
-  ;; babashka.cli stops at the first argument, so parse in two passes.
-  (let [{global :opts rest-args :args} (cli/parse-args args spec)
-        {[cmd & more] :args local-opts :opts} (cli/parse-args rest-args spec)
-        opts (merge global local-opts)]
+  (let [{:keys [cmd more opts]} (parse-line args)]
     (if (or (nil? cmd) (#{"help" "-h" "--help"} cmd))
       (result 0 usage)
       (do (when (and (= "tool" cmd) (or (str/blank? (:role opts)) (str/blank? (:data opts))))
@@ -410,7 +444,7 @@ contaminated, for text you copied from somewhere you do not trust.")
           (let [dir (data-dir opts)
                 result (if (= "init" cmd)
                          (init! dir)
-                         (let [sys (try (inbound/system dir)
+                         (let [sys (try (inbound/system dir (cond-> {} *clock* (assoc :clock *clock*)))
                                         (catch clojure.lang.ExceptionInfo e
                                           (when (= "tick" cmd) (report-broken-settings! dir (ex-message e)))
                                           (throw e)))]

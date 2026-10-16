@@ -1,0 +1,20 @@
+;; The same path as operator-memo-closed, but the wake is started the way
+;; `relay tick` starts it: a `relay wake` subprocess running bin/relay. The
+;; other scenarios run wakes in the runner's own process, which cannot tell
+;; when bin/relay will not start.
+{:doc "A wake started as a subprocess, as relay tick starts it, closes a memo."
+ :live? false
+
+ :model
+ {"hub" [{:tool-uses [{:name "memo_close"
+                       :input {:memo {:memo-id {:subject "Subprocess please"}}
+                               :outcome "Done in a subprocess."}}]}
+         {:text "Closed it."}]}
+
+ :steps
+ [{:run ["memo" "hub" "-s" "Subprocess please" "-m" "Close this."]}
+  {:tick 1 :spawn :process}]
+
+ :assert
+ [[:has :memo {:subject "Subprocess please" :status :read :closed-by "hub"}]
+  [:has :wake {:role "hub" :outcome "ran" :status :ended}]]}
