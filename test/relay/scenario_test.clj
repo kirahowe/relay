@@ -107,7 +107,12 @@
     (is (seq (scenario/problems (assoc ok :steps [{:tick 0}]))))
     (is (seq (scenario/problems (assoc ok :steps [{:tick 1 :run ["x"]}]))))
     (is (seq (scenario/problems (assoc ok :assert [[:has :wombat {}]]))))
-    (is (seq (scenario/problems (assoc ok :model {"hub" {:text "x"}}))))))
+    (is (seq (scenario/problems (assoc ok :model {"hub" {:text "x"}}))))
+    (testing ":tty goes with :run, as strings"
+      (is (empty? (scenario/problems (assoc ok :steps [{:run ["review" "1"] :tty ["a" "n"]}]))))
+      (is (seq (scenario/problems (assoc ok :steps [{:tick 1 :tty ["a"]}]))))
+      (is (seq (scenario/problems (assoc ok :steps [{:run ["review" "1"] :tty "a"}]))))
+      (is (seq (scenario/problems (assoc ok :steps [{:run ["review" "1"] :tty [:a]}])))))))
 
 ;; --- whole scenarios
 

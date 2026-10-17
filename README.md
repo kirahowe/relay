@@ -580,7 +580,10 @@ directory named in `~/.config/relay/config.edn`, and a directory that is not
 empty. `--force` empties a directory only if an earlier `staging init` made
 it. The staging `relay.edn` uses a `:file` notifier, which appends each
 notification to `notifications.log` in the directory and reaches nobody. Its
-roles are the hub, the clerk and the scout, a public role.
+roles are the hub, the clerk and the scout, a public role. Its `:verifier` is
+a stand-in that checks quotes against the pages in the directory's `web/` and
+reaches nothing else. No role writes reports unless a scenario's `:settings`
+grants it `:reports`.
 
 A scenario is a data file: relay commands to run as the operator, dispatcher
 ticks, clock moves, and assertions over the log and state. The header of

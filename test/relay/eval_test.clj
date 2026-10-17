@@ -3,14 +3,17 @@
   stand-in tools, and every eval case's oracle and foils against the mock
   model."
   (:require [babashka.fs :as fs]
+            [cheshire.core :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [clojure.test.check :as tc]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
+            [relay.config :as config]
             [relay.eval :as eval]
             [relay.eval-trial :as et]
             [relay.render :as render]
+            [relay.reports :as reports]
             [relay.scenario :as scenario]
             [relay.scenario-runner :as runner]
             [relay.staging :as staging]
@@ -258,6 +261,21 @@
                      [:grants "hub" :may-add]))
       "a grant's other keys stay"))
 
+(deftest settings-may-grant-reports-of-well-named-kinds
+  (is (empty? (scenario/settings-problems {:grants {"scout" {:reports {:kinds ["grant" "job"]}}}})))
+  (is (empty? (scenario/settings-problems {:grants {"scout" {:tools ["web-demo"] :reports {:kinds ["grant"]}}}})))
+  (testing "an unknown grant key is still refused, alone or beside a known one"
+    (doseq [grant [{:public true} {:reports {:kinds ["grant"]} :public true} {:tools ["web-demo"] :may-add true} {}]]
+      (is (seq (scenario/settings-problems {:grants {"scout" grant}})) (pr-str grant))))
+  (testing "a bad :reports or :kinds is refused"
+    (doseq [reports [{:kinds []} {:kinds ["Grant"]} {:kinds ["grant" "grant"]} {:kinds "grant"}
+                     {:kinds [:grant]} {:kinds ["a b"]} {:kinds ["grant"] :more true} {} ["grant"]]]
+      (is (seq (scenario/settings-problems {:grants {"scout" {:reports reports}}})) (pr-str reports))))
+  (let [merged (scenario/merge-settings (staging/settings {:data-dir "/s"})
+                                        {:grants {"scout" {:reports {:kinds ["grant"]}}}})]
+    (is (= {:public true :reports {:kinds ["grant"]}} (get-in merged [:grants "scout"])))
+    (is (config/resolve-config merged) "relay accepts what it makes")))
+
 (deftest a-foil-must-fail-exactly-what-it-says
   (let [scores {:a {:value :pass} :b {:value :fail :explanation "b broke"} :c {:value :fail :explanation "c broke"}}]
     (is (empty? (eval/foil-problems scores #{:b :c})))
@@ -310,7 +328,22 @@
         (is (nil? effect) bad)))
     (is (= ["contaminated"] (:labels (first (staging-tools/answer "web-demo" "/d" {:page "x.html"}))))))
   (testing "mail-demo appends inside the data directory"
-    (is (= "/d/outbox.log" (:append (second (staging-tools/answer "mail-demo" "/d" {:to "a@example.com" :subject "s" :body "b"})))))))
+    (is (= "/d/outbox.log" (:append (second (staging-tools/answer "mail-demo" "/d" {:to "a@example.com" :subject "s" :body "b"}))))))
+  (testing "verify-demo finds a quote only on the page the URL names, and reads nothing else"
+    (let [items [{:url "https://a.example.org/office-page.html" :quotes ["Closed on Mondays." "Open on Sundays."]}
+                 {:url "https://a.example.org/missing.html" :quotes ["x"]}
+                 {:url "https://a.example.org/../relay.edn" :quotes []}]
+          asked (atom [])
+          {out :items} (staging-tools/check-items items (fn [page] (swap! asked conj page)
+                                                          (when (= "office-page.html" page) "<p>Closed on Mondays.</p>")))]
+      (is (= ["office-page.html" "missing.html"] @asked))
+      (is (= [true false] (map :found (:quotes (first out)))))
+      (is (= [true false false] (map :fetched out)))
+      (is (= "example.org" (:domain (first out))))
+      (is (= {:check items} (second (staging-tools/answer "verify-demo" "/d" {:items items}))))
+      (testing "in the shape relay reads from webtool check"
+        (is (= (count items) (count (reports/parse-check-items {:items items}
+                                                               (json/parse-string (json/generate-string {:items out}))))))))))
 
 (deftest the-stand-in-tools-are-defined-but-granted-to-nobody
   (let [s (staging/settings {:data-dir "/s" :repo-root "/r" :bb-bin "/bin/bb"})]
@@ -318,7 +351,10 @@
     (is (= ["contaminated"] (get-in s [:tools "web-demo" :labels])))
     (is (= ["/bin/bb" "--classpath" "/r/src" "-m" "relay.staging-tools" "fail-demo" "/s"]
            (get-in s [:tools "fail-demo" :command])))
-    (is (not-any? (set (keys staging/stand-in-tools)) (mapcat :tools (vals (:grants s)))))))
+    (is (not-any? (set (keys staging/stand-in-tools)) (mapcat :tools (vals (:grants s)))))
+    (is (= ["/bin/bb" "--classpath" "/r/src" "-m" "relay.staging-tools" "verify-demo" "/s"]
+           (get-in s [:verifier :command])))
+    (is (not-any? :reports (vals (:grants s))) "no role writes reports unless a scenario grants it")))
 
 (deftest a-granted-stand-in-tool-runs-through-relay-tool
   (let [dir (str (fs/create-temp-dir {:prefix "relay-eval-standin"}))

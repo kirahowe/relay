@@ -16,6 +16,8 @@
     {:run [\"memo\" \"hub\" \"-s\" \"Subject\" \"-m\" \"Body\"]  ; a relay command, as the operator
      :stdin \"text\"                                         ; optional
      :exit 0}                                               ; expected exit code, default 0
+    {:run [\"review\" \"1\"] :tty [\"a\" \"n\"]}  ; what the operator types at the terminal,
+                                         ; in order, beyond the codes the runner types
     {:tick 3}                  ; relay's dispatcher pass, three times; wakes run to the end
     {:tick 1 :spawn :process}  ; the same, but each wake is started the way relay tick
                                ; starts it, as a `relay wake` subprocess, and waited for
@@ -30,7 +32,7 @@
   among them.
 
   A run argument may be {:memo-id pattern}, replaced by the id of the first
-  memo that matches.
+  memo that matches, or {:report-id pattern}, the same for reports.
 
   Each reply in :model is the model's answer to one request from that role:
 
@@ -56,6 +58,9 @@
     :tool-call   one per call in any wake's transcript: :role :wake :n (its
                  place in the run) :name :input :verdict (agentloop's: allow,
                  deny or hold) :error :result. Held calls count.
+    :report      one per research report, as relay keeps it, with its
+                 :verification once checked
+    :ledger      one per ledger entry
 
   A :wake also has :requests, :input-tokens, :output-tokens,
   :cache-read-tokens, :cache-write-tokens, :cost-usd, :models (the models
@@ -83,11 +88,14 @@
     :clock    \"2026-10-12T09:00\", relay's clock at the start, in the staging
               time zone; without it the clock starts at the real time
     :settings {:grants {\"clerk\" {:tools [\"fail-demo\"]}}}, merged into the
-              staging relay.edn: only :grants, and only :tools in them,
-              naming tools relay.staging defines. A role's :tools replace
-              its staging ones."
+              staging relay.edn: only :grants, and in them only :tools,
+              naming tools relay.staging defines, and :reports {:kinds
+              [...]}, which relay accepts only for a public role such as
+              the scout. A role's :tools and :reports replace its staging
+              ones."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
+            [relay.config :as config]
             [relay.core :as core]
             [relay.staging :as staging]
             [relay.transcript :as transcript])
@@ -144,7 +152,7 @@
     :else (= pattern value)))
 
 (def kinds #{:memo :hold :wake :role :routine :dead-letter :notification :event :sent
-             :fact :journal :note :doc :tool-call})
+             :fact :journal :note :doc :tool-call :report :ledger})
 
 ;; --- the newer kinds, from the state and the wakes' transcripts
 
@@ -235,6 +243,8 @@
     :routine (sort-by (juxt :owner :name) (mapcat vals (vals (:routines state))))
     :dead-letter (sort-by :id (vals (:dead-letters state)))
     :notification (sort-by :id (vals (:notifications state)))
+    :report (sort-by :id (vals (:reports state)))
+    :ledger (sort-by :id (vals (:ledger state)))
     :event events
     :sent sent))
 
@@ -277,9 +287,15 @@
   [state pattern]
   (:id (first (filter #(match? pattern %) (fact-items {:state state})))))
 
+(defn report-id
+  "The id of the first report matching `pattern`, or nil."
+  [state pattern]
+  (:id (first (filter #(match? pattern %) (sort-by :id (vals (:reports state)))))))
+
 (defn resolve-refs
-  "`x` with each {:memo-id pattern} replaced by that memo's id, and each
-  {:fact-id pattern} by that fact's. Throws when nothing matches."
+  "`x` with each {:memo-id pattern} replaced by that memo's id, each
+  {:fact-id pattern} by that fact's and each {:report-id pattern} by that
+  report's. Throws when nothing matches."
   [state x]
   (walk/postwalk
    (fn [form]
@@ -290,6 +306,9 @@
        (and (map? form) (= [:fact-id] (keys form)))
        (or (fact-id state (:fact-id form))
            (throw (ex-info (str "No fact matches " (pr-str (:fact-id form)) ".") {:pattern (:fact-id form)})))
+       (and (map? form) (= [:report-id] (keys form)))
+       (or (report-id state (:report-id form))
+           (throw (ex-info (str "No report matches " (pr-str (:report-id form)) ".") {:pattern (:report-id form)})))
        :else form))
    x))
 
@@ -319,7 +338,7 @@
   only the data directory."
   #{"status" "inbox" "memo" "close" "roles" "add" "update" "remove" "routines" "routine" "unroutine"
     "retry" "wake" "facts" "fact" "notes" "journal" "docs" "doc" "put" "log" "holds"
-    "approve" "deny" "release" "trust" "declassify"})
+    "approve" "deny" "release" "trust" "declassify" "review"})
 
 (defn path-option?
   "Whether a command-line argument picks a path: the data directory, the
@@ -343,6 +362,10 @@
   (when clock
     (.toInstant (.atZone (LocalDateTime/parse clock) ^ZoneId zone))))
 
+(defn- kinds-ok? [kinds]
+  (and (vector? kinds) (seq kinds) (apply distinct? kinds)
+       (every? #(and (string? %) (re-matches config/kind-pattern %)) kinds)))
+
 (defn settings-problems
   "What is wrong with a scenario's :settings."
   [settings]
@@ -352,13 +375,20 @@
       (nil? settings) []
       (not (map? settings)) [":settings is a map."]
       (not= #{:grants} (set (keys settings))) [":settings may hold only :grants."]
-      (not (map? (:grants settings))) [":settings :grants maps a role id to {:tools [...]}."]
+      (not (map? (:grants settings))) [":settings :grants maps a role id to {:tools [...] :reports {:kinds [...]}}."]
       :else
       (vec (for [[role grant] (:grants settings)
                  problem [(when-not (string? role) (str "A role in :settings :grants is a string, not " (pr-str role) "."))
-                          (when-not (and (map? grant) (= #{:tools} (set (keys grant))) (vector? (:tools grant)))
-                            (str "The grant for " role " in :settings is {:tools [...]}, nothing else."))
-                          (when-let [bad (seq (remove known (:tools grant)))]
+                          (when-not (and (map? grant) (seq grant) (every? #{:tools :reports} (keys grant))
+                                         (or (not (contains? grant :tools)) (vector? (:tools grant))))
+                            (str "The grant for " role " in :settings is {:tools [...] :reports {:kinds [...]}},"
+                                 " either or both, nothing else."))
+                          (when (and (map? grant) (contains? grant :reports)
+                                     (not (and (map? (:reports grant)) (= #{:kinds} (set (keys (:reports grant))))
+                                               (kinds-ok? (:kinds (:reports grant))))))
+                            (str "The :reports grant for " role " in :settings is {:kinds [...]}, a vector of distinct"
+                                 " names of lower case letters, digits and hyphens, such as [\"grant\"]."))
+                          (when-let [bad (seq (remove known (when (map? grant) (:tools grant))))]
                             (str "The grant for " role " names " (str/join ", " bad)
                                  "; :settings may grant only " (str/join ", " (sort known)) "."))]
                  :when problem]
@@ -367,7 +397,10 @@
 (defn merge-settings
   "The staging relay.edn settings with a scenario's :settings merged in."
   [settings {:keys [grants]}]
-  (reduce (fn [s [role grant]] (assoc-in s [:grants role :tools] (:tools grant)))
+  (reduce (fn [s [role grant]]
+            (cond-> s
+              (contains? grant :tools) (assoc-in [:grants role :tools] (:tools grant))
+              (contains? grant :reports) (assoc-in [:grants role :reports] (:reports grant))))
           settings grants))
 
 (defn problems
@@ -390,7 +423,9 @@
                            (and (:spawn step) (not (and (:tick step) (= :process (:spawn step)))))
                            (str "Step " (brief step) " may give :spawn :process only with :tick.")
                            (and (:advance-minutes step) (not (pos-int? (:advance-minutes step))))
-                           (str "Step " (brief step) " needs a positive :advance-minutes."))))
+                           (str "Step " (brief step) " needs a positive :advance-minutes.")
+                           (and (contains? step :tty) (not (and (:run step) (vector? (:tty step)) (every? string? (:tty step)))))
+                           (str "Step " (brief step) " may give :tty, a vector of strings, only with :run."))))
         assertion-problem (fn [[op kind :as a]]
                             (when-not (and (vector? a) (#{:has :none :count} op) (kinds kind))
                               (str "Assertion " (brief a) " is not [:has|:none|:count kind pattern ...].")))

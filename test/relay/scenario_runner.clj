@@ -21,7 +21,13 @@
   :live? false.
 
   The operator's terminal confirmations (release, approve, trust) are
-  answered by the runner, since a scenario is the operator."
+  answered by the runner, since a scenario is the operator. Anything else
+  the terminal asks, such as review's choice for each finding, is answered
+  from the step's :tty.
+
+  A tick checks each new research report with the staging :verifier, in
+  this process, or as a `relay verify` subprocess it waits for when the
+  step says :spawn :process."
   (:require [babashka.cli :as cli]
             [babashka.fs :as fs]
             [cheshire.core :as json]
@@ -75,11 +81,16 @@
 ;; --- the operator at the terminal
 
 (defn- operator-tty
-  "A terminal that types back whatever code it is asked for."
-  []
-  (let [shown (atom "")]
-    {:say (fn [text] (swap! shown str text))
-     :ask (fn [] (second (re-find #"Type ([A-Z0-9]{4}) to " @shown)))}))
+  "A terminal that types back whatever code it is asked for, and to any
+  other question the next of `answers`, a step's :tty. Once they run out
+  it types nothing, as a closed terminal does."
+  [answers]
+  (let [last-said (atom "")
+        left (atom (seq answers))]
+    {:say (fn [text] (reset! last-said text))
+     :ask (fn []
+            (or (second (re-find #"Type ([A-Z0-9]{4}) to [^\n]*$" @last-said))
+                (ffirst (swap-vals! left next))))}))
 
 ;; --- a run
 
@@ -116,7 +127,7 @@
   automatically, so before that is bound the data directory the command
   would really use is worked out the way relay works it out, and the
   command is refused unless it is this scenario's own."
-  [{:keys [dir clock]} args stdin]
+  [{:keys [dir clock]} args stdin & [tty-answers]]
   (let [line (into ["--data" dir] args)
         ;; No config file to fall back on, whatever the arguments say.
         no-config (str (fs/path dir "no-operator-config.edn"))
@@ -139,7 +150,7 @@
                                   (pr-str effective) ", not the scenario's data directory " dir ".")]}
 
       :else
-      (binding [relay/*tty* operator-tty
+      (binding [relay/*tty* #(operator-tty tty-answers)
                 relay/*stdin* stdin
                 relay/*clock* clock
                 relay/*config-file* no-config
@@ -155,7 +166,10 @@
   [{:keys [dir clock]}]
   (let [woke (atom [])
         sys (inbound/system dir {:clock clock})]
-    (dispatch/tick! sys {:spawn! (fn [sys role]
+    (dispatch/tick! sys {:spawn-verify! (fn [sys report]
+                                          (let [r (dispatch/verify! sys report {})]
+                                            (swap! woke conj (str "verify report " report ": " (name (:result r))))))
+                         :spawn! (fn [sys role]
                                    (let [r (dispatch/wake! sys role {:dispatched true})]
                                      (swap! woke conj (str role ": " (or (:outcome r) (name (:result r)))
                                                            (when (:left-open r) (str ", " (:left-open r) " memo(s) left open"))))))})
@@ -165,23 +179,26 @@
 
 (defn- tick-with-processes!
   "One dispatcher pass exactly as relay tick does it: each wake is a `relay
-  wake` subprocess, started with the real spawn and the real bin/relay.
-  Waits for them. A wake that cannot start, or exits badly, is a failure."
+  wake` subprocess, and each report check a `relay verify` one, started
+  with the real spawn and the real bin/relay. Waits for them. A process
+  that cannot start, or exits badly, is a failure."
   [{:keys [dir clock]}]
   (let [sys (inbound/system dir {:clock clock})
         started (atom [])
         spawn (fn [sys role]
                 (let [process (dispatch/spawn-wake! sys role)]
-                  (swap! started conj [role process])
+                  (swap! started conj [(str "relay wake " role) process])
                   process))
-        roles (dispatch/tick! sys {:spawn! spawn})
-        results (doall (for [[role process] @started]
-                         [role (deref process process-wait-ms ::timeout)]))]
-    {:lines (vec (for [[role r] results]
-                   (str role ": relay wake " (if (= ::timeout r) "timed out" (str "exited " (:exit r))))))
-     :failures (vec (for [[role r] results
+        spawn-verify (fn [sys report]
+                       (swap! started conj [(str "relay verify " report) (dispatch/spawn-verify! sys report)]))
+        roles (dispatch/tick! sys {:spawn! spawn :spawn-verify! spawn-verify})
+        results (doall (for [[what process] @started]
+                         [what (deref process process-wait-ms ::timeout)]))]
+    {:lines (vec (for [[what r] results]
+                   (str what " " (if (= ::timeout r) "timed out" (str "exited " (:exit r))))))
+     :failures (vec (for [[what r] results
                           :when (or (= ::timeout r) (not (zero? (:exit r))))]
-                      (str "The relay wake process for " role " "
+                      (str "The " what " process "
                            (if (= ::timeout r) "did not finish" (str "exited " (:exit r))) ".")))
      :roles roles}))
 
@@ -197,7 +214,7 @@
     (:run step)
     (let [state (:state (world dir))
           args (mapv str (scenario/resolve-refs state (:run step)))
-          {:keys [exit out err]} (run-command! ctx args (:stdin step))
+          {:keys [exit out err]} (run-command! ctx args (:stdin step) (:tty step))
           expected (:exit step 0)]
       {:log [(str "relay " (str/join " " args) " -> exit " exit)]
        :failures (when (not= expected exit)
