@@ -40,7 +40,12 @@
 
 (def scenario-dir "test/scenarios")
 
-(defn scenario-files [] (sort (map str (fs/glob scenario-dir "*.edn"))))
+(def not-scenarios
+  "Files in the scenario directory that are not scenarios."
+  #{"eval-defaults.edn"})
+
+(defn scenario-files []
+  (sort (map str (remove #(not-scenarios (str (fs/file-name %))) (fs/glob scenario-dir "*.edn")))))
 
 (defn scenario-name [file] (str/replace (str (fs/file-name file)) #"\.edn$" ""))
 
@@ -78,13 +83,28 @@
 
 ;; --- a run
 
-(defn- world [dir]
-  (let [sent-file (fs/path dir "notifications.log")]
-    {:state (core/replay (log/read-events dir))
-     :events (log/read-events dir)
-     :sent (if (fs/exists? sent-file)
-             (mapv #(json/parse-string % true) (str/split-lines (slurp (str sent-file))))
-             [])}))
+(defn- json-lines [file]
+  (if (fs/exists? file)
+    (vec (keep #(try (json/parse-string % true) (catch Exception _ nil))
+               (remove str/blank? (str/split-lines (slurp (str file))))))
+    []))
+
+(defn world
+  "What a scenario's assertions see in a data directory: the state, the
+  events, what the notifier sent, each wake's transcript entries by wake id,
+  and `now`, relay's clock, when given."
+  ([dir] (world dir nil))
+  ([dir now]
+   (let [events (log/read-events dir)
+         state (core/replay events)]
+     {:state state
+      :events events
+      :sent (json-lines (fs/path dir "notifications.log"))
+      :transcripts (into {} (for [{:keys [id role]} (vals (:wakes state))
+                                  :let [f (fs/path dir "runs" role (str id) "transcript.jsonl")]
+                                  :when (fs/exists? f)]
+                              [id (json-lines f)]))
+      :now now})))
 
 (defn- same-dir? [a b]
   (let [home (System/getProperty "user.home")]
@@ -165,6 +185,11 @@
                            (if (= ::timeout r) "did not finish" (str "exited " (:exit r))) ".")))
      :roles roles}))
 
+(defn- write-clock!
+  "Tells test/bin/relay, and so every relay process a wake starts, the time."
+  [dir ^Instant at]
+  (spit (str (fs/path dir "staging-clock.edn")) (pr-str {:at (str at)})))
+
 (defn- step!
   "Runs one step. Returns {:log [lines] :failures [lines]}."
   [{:keys [dir offset] :as ctx} step]
@@ -196,24 +221,27 @@
 
     (:advance-minutes step)
     (do (swap! offset + (:advance-minutes step))
+        (when (:stopped-clock? ctx) (write-clock! dir ((:clock ctx))))
         {:log [(str "advance " (:advance-minutes step) " minute(s)")]})
 
     (:assert step)
-    {:failures (scenario/check-all (world dir) (:assert step))}))
+    {:failures (scenario/check-all (world dir ((:clock ctx))) (:assert step))}))
 
 ;; --- the harness: mock or real
+
+(defn- update-settings! [dir f]
+  (let [file (str (fs/path dir "relay.edn"))]
+    (spit file (pr-str (f (edn/read-string (slurp file)))))))
 
 (defn- use-mock!
   "Points the staging harness at a mock server and a made-up key, and at
   the agentloop the tests run (test-support, --agentloop) when there is one."
   [dir mock-url]
-  (let [file (str (fs/path dir "relay.edn"))
-        settings (edn/read-string (slurp file))]
-    (spit file (pr-str (update-in settings [:harnesses :agentloop]
-                                  #(cond-> (assoc % :base-url mock-url
-                                                  :api-key-command ["echo" "sk-mock-key"]
-                                                  :retry {:retries 0})
-                                     support/agentloop-bin (assoc :bin support/agentloop-bin)))))))
+  (update-settings! dir #(update-in % [:harnesses :agentloop]
+                                    (fn [h] (cond-> (assoc h :base-url mock-url
+                                                           :api-key-command ["echo" "sk-mock-key"]
+                                                           :retry {:retries 0})
+                                              support/agentloop-bin (assoc :bin support/agentloop-bin))))))
 
 (defn- scripted-model
   "A mock-anthropic responder playing the scenario's script. Returns it with
@@ -238,9 +266,17 @@
 (defn run-scenario!
   "Plays a scenario. Options: :live?, :data (a directory to make the staging
   data in, else a temporary one), :force?, :operator-config, :repo-root.
-  Returns {:pass? :dir :log :failures}."
-  [file {:keys [live? data force? operator-config] :as opts}]
-  (let [{:keys [steps model] :as s} (read-scenario file)
+  For evals also :script (replies to play instead of the scenario's
+  :model), :model (the model a live run asks for, instead of staging's),
+  :harness (more settings for the staging harness, such as :limits),
+  :fresh? (the :data directory was just made empty by the caller, so the
+  staging checks are skipped) and :keep? (never delete the directory).
+  Returns {:pass? :dir :log :failures :assert-failures :requests :world},
+  :world being what the assertions saw at the end and :assert-failures the
+  last part of :failures, from the scenario's final :assert."
+  [file {:keys [live? data force? operator-config script harness fresh? keep?] :as opts}]
+  (let [{:keys [steps] :as s} (read-scenario file)
+        model (if (contains? opts :script) script (:model s))
         _ (when (and live? (false? (:live? s)))
             (throw (ex-info (str (scenario-name file) " cannot run live: it needs a scripted model.")
                             {:relay/usage true})))
@@ -248,21 +284,30 @@
         dir (if temp?
               (str (fs/create-temp-dir {:prefix (str "relay-scenario-" (scenario-name file) "-")}))
               data)
-        _ (staging/init! (cond-> {:dir dir :force? force? :operator-config operator-config
-                                  :repo-root (:repo-root opts ".")}
-                           temp? (assoc :check? false)))
-        dir (staging/canonical dir (System/getProperty "user.home"))
-        started (Instant/now)
+        fixed (scenario/clock-instant s)
+        started (or fixed (Instant/now))
         offset (atom 0)
         clock #(.plus started (Duration/ofMinutes @offset))
-        ctx {:dir dir :clock clock :offset offset}
+        _ (staging/init! (cond-> {:dir dir :force? force? :operator-config operator-config
+                                  :repo-root (:repo-root opts ".")}
+                           (or temp? fresh?) (assoc :check? false)
+                           fixed (assoc :clock clock)))
+        dir (staging/canonical dir (System/getProperty "user.home"))
+        ctx {:dir dir :clock clock :offset offset :stopped-clock? (some? fixed)}
         mock-model (when-not live? (scripted-model model dir))
         server (when mock-model (mock/start! (:responder mock-model)))
         before (System/getProperty "relay.bin")
         log-lines (atom [])
-        failures (atom [])]
+        failures (atom [])
+        assert-failures (atom [])]
     (when server (use-mock! dir (:url server)))
-    (System/setProperty "relay.bin" (str (fs/absolutize (str (:repo-root opts ".") "/bin/relay"))))
+    (update-settings! dir #(cond-> (scenario/merge-settings % (:settings s))
+                             (and live? (:model opts)) (assoc-in [:harnesses :agentloop :model] (:model opts))
+                             harness (update-in [:harnesses :agentloop] merge harness)))
+    (when fixed (write-clock! dir started))
+    ;; With a stopped clock, every relay process a wake starts reads it.
+    (System/setProperty "relay.bin" (str (fs/absolutize (str (:repo-root opts ".")
+                                                             (if fixed "/test/bin/relay" "/bin/relay")))))
     (try
       ;; A step that throws (a wake that cannot start, say) fails the
       ;; scenario and ends the run; later steps would only pile up noise.
@@ -274,15 +319,20 @@
                        (swap! failures conj (str "Step " (pr-str step) " threw: " (ex-message e)))
                        (reduced nil))))
               nil steps)
-      (swap! failures into (scenario/check-all (world dir) (:assert s)))
+      (swap! assert-failures into (scenario/check-all (world dir (clock)) (:assert s)))
       (when mock-model (swap! failures into @(:problems mock-model)))
       (finally
         (when server ((:stop server)))
         (if before (System/setProperty "relay.bin" before) (System/clearProperty "relay.bin"))))
-    (let [pass? (empty? @failures)]
-      (when (and temp? pass?) (fs/delete-tree dir))
-      {:pass? pass? :dir (when-not (and temp? pass?) dir) :log @log-lines :failures @failures
-       :requests (when server (count @(:requests server)))})))
+    (let [all-failures (into @failures @assert-failures)
+          pass? (empty? all-failures)
+          end (world dir (clock))
+          delete? (and temp? pass? (not keep?))]
+      (when delete? (fs/delete-tree dir))
+      {:pass? pass? :dir (when-not delete? dir) :log @log-lines :failures all-failures
+       :assert-failures @assert-failures
+       :requests (when server (count @(:requests server)))
+       :world end})))
 
 ;; --- bb scenario, bb scenarios
 

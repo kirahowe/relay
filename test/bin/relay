@@ -1,0 +1,26 @@
+#!/usr/bin/env bb
+;; bin/relay on a stopped clock, for scenarios with a :clock. The scenario
+;; runner points relay.bin here, so that the `relay tool` and `relay wake`
+;; processes a wake starts read the same time as the runner. The time is in
+;; staging-clock.edn in the data directory given by --data; without that
+;; file this is bin/relay. Production relay never reads that file.
+
+(require '[babashka.classpath :as cp]
+         '[babashka.fs :as fs])
+
+(let [script (fs/real-path *file*)
+      root (-> script fs/parent fs/parent fs/parent)]
+  (System/setProperty "relay.bin" (str script))
+  (cp/add-classpath (str (fs/path root "src") ":" (fs/path root "resources"))))
+
+(require '[clojure.edn :as edn]
+         '[relay.cli :as cli])
+
+(let [args *command-line-args*
+      data (second (drop-while #(not= "--data" %) args))
+      file (when data (fs/path data "staging-clock.edn"))
+      at (when (and file (fs/exists? file))
+           (java.time.Instant/parse (:at (edn/read-string (slurp (str file))))))]
+  (if at
+    (binding [cli/*clock* (constantly at)] (apply cli/-main args))
+    (apply cli/-main args)))

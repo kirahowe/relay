@@ -309,3 +309,39 @@
      (concat (mapcat #(concat (hold % config) [""]) hs)
              ["relay approve <hold> lets one run; relay deny <hold> [why] refuses it,"
               "and with --end also starts the role's next wake afresh."]))))
+
+;; --- eval runs (bb eval)
+
+(defn- money [x] (if x (format "$%.4f" (double x)) "?"))
+(defn- ratio [x] (if x (format "%.2f" (double x)) "-"))
+(defn- pad [s n] (let [s (str s)] (if (>= (count s) n) s (str s (apply str (repeat (- n (count s)) " "))))))
+
+(defn eval-report
+  "The terminal report for an eval run. `run` is run.json's data, `summary`
+  summary.json's, both with keyword keys."
+  [run summary]
+  (let [{:keys [run-id model effort live trials prompt-digest relay-commit agentloop-commit]} run]
+    (concat
+     [(str "relay evals  " run-id "  " (if live (str model " effort " effort) "mock model")
+           "  " (if trials (str trials " trial(s)") "default trials"))
+      (str "prompt digest " (subs (str prompt-digest "            ") 0 12)
+           "  relay " (or relay-commit "?") "  agentloop " (or agentloop-commit "?"))
+      ""
+      (str (pad "case" 26) (pad "tier" 6) (pad "pass" 7) (pad "pass^3" 8) (pad "errors" 8)
+           (pad "cost/trial" 12) "failed graders")]
+     (for [[id c] (:cases summary)]
+       (str (pad id 26) (pad (if (= :capability (:tier c)) "cap" "reg") 6)
+            (pad (str (:passed c) "/" (:scored c)) 7)
+            (pad (ratio (get-in c [:pass-hat 3])) 8)
+            (pad (:errors c) 8)
+            (pad (money (:mean-cost-usd c)) 12)
+            (str/join ", " (for [[g k] (:grader-fails c)] (str (name g) " x" k)))))
+     [""]
+     (for [tier [:regression :capability]
+           :let [t (get summary tier)]
+           :when t]
+       (str (name tier) ": pass " (ratio (:pass-rate t))
+            (when-let [[lo hi] (:interval t)] (str " [" (ratio lo) ", " (ratio hi) "]"))
+            "  pass^3 " (ratio (:pass-hat-3 t)) "  errors " (:errors t)))
+     [(str "total " (money (:cost-usd summary)) " model; " (:trials summary) " trials, " (:wakes summary)
+           " wakes, " (:requests summary) " requests; " (money (:cost-per-wake summary)) " per wake")])))

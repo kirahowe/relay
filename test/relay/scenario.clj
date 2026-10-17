@@ -43,17 +43,81 @@
   An assertion is [:has kind pattern], [:none kind pattern] or
   [:count kind pattern n]. Kind is one of :memo :hold :wake :role :routine
   :dead-letter :notification (relay's records of one), :event (the log's
-  events, as JSON read back) or :sent (what the file notifier received). A
-  pattern is a map that must be contained in the item, recursively. Its
+  events, as JSON read back) or :sent (what the file notifier received),
+  and also:
+
+    :fact        one per fact: its latest version, plus :current, :changes
+                 (each version's change, such as [:added :corrected]), :why
+                 (of the latest correction or retraction), :first-text (its first version's
+                 text) and :supersedes-text (the first text of the fact it
+                 replaced)
+    :journal     one per entry: :id :owner :text :at :wake
+    :note :doc   the current ones
+    :tool-call   one per call in any wake's transcript: :role :wake :n (its
+                 place in the run) :name :input :verdict (agentloop's: allow,
+                 deny or hold) :error :result. Held calls count.
+
+  A :wake also has :requests, :input-tokens, :output-tokens,
+  :cache-read-tokens, :cache-write-tokens, :cost-usd, :models (the models
+  that served it), :end-reason (agentloop's), :tool-calls, :tool-errors and
+  :journal-at-end (its last journal_write came after its last memo_close
+  or memo_block). A :memo also has :resolution (closed, blocked,
+  dead-lettered, retry or open) and :recipient-woke.
+
+  A pattern is a map that must be contained in the item, recursively. Its
   values are compared with =, or are one of
 
     [:includes \"text\"]   a string containing text
     [:regex \"re\"]        a string matching re
-    [:not p] [:any p ...] [:all p ...]"
+    [:not p] [:any p ...] [:all p ...]
+    [:on-date \"2026-11-03\" ...]  an instant on one of these days, in the
+                                  staging time zone
+    [:between from to]   a number, or an instant, in a closed range; dates
+                         as bounds compare the instant's local date
+    [:min-length n]      a string of at least n characters, trimmed
+    [:subset s] [:same-set s]  a collection within, or equal to, s as sets
+    [:contains p]        a collection with an element matching p
+
+  Eval cases (relay.eval) add keys a scenario run reads too:
+
+    :clock    \"2026-10-12T09:00\", relay's clock at the start, in the staging
+              time zone; without it the clock starts at the real time
+    :settings {:grants {\"clerk\" {:tools [\"fail-demo\"]}}}, merged into the
+              staging relay.edn: only :grants, and only :tools in them,
+              naming tools relay.staging defines. A role's :tools replace
+              its staging ones."
   (:require [clojure.string :as str]
-            [clojure.walk :as walk]))
+            [clojure.walk :as walk]
+            [relay.core :as core]
+            [relay.staging :as staging]
+            [relay.transcript :as transcript])
+  (:import (java.time Instant LocalDate LocalDateTime ZoneId)))
 
 ;; --- matching
+
+(def zone
+  "The staging time zone, which :on-date and :clock are read in."
+  (ZoneId/of staging/timezone))
+
+(defn- instant [v]
+  (cond (instance? Instant v) v
+        (string? v) (try (Instant/parse v) (catch Exception _ nil))))
+
+(defn- local-date [v] (some-> (instant v) (.atZone ^ZoneId zone) .toLocalDate))
+
+(defn- date-string? [s] (and (string? s) (re-matches #"\d{4}-\d{2}-\d{2}" s)))
+
+(defn- within? [value from to]
+  (cond
+    (and (number? value) (number? from) (number? to)) (<= from value to)
+    (and (date-string? from) (date-string? to))
+    (when-let [d (local-date value)]
+      (not (or (.isBefore d (LocalDate/parse from)) (.isAfter d (LocalDate/parse to)))))
+    :else
+    (let [v (instant value) f (instant from) t (instant to)]
+      (boolean (and v f t (not (.isBefore v f)) (not (.isAfter v t)))))))
+
+(def ops #{:includes :regex :not :any :all :on-date :between :min-length :subset :same-set :contains})
 
 (defn match?
   "Whether `value` fits `pattern`."
@@ -62,27 +126,111 @@
     (map? pattern)
     (and (map? value) (every? (fn [[k p]] (match? p (get value k))) pattern))
 
-    (and (vector? pattern) (#{:includes :regex :not :any :all} (first pattern)))
+    (and (vector? pattern) (ops (first pattern)))
     (let [[op & args] pattern]
       (case op
         :includes (and (string? value) (str/includes? value (first args)))
         :regex (and (string? value) (boolean (re-find (re-pattern (first args)) value)))
         :not (not (match? (first args) value))
         :any (boolean (some #(match? % value) args))
-        :all (every? #(match? % value) args)))
+        :all (every? #(match? % value) args)
+        :on-date (let [d (some-> (local-date value) str)] (boolean (and d (some #{d} args))))
+        :between (boolean (within? value (first args) (second args)))
+        :min-length (and (string? value) (>= (count (str/trim value)) (first args)))
+        :subset (and (coll? value) (let [s (set (first args))] (every? #(contains? s %) value)))
+        :same-set (and (coll? value) (= (set value) (set (first args))))
+        :contains (and (coll? value) (boolean (some #(match? (first args) %) value)))))
 
     :else (= pattern value)))
 
-(def kinds #{:memo :hold :wake :role :routine :dead-letter :notification :event :sent})
+(def kinds #{:memo :hold :wake :role :routine :dead-letter :notification :event :sent
+             :fact :journal :note :doc :tool-call})
+
+;; --- the newer kinds, from the state and the wakes' transcripts
+
+(defn- now-of [{:keys [now state]}] (or now (:last-at state)))
+
+(defn fact-items
+  "One item per fact (see the namespace doc)."
+  [{:keys [state] :as world}]
+  (let [^Instant now (now-of world)
+        first-text (fn [id] (get-in state [:facts id :versions 0 :text]))]
+    (vec (for [f (sort-by :id (vals (:facts state)))
+               :let [latest (core/fact-as-known f nil)
+                     ^Instant to (:valid-to latest)
+                     corrections (filter #(#{:corrected :retracted} (:change %)) (:versions f))]]
+           (assoc latest
+                  :current (and (not (:retracted latest)) (nil? (:superseded-by latest))
+                                (or (nil? to) (nil? now) (not (.isBefore to now))))
+                  :changes (mapv :change (:versions f))
+                  :why (:why (last corrections))
+                  :first-text (first-text (:id f))
+                  :supersedes-text (some-> (:supersedes f) first-text))))))
+
+(defn- wakes [state] (sort-by :id (vals (:wakes state))))
+
+(defn tool-call-items
+  "One item per tool call, over every wake in order."
+  [{:keys [state transcripts]}]
+  (vec (map-indexed (fn [i call] (assoc call :n (inc i)))
+                    (for [w (wakes state)
+                          call (transcript/tool-calls (get transcripts (:id w)))]
+                      (assoc call :role (:role w) :wake (:id w))))))
+
+(defn- done? [call] (and (= "allow" (:verdict call)) (not (:error call))))
+
+(defn journal-at-end?
+  "Whether a wake's last journal_write that ran came after its last
+  memo_close or memo_block that ran. Pure, over the wake's calls in order."
+  [calls]
+  (let [last-index (fn [names] (last (keep-indexed (fn [i c] (when (and (names (:name c)) (done? c)) i)) calls)))
+        j (last-index #{"journal_write"})
+        c (last-index #{"memo_close" "memo_block"})]
+    (boolean (and j (or (nil? c) (> j c))))))
+
+(defn- wake-item [transcripts w]
+  (let [entries (get transcripts (:id w))
+        {:keys [requests usage cost-usd models]} (transcript/run-usage entries)
+        calls (transcript/tool-calls entries)]
+    (assoc w
+           :requests requests
+           :input-tokens (:input usage) :output-tokens (:output usage)
+           :cache-read-tokens (:cache-read usage) :cache-write-tokens (:cache-write usage)
+           :cost-usd cost-usd :models models
+           :end-reason (transcript/end-reason entries)
+           :tool-calls (count calls)
+           :tool-errors (count (filter :error calls))
+           :journal-at-end (journal-at-end? calls))))
+
+(defn- memo-item [state m]
+  (let [blocked? (some #(and (= (:id m) (:memo %)) (= "blocked" (:reason %))) (vals (:dead-letters state)))]
+    (assoc m
+           :resolution (case (:status m)
+                         :read "closed"
+                         :dead (if blocked? "blocked" "dead-lettered")
+                         (if (:retry-at m) "retry" "open"))
+           :recipient-woke (boolean (some #(= (:to m) (:role %)) (vals (:wakes state)))))))
+
+(defn journal-items [{:keys [state]}]
+  (let [ws (wakes state)]
+    (vec (for [e (sort-by :id (mapcat val (:journals state)))]
+           (assoc e :wake (:id (last (filter #(and (= (:owner e) (:role %)) (< (:id %) (:id e))) ws))))))))
 
 (defn items
-  "The things of one kind in a world: {:state :events :sent}. Sorted so that
-  failures read the same every time."
-  [{:keys [state events sent]} kind]
+  "The things of one kind in a world: {:state :events :sent}, and for the
+  newer kinds also :transcripts (wake id to its transcript's entries) and
+  :now (relay's clock at the end). Sorted so that failures read the same
+  every time."
+  [{:keys [state events sent transcripts] :as world} kind]
   (case kind
-    :memo (sort-by :id (vals (:memos state)))
+    :memo (map #(memo-item state %) (sort-by :id (vals (:memos state))))
     :hold (sort-by :id (vals (:holds state)))
-    :wake (sort-by :id (vals (:wakes state)))
+    :wake (map #(wake-item transcripts %) (wakes state))
+    :fact (fact-items world)
+    :journal (journal-items world)
+    :note (sort-by (juxt :owner :name) (mapcat vals (vals (:notes state))))
+    :doc (core/docs state nil)
+    :tool-call (tool-call-items world)
     :role (sort-by :id (vals (:roles state)))
     :routine (sort-by (juxt :owner :name) (mapcat vals (vals (:routines state))))
     :dead-letter (sort-by :id (vals (:dead-letters state)))
@@ -122,16 +270,25 @@
   [state pattern]
   (:id (first (filter #(match? pattern %) (sort-by :id (vals (:memos state)))))))
 
+(defn fact-id
+  "The id of the first fact whose :fact item matches `pattern`, or nil."
+  [state pattern]
+  (:id (first (filter #(match? pattern %) (fact-items {:state state})))))
+
 (defn resolve-refs
-  "`x` with each {:memo-id pattern} replaced by that memo's id. Throws when
-  no memo matches."
+  "`x` with each {:memo-id pattern} replaced by that memo's id, and each
+  {:fact-id pattern} by that fact's. Throws when nothing matches."
   [state x]
   (walk/postwalk
    (fn [form]
-     (if (and (map? form) (= [:memo-id] (keys form)))
+     (cond
+       (and (map? form) (= [:memo-id] (keys form)))
        (or (memo-id state (:memo-id form))
            (throw (ex-info (str "No memo matches " (pr-str (:memo-id form)) ".") {:pattern (:memo-id form)})))
-       form))
+       (and (map? form) (= [:fact-id] (keys form)))
+       (or (fact-id state (:fact-id form))
+           (throw (ex-info (str "No fact matches " (pr-str (:fact-id form)) ".") {:pattern (:fact-id form)})))
+       :else form))
    x))
 
 ;; --- the scripted model
@@ -175,6 +332,42 @@
 
 (def path-option-keys #{:data :pause-file :trace})
 
+;; --- :clock and :settings
+
+(defn clock-instant
+  "The instant a scenario's :clock names, or nil when it has none. Throws
+  on one that is not a local date and time."
+  [{:keys [clock]}]
+  (when clock
+    (.toInstant (.atZone (LocalDateTime/parse clock) ^ZoneId zone))))
+
+(defn settings-problems
+  "What is wrong with a scenario's :settings."
+  [settings]
+  (let [allowed (set (keys staging/stand-in-tools))
+        known (into allowed ["remind-demo"])]
+    (cond
+      (nil? settings) []
+      (not (map? settings)) [":settings is a map."]
+      (not= #{:grants} (set (keys settings))) [":settings may hold only :grants."]
+      (not (map? (:grants settings))) [":settings :grants maps a role id to {:tools [...]}."]
+      :else
+      (vec (for [[role grant] (:grants settings)
+                 problem [(when-not (string? role) (str "A role in :settings :grants is a string, not " (pr-str role) "."))
+                          (when-not (and (map? grant) (= #{:tools} (set (keys grant))) (vector? (:tools grant)))
+                            (str "The grant for " role " in :settings is {:tools [...]}, nothing else."))
+                          (when-let [bad (seq (remove known (:tools grant)))]
+                            (str "The grant for " role " names " (str/join ", " bad)
+                                 "; :settings may grant only " (str/join ", " (sort known)) "."))]
+                 :when problem]
+             problem)))))
+
+(defn merge-settings
+  "The staging relay.edn settings with a scenario's :settings merged in."
+  [settings {:keys [grants]}]
+  (reduce (fn [s [role grant]] (assoc-in s [:grants role :tools] (:tools grant)))
+          settings grants))
+
 (defn problems
   "What is wrong with a scenario's shape, as a vector of messages."
   [{:keys [steps assert model] :as scenario}]
@@ -201,6 +394,12 @@
                               (str "Assertion " (brief a) " is not [:has|:none|:count kind pattern ...].")))
         all-assertions (concat assert (mapcat :assert steps))]
     (vec (concat (when-not (and (vector? steps) (seq steps)) ["A scenario needs :steps."])
+                 (when (:clock scenario)
+                   (when-not (and (string? (:clock scenario))
+                                  (try (clock-instant scenario) (catch Exception _ nil)))
+                     [(str ":clock is a local date and time such as \"2026-10-12T09:00\", not "
+                           (pr-str (:clock scenario)) ".")]))
+                 (settings-problems (:settings scenario))
                  (when-not (seq assert) ["A scenario needs :assert."])
                  (when-not (or (nil? model) (and (map? model) (every? vector? (vals model))))
                    [":model maps a role id to a vector of replies."])

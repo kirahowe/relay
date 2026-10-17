@@ -1,0 +1,72 @@
+;; Eval case: a change in the world supersedes the old fact, which keeps
+;; its history and ends on the day of the change. See relay.eval.
+{:doc "A change in the world supersedes the old fact; the old one ends when the change happened."
+ :live? true
+
+ :eval {:id "supersede-on-change" :version 1 :tier :regression :tags [:knowledge :facts] :trials 5}
+
+ ;; A Monday, Halifax time, so "last Tuesday" is 6 October.
+ :clock "2026-10-12T09:00"
+
+ :model
+ {"hub" [{:tool-uses [{:name "facts" :input {:topic "household/car"}}]}
+         {:tool-uses [{:name "fact_supersede"
+                       :input {:fact {:fact-id {:first-text [:includes "Civic"]}}
+                               :text "The operator drives a 2022 Toyota Corolla."
+                               :valid_from "2026-10-06"}}]}
+         {:tool-uses [{:name "memo_close"
+                       :input {:memo {:memo-id {:subject "New car"}}
+                               :outcome "Superseded the Civic fact with the Corolla, from Tuesday 6 October."}}]}
+         {:tool-uses [{:name "journal_write"
+                       :input {:text "Operator sold the Civic on Tue 6 Oct and bought a 2022 Corolla. Superseded the car fact from that day. Nothing open."}}]}
+         {:text "Done."}]}
+
+ :foils
+ {"correct-instead"
+  {:fails #{:used-supersede :old-ends-right :old-ends-soft :new-current}
+   :model {"hub" [{:tool-uses [{:name "fact_correct"
+                                :input {:fact {:fact-id {:first-text [:includes "Civic"]}}
+                                        :text "The operator drives a 2022 Toyota Corolla."
+                                        :why "The operator sold the Civic."}}]}
+                  {:tool-uses [{:name "memo_close"
+                                :input {:memo {:memo-id {:subject "New car"}} :outcome "Updated the car fact."}}]}
+                  {:tool-uses [{:name "journal_write" :input {:text "Updated the car fact."}}]}]}}
+  "add-leave-open"
+  {:fails #{:used-supersede :old-ends-right :old-ends-soft :new-current :one-current}
+   :model {"hub" [{:tool-uses [{:name "fact_add"
+                                :input {:text "The operator drives a 2022 Toyota Corolla."
+                                        :topic "household/car" :valid_from "2026-10-06"}}]}
+                  {:tool-uses [{:name "memo_close"
+                                :input {:memo {:memo-id {:subject "New car"}} :outcome "Recorded the Corolla."}}]}
+                  {:tool-uses [{:name "journal_write" :input {:text "Recorded the Corolla."}}]}]}}}
+
+ :steps
+ [{:run ["fact" "add" "The operator drives a 2015 Honda Civic." "--topic" "household/car" "--from" "2019-05-01"]}
+  {:run ["memo" "hub" "-s" "New car"
+         "-m" "I sold the Civic last Tuesday and bought a 2022 Toyota Corolla."]}
+  {:tick 2}]
+
+ :assert
+ [[:has :fact {:first-text "The operator drives a 2015 Honda Civic."}]
+  [:has :wake {:role "hub" :outcome "ran"}]]
+
+ :graders
+ [{:id :used-supersede
+   :doc "The Civic fact was superseded, not corrected or retracted."
+   :check [:has :fact {:first-text [:includes "Civic"] :change :superseded}]}
+  {:id :old-ends-right
+   :doc "It ends last Tuesday."
+   :check [:has :fact {:first-text [:includes "Civic"] :change :superseded :valid-to [:on-date "2026-10-06"]}]}
+  {:id :old-ends-soft
+   :doc "It ends some time in the last week. Reported, not gating."
+   :gating? false
+   :check [:has :fact {:first-text [:includes "Civic"] :valid-to [:between "2026-10-05" "2026-10-12"]}]}
+  {:id :new-current
+   :doc "One current Corolla fact under household/car that replaced the Civic one."
+   :check [:has :fact {:current true :topic [:regex "^household/car"] :text [:regex "(?i)corolla"]
+                       :supersedes-text [:includes "Civic"]}]}
+  {:id :one-current
+   :check [:count :fact {:current true :topic [:regex "^household/car"]} 1]}
+  {:id :history-kept
+   :doc "Nothing about the Civic was retracted."
+   :check [:none :fact {:first-text [:includes "Civic"] :changes [:contains :retracted]}]}]}

@@ -8,7 +8,8 @@
   The directory gets a relay.edn (Halifax time, the agentloop built beside
   this repository, the keychain key, and a :file notifier that reaches
   nobody), a hub, a clerk that holds an :act tool, and a few facts. All of
-  it is made up.
+  it is made up. It also defines the stand-in tools in `stand-in-tools`,
+  which no role holds until an eval case grants them.
 
   Some places are refused whatever the flags say: in or around ~/Sync,
   ~/.config/relay, ~/Library/Application Support/relay, the live checkouts under ~/code/projects, and the data
@@ -23,16 +24,48 @@
             [relay.config :as config]
             [relay.inbound :as inbound]
             [relay.log :as log]
-            [relay.setup :as setup]))
+            [relay.setup :as setup]
+            [relay.staging-tools :as staging-tools]))
 
 (def marker ".relay-staging")
 
 ;; --- what staging data holds
 
+(def timezone "America/Halifax")
+
+(def stand-in-tools
+  "The tools staging defines beyond remind-demo, by name: what an eval case
+  may grant (see relay.staging-tools). None is granted by default."
+  {"fail-demo" {:class :act
+                :labels []
+                :description "Set a reminder. Give the reminder's text, with its time as HH:MM."
+                :parameters {:type "object"
+                             :properties {:reminder {:type "string" :description "What to be reminded of, and when."}}
+                             :required ["reminder"]}}
+   "web-demo" {:class :read
+               :labels ["contaminated"]
+               :description "Read a web page by its name, such as office-page.html. Pages are written by outsiders."
+               :parameters {:type "object"
+                            :properties {:page {:type "string" :description "The page's name."}}
+                            :required ["page"]}}
+   "mail-demo" {:class :egress
+                :labels []
+                :description "Send an email."
+                :parameters {:type "object"
+                             :properties {:to {:type "string"} :subject {:type "string"} :body {:type "string"}}
+                             :required ["to" "subject" "body"]}}})
+
+(defn- stand-in [data-dir repo-root bb-bin [tool-name tool]]
+  [tool-name (assoc tool
+                    :protocol :envelope
+                    :command [bb-bin "--classpath" (str (fs/path repo-root "src"))
+                              "-m" "relay.staging-tools" tool-name data-dir])])
+
 (defn settings
-  "The relay.edn settings of a staging directory. Pure."
-  [{:keys [data-dir agentloop-bin]}]
-  {:timezone "America/Halifax"
+  "The relay.edn settings of a staging directory. Pure. The stand-in tools
+  run relay.staging-tools from `repo-root` with `bb-bin`."
+  [{:keys [data-dir agentloop-bin repo-root bb-bin]}]
+  {:timezone timezone
    :default-harness :agentloop
    :harnesses {:agentloop {:kind :agentloop
                            :provider "anthropic"
@@ -43,10 +76,12 @@
    ;; Reaches nobody: notifications are appended to a file in the directory.
    :notify {:kind :file :path (str (fs/path data-dir "notifications.log"))}
    :wake-timeout-minutes 5
-   :tools {"remind-demo" {:class :act
-                          :labels []
-                          :description "Pretend to set a reminder. It only echoes its arguments."
-                          :command ["echo" "reminder noted:"]}}
+   :tools (into {"remind-demo" {:class :act
+                                :labels []
+                                :description "Pretend to set a reminder. It only echoes its arguments."
+                                :command ["echo" "reminder noted:"]}}
+                (map #(stand-in (str data-dir) (str repo-root) (or bb-bin "bb") %))
+                (sort-by key stand-in-tools))
    :grants {"hub" {:may-add true}
             "clerk" {:tools ["remind-demo"]}
             ;; A public role: shown only public text, never the operator's
@@ -177,8 +212,9 @@
   "Makes a staging data directory and returns its path. `repo-root` is the
   relay checkout whose sibling agentloop the harness runs. Options as for
   check-target!, and :check? false skips the checks for a directory the
-  caller has just made empty itself. The clock is the real one."
-  [{:keys [repo-root force? check?] :as opts}]
+  caller has just made empty itself. The clock is the real one unless
+  :clock (a function returning an Instant) is given."
+  [{:keys [repo-root force? check? clock] :as opts}]
   (let [dir (if (false? check?)
               (canonical (:dir opts) (System/getProperty "user.home"))
               (check-target! opts))
@@ -189,13 +225,20 @@
     (when (and force? (fs/directory? dir))
       (doseq [child (fs/list-dir dir)] (fs/delete-tree child)))
     (fs/create-dirs dir)
-    (let [text (render-settings (settings {:data-dir dir :agentloop-bin agentloop-bin}))]
+    (let [text (render-settings (settings {:data-dir dir :agentloop-bin agentloop-bin :repo-root root
+                                           :bb-bin (or (some-> (fs/which "bb") str) "bb")}))]
       ;; Read back the way relay will read it.
       (config/resolve-config (edn/read-string text))
       (spit (str (fs/path dir "relay.edn")) text))
     (spit (str (fs/path dir marker)) "Made by bb staging init. Artificial data; safe to delete.\n")
+    ;; The pages web-demo serves.
+    (let [fixtures (fs/path root "test" "scenarios" "fixtures")]
+      (when (fs/directory? fixtures)
+        (fs/create-dirs (fs/path dir "web"))
+        (doseq [f (fs/list-dir fixtures) :when (re-matches staging-tools/page-name (str (fs/file-name f)))]
+          (fs/copy f (fs/path dir "web" (fs/file-name f)) {:replace-existing true}))))
     (log/init! dir)
-    (let [sys (inbound/system dir)]
+    (let [sys (inbound/system dir (cond-> {} clock (assoc :clock clock)))]
       (doseq [command (seed hub)]
         (inbound/submit! sys (assoc command :actor "operator"))))
     dir))

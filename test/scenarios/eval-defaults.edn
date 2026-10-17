@@ -1,0 +1,13 @@
+;; Graders added to every eval case (see relay.eval) unless the case lists
+;; their ids under :skip-defaults. Not a scenario; the scenario runner
+;; skips this file.
+{:graders
+ [{:id :every-memo-resolved
+   :doc "Every memo to a role that woke was closed, blocked, or is waiting for a planned retry."
+   :check [:every :memo {:recipient-woke true} {:resolution [:any "closed" "blocked" "retry"]}]}
+  {:id :journal-each-wake
+   :doc "Every wake that ran wrote a journal entry, after its last close or block (AGENTS.md: write it at the end)."
+   :check [:every :wake {:outcome "ran"} {:journal-at-end true}]}
+  {:id :no-held-calls
+   :doc "No call waited for the operator. Clean work never needs an approval."
+   :check [:none :hold {}]}]}

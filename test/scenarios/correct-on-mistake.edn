@@ -1,0 +1,56 @@
+;; Eval case: a fact that was wrong from the start is corrected (or
+;; retracted and replaced), not superseded as if the world had changed.
+;; The mirror of supersede-on-change. See relay.eval.
+{:doc "A fact that was wrong all along is corrected, not superseded."
+ :live? true
+
+ :eval {:id "correct-on-mistake" :version 1 :tier :regression :tags [:knowledge :facts] :trials 5}
+
+ :clock "2026-10-12T09:00"
+
+ :model
+ {"hub" [{:tool-uses [{:name "facts" :input {:search "dentist"}}]}
+         {:tool-uses [{:name "fact_correct"
+                       :input {:fact {:fact-id {:first-text [:includes "Patel"]}}
+                               :text "The operator's dentist is Dr. Okafor."
+                               :why "The operator says it has always been Dr. Okafor; Patel was a mistake."}}]}
+         {:tool-uses [{:name "memo_close"
+                       :input {:memo {:memo-id {:subject "Dentist"}}
+                               :outcome "Corrected the dentist fact to Dr. Okafor."}}]}
+         {:tool-uses [{:name "journal_write"
+                       :input {:text "Operator said the dentist was always Dr. Okafor. Corrected the fact, which wrongly said Patel. Nothing open."}}]}
+         {:text "Done."}]}
+
+ :foils
+ {"supersede-instead"
+  {:fails #{:used-correct :not-superseded}
+   :model {"hub" [{:tool-uses [{:name "fact_supersede"
+                                :input {:fact {:fact-id {:first-text [:includes "Patel"]}}
+                                        :text "The operator's dentist is Dr. Okafor."}}]}
+                  {:tool-uses [{:name "memo_close"
+                                :input {:memo {:memo-id {:subject "Dentist"}} :outcome "Updated the dentist."}}]}
+                  {:tool-uses [{:name "journal_write" :input {:text "Updated the dentist."}}]}]}}}
+
+ :steps
+ [{:run ["fact" "add" "The operator's dentist is Dr. Patel." "--topic" "health/dentist"]}
+  {:run ["memo" "hub" "-s" "Dentist"
+         "-m" "You have my dentist wrong. It's always been Dr. Okafor, never Patel."]}
+  {:tick 2}]
+
+ :assert
+ [[:has :fact {:first-text "The operator's dentist is Dr. Patel."}]
+  [:has :wake {:role "hub" :outcome "ran"}]]
+
+ :graders
+ [{:id :used-correct
+   :doc "The Patel fact was corrected or retracted, with a reason."
+   :check [:has :fact {:first-text [:includes "Patel"] :changes [:contains [:any :corrected :retracted]]
+                       :why [:min-length 3]}]}
+  {:id :not-superseded
+   :check [:none :fact {:first-text [:includes "Patel"] :changes [:contains :superseded]}]}
+  {:id :one-current
+   :doc "Exactly one current fact about the dentist, and it names Okafor."
+   :check [:and [:count :fact {:current true :text [:regex "(?i)dentist|patel|okafor"]} 1]
+           [:has :fact {:current true :text [:includes "Okafor"]}]]}
+  {:id :quiet
+   :check [:none :memo {:to "operator"}]}]}
