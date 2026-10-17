@@ -82,10 +82,13 @@ Every command needs the data directory, from --data <dir> or from the file
   relay trust <kind> <ref>            vouch for contaminated text you have read:
                                       memo <n>, fact <n>, doc <path>, note <role>/<name>,
                                       routine <role>/<name>, role <id> or journal <n>
+  relay review [<report>]             the research reports waiting for you, or go
+                                      through one report's findings: accept each,
+                                      reject it as fake, or set it aside
   relay tool --data <dir> --role <r> [--wake <w>] <name>
                                       run a role's tool call (harnesses use this)
 
-approve, deny, release, declassify, trust and revert show you what they are
+approve, deny, release, declassify, trust, review and revert show you what they are
 about on the terminal and ask you to type a code back there, so only a
 person at the terminal can make those decisions.
 
@@ -263,13 +266,19 @@ and --instructions marks the id public too.")
   (let [rng (java.security.SecureRandom.)]
     (apply str (repeatedly 4 #(nth code-chars (.nextInt rng (count code-chars)))))))
 
+(defn- tty!
+  "The operator's terminal (*tty*), or a refusal saying `verb` needs one."
+  [verb]
+  (try (*tty*)
+       (catch Exception _
+         (fail! (str "relay " verb " asks you to confirm on a terminal, and there is none.")))))
+
 (defn- confirm!
   "Shows `lines` on the terminal and asks for a fresh code to be typed back.
-  Throws, changing nothing, when there is no terminal or the code is wrong."
-  [verb lines]
-  (let [{:keys [say ask]} (try (*tty*)
-                               (catch Exception _
-                                 (fail! (str "relay " verb " asks you to confirm on a terminal, and there is none."))))
+  Throws, changing nothing, when there is no terminal or the code is wrong.
+  `tty` is a terminal already open for the same decision."
+  [verb lines & [tty]]
+  (let [{:keys [say ask]} (or tty (tty! verb))
         code (confirmation-code)]
     (say (str (str/join "\n" (map text/visible-line lines)) "\n\nType " code " to " verb ": "))
     (when-not (= code (some-> (ask) str/trim str/upper-case))
@@ -293,6 +302,50 @@ and --instructions marks the id public too.")
     (submit! sys :hold/resolve {:hold hold-id :verdict verdict :reason reason :end (boolean end)})
     (result 0 (str (if (= "allow" verdict) "Approved" "Denied") " hold " hold-id ". "
                    (:role h) " carries on at the next tick."))))
+
+(def ^:private review-answers
+  {"a" "accept" "r" "fake" "n" "not-relevant" "s" nil})
+
+(defn- review!
+  "Goes through a report's waiting findings with the operator on the
+  terminal, one at a time, then asks for the code to record what they
+  decided. Each decision is bound to the digest of the finding as shown."
+  [sys id]
+  (let [state (inbound/current-state sys)
+        zone (config/zone (:config sys))
+        r (core/report state id)
+        pending (when r (core/pending-findings r))]
+    (when-not (seq pending)
+      (fail! (str "Report " id " has nothing waiting for you. relay review lists those that do.")))
+    (let [{:keys [say ask] :as tty} (tty! "review")
+          show (fn [lines] (say (str (str/join "\n" (map text/visible-line lines)) "\n")))
+          _ (show (concat (render/report-header zone r) [""]))
+          decisions (vec (for [i pending
+                               :let [_ (show (concat (render/finding r i) [""]))
+                                     answer (loop []
+                                              (say "[a]ccept / [r]eject as fake / [n]ot relevant / [s]kip: ")
+                                              (let [a (some-> (ask) str/trim str/lower-case)]
+                                                (cond (nil? a) (fail! "The terminal closed. Nothing was decided.")
+                                                      (contains? review-answers a) (review-answers a)
+                                                      :else (recur))))]
+                               :when answer]
+                           {:finding i :decision answer :sha256 (core/finding-digest r i)}))
+          by (group-by :decision decisions)
+          listed (fn [d] (if-let [ds (seq (get by d))] (str/join ", " (map #(inc (:finding %)) ds)) "none"))]
+      (if (empty? decisions)
+        (result 0 "Nothing was decided.")
+        (do (confirm! "record these decisions"
+                      [(str "Report " id ":")
+                       (str "  accept: " (listed "accept"))
+                       (str "  reject as fake: " (listed "fake"))
+                       (str "  not relevant: " (listed "not-relevant"))
+                       (str "  skipped: " (let [s (remove (set (map :finding decisions)) pending)]
+                                            (if (seq s) (str/join ", " (map inc s)) "none")))
+                       ""
+                       "Accepting puts a finding in the ledger as yours: its text no longer counts as an outsider's."]
+                      tty)
+            (submit! sys :report/review {:report id :decisions decisions})
+            (result 0 (str "Recorded " (count decisions) " decision(s) on report " id ".")))))))
 
 (def ^:private spec
   {:alias {:s :subject :m :message :n :tail}
@@ -469,6 +522,9 @@ and --instructions marks the id public too.")
                 (submit! sys :label/trust {:kind kind :ref ref :version (:version v)
                                            :sha256 (core/sha256 (:text v))})
                 (result 0 (str "Trusted " kind " " ref ".")))
+      "review" (if-let [id (some-> (first more) parse-long)]
+                 (review! sys id)
+                 (lines (render/reports-waiting zone (core/reports-waiting (state)))))
       "tool" (run-tool sys (:role opts) (first more) (:wake opts))
       (apply result 1 (str/split-lines usage)))))
 

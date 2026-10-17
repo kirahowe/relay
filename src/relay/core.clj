@@ -2473,3 +2473,69 @@
   (let [r (report! state id)]
     (checking! r pid pid-start)
     (verify-failed tx id error)))
+
+;; reviewing reports
+
+(def review-decisions
+  "What the operator says of a finding: accept it into the ledger, reject it
+  as fake (made up, or a trap), or set it aside as not relevant."
+  #{"accept" "fake" "not-relevant"})
+
+(defn finding-digest
+  "The digest of a finding exactly as the operator is shown it
+  (relay.reports/finding-fields), which accepting it is bound to."
+  [r i]
+  (sha256 (reports/finding-digest-text (get-in r [:findings i]) (get-in r [:verification :findings i]))))
+
+(defn reports-waiting
+  "Verified reports with findings waiting for the operator, oldest first."
+  [state]
+  (->> (vals (:reports state)) (filter #(seq (pending-findings %))) (sort-by :id) vec))
+
+(defmethod evolve* "finding/reviewed" [state {:keys [at actor data]}]
+  (update-in state [:reports (:report data) :verification :findings (:finding data)] assoc
+             :decision (:decision data) :decided-by actor :decided-at (inst at)))
+
+(defmethod evolve* "ledger/entry-added" [state {:keys [seq at data labels]}]
+  (let [{:keys [report finding auto]} data]
+    (-> state
+        (assoc-in [:ledger seq] (merge (select-keys data [:role :kind :title :organization :url :domain
+                                                          :deadline :amount :location :report :finding])
+                                       {:id seq :status "new" :trusted (not auto) :added-at (inst at)
+                                        :labels (union labels)}))
+        (update-in [:reports report :verification :findings finding]
+                   #(cond-> (assoc % :entry seq) auto (assoc :decision "accept" :auto true))))))
+
+(defn- ledger-entry-data
+  "A ledger entry for a finding: its typed values and text, with the
+  canonical URL and domain the verifier found."
+  [r i]
+  (let [f (get-in r [:findings i])
+        v (get-in r [:verification :findings i])]
+    (cond-> (merge (select-keys f [:kind :title :organization :deadline :amount :location])
+                   {:role (:role r) :url (:canonical-url v) :domain (:domain v) :report (:id r) :finding i})
+      true (->> (remove (comp nil? val)) (into {})))))
+
+(defmethod decide* :report/review [{:keys [state] :as tx} {{id :report :keys [decisions]} :args}]
+  ;; A person at the terminal reads each finding and says what it is.
+  (operator-only! tx "reviews a report")
+  (let [r (report! state id)
+        pending (set (pending-findings r))]
+    (when-not (= :verified (:status r)) (reject! :invalid (str "Report " id " has not been checked yet.")))
+    (when-not (and (sequential? decisions) (seq decisions)) (reject! :invalid "Nothing was decided."))
+    (when-not (apply distinct? (map :finding decisions))
+      (reject! :invalid "Each finding is decided once."))
+    (doseq [{i :finding :keys [decision]} decisions]
+      (when-not (pending i) (reject! :invalid (str "Finding " (if (integer? i) (inc i) i) " of report " id " is not waiting.")))
+      (when-not (review-decisions decision)
+        (reject! :invalid (str "A finding is accepted, rejected as fake or not relevant, not " (pr-str decision) "."))))
+    ;; The operator decides on what they were shown, and only that.
+    (when-not (every? #(= (:sha256 %) (finding-digest r (:finding %))) decisions)
+      (reject! :conflict (str "Report " id " changed since you read it. Nothing was decided; look again.")))
+    (reduce (fn [tx {i :finding :keys [decision sha256]}]
+              (cond-> (emit tx "finding/reviewed" {:report id :finding i :decision decision :sha256 sha256})
+                ;; Read and vouched for: the entry is the operator's, so its
+                ;; text is not contaminated. Reading it adds private, as
+                ;; reading anything relay keeps does.
+                (= "accept" decision) (emit "ledger/entry-added" (ledger-entry-data r i))))
+            tx (sort-by :finding decisions))))

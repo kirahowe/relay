@@ -544,8 +544,11 @@
 
 ;; --- what the operator is shown
 
-(defn amount-text [{:keys [value currency]}]
-  (when (number? value)
+(defn amount-text
+  "An amount as a plain number and its currency, or nil when it is not a
+  finite number. Total."
+  [{:keys [value currency]}]
+  (when (and (number? value) (not (ratio? value)) (Double/isFinite (double value)))
     (str (.toPlainString (.stripTrailingZeros (bigdec value))) " " currency)))
 
 (defn finding-fields

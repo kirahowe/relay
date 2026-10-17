@@ -13,6 +13,7 @@
             [clojure.walk]
             [clojure.string :as str]
             [relay.core :as core]
+            [relay.reports :as reports]
             [relay.text :as text])
   (:import (java.time Instant ZoneId)
            (java.time.format DateTimeFormatter)))
@@ -345,3 +346,125 @@
             "  pass^3 " (ratio (:pass-hat-3 t)) "  errors " (:errors t)))
      [(str "total " (money (:cost-usd summary)) " model; " (:trials summary) " trials, " (:wakes summary)
            " wakes, " (:requests summary) " requests; " (money (:cost-per-wake summary)) " per wake")])))
+
+
+;; --- research reports
+;;
+;; A report's text was chosen by whoever wrote the pages, so it never
+;; decides where a line of the review screen starts. A field of one line
+;; is one screen line, its line breaks escaped at the edge
+;; (text/visible-line); a field of many lines (a summary, a quote) goes
+;; behind text/gutter (text/block).
+
+(defn- one-line
+  "A field of one line. The edge escapes any line break in it."
+  [s]
+  (str s))
+
+(defn- block
+  "A field of many lines: its label on a line of the screen's own, then
+  text/block."
+  [label labels s]
+  (cons (str "  " label ":") (text/block labels s)))
+
+(defn- url-line
+  "A URL printed in full with its registrable domain in brackets, and how
+  its host displays when that is punycode. The edge that prints it makes
+  its characters visible."
+  [url {:keys [domain host]}]
+  (one-line (str (reports/marked-url url domain)
+                 (when (:punycode host) (str "  (its host shows as " (:unicode host) ")")))))
+
+(defn flag-text
+  "One flag in plain words, on one line."
+  [{:keys [kind url quote error refused refusal reason final-url host unicode domain evidence-domains field what
+           deadline incomplete status]}]
+  (one-line
+   (case kind
+     "quote-not-found" (str "a quote was not found on " url (when (and status (not= 200 status)) (str ", which answered " status))
+                            (when incomplete " (the page was not read whole, so it may be in the rest)")
+                            ": \"" quote "\"")
+     "page-uncheckable" (str url " could not be checked: " reason)
+     "fetch-failed" (cond refused (str "the verifier's guard refused the address of " url ": " error)
+                          (= "redirect" refusal) (str url " redirects where the verifier will not follow: " error)
+                          :else (str url " could not be fetched: " error))
+     "cross-domain-redirect" (str url " sends you on to another domain, " final-url)
+     "suspicious-host" (str "the host " host " is written in punycode or mixes scripts; it shows as " unicode)
+     "domain-mismatch" (str "the finding is on " domain ", and none of its evidence is"
+                            (when (seq evidence-domains) (str " (the evidence is on " (str/join ", " evidence-domains) ")")))
+     "hidden-characters" (str "the " field " has characters that do not show")
+     "lookalikes" (str "the " field " has characters that can pass for others: " (str/join "; " what))
+     "deadline-unparseable" (str "the deadline " deadline " is not a real date")
+     "deadline-past" (str "the deadline " deadline " has passed")
+     "organization-not-in-domain" (str "the organization's name is not in " domain " (a weak sign)")
+     "first-seen-domain" (str domain " has not come up before")
+     "reader-directed" (str "the " field " speaks to whoever reads it, as an instruction would")
+     "rejected-as-fake-before" (str "this URL was rejected as fake before: " url)
+     (str "flagged: " kind))))
+
+(defn- verified-url
+  "What the verifier found of a URL a report cites."
+  [r url]
+  (first (filter #(= url (:url %)) (get-in r [:verification :urls]))))
+
+(def ^:private many-lines
+  "The fields that may run to many lines; every other is one line."
+  #(or (= "summary" %) (str/starts-with? % "quote ")))
+
+(defn finding
+  "One finding as the operator reviews it: every field, the text as from
+  a contaminated source, each URL in full with its domain marked, and
+  the flags in plain words. Exactly the fields relay.reports/finding-fields
+  gives, which accepting it is bound to. Total: whatever the finding and
+  the verifier's data hold, it returns lines."
+  [r i]
+  (let [f (get-in r [:findings i])
+        v (get-in r [:verification :findings i])
+        labels (get-in r [:verification :labels])
+        urlish #{"url" "lands at"}
+        field (fn [[k value]]
+                (cond
+                  (many-lines k) (block k labels value)
+                  (urlish k) [(str "  " k ": " (url-line value (if (= "url" k) (verified-url r value)
+                                                                    {:domain (some-> (verified-url r (:url f)) :final-domain)
+                                                                     :host (:final-host (verified-url r (:url f)))})))]
+                  (str/starts-with? k "evidence ") [(str "  " k ": " (url-line value (verified-url r value)))]
+                  :else [(str "  " k ": " (text/for-operator labels (one-line value)))]))]
+    (concat
+     [(str "Finding " (inc i) " of " (count (:findings r)) ", report " (:id r) " from " (one-line (:role r)))]
+     (mapcat field (reports/finding-fields f v))
+     (if-let [flags (seq (:flags v))]
+       (cons "  flags:" (map #(str "    - " (text/for-operator labels (flag-text %))) flags))
+       ["  flags: none"]))))
+
+(defn- seen-as-text [{:keys [kind entry report finding]}]
+  (case kind
+    "ledger" (str "matches ledger entry " entry)
+    "pending" (str "matches finding " (some-> finding inc) " of report " report ", waiting for review")
+    "not-relevant" (str "matches finding " (some-> finding inc) " of report " report ", which you judged not relevant")
+    "earlier" (str "matches finding " (some-> finding inc) " of this report")
+    "matches something seen before"))
+
+(defn report-header
+  "What a report says about itself, what flags its own text, and which of
+  its findings are hidden as seen before and what each matched."
+  [zone r]
+  (let [labels (get-in r [:verification :labels] (:labels r))
+        hidden (keep-indexed (fn [i f] (when (:seen-before f) [i f])) (get-in r [:verification :findings]))]
+    (concat
+     [(str "Report " (:id r) " from " (one-line (:role r)) ", submitted " (local (:submitted-at r) zone))]
+     (block "summary" labels (:summary r))
+     (map #(str "  flag: " (text/for-operator labels (flag-text %))) (get-in r [:verification :flags]))
+     (when (seq hidden)
+       (cons (str "  hidden as seen before: " (count hidden))
+             (for [[i f] hidden] (str "    - finding " (inc i) " " (seen-as-text (:seen-as f)))))))))
+
+(defn reports-waiting
+  "The reports with findings for the operator to review."
+  [zone rs]
+  (if (empty? rs)
+    ["No reports are waiting for you."]
+    (for [r rs]
+      (str "Report " (:id r) " from " (:role r) ", submitted " (local (:submitted-at r) zone) ": "
+           (count (core/pending-findings r)) " of " (count (:findings r)) " findings to review"
+           " (relay review " (:id r) ")"))))
