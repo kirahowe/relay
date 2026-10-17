@@ -271,9 +271,11 @@ is written in Go.
    access by default, give the phone a user that can only read the topic
    and relay a token that can only write to it, and pick a topic nobody
    could guess. relay sends the token as `Authorization: Bearer`, reading
-   it at each push from `:token-file "/path/to/token"` or from the output
-   of `:token-command ["cat" "/path/to/token"]` (any command, like
-   `:api-key-command`). Keep the token file readable only by you.
+   it at each push from the output of `:token-command` (any command, like
+   `:api-key-command`) or from `:token-file`. The lockdown script keeps it
+   in the login keychain, so the setting is
+   `:token-command ["security" "find-generic-password" "-s" "relay-ntfy" "-w"]`.
+   If you use `:token-file` instead, keep the file readable only by you.
 7. To give roles Apple Reminders, build `tools/rem` (see its README) and
    define its two tools (`rem-read`, `rem`) and grant them in `relay.edn`.
 8. To let roles read your Apple Calendar, build `tools/cal` (see its README),

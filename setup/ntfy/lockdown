@@ -5,9 +5,10 @@
 #
 #   setup/ntfy/lockdown <server.yml> <ntfy-binary>
 #
-# It refuses a config that already has an auth-file. When it finishes it
-# prints the :notify settings for relay.edn and what to change on the
-# phone. Until you do both, notifications stop reaching the phone.
+# It refuses a config that already has an auth-file. relay's token goes
+# into the login keychain (service relay-ntfy), never a file. When it
+# finishes it prints the :notify settings for relay.edn and what to change
+# on the phone. Until you do both, notifications stop reaching the phone.
 set -euo pipefail
 
 conf=${1:?usage: lockdown <server.yml> <ntfy-binary>}
@@ -15,7 +16,7 @@ ntfy=${2:?usage: lockdown <server.yml> <ntfy-binary>}
 dir=$(cd "$(dirname "$conf")" && pwd)
 conf="$dir/$(basename "$conf")"
 authdb="$dir/user.db"
-tokenfile="$dir/relay.token"
+service=relay-ntfy
 
 [ -t 0 ] || { echo "Run this in a terminal: it asks for a password." >&2; exit 1; }
 [ -x "$ntfy" ] || { echo "No ntfy binary at $ntfy." >&2; exit 1; }
@@ -47,16 +48,18 @@ echo "Choose a password for the phone's ntfy user (you type it into the ntfy app
 # thrown away. ntfy takes a scripted password only from NTFY_PASSWORD.
 NTFY_PASSWORD=$(openssl rand -hex 24) "$ntfy" user --config "$conf" add relay
 "$ntfy" access --config "$conf" relay "$topic" write-only
-umask 077
-"$ntfy" token --config "$conf" add relay | grep -Eo 'tk_[A-Za-z0-9]+' > "$tokenfile"
-[ -s "$tokenfile" ] || { echo "ntfy printed no token; see $conf.pre-lockdown to undo." >&2; exit 1; }
-chmod 600 "$tokenfile"
+token=$("$ntfy" token --config "$conf" add relay | grep -Eo 'tk_[A-Za-z0-9]+' || true)
+[ -n "$token" ] || { echo "ntfy printed no token; see $conf.pre-lockdown to undo." >&2; exit 1; }
+# security -i reads the command from stdin, which keeps the token out of
+# every process's arguments, where ps would show it.
+printf 'add-generic-password -U -a "%s" -s %s -w %s\n' "$USER" "$service" "$token" | security -i
+token=$(security find-generic-password -s "$service" -w)
 
 url=$(grep -E '^listen-http:' "$conf" | sed -E 's/.*"([^"]+)".*/\1/')
 code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 anon=$(code -d "lockdown check" "http://$url/$topic")
 anonget=$(code "http://$url/$topic/publish?message=lockdown+check")
-withtoken=$(code -H "Authorization: Bearer $(cat "$tokenfile")" -d "relay can publish" "http://$url/$topic")
+withtoken=$(printf 'Authorization: Bearer %s\n' "$token" | code -H @- -d "relay can publish" "http://$url/$topic")
 echo
 echo "Publish without a token: $anon (want 401 or 403)"
 echo "Publish over GET without a token: $anonget (want 401 or 403)"
@@ -67,13 +70,14 @@ cat <<EOF
 Set :notify in relay.edn to:
 
   :notify {:kind :ntfy :url "http://$url" :topic "$topic"
-           :token-file "$tokenfile"}
+           :token-command ["security" "find-generic-password" "-s" "$service" "-w"]}
 
 On the phone, in the ntfy app: sign in to your server as "phone" with the
 password you chose, unsubscribe from "relay", and subscribe to:
 
   $topic
 
-To undo: put $conf.pre-lockdown back and run
+To undo: put $conf.pre-lockdown back, run
 launchctl kickstart -k gui/$(id -u)/relay.ntfy
+and remove the token with security delete-generic-password -s $service
 EOF

@@ -30,7 +30,8 @@ web-root: disable
 #   ntfy access phone <topic> read-only
 #   ntfy user add relay
 #   ntfy access relay <topic> write-only
-#   ntfy token add relay        # prints tk_...; keep it in a file only you can read
+#   ntfy token add relay        # prints tk_...; put it in the login keychain
 #
 # Use a topic nobody could guess (openssl rand -hex 16), and give relay the
-# token in relay.edn with :token-file or :token-command (see README).
+# token in relay.edn with :token-command (see README). setup/ntfy/lockdown
+# does all of this for a running server.
