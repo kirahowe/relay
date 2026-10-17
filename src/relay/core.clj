@@ -91,6 +91,20 @@
    (throw (ex-info message (cond-> {:relay/rejected reason}
                              (seq labels) (assoc :relay/labels (union labels)))))))
 
+(defn reject-quoting-call!
+  "reject! for a message that quotes the call being refused, such as a
+  date relay could not read. That text is the caller's own, so whatever
+  ran the call gives the refusal the labels of the session that sent it
+  (relay.tools/run-tool). Without them the refusal would hand a
+  session's text back unlabelled."
+  [message]
+  (throw (ex-info message {:relay/rejected :invalid :relay/quotes-call true})))
+
+(defn quotes-call?
+  "Whether a refusal quotes the call it refused (reject-quoting-call!)."
+  [e]
+  (true? (:relay/quotes-call (ex-data e))))
+
 (defn rejection [e] (:relay/rejected (ex-data e)))
 
 (defn rejection-labels
@@ -1447,7 +1461,7 @@
     (when-not (and (string? name) (re-matches routine-name-pattern name))
       (reject! "A routine name is lower case letters, digits and hyphens."))
     (when-not (schedule/parse schedule)
-      (reject! (str "Not a schedule relay understands: " (pr-str schedule) ". Use every 30m, "
+      (reject-quoting-call! (str "Not a schedule relay understands: " (pr-str schedule) ". Use every 30m, "
                     "every 2h, every 1d, daily 07:30, weekly mon 09:00 or once 2026-10-08 09:00.")))
     (let [last-run (memo (:state tx) (:last-memo (routine (:state tx) owner name)))
           tx (emit tx "routine/written" {:owner owner :name name
@@ -2220,7 +2234,7 @@
       (or (attempt #(Instant/parse s))
           (attempt #(.toInstant (.atZone (LocalDateTime/parse (str/replace s " " "T")) zone)))
           (attempt #(.toInstant (.atStartOfDay (LocalDate/parse s) zone)))
-          (reject! (str what " is not a time relay understands: " (pr-str s) ". Use 2026-10-14, "
+          (reject-quoting-call! (str what " is not a time relay understands: " (pr-str s) ". Use 2026-10-14, "
                         "2026-10-14 09:00 or 2026-10-14T13:00:00Z."))))))
 
 (def ^:private topic-pattern #"[a-z0-9][a-z0-9-]*(/[a-z0-9][a-z0-9-]*)*")
@@ -2229,7 +2243,7 @@
   (when-not (blank? topic)
     (let [t (str/trim topic)]
       (when-not (and (<= (count t) 100) (re-matches topic-pattern t))
-        (reject! (str "A topic is lower case words joined by hyphens, with / between levels,"
+        (reject-quoting-call! (str "A topic is lower case words joined by hyphens, with / between levels,"
                       " such as household/car. " (pr-str t) " is not one.")))
       t)))
 

@@ -1,6 +1,6 @@
 {:id 25
  :title "Label the clock error echoes consistently"
- :status :inbox
+ :status :review
  :type :bug
  :priority :p3
  :created "2026-10-17"

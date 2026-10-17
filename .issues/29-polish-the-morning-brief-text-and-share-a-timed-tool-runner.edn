@@ -1,6 +1,6 @@
 {:id 29
  :title "Polish the morning brief text and share a timed tool runner"
- :status :ready
+ :status :in-progress
  :type :chore
  :priority :p3
  :created "2026-10-17"

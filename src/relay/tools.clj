@@ -484,8 +484,10 @@
                       nil
                       v)]
               (cond (nil? v) (throw (ex-info (str "There is no doc at " path
-                                                  (when version (str " with version " version)) ".") {}))
-                    (:removed v) (throw (ex-info (str path " was removed in version " (:seq v) ".") {}))
+                                                  (when version (str " with version " version)) ".")
+                                             {:relay/quotes-call true}))
+                    (:removed v) (throw (ex-info (str path " was removed in version " (:seq v) ".")
+                                                 {:relay/quotes-call true}))
                     :else (show [(item (str (:content v)
                                             (when (:newer-withheld v) (str "\n\n[relay: " newer-withheld "]")))
                                        (core/item-labels v)
@@ -500,7 +502,7 @@
             (let [public (public-reader? state config actor)
                   vs (get-in state [:docs path :versions])]
               (if (or (empty? vs) (and public (not (core/doc-shown-to-public? state path (peek vs)))))
-                (throw (ex-info (str "There is no doc at " path ".") {}))
+                (throw (ex-info (str "There is no doc at " path ".") {:relay/quotes-call true}))
                 (show (for [{:keys [seq at actor content removed] :as v} vs
                             :when (or (not public) (core/doc-shown-to-public? state path v))
                             :let [[who who-labels] (author state actor)]]
@@ -908,8 +910,12 @@
                  (read (read-ctx sys) actor args)
                  ((:run tool) sys actor labels args)))
        (catch clojure.lang.ExceptionInfo e
+         ;; A refusal that quotes the call shows the session its own text
+         ;; again, so it carries that session's labels. A fixed message
+         ;; (clock's, input-problem's) quotes nothing and carries none.
          {:error (ex-message e)
-          :labels (core/union (core/rejection-labels e) (:relay/labels (ex-data e)))})
+          :labels (core/union (core/rejection-labels e) (:relay/labels (ex-data e))
+                              (when (core/quotes-call? e) labels))})
        (catch Exception e
          {:error (or (ex-message e) (str (class e))) :labels []})))
 
@@ -959,8 +965,10 @@
     (cond
       (not (core/active-role? state role-id))
       {:error (str role-id " is not an active role.") :labels []}
+      ;; The name is the session's own text, so the refusal carries the
+      ;; session's labels, as any refusal that quotes the call does.
       (nil? tool)
-      {:error (str "You have no tool called " tool-name ".") :labels []}
+      {:error (str "You have no tool called " tool-name ".") :labels (core/union labels)}
       :else
       (let [args (coerce-input (or args {}))]
         (if-let [problem (input-problem (:parameters tool) args)]

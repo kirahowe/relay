@@ -474,6 +474,36 @@
         (is (not (str/includes? error "secretXYZ")) input)
         (is (= [] labels) "an error carries no labels, so it holds nothing from the call")))))
 
+(deftest an-error-that-quotes-the-call-carries-the-session-s-labels
+  ;; relay#25. These errors show the session its own text again, so they
+  ;; carry the labels of the session that sent it, where the clock's fixed
+  ;; errors above carry none.
+  (with-sys
+    (fn [sys]
+      (let [session ["contaminated" "private"]]
+        (testing "a time relay cannot read"
+          (doseq [[tool input] [["facts" {:as_of "secretXYZ123"}]
+                                ["facts" {:known_at "secretXYZ123"}]
+                                ["fact_add" {:topic "home" :text "x" :valid_from "secretXYZ123"}]]
+                  :let [{:keys [error labels]} (tools/call! sys "clerk" tool input session "c1")]]
+            (is (str/includes? (str error) "secretXYZ123") tool)
+            (is (= session labels) tool)))
+        (testing "a topic, a schedule and a doc path"
+          (doseq [[tool input] [["fact_add" {:topic "secretXYZ123" :text "x"}]
+                                ["routine_write" {:name "r" :schedule "secretXYZ123" :instructions "x"}]
+                                ["doc_get" {:path "secretXYZ123.md"}]
+                                ["doc_history" {:path "secretXYZ123.md"}]]
+                  :let [{:keys [error labels]} (tools/call! sys "clerk" tool input session "c1")]]
+            (is (str/includes? (str/lower-case (str error)) "secretxyz123") tool)
+            (is (= session labels) tool)))
+        (testing "a tool the role does not have"
+          (is (= {:error "You have no tool called secretXYZ123." :labels session}
+                 (tools/call! sys "clerk" "secretXYZ123" {} session "c1"))))
+        (testing "a clean session's echo stays clean"
+          (is (= [] (:labels (tools/call! sys "clerk" "facts" {:as_of "nonsense"} [] "c1")))))
+        (testing "a fixed message still carries nothing"
+          (is (= [] (:labels (tools/call! sys "clerk" "clock" {:op "add"} session "c1")))))))))
+
 (deftest the-tool-is-a-read-that-shows-nothing-relay-keeps
   (let [tool (get tools/builtin "clock")
         sys {:config cfg :clock (constantly now)}]

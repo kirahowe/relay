@@ -138,7 +138,11 @@ contract Tools {
         -- shows, and of every role id it shows, and private as well
         -- when it shows relay content: a memo, fact, doc, note, journal
         -- entry or routine's instructions. A refusal that quotes stored
-        -- text carries that text's labels. Over-labelling is allowed;
+        -- text carries that text's labels. A refusal that quotes the
+        -- call itself (a time, topic, schedule or doc path relay cannot
+        -- use, or the name of a tool the role lacks) carries the calling
+        -- session's labels, since it shows the session its own text. A
+        -- refusal in fixed text carries none. Over-labelling is allowed;
         -- under-labelling never is.
 
     @invariant ContaminatedTextIsWithheldUnlessAccepted
