@@ -18,6 +18,7 @@
 | [20](20-send-one-morning-brief.md) | Send one morning brief | feature | P2 |
 | [21](21-make-agentloop-cleanroom-s-reader.md) | Make agentloop cleanroom's reader | feature | P3 |
 | [23](23-decide-who-syncs.md) | Decide who syncs ~/Sync/relay | chore | P3 |
+| [28](28-tighten-the-hidden-finding-invariant-and-header-text.md) | Tighten the hidden-finding invariant and header text | chore | P3 |
 
 ### Review
 
