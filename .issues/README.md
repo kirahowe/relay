@@ -15,7 +15,6 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [2](2-trust-the-legacy-contaminated-items.md) | Trust the legacy contaminated items | chore | P2 |
-| [21](21-make-agentloop-cleanroom-s-reader.md) | Make agentloop cleanroom's reader | feature | P3 |
 | [23](23-decide-who-syncs.md) | Decide who syncs ~/Sync/relay | chore | P3 |
 | [28](28-tighten-the-hidden-finding-invariant-and-header-text.md) | Tighten the hidden-finding invariant and header text | chore | P3 |
 | [29](29-polish-the-morning-brief-text-and-share-a-timed-tool-runner.md) | Polish the morning brief text and share a timed tool runner | chore | P3 |
@@ -33,6 +32,7 @@
 | [11](11-let-research-roles-submit-structured-reports.md) | Let research roles submit structured reports | feature | P1 |
 | [12](12-verify-every-report-with-code-not-a-model.md) | Verify every report with code, not a model | feature | P1 |
 | [13](13-review-reports-finding-by-finding.md) | Review reports finding by finding | feature | P1 |
+| [16](16-build-a-red-team-corpus-for-research-roles.md) | Build a red-team corpus for research roles | feature | P1 |
 | [3](3-run-agentloop-s-live-smoke-tests-from-a-flag-not-an-env-var.md) | Run agentloop's live smoke tests from a flag, not an env var | chore | P2 |
 | [5](5-support-reminder-sections-in-rem.md) | Support reminder sections in rem | feature | P2 |
 | [7](7-add-bb-deploy-and-bb-rollback-for-kira-to-run.md) | Add bb deploy and bb rollback for Kira to run | feature | P2 |
@@ -41,6 +41,7 @@
 | [19](19-read-the-calendar.md) | Read the calendar | feature | P2 |
 | [20](20-send-one-morning-brief.md) | Send one morning brief | feature | P2 |
 | [27](27-show-findings-again-when-their-hidden-match-is-rejected-as.md) | Show findings again when their hidden match is rejected as fake | bug | P2 |
+| [21](21-make-agentloop-cleanroom-s-reader.md) | Make agentloop cleanroom's reader | feature | P3 |
 | [22](22-show-spend-per-role-per-week-in-relay-status.md) | Show spend per role per week in relay status | feature | P3 |
 | [26](26-tidy-small-webtool-findings.md) | Tidy small webtool findings | feature | P3 |
 
@@ -48,7 +49,6 @@
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
-| [16](16-build-a-red-team-corpus-for-research-roles.md) | Build a red-team corpus for research roles | feature | P1 |
 | [17](17-set-up-the-job-search-role.md) | Set up the job search role | feature | P2 |
 | [18](18-set-up-the-grant-search-role.md) | Set up the grant search role | feature | P3 |
 

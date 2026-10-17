@@ -13,3 +13,5 @@ Cleanroom's reader is headless Claude Code today. Moving it to agentloop fits th
 ## Plan
 
 ## Log
+
+- 2026-10-17: built as cmd/agentloop-reader in cleanroom, on the branch agentloop-reader in the worktree ~/code/projects/.next/cleanroom-reader (0a17181, d656822, 257b574 on a0575ad). The split: cleanroom owns the reader, because the reader contract is already a command template there. agentloop is used as a library (anthropic, mcp), with no cleanroom code in agentloop. The API key comes from --key-command, and there is no Claude Code login. A failure exits 1 with the reason on stderr. Two Opus review rounds: round 1 found the key command escaping the process-group kill, which is fixed with a test; round 2 found no in-scope defect. Not merged: go.mod replaces agentloop with ../agentloop, because the mcp package exists only on agentloop's local main. Once Kira pushes agentloop, drop the replace, pin the version and merge. It has not been run end to end through cleanroom ask against the demo inbox, and the example policies still use claude-reader.
