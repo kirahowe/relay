@@ -1,0 +1,11 @@
+{:id 29
+ :title "Polish the morning brief text and share a timed tool runner"
+ :status :ready
+ :type :chore
+ :priority :p3
+ :created "2026-10-17"
+ :updated "2026-10-17"
+ :tags #{}
+ :blocked-by #{}
+ :related #{"relay#20"}
+ :details "29-polish-the-morning-brief-text-and-share-a-timed-tool-runner.md"}
