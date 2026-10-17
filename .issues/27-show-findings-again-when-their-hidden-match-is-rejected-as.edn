@@ -1,6 +1,6 @@
 {:id 27
  :title "Show findings again when their hidden match is rejected as fake"
- :status :ready
+ :status :review
  :type :bug
  :priority :p2
  :created "2026-10-17"

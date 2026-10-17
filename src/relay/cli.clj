@@ -349,8 +349,14 @@ and --instructions marks the id public too.")
                        ""
                        "Accepting puts a finding in the ledger as yours: its text no longer counts as an outsider's."]
                       tty)
-            (submit! sys :report/review {:report id :decisions decisions})
-            (result 0 (str "Recorded " (count decisions) " decision(s) on report " id ".")))))))
+            (let [before (core/waiting-findings (inbound/current-state sys))
+                  _ (submit! sys :report/review {:report id :decisions decisions})
+                  again (core/shown-again before (inbound/current-state sys))]
+              (apply result 0 (str "Recorded " (count decisions) " decision(s) on report " id ".")
+                     (when (seq again)
+                       [(str "Shown again, as they match what you rejected as fake: "
+                             (str/join ", " (for [[r i] again] (str "finding " (inc i) " of report " r)))
+                             ". relay review lists them.")]))))))))
 
 (def ^:private spec
   {:alias {:s :subject :m :message :n :tail}

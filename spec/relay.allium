@@ -833,8 +833,9 @@ entity Finding {
     evidence: List<Evidence>   -- 1 to 5 of {url, quote}, quotes at most 500 characters
 
     -- Set once its report is verified.
-    flags: List<Flag>
-    seen_before: Boolean
+    flags: List<Flag>          -- with rejected_as_fake_before once hidden_by is rejected as fake
+    hidden_by: Finding?        -- what it matched when checked: a finding waiting, one accepted
+                               -- (through its ledger entry, even one since withdrawn), one set aside
     canonical_url: String      -- of where its url landed
     domain: String             -- the registrable domain of its url
     sampled: Boolean
@@ -842,6 +843,7 @@ entity Finding {
     decided_unread: Boolean    -- accepted by relay at trust level 1
     entry: LedgerEntry?
 
+    seen_before: hidden_by != null and hidden_by.decision != fake
     is_waiting: verified and not seen_before and decision = null
 }
 
@@ -2695,7 +2697,10 @@ rule RecordVerification {
         -- by where that landed, so a redirect cannot hide it. It is seen
         -- before, and not reviewed, when that matches a ledger entry, a
         -- finding waiting for review, or one judged not relevant; one
-        -- matching a finding rejected as fake is flagged instead. A
+        -- matching a finding rejected as fake is flagged instead. Being
+        -- hidden is worked out from the current state, not fixed at the
+        -- check: one hidden behind a finding that is later rejected as
+        -- fake waits for review, flagged, as if checked after it. A
         -- canonical URL has its scheme and host in lower case, no
         -- tracking parameters, no default port, no trailing slash, and no
         -- fragment unless it starts #/ or #!. The verification carries
@@ -2732,7 +2737,7 @@ rule ReviewFindings {
     requires: caller.is_operator
     requires: report.status = verified
     requires: decisions.all(d => d.finding.is_waiting
-        and d.sha256 = digest_of_fields_shown(d.finding))   -- black box: relay.reports/finding-fields
+        and d.sha256 = digest_of_what_was_shown(d.finding))   -- black box: relay.reports/finding-digest-text, fields and flags
 
     for d in decisions:
         ensures: d.finding.decision = d.decision
@@ -2757,10 +2762,11 @@ rule ReviewFindings {
         -- uses for nothing else. The operator accepts it,
         -- rejects it as fake, sets it aside as not relevant, or skips it,
         -- then types a fresh code once for the lot. A decision is bound
-        -- to the digest of exactly the fields shown, so a finding that
-        -- changed decides nothing. An accepted finding's entry is the
-        -- operator's: its text is no longer contaminated, and reading it
-        -- still adds private.
+        -- to the digest of exactly the fields and flags shown, so a
+        -- finding that changed decides nothing. The command says which
+        -- findings a fake decision brought back from hiding. An accepted
+        -- finding's entry is the operator's: its text is no longer
+        -- contaminated, and reading it still adds private.
 }
 
 rule AcceptUnread {
@@ -3213,6 +3219,13 @@ invariant AReportIsNeverPrivate {
 invariant OnlyTheOperatorReviews {
     for finding in Findings where decision != null and not decided_unread:
         decided_by(finding).is_operator   -- black box: who wrote its finding/reviewed event
+}
+
+invariant NothingHidesBehindAFake {
+    -- A finding stays hidden only behind one shown and not rejected as
+    -- fake: waiting, accepted or set aside.
+    for finding in Findings where seen_before:
+        finding.hidden_by.decision != fake and not finding.hidden_by.seen_before
 }
 
 invariant OnlyTheOperatorRaisesATrustLevel {

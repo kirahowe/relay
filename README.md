@@ -320,7 +320,10 @@ unless it starts `#/` or `#!`, which single-page sites route by. A
 finding that matches a ledger entry, a finding waiting for review, or
 one the operator judged not relevant is seen before: it is not shown,
 and the review says how many were hidden and what each matched. One
-that matches a finding rejected as fake is shown again, flagged. The
+that matches a finding rejected as fake is shown again, flagged. That
+holds for one already hidden, too: once the finding it matched is
+rejected as fake, it waits for review with the same flag, and `relay
+review` says which findings came back. The
 verification is contaminated, since it all comes from pages, and keeps
 any labels the verifier reports. relay reads at most 8 MB of what the
 verifier prints and cuts every string in it to a fixed length. The operator gets one notification with counts:
@@ -338,8 +341,8 @@ one line shows a line break as `\u{000a}`, and a summary or quote is
 printed line by line behind a `│` gutter, so nothing in a report can
 start a line of the screen or pass for its structure. For each,
 type a to accept it, r to reject it as fake, n for not relevant, or s to
-skip it, then type the code once for the lot. Accepting is bound to a
-digest of exactly the fields shown, as `relay trust` is.
+skip it, then type the code once for the lot. Each decision is bound to
+a digest of exactly the fields and flags shown, as `relay trust` is.
 
 An accepted finding becomes a ledger entry: its role, kind, title,
 organization, canonical URL, deadline, amount, location, and a status

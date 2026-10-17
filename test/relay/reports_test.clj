@@ -849,6 +849,50 @@
       (is (some #(= "rejected-as-fake-before" (:kind %)) (:flags (seen-as w id2))))
       (is (str/includes? (str/join "\n" (relay.render/finding r 0)) "this URL was rejected as fake before")))))
 
+;; Regression (relay#27): a finding hidden behind one waiting for review
+;; stayed hidden when that one was rejected as fake, so a decoy could bury
+;; a genuine finding checked while the decoy waited.
+(deftest a-finding-hidden-behind-one-rejected-as-fake-is-shown-again
+  (let [[w a] (submitted (world) (assoc-in a-report [:findings 0 :title] "Bogus"))
+        w (verified w a)
+        [w b] (submitted w a-report)
+        w (verified w b)
+        _ (is (= {:kind "pending" :report a :finding 0} (:seen-as (seen-as w b))))
+        _ (is (empty? (core/pending-findings (core/report (:state w) b))) "hidden while A waits")
+        w (reviewed w a [[0 "fake"]])
+        r (core/report (:state w) b)
+        f (get-in r [:verification :findings 0])]
+    (is (false? (:seen-before f)))
+    (is (= [0] (core/pending-findings r)) "B's finding waits for the operator")
+    (is (= [b] (map :id (core/reports-waiting (:state w)))))
+    (is (some #(= {:kind "rejected-as-fake-before" :url "https://jobs.example.org/archivist"} %) (:flags f)))
+    (is (str/includes? (str/join "\n" (relay.render/finding r 0)) "this URL was rejected as fake before"))
+    (is (not-any? #(str/includes? % "hidden as seen before") (relay.render/report-header java.time.ZoneOffset/UTC r)))
+    (is (= [[b 0]] (core/shown-again #{} (:state w))))
+    (testing "the digest covers the flag, so a decision made before it was added decides nothing"
+      (let [unflagged (update-in r [:verification :findings 0 :flags] #(vec (remove (comp #{"rejected-as-fake-before"} :kind) %)))]
+        (is (not= (core/finding-digest r 0) (core/finding-digest unflagged 0)))
+        (is (str/includes? (refusal #(run w "operator" :report/review
+                                           {:report b :decisions [{:finding 0 :decision "accept"
+                                                                   :sha256 (core/finding-digest unflagged 0)}]}))
+                           "changed since you read it"))))
+    (testing "and it is reviewed as any other"
+      (let [w (reviewed w b [[0 "accept"]])]
+        (is (empty? (core/reports-waiting (:state w))))
+        (is (= [b] (map :report (core/ledger-entries (:state w)))))))
+    (testing "a later report on the URL is hidden behind B's finding while it waits"
+      (let [[w c] (submitted w a-report)
+            w (verified w c)]
+        (is (= {:kind "pending" :report b :finding 0} (:seen-as (seen-as w c))))
+        (is (= [0] (core/pending-findings (core/report (:state (reviewed w b [[0 "fake"]])) c))))))
+    (testing "one accepted or set aside keeps it hidden"
+      (doseq [d ["accept" "not-relevant"]]
+        (let [[w a] (submitted (world) a-report)
+              w (verified w a)
+              [w b] (submitted w a-report)
+              w (-> w (verified b) (reviewed a [[0 d]]))]
+          (is (empty? (core/pending-findings (core/report (:state w) b))) d))))))
+
 (defn- tty
   "A terminal that answers in turn from `answers`, a function of what was
   shown so far for the code, and records what it shows."
@@ -883,6 +927,22 @@
         (let [state (inbound/current-state sys)]
           (is (= [1] (core/pending-findings (core/report state id))) "a skipped finding still waits")
           (is (= 1 (count (core/ledger-entries state)))))))))
+
+(deftest relay-review-says-what-a-fake-decision-shows-again
+  (with-data "ok" a-report
+    (fn [sys dir a]
+      (let [wake (:id (core/running-wake (inbound/current-state sys) "scout"))
+            b (:seq (first (inbound/submit! sys {:type :report/submit :actor "scout" :session-wake wake
+                                                 :labels ["contaminated"] :args a-report})))]
+        (dispatch/verify! sys a {:draw #(vec (repeat % false))})
+        (dispatch/verify! sys b {:draw #(vec (repeat % false))})
+        (is (= [a] (map :id (core/reports-waiting (inbound/current-state sys)))) "B's finding is hidden")
+        (binding [cli/*tty* (tty (atom "") ["r" typed-code])]
+          (is (= [(str "Recorded 1 decision(s) on report " a ".")
+                  (str "Shown again, as they match what you rejected as fake: finding 1 of report " b
+                       ". relay review lists them.")]
+                 (:out (cli/execute ["--data" dir "review" (str a)])))))
+        (is (= [b] (map :id (core/reports-waiting (inbound/current-state sys)))))))))
 
 ;; --- the ledger and its tools
 
@@ -1170,3 +1230,26 @@
                  upper gen/boolean]
     (let [w (if upper (str/upper-case w) (str/lower-case w))]
       (reports/reader-directed? (str before " " w " " after)))))
+
+(deftest a-finding-hidden-behind-a-withdrawn-entry-follows-its-finding
+  ;; An entry accepted unread is withdrawn when a sibling is rejected as
+  ;; fake. A finding it hid stays hidden behind the finding that made it,
+  ;; which waits again, and is shown once that is rejected as fake.
+  (let [w (at-level-1 @known-world)
+        [w a] (submitted w mixed-findings)
+        w (verified w a nil [false false])
+        entry (:id (last (core/ledger-entries (:state w))))
+        [w b] (submitted w a-report)
+        w (verified w b nil [false])
+        _ (is (= {:kind "ledger" :entry entry} (:seen-as (seen-as w b))))
+        w (reviewed w a [[1 "fake"]])
+        _ (is (nil? (core/ledger-entry (:state w) entry)) "withdrawn")
+        _ (is (= [0] (core/pending-findings (core/report (:state w) a))))
+        _ (is (empty? (core/pending-findings (core/report (:state w) b))) "hidden while A's finding waits again")]
+    (testing "accepted again, it stays hidden"
+      (is (empty? (core/pending-findings (core/report (:state (reviewed w a [[0 "accept"]])) b)))))
+    (testing "rejected as fake, it is shown, flagged"
+      (let [w (reviewed w a [[0 "fake"]])
+            r (core/report (:state w) b)]
+        (is (= [0] (core/pending-findings r)))
+        (is (some #(= "rejected-as-fake-before" (:kind %)) (get-in r [:verification :findings 0 :flags])))))))

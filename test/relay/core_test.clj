@@ -799,6 +799,15 @@
                                (not= (:state before) s))
             :let [r (core/report s (get-in e [:data :report]))]]
       (when (some :auto (get-in r [:verification :findings])) (fail! [:unread-kept-after-fake (:id r)])))
+    ;; A finding stays hidden as seen before only behind another with its
+    ;; URL that is shown and not rejected as fake: waiting, accepted or
+    ;; set aside (relay#27).
+    (let [fs (for [r (map #(core/report s %) (keys (:reports s))) :when (= :verified (:status r))
+                   [i f] (map-indexed vector (get-in r [:verification :findings]))]
+               (assoc f :at [(:id r) i]))
+          backing (set (keep #(when-not (or (:seen-before %) (= "fake" (:decision %))) (:canonical-url %)) fs))]
+      (doseq [f fs :when (and (:seen-before f) (not (backing (:canonical-url f))))]
+        (fail! [:hidden-behind-nothing (:at f)])))
     ;; OnlyTheOperatorRaisesATrustLevel, and only on the record they saw.
     (doseq [e batch :when (and (= "role/trust-level" (:type e)) (= 1 (get-in e [:data :level])) (not= (:state before) s))]
       (when-not (= (get-in e [:data :sha256]) (core/record-digest (:state before) (get-in e [:data :role])))

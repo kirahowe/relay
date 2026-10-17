@@ -589,8 +589,8 @@
 
 (defn finding-fields
   "A finding as the operator is shown it, field by field: [name value]
-  pairs, in order. An acceptance is bound to a digest of exactly these
-  (finding-digest-text), so what is accepted is what was read."
+  pairs, in order. A decision is bound to a digest of exactly these and
+  the flags (finding-digest-text), so what is decided is what was read."
   [{:keys [title url organization kind deadline amount location summary evidence]} {:keys [final-url]}]
   (vec (concat [["title" title] ["organization" organization] ["kind" kind]]
                (when deadline [["deadline" deadline]])
@@ -602,8 +602,12 @@
                          [[(str "evidence " (inc i)) url] [(str "quote " (inc i)) quote]])
                        (range) evidence))))
 
-(defn finding-digest-text [finding verification]
-  (pr-str (finding-fields finding verification)))
+(defn finding-digest-text
+  "What a decision on a finding is bound to: its fields as shown
+  (finding-fields) and its flags, which are shown too, so a flag added
+  since the operator looked decides nothing."
+  [finding verification]
+  (pr-str [(finding-fields finding verification) (vec (:flags verification))]))
 
 (def statuses ["new" "seen" "applied" "passed"])
 

@@ -2342,7 +2342,40 @@
 ;; cannot learn to pass the checks. The operator reviews each finding not
 ;; seen before and accepts it into the ledger or rejects it.
 
-(defn report [state id] (get-in state [:reports id]))
+(defn- matched-decision
+  "What the operator decided, as it stands now, on the finding that a
+  finding hidden as seen before matched: through the ledger entry it
+  made, even once that entry is withdrawn. Nil while it waits."
+  [state r {:keys [kind entry report finding]}]
+  (let [[id i] (case kind
+                 ("pending" "not-relevant") [report finding]
+                 "earlier" [(:id r) finding]
+                 "ledger" ((juxt :report :finding) (or (get-in state [:ledger entry]) (get-in state [:withdrawn entry])))
+                 nil)]
+    (get-in state [:reports id :verification :findings i :decision])))
+
+(defn- as-it-stands
+  "A report as it stands now. Whether a finding stays hidden as seen
+  before is worked out from the current state, not fixed when it was
+  checked: once what it matched is rejected as fake, it waits for the
+  operator, flagged, as one checked after the rejection would."
+  [state r]
+  (if-not (get-in r [:verification :findings])
+    r
+    (update-in r [:verification :findings]
+               (fn [fs]
+                 (mapv (fn [f]
+                         (if (and (:seen-before f) (= "fake" (matched-decision state r (:seen-as f))))
+                           (-> (dissoc f :seen-as)
+                               (assoc :seen-before false)
+                               (update :flags #(vec (distinct (conj (vec %) {:kind "rejected-as-fake-before"
+                                                                             :url (:canonical-url f)})))))
+                           f))
+                       fs)))))
+
+(defn report [state id] (some->> (get-in state [:reports id]) (as-it-stands state)))
+
+(defn- reports-now [state] (map #(as-it-stands state %) (vals (:reports state))))
 
 (defmethod evolve* "report/submitted" [state {:keys [seq at data labels public]}]
   (assoc-in state [:reports seq] {:id seq :role (:role data) :summary (:summary data)
@@ -2391,7 +2424,7 @@
   Report `except`'s own findings are left out."
   [state except]
   (let [entries (sort-by :id (vals (:ledger state)))
-        findings (for [r (sort-by :id (vals (:reports state)))
+        findings (for [r (sort-by :id (reports-now state))
                        :when (and (not= except (:id r)) (= :verified (:status r)))
                        [i f] (map-indexed vector (get-in r [:verification :findings]))]
                    [(:id r) i f])
@@ -2412,8 +2445,8 @@
   (union (:labels r) [contaminated-label]))
 
 (defn pending-findings
-  "The findings of a verified report that wait for the operator: not seen
-  before and not yet decided, as their indexes."
+  "The findings of a verified report, as `report` gives it, that wait for
+  the operator: not seen before and not yet decided, as their indexes."
   [r]
   (if-not (= :verified (:status r))
     []
@@ -2544,15 +2577,32 @@
   #{"accept" "fake" "not-relevant"})
 
 (defn finding-digest
-  "The digest of a finding exactly as the operator is shown it
-  (relay.reports/finding-fields), which accepting it is bound to."
+  "The digest of a finding exactly as the operator is shown it, its
+  fields and flags (relay.reports/finding-digest-text), which deciding
+  on it is bound to. `r` is the report as `report` gives it."
   [r i]
   (sha256 (reports/finding-digest-text (get-in r [:findings i]) (get-in r [:verification :findings i]))))
 
 (defn reports-waiting
   "Verified reports with findings waiting for the operator, oldest first."
   [state]
-  (->> (vals (:reports state)) (filter #(seq (pending-findings %))) (sort-by :id) vec))
+  (->> (reports-now state) (filter #(seq (pending-findings %))) (sort-by :id) vec))
+
+(defn waiting-findings
+  "Every finding waiting for the operator, as [report finding]."
+  [state]
+  (set (for [r (reports-waiting state), i (pending-findings r)] [(:id r) i])))
+
+(defn shown-again
+  "The findings waiting in `state` that were not among `before`
+  (waiting-findings) and are flagged as matching one rejected as fake:
+  those a fake decision brought back from hiding, in order."
+  [before state]
+  (vec (sort (for [[id i :as k] (waiting-findings state)
+                   :when (and (not (before k))
+                              (some #(= "rejected-as-fake-before" (:kind %))
+                                    (get-in (report state id) [:verification :findings i :flags])))]
+               k))))
 
 (defmethod evolve* "finding/reviewed" [state {:keys [at actor data]}]
   (update-in state [:reports (:report data) :verification :findings (:finding data)] assoc
@@ -2701,7 +2751,7 @@
   findings, how many findings each kind of flag was raised on, and what
   became of them, up to its latest report."
   [state role]
-  (let [rs (filter #(= role (:role %)) (vals (:reports state)))
+  (let [rs (filter #(= role (:role %)) (reports-now state))
         vs (mapcat #(get-in % [:verification :findings]) rs)]
     {:level (trust-level state role)
      :latest-report (apply max 0 (map :id rs))
@@ -2720,6 +2770,8 @@
   (let [{:keys [entry report finding]} data]
     (-> state
         (update :ledger dissoc entry)
+        ;; Where it came from, for the findings it hid (as-it-stands).
+        (assoc-in [:withdrawn entry] {:report report :finding finding})
         (update-in [:reports report :verification :findings finding] dissoc :decision :auto :entry))))
 
 (defn withdraw-unread

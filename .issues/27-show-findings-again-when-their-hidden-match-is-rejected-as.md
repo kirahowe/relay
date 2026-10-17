@@ -12,12 +12,42 @@ The reviewer's fix: when `:report/review` records a "fake" decision, emit an eve
 
 ## Acceptance criteria
 
-- [ ] Regression test: A pending on X, B on X hidden, A rejected as fake. B's finding is then pending and flagged `rejected-as-fake-before`.
-- [ ] The same for a withdrawn entry, or a note on why it differs.
-- [ ] The review digest covers the new flag.
+- [x] Regression test: A pending on X, B on X hidden, A rejected as fake. B's finding is then pending and flagged `rejected-as-fake-before`.
+- [x] The same for a withdrawn entry, or a note on why it differs.
+- [x] The review digest covers the new flag.
 
 ## Plan
 
 Coordinate with relay-23 first. Its cost work touches core.clj.
 
 ## Log
+
+2026-10-17: Fixed by working out visibility at read time (option a),
+not with an event on a fake decision (option b).
+
+`core/report` now returns a report as it stands: a finding hidden as
+seen before is shown again, with the `rejected-as-fake-before` flag,
+once the finding it matched is decided fake. The stored verification
+is unchanged. Reasons for (a): it needs no new event type and no
+fan-out in `:report/review`, and it also brings back findings already
+buried in existing data, which an event would only do for decisions
+made after it shipped. The digest stays sound because the review screen
+and the digest are both computed from that same view. The digest now
+covers the flags as well as the fields
+(`reports/finding-digest-text`), so a decision made before the flag
+appeared is refused.
+
+Withdrawal: an entry relay accepted unread is withdrawn when a sibling
+is rejected as fake, and its finding waits for review again. A finding
+hidden behind that entry stays hidden, now behind the finding that made
+it (relay keeps a `:withdrawn` index of entry to finding for this), and
+is shown, flagged, if that finding is then rejected as fake. Showing it
+at withdrawal would put the same URL in front of the operator twice.
+
+`known-findings` uses the same view, so a later report on the URL hides
+behind the shown-again finding while it waits. `relay review` says
+which findings a fake decision brought back. Tests: regression tests in
+reports_test, a CLI test, and an invariant in the model-based property
+test (a hidden finding is always backed by a shown, non-fake finding
+with its URL). The invariant fails on the old code with a five-step
+counterexample (report, verify, report, verify, review fake).
