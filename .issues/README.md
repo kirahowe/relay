@@ -15,7 +15,6 @@
 | --- | --- | --- | --- |
 | [2](2-trust-the-legacy-contaminated-items.md) | Trust the legacy contaminated items | chore | P2 |
 | [23](23-decide-who-syncs.md) | Decide who syncs ~/Sync/relay | chore | P3 |
-| [31](31-report-check-workspaces-a-ctrl-c-could-not-forget.md) | Report check workspaces a Ctrl-C could not forget | bug | P3 |
 | [32](32-close-the-last-gaps-in-echo-labels-push-cuts-and-tool.md) | Close the last gaps in echo labels, push cuts and tool timeouts | bug | P3 |
 
 ### Review
@@ -47,6 +46,7 @@
 | [26](26-tidy-small-webtool-findings.md) | Tidy small webtool findings | feature | P3 |
 | [28](28-tighten-the-hidden-finding-invariant-and-header-text.md) | Tighten the hidden-finding invariant and header text | chore | P3 |
 | [29](29-polish-the-morning-brief-text-and-share-a-timed-tool-runner.md) | Polish the morning brief text and share a timed tool runner | chore | P3 |
+| [31](31-report-check-workspaces-a-ctrl-c-could-not-forget.md) | Report check workspaces a Ctrl-C could not forget | bug | P3 |
 
 ### Blocked
 

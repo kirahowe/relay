@@ -160,7 +160,8 @@
 ;; touch would, and says so.
 ;;
 ;;   :pause       lift the pause this run made
-;;   :workspaces  forget the check workspaces
+;;   :workspaces  forget the check workspaces; returns how to forget by
+;;                hand the ones it could not, or nil
 ;;   :finish      close the run's record, while nothing has been touched
 ;;   :notice      say how to recover, shown when the pause stays
 ;;
@@ -183,13 +184,17 @@
         run! (fn [k] (when-let [g (get before k)] (try (g) true (catch Throwable _ false))))
         ;; The pause first: a kill between the two then leaves a closed record
         ;; and no pause, which is safe, not a pause with a closed record.
-        lifted? (run! :pause)]
-    (run! :workspaces)
+        lifted? (run! :pause)
+        ;; :workspaces returns what it could not forget, as a message.
+        stuck (when-let [g (:workspaces before)]
+                (try (let [m (g)] (when (string? m) m)) (catch Throwable _ nil)))]
     (run! :finish)
     (cond
       (:closing before) nil
+      (and lifted? stuck) (println (str "Interrupted before any checkout was touched. relay is not paused.\n" stuck))
       lifted? (println "Interrupted before any checkout was touched. Nothing was changed and relay is not paused.")
-      (:notice before) (try ((:notice before)) (catch Throwable _ nil)))))
+      :else (do (when stuck (println (str "Interrupted. " stuck)))
+                (when-let [n (:notice before)] (try (n) (catch Throwable _ nil)))))))
 
 (defn- with-exit-cleanup [f]
   (let [hook (Thread. ^Runnable run-exit-cleanup!)]
@@ -218,12 +223,22 @@
         run! (fn [what cmd dir]
                (when-not @problem
                  (let [res (sh dir cmd)]
-                   (when-not (ok? res) (reset! problem (failure what res))))))]
-    (swap! on-exit assoc :workspaces
-           ;; Registered before any is made, and forgets by name every
-           ;; repo's: one that was never made just fails to be forgotten.
-           (fn [] (doseq [r deploy/repo-keys] (jj sh (get paths r) "workspace" "forget" (names r)))
-             (fs/delete-tree tmp)))
+                   (when-not (ok? res) (reset! problem (failure what res))))))
+        ;; Forgets by name every repo's workspace, so one made but not yet
+        ;; noted is forgotten too: one never made just fails to be
+        ;; forgotten. Only a failure for one known to be made is news, and
+        ;; comes back as the commands to run by hand.
+        forget-all! (fn []
+                      (let [stuck (vec (for [r deploy/repo-keys
+                                             :let [res (jj sh (get paths r) "workspace" "forget" (names r))]
+                                             :when (and (not (ok? res)) (some #{r} @made))]
+                                         (str "  in " (get paths r) ": jj workspace forget " (names r))))]
+                        (fs/delete-tree tmp)
+                        (when (seq stuck)
+                          (str "The check workspaces could not all be forgotten. Run these by hand:\n"
+                               (str/join "\n" stuck)))))]
+    ;; Registered before any is made; the interrupt hook reports what it returns.
+    (swap! on-exit assoc :workspaces forget-all!)
     (try
       (doseq [r deploy/repo-keys :while (nil? @problem)]
         (let [res (jj sh (get paths r) "workspace" "add" "--name" (names r) "-r" (commit-of r) (dirs r))]
@@ -238,17 +253,8 @@
         (run! (str (str/join " " cmd) " on relay") cmd (dirs :relay)))
       (finally
         (swap! on-exit dissoc :workspaces)
-        ;; Every name, as the interrupt hook does: one made but not yet noted
-        ;; is forgotten too. Only a failure for one known to be made is news.
-        (let [stuck (vec (for [r deploy/repo-keys
-                               :let [res (jj sh (get paths r) "workspace" "forget" (names r))]
-                               :when (and (not (ok? res)) (some #{r} @made))]
-                           (str "  in " (get paths r) ": jj workspace forget " (names r))))]
-          (fs/delete-tree tmp)
-          (when (seq stuck)
-            (swap! problem #(str (when % (str % "\n"))
-                                 "The check workspaces could not all be forgotten. Run these by hand:\n"
-                                 (str/join "\n" stuck)))))))
+        (when-let [stuck (forget-all!)]
+          (swap! problem #(str (when % (str % "\n")) stuck)))))
     (when @problem (throw (usage-error (str "Nothing was changed in the checkouts.\n" @problem))))))
 
 ;; --- waiting for wakes and ticks to finish

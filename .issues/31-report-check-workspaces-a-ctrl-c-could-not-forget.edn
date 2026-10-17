@@ -1,6 +1,6 @@
 {:id 31
  :title "Report check workspaces a Ctrl-C could not forget"
- :status :ready
+ :status :review
  :type :bug
  :priority :p3
  :created "2026-10-17"

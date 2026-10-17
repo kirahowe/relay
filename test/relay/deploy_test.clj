@@ -522,6 +522,34 @@
           (is (str/includes? msg (:relay repos))))
         (is (on-previous? w))))))
 
+(deftest an-interrupt-reports-check-workspaces-it-could-not-forget
+  ;; Regression (relay#31): the hook ignored jj's answer and said nothing
+  ;; was changed, though a workspace was left in a checkout's list.
+  (when jj?
+    (with-world
+      (fn [{:keys [repos] :as w}]
+        (let [printed (atom nil)
+              sh (fn [dir cmd]
+                   (cond
+                     (some #{"forget"} cmd) {:exit 1 :out "" :err "locked"}
+                     (= ["interrupt-here"] cmd) (do (reset! printed (with-out-str (#'run/run-exit-cleanup!)))
+                                                    {:exit 1 :out "" :err "interrupted"})
+                     :else (run/sh dir cmd)))]
+          (threw #(run/deploy! (opts w :sh sh :test-cmds [["interrupt-here"]])))
+          (is (str/starts-with? @printed "Interrupted."))
+          (is (str/includes? @printed "could not all be forgotten"))
+          (is (str/includes? @printed (str (fs/file-name (:relay repos)) ": jj workspace forget deploy-check-relay-")))
+          (is (on-previous? w))))))
+  (testing "after the pause was made, it says the pause was lifted and nothing else was changed"
+    (let [on-exit @#'run/on-exit]
+      (try
+        (reset! on-exit {:pause (constantly nil) :workspaces (constantly "Run these by hand: jj workspace forget x")})
+        (let [printed (with-out-str (#'run/run-exit-cleanup!))]
+          (is (str/includes? printed "relay is not paused"))
+          (is (not (str/includes? printed "Nothing was changed")))
+          (is (str/includes? printed "jj workspace forget x")))
+        (finally (reset! on-exit {}))))))
+
 ;; --- coordinating with wakes
 
 (defn- start-wake! [data]
