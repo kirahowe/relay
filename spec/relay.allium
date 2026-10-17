@@ -195,6 +195,14 @@ contract Tools {
         -- environment, so nothing the harness or relay was started
         -- with, such as credentials, reaches it.
 
+    @invariant ExternalToolsRunForALimitedTime
+        -- Every external tool, on either protocol, runs for at most its
+        -- timeout_seconds, external_tool_timeout when it has none. Past
+        -- that relay ends the tool and every process it started. A plain
+        -- tool's caller is told it timed out; an envelope tool's, only
+        -- that it failed. The morning brief runs its tools the same way,
+        -- with brief_tool_timeout when a tool has none.
+
     @invariant TheClockToolShowsNothingRelayKeeps
         -- clock is a read tool that answers from the time now, the
         -- operator's time zone and its arguments alone: the time, a
@@ -962,7 +970,10 @@ config {
     -- calendar and reminders tools it reads are cal and rem-read unless
     -- :brief names others; either must be a read tool.
     brief_at: Time? = null
+    -- How long the brief waits for a tool with no timeout_seconds.
     brief_tool_timeout: Duration = 1.minute
+    -- How long an external tool may run when it has no timeout_seconds.
+    external_tool_timeout: Duration = 10.minutes
 }
 
 ------------------------------------------------------------
@@ -2390,7 +2401,11 @@ rule SendMorningBrief {
         -- item or is unavailable, and an empty brief is recorded and
         -- not pushed. The notification carries the labels of what it
         -- shows, so a brief with calendar text is marked contaminated
-        -- and its URLs broken when it is pushed.
+        -- and its URLs broken when it is pushed. A title or a calendar
+        -- or list name has each run of whitespace made one space and is
+        -- cut at 80 code points. cal and rem's escapes are read back
+        -- before the push escapes the text once; an escape they never
+        -- print makes the section unreadable.
         -- A day's brief is due from its time until the day ends. A
         -- tick missed while the Mac slept sends it late the same day;
         -- a day with no tick past its time has none, and a later day

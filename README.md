@@ -116,15 +116,17 @@ tool on this plain protocol must refuse flags in the model's part of its
 arguments, or the model could override a flag the operator pinned; `rem`
 reads its pinned flags first and treat anything after
 as the role's command. Prefer the envelope protocol for new tools.
+Every external tool may run for its `:timeout-seconds`, ten minutes by
+default. relay then ends the tool and every process it started, and
+tells the model the tool timed out.
 With `:protocol :envelope` it speaks the same envelope protocol as `relay
 tool`: the call arrives on stdin as `{input, labels, call_id}`, the labels
 being the calling session's, and the tool prints exactly one `{content,
 is_error, labels}`. The labels it reports are added to its static
 `:labels`. Output that is not exactly one such object (a repeated key, a
 key in another case, a label relay does not know, anything else printed),
-a non-zero exit or a timeout (`:timeout-seconds`, ten minutes by default)
-tells the model only that the tool failed, and what it printed goes to
-relay's stderr. An envelope tool may give its input schema as
+a non-zero exit or a timeout tells the model only that the tool failed,
+and what it printed goes to relay's stderr. An envelope tool may give its input schema as
 `:parameters`, which relay checks before running it. cleanroom's `relay-tool`
 is one such tool; the example settings show how to add it, with `:labels
 ["private"]` since every answer comes from the operator's mail.
@@ -542,7 +544,14 @@ events --from <today> --to <today>`. Reminders come from `rem-read`, run
 as `rem ... ls --today`. `:brief {:at "07:30" :calendar "my-cal"
 :reminders "my-rem"}` names other tools. The brief runs only `:read`
 tools that take their arguments on the command line, since nobody is
-there to approve a call. It gives each tool a minute.
+there to approve a call. It gives each tool its `:timeout-seconds`, or a
+minute when the tool has none, since the tick waits on it.
+
+Titles and calendar and list names show on one line each, cut at 80
+characters, with every run of spaces or line breaks made one space. cal
+and rem print invisible characters as `\u{XXXX}`; the brief reads those
+back and the push escapes them once, so the phone shows `\u{200b}`, not
+`\\u{200b}`.
 
 A section whose tool fails, times out or prints something the brief
 cannot read says it is unavailable. A section whose tool is not in

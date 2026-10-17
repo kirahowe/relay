@@ -274,6 +274,84 @@
   (is (nil? (brief/reminder-items "4F2A9C1B\tGroceries\n")))
   (is (= {:items [] :more 7} (brief/calendar-items "note: 7 more events not shown (207 in range, showing the first 200).\n"))))
 
+(defn- cal-escape
+  "What cal and rem print for a field (tools/shared/Escape.swift)."
+  [s]
+  (let [sb (StringBuilder.)]
+    (doseq [cp (iterator-seq (.iterator (.codePoints (str s))))]
+      (cond (= cp 92) (.append sb "\\\\")
+            (= cp 9) (.append sb "\\t")
+            (= cp 10) (.append sb "\\n")
+            (= cp 13) (.append sb "\\r")
+            (= cp 32) (.append sb " ")
+            (or (text/hidden? cp) (= Character/SPACE_SEPARATOR (Character/getType (int cp))))
+            (.append sb (str "\\u{" (str/upper-case (Integer/toHexString cp)) "}"))
+            :else (.appendCodePoint sb (int cp))))
+    (str sb)))
+
+(def ^:private gen-title
+  "Text with the characters that matter here: spaces of every kind, line
+  breaks, invisible characters, backslashes and what an escape is made
+  of, letters and an emoji outside the basic plane."
+  (gen/fmap (fn [cps] (let [sb (StringBuilder.)] (doseq [cp cps] (.appendCodePoint sb (int cp))) (str sb)))
+            (gen/vector (gen/one-of [(gen/elements [32 32 32 9 10 13 0xA0 0x3000 0x2003 0x2028 0x85
+                                                    0x200B 0x202E 0xFE0F 0xE0041 0x7F 0x1B 0x2800
+                                                    92 (int \u) (int \{) (int \}) 0x1F600 0x1D11E])
+                                     (gen/choose 33 126)
+                                     (gen/choose 0xC0 0x24F)])
+                        0 120)))
+
+(defn- event-out [title]
+  (str "E1\t2026-10-17 09:00\t2026-10-17 10:00\t" (cal-escape title) "\tWork\t-\n"))
+
+(defn- pushed-event-line
+  "The event's line of the brief's body as it reaches the phone."
+  [title]
+  (let [b (composed empty-state {:out (event-out title) :labels ["private"]} nil)
+        [_ body] (as-pushed (brief/labels b) (render/brief b))]
+    (second (str/split-lines body))))
+
+(deftest what-cal-and-rem-escaped-is-decoded-once
+  (is (= "a\\b\tc\n​d😀" (brief/unescape "a\\\\b\\tc\\n\\u{200B}d\\u{1F600}")))
+  (testing "an escape their escaper never prints makes the output unreadable"
+    (doseq [bad ["a\\q" "a\\" "\\u{110000}" "\\u{}" "\\u200B" "\\u{12345678}" "\\u{zz}"]]
+      (is (nil? (brief/unescape bad)) bad)
+      (is (nil? (brief/calendar-items (str "E1\t2026-10-17\tall-day\t" bad "\tHome\t-\n"))) bad)
+      (is (nil? (brief/reminder-items (str "4F\tHome\t2026-10-17\t" bad "\t-\n"))) bad)))
+  (testing "an invisible character shows on the phone as one escape, not two"
+    (let [line (pushed-event-line "Stand​up ‮now")]
+      (is (= "  09:00-10:00 Stand\\u{200b}up \\u{202e}now (Work)" line))
+      (is (not (str/includes? line "\\\\u")))))
+  (testing "a backslash the title holds is still shown as two, so an escape cannot be forged"
+    (is (= "  09:00-10:00 a\\\\u{200b} (Work)" (pushed-event-line "a\\u{200b}"))))
+  (quick 300
+   (prop/for-all [s gen-title]
+     (= s (brief/unescape (cal-escape s))))))
+
+(deftest a-padded-title-stays-on-one-short-line
+  (is (= "  09:00-10:00 Lunch Held calls: 3 (Work)"
+         (pushed-event-line (str "Lunch" (apply str (repeat 60 " ")) "Held calls: 3" (apply str (repeat 10 " "))))))
+  (is (= "  09:00-10:00 Lunch Held calls: 3 (Work)"
+         (pushed-event-line (str "  Lunch 　 \t\n Held  calls:\r\n3 ")))
+      "every kind of space and line break, escaped by cal")
+  (testing "in a reminder too"
+    (let [b (composed empty-state nil {:out (str "4F\tGro   ceries\t2026-10-17\t" (cal-escape "Buy      milk") "\t-\n")
+                                       :labels ["private"]})]
+      (is (str/includes? (:body (render/brief b)) "  Buy milk (Gro ceries)")))))
+
+(deftest a-title-is-cut-between-characters
+  (testing "never inside a surrogate pair"
+    (let [line (pushed-event-line (str (apply str (repeat 79 "x")) "😀" "yy"))]
+      (is (str/includes? line (str (apply str (repeat 79 "x")) "😀...")))))
+  (quick 300
+   (prop/for-all [s gen-title]
+     (let [line (pushed-event-line s)
+           cps (vec (iterator-seq (.iterator (.codePoints line))))]
+       (and (string? line)
+            (= line (String. (.getBytes line "UTF-8") "UTF-8")) "no lone surrogate"
+            (not-any? #(and (text/hidden? %) (not= 9 %)) cps)
+            (not-any? #{10} cps))))))
+
 (deftest any-tool-output-gives-a-brief
   (quick 200
    (prop/for-all [cal (gen/one-of [(gen/return nil)
@@ -428,6 +506,21 @@
       (is (str/includes? (:body p) "Calendar: unavailable, the tool cal failed."))
       (is (not (str/includes? (:body p) "denied")) "what it printed stays in the tick's log")
       (is (= ["private"] (:labels p))))))
+
+(deftest the-brief-honours-a-tool-s-time-limit
+  (let [sys (sys-at cal-out rem-out (at "2026-10-17T08:00")
+                    {:tools {"cal" {:class :read :labels ["private" "contaminated"] :timeout-seconds 1
+                                    :command [(str *dir* "/cal")]}
+                             "rem-read" {:class :read :labels ["private"]
+                                         :command [(str *dir* "/rem") "--mode" "read"]}}})
+        started (System/nanoTime)]
+    (script! (str *dir* "/cal") "sleep 30")
+    (binding [*err* (java.io.StringWriter.)] (tick! sys))
+    (is (< (/ (- (System/nanoTime) started) 1e9) 20) "its own second, not the brief's minute")
+    (let [[p] (pushed)]
+      (is (str/includes? (:body p) "Calendar: unavailable, the tool cal timed out after 1 seconds."))
+      (is (str/includes? (:title p) "calendar unavailable, 3 reminders"))))
+  (is (= 60 brief/default-timeout-seconds) "a tool with no limit gets a minute"))
 
 (deftest the-tick-goes-on-without-a-brief-setting
   (let [sys (sys-at cal-out rem-out (at "2026-10-17T08:00") {:brief nil})]

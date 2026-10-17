@@ -678,10 +678,46 @@
                (every? core/label-names (get v "labels")))
       {:content (get v "content") :is-error (true? (get v "is_error")) :labels (core/union (get v "labels"))})))
 
-(def envelope-timeout-ms
-  "How long an envelope tool may run. agentloop's own tool timeout is the
-  outer bound; this one makes sure the model is told only that it failed."
-  (* 10 60 1000))
+(def default-timeout-seconds
+  "How long an external tool may run when relay.edn gives it no
+  :timeout-seconds. agentloop's own tool timeout is the outer bound on a
+  role's call; this one makes sure relay ends the tool's processes and
+  tells the model only what it may know."
+  600)
+
+(defn timeout-seconds
+  "How long a tool spec may run: its :timeout-seconds, or `default`."
+  ([spec] (timeout-seconds spec default-timeout-seconds))
+  ([{:keys [timeout-seconds]} default] (or timeout-seconds default)))
+
+(defn run-external!
+  "Runs an external tool on the plain protocol: its configured command with
+  `args` after it, a clean environment and nothing on stdin, for at most
+  its :timeout-seconds, or `default-seconds` when it has none. Returns
+  {:out :labels}, the labels being the tool's own, or {:error why} with
+  :timed-out true when it ran out of time, in which case its whole process
+  tree is ended. What a failed tool printed goes to stderr, the
+  operator's log, and nowhere else."
+  ([tool-name spec args] (run-external! tool-name spec args default-timeout-seconds))
+  ([tool-name {:keys [command labels] :as spec} args default-seconds]
+   (let [seconds (timeout-seconds spec default-seconds)
+         failed (fn [why out err & [extra]]
+                  (binding [*out* *err*]
+                    (println (str "the tool " tool-name " " why))
+                    (print (str err) (str out)) (flush))
+                  (merge {:error why} extra))]
+     (try
+       ;; A clean environment: nothing the harness or relay was started
+       ;; with, such as credentials, reaches an external command.
+       (let [proc (p/process (into (vec command) (map str args))
+                             {:in "" :out :string :err :string :env (harness/base-env {})})
+             result (deref proc (* 1000 seconds) ::timeout)]
+         (cond
+           (= ::timeout result) (do (p/destroy-tree proc)
+                                    (failed (str "timed out after " seconds " seconds") "" "" {:timed-out true}))
+           (not (zero? (:exit result))) (failed (str "exited " (:exit result)) (:out result) (:err result))
+           :else {:out (:out result) :labels (vec labels)}))
+       (catch Exception e (failed (str "could not start: " (ex-message e)) "" ""))))))
 
 (defn- run-envelope-tool
   "Runs an envelope tool: the call on stdin, one result envelope on stdout.
@@ -760,7 +796,7 @@
   "A tool the operator defined in relay.edn: an external command, given the
   call's `args` after its own, or with :protocol :envelope, given the call
   as an envelope on stdin and answering with one on stdout."
-  [[tool-name {:keys [class description command labels always-hold protocol parameters timeout-seconds]}]]
+  [[tool-name {:keys [class description command labels always-hold protocol parameters timeout-seconds] :as spec}]]
   (if (= :envelope protocol)
     [tool-name
      {:class class
@@ -770,7 +806,7 @@
       :parameters (or parameters {:type "object"})
       :run (fn [_ _ session-labels args]
              (run-envelope-tool tool-name command (vec labels) session-labels args
-                                (if timeout-seconds (* 1000 timeout-seconds) envelope-timeout-ms)))}]
+                                (* 1000 (or timeout-seconds default-timeout-seconds))))}]
   [tool-name
    {:class class
     :labels (vec labels)
@@ -780,18 +816,13 @@
                              :description "Command line arguments."}})
     ;; Everything it prints, on success or failure, carries its labels.
     :run (fn [_ _ _ {:keys [args]}]
-           ;; A clean environment: nothing the harness or relay was started
-           ;; with, such as credentials, reaches an external command.
-           (let [{:keys [exit out err]} (apply p/shell {:out :string :err :string :continue true :in ""
-                                                        :env (harness/base-env {})}
-                                               (into (vec command) (map str args)))]
-             (if (zero? exit)
-               (labelled out labels)
-               ;; What it printed goes to the operator's log only; the model
-               ;; is told just that it failed.
-               (do (binding [*out* *err*] (print err out) (flush))
-                   (throw (ex-info (str "The tool " tool-name " failed.")
-                                   {:relay/labels (vec labels)}))))))}]))
+           (let [{:keys [out error timed-out]} (run-external! tool-name spec args)]
+             (if error
+               ;; What it printed went to the operator's log only; the model
+               ;; is told just that it failed, or that it ran out of time.
+               (throw (ex-info (str "The tool " tool-name (if timed-out (str " " error) " failed") ".")
+                               {:relay/labels (vec labels)}))
+               (labelled out labels))))}]))
 
 (defn script-role?
   "Whether a role runs on a :script harness. A script is any program: no

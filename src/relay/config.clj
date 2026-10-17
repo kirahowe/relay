@@ -263,6 +263,10 @@
       (throw (ex-info (str "Tool " tool-name " has :parameters, which an :envelope tool may give as a"
                            " JSON Schema object, {:type \"object\" ...}.")
                       {:tool tool-name :relay/usage true})))
+    (when-not (or (nil? (:timeout-seconds tool)) (pos-int? (:timeout-seconds tool)))
+      (throw (ex-info (str "Tool " tool-name " has :timeout-seconds " (pr-str (:timeout-seconds tool))
+                           "; it must be a positive whole number.")
+                      {:tool tool-name :relay/usage true})))
     (when-not (or (nil? always-hold) (boolean? always-hold))
       (throw (ex-info (str "Tool " tool-name " has :always-hold " (pr-str always-hold)
                            "; it must be true or false.")

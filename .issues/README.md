@@ -17,12 +17,6 @@
 | [23](23-decide-who-syncs.md) | Decide who syncs ~/Sync/relay | chore | P3 |
 | [31](31-report-check-workspaces-a-ctrl-c-could-not-forget.md) | Report check workspaces a Ctrl-C could not forget | bug | P3 |
 
-### In progress
-
-| ID | Title | Type | Priority |
-| --- | --- | --- | --- |
-| [29](29-polish-the-morning-brief-text-and-share-a-timed-tool-runner.md) | Polish the morning brief text and share a timed tool runner | chore | P3 |
-
 ### Review
 
 | ID | Title | Type | Priority |
@@ -51,6 +45,7 @@
 | [25](25-label-the-clock-error-echoes-consistently.md) | Label the clock error echoes consistently | bug | P3 |
 | [26](26-tidy-small-webtool-findings.md) | Tidy small webtool findings | feature | P3 |
 | [28](28-tighten-the-hidden-finding-invariant-and-header-text.md) | Tighten the hidden-finding invariant and header text | chore | P3 |
+| [29](29-polish-the-morning-brief-text-and-share-a-timed-tool-runner.md) | Polish the morning brief text and share a timed tool runner | chore | P3 |
 
 ### Blocked
 

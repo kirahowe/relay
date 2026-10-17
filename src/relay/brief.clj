@@ -27,6 +27,13 @@
   {:calendar (fn [date] ["events" "--from" (str date) "--to" (str date)])
    :reminders (fn [_] ["ls" "--today"])})
 
+(def default-timeout-seconds
+  "How long the brief waits for cal or rem when relay.edn gives the tool
+  no :timeout-seconds. The tick waits on it, and a tool that hangs, such
+  as one waiting on a permission prompt nobody sees, must not hold up
+  the tick for the ten minutes a role's call may take."
+  60)
+
 (def lines-per-section
   "The most items a section lists; the rest are counted."
   8)
@@ -88,10 +95,56 @@
       (= :envelope (:protocol spec)) {:unusable n :why "speaks the envelope protocol, and the brief gives a tool its arguments on the command line"}
       :else {:tool n :spec spec})))
 
-(defn- clip [s]
-  (let [s (str s)] (if (> (count s) title-limit) (str (subs s 0 title-limit) "...") s)))
+(defn- clip
+  "`s` cut to title-limit code points, so a surrogate pair is never split.
+  The text holds no escapes yet (fields decodes them, and the push escapes
+  once, last), so the cut cannot fall inside one."
+  [s]
+  (let [s (str s)]
+    (if (> (.codePointCount s 0 (count s)) title-limit)
+      (str (subs s 0 (.offsetByCodePoints s 0 title-limit)) "...")
+      s)))
 
-(defn- fields [line] (str/split line #"\t" -1))
+(defn unescape
+  "A field as cal and rem printed it (tools/shared/Escape.swift), back as
+  the text it was: \\\\ is a backslash, \\t, \\n and \\r are themselves,
+  and \\u{XXXX} is that code point. Nil when a backslash starts anything
+  else, which their escaper never prints. The push makes the text
+  visible again, once (relay.notify); decoding here keeps it from being
+  escaped twice."
+  [s]
+  (let [s (str s) n (count s) sb (StringBuilder.)]
+    (loop [i 0]
+      (if (>= i n)
+        (str sb)
+        (let [c (.charAt s i)]
+          (if (not= \\ c)
+            (do (.append sb c) (recur (inc i)))
+            (let [nxt (when (< (inc i) n) (.charAt s (inc i)))
+                  simple ({\\ \\ \t \tab \n \newline \r \return} nxt)]
+              (cond
+                simple (do (.append sb simple) (recur (+ i 2)))
+                (= \u nxt) (let [[m hex] (re-find #"^\{([0-9A-Fa-f]{1,6})\}" (subs s (+ i 2)))
+                                  cp (some-> hex (Long/parseLong 16))]
+                              (when (and cp (<= cp 0x10FFFF))
+                                (.appendCodePoint sb (int cp))
+                                (recur (+ i 2 (count m)))))
+                :else nil))))))))
+
+(defn squeeze
+  "Text with every run of whitespace, Unicode's spaces and line breaks
+  included, made one space, and none at either end. A title padded with
+  spaces cannot then wrap on the phone so that its tail starts a line of
+  its own and looks like a heading."
+  [s]
+  (str/trim (str/replace (str s) #"(?U)\s+" " ")))
+
+(defn- fields
+  "A line's tab-separated fields, each decoded and squeezed, or nil when
+  one holds an escape cal and rem do not print."
+  [line]
+  (let [fs (map unescape (str/split line #"\t" -1))]
+    (when (every? some? fs) (mapv squeeze fs))))
 
 (defn- lines [out] (remove str/blank? (str/split-lines (str out))))
 
@@ -136,7 +189,7 @@
   (cond
     (:missing src) {:status :missing :tool (:missing src)}
     (:unusable src) {:status :unavailable :tool (:unusable src) :why (:why src)}
-    (:error ran) {:status :unavailable :tool (:tool src) :why "failed"}
+    (:error ran) {:status :unavailable :tool (:tool src) :why (if (:timed-out ran) (:error ran) "failed")}
     :else (if-let [parsed ((parsers section) (:out ran))]
             (assoc parsed :status :ok :labels (core/union (:labels ran)))
             {:status :unavailable :tool (:tool src) :why "printed something the brief cannot read"})))

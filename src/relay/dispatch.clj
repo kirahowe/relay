@@ -753,33 +753,6 @@
 
 ;; --- the morning brief (relay.brief)
 
-(def brief-tool-timeout-ms
-  "How long the brief waits for cal or rem. A tool that hangs, such as one
-  waiting on a permission prompt nobody sees, must not hold up the tick."
-  60000)
-
-(defn run-brief-tool!
-  "Runs a tool as relay runs an external command (relay.tools): its
-  configured command with `args` after it, a clean environment and nothing
-  on stdin, here with a time limit. Returns {:out :labels}, the labels
-  being the tool's own, or {:error why}. What a failed tool printed goes
-  to stderr, the tick's log, and nowhere else."
-  [tool-name {:keys [command labels]} args]
-  (let [failed (fn [why out err]
-                 (binding [*out* *err*]
-                   (println (str "relay brief: the tool " tool-name " " why))
-                   (print (str err) (str out)) (flush))
-                 {:error why})]
-    (try
-      (let [proc (p/process (into (vec command) args)
-                            {:in "" :out :string :err :string :env (harness/base-env {})})
-            result (deref proc brief-tool-timeout-ms ::timeout)]
-        (cond
-          (= ::timeout result) (do (p/destroy-tree proc) (failed "timed out" "" ""))
-          (not (zero? (:exit result))) (failed (str "exited " (:exit result)) (:out result) (:err result))
-          :else {:out (:out result) :labels (vec labels)}))
-      (catch Exception e (failed (str "could not start: " (ex-message e)) "" "")))))
-
 (defn send-brief!
   "Composes the morning brief when one is due at `t` and records it, which
   pushes it when it has something to say. Returns the events appended, or
@@ -789,8 +762,9 @@
     (let [section (fn [k]
                     (let [src (brief/source config k)]
                       (brief/tool-section k src (when (:tool src)
-                                                  (run-brief-tool! (:tool src) (:spec src)
-                                                                   ((brief/tool-args k) date))))))
+                                                  (tools/run-external! (:tool src) (:spec src)
+                                                                       ((brief/tool-args k) date)
+                                                                       brief/default-timeout-seconds)))))
           composed (brief/compose state date (section :calendar) (section :reminders))]
       (inbound/submit! sys {:type :brief/send :actor core/dispatcher
                             :args (merge {:date (str date) :labels (brief/labels composed)
