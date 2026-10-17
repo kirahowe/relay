@@ -23,6 +23,11 @@
                                  ;; courier is public: memos to it from anyone
                                  ;; but itself wait for the operator.
                                  :verifier {:command ["true"]}
+                                 ;; Two MCP tools, granted to nobody: relay
+                                 ;; keeps their accepted definitions all the same.
+                                 :mcp-servers {"srv" {:command ["srv"]}}
+                                 :tools {"t1" {:protocol :mcp-stdio :server "srv" :tool "one" :class :read :labels []}
+                                         "t2" {:protocol :mcp-stdio :server "srv" :tool "two" :class :read :labels []}}
                                  :grants {"hub" {:may-add true}
                                           "courier" {:public true :reports {:kinds ["job"]}}}}))
 
@@ -479,6 +484,8 @@
   (mapv #(Instant/parse %) ["2026-08-01T00:00:00Z" "2026-09-15T00:00:00Z" "2026-10-14T12:00:00Z"
                             "2026-10-20T00:00:00Z" "2026-12-01T00:00:00Z" "2027-06-01T00:00:00Z"]))
 
+(def mcp-digests (mapv #(apply str (repeat 64 %)) ["a" "b" "c"]))
+
 (def gen-step
   (gen/frequency
    [[3 (gen/tuple (gen/return :advance) (gen/elements [1 30 60 600 3600 7200 86400]))]
@@ -499,9 +506,14 @@
     [4 (gen/tuple (gen/return :tick) gen/boolean)]
     [6 (gen/tuple (gen/return :wake) (gen/elements role-pool) gen/boolean
                   (gen/frequency [[6 (gen/return "ran")] [1 (gen/return "limited")]
-                                  [1 (gen/return "unreachable")] [1 (gen/return "needs-attention")]])
-                  (gen/vector gen/nat 0 3) gen/boolean gen/boolean)]
+                                  [1 (gen/return "unreachable")] [1 (gen/return "needs-attention")]
+                                  [1 (gen/return "tools-changed")] [1 (gen/return "tools-down")]])
+                  (gen/vector gen/nat 0 3) gen/boolean gen/boolean
+                  ;; The MCP tool a run pinned or saw change, and digests.
+                  (gen/elements ["t1" "t2"]) (gen/elements mcp-digests) (gen/elements mcp-digests))]
     [1 (gen/tuple (gen/return :start-only) (gen/elements role-pool))]
+    [2 (gen/tuple (gen/return :fresh) (gen/elements (into ["operator" "operator"] actors)) (gen/elements role-pool)
+                  (gen/frequency [[5 (gen/return false)] [1 (gen/return true)]]))]
     [1 (gen/tuple (gen/return :chat) (gen/elements role-pool)
                   (gen/elements ["ran" "limited" "unreachable" "needs-attention"])
                   (gen/one-of [(gen/return nil) (gen/vector (gen/elements ["s1" "s2" "s3"]) 0 3)]))]
@@ -630,9 +642,13 @@
                   ;; In a wake of its own, as a role's calls are made.
                   (let [w (-> w (run "operator" :memo/send {:to actor :subject "go" :body "b"} true)
                               (run "dispatcher" :wake/start {:role actor}))
-                        wake (core/running-wake (:state w) actor)
-                        w (run w actor :report/submit {:summary "s" :findings (if two? [(f page) (f (str page "2"))] [(f page)])})]
-                    (if wake (run w "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :said "ok"}) w))
+                        wake (core/running-wake (:state w) actor)]
+                    ;; A role waiting on relay fresh is not woken, so it
+                    ;; submits nothing.
+                    (if-not wake
+                      (dissoc w :rejected)
+                      (-> (run w actor :report/submit {:summary "s" :findings (if two? [(f page) (f (str page "2"))] [(f page)])})
+                          (run "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :said "ok"}))))
                   (run w actor :report/submit {:summary "s" :findings (if two? [(f page) (f (str page "2"))] [(f page)])})))
       :verify (let [[n how sampled?] args
                     r (nth-or (vec (sort-by :id (filter #(#{:submitted :failed} (:status %)) (vals (:reports (:state w))))))
@@ -674,7 +690,7 @@
                              true (advance 61)
                              true (run "dispatcher" :tick {}))))
                        w (range n)))
-      :wake (let [[r dispatched outcome closes resets? cut-short] args
+      :wake (let [[r dispatched outcome closes resets? cut-short tool d1 d2] args
                   w (run w "dispatcher" :wake/start {:role r :dispatched dispatched})
                   wake-row (core/running-wake (:state w) r)]
               (if-not wake-row
@@ -684,12 +700,30 @@
                                                           :outcome "done"}))
                           w closes)
                   (run w "dispatcher" :wake/end
-                       {:wake (:id wake-row) :outcome outcome :exit 0 :said "said"
-                        :crashed cut-short :cut-short cut-short
-                        :resets-at (when resets? (str (.plusSeconds ^Instant (:now w) 1800)))})))))))
+                       (merge
+                        {:wake (:id wake-row) :outcome outcome :exit 0 :said "said"
+                         :crashed cut-short :cut-short cut-short
+                         :resets-at (when resets? (str (.plusSeconds ^Instant (:now w) 1800)))}
+                        ;; A run that got going pinned a definition.
+                        (when (= "ran" outcome) {:session (str "s" (:id wake-row)) :pins {tool d1}})
+                        ;; A run whose MCP tools could not be set up.
+                        (case outcome
+                          "tools-changed" {:outcome "needs-attention" :crashed false :cut-short false
+                                           :session (str "s" (:id wake-row))
+                                           :tools-error {:tool tool :pinned d1 :got d2 :message "changed"}}
+                          "tools-down" {:outcome "needs-attention" :crashed false :cut-short false
+                                        :session (str "s" (:id wake-row))
+                                        :tools-error {:server "srv" :message "did not start"}}
+                          {}))))))
+      ;; relay fresh with what the operator was shown, or something stale.
+      :fresh (let [[actor r stale?] args
+                   expect (cond-> (core/fresh-expectation (:state w) r) stale? (assoc :got "stale"))]
+               (run w actor :role/fresh {:role r :expect expect})))))
 
 (def legal-transitions
   #{[:unread :read] [:unread :dead] [:dead :unread]})
+
+(defn- cfg-mcp-tool? [tool] (config/mcp-tool? (get-in cfg [:tools tool])))
 
 (defn- check-step
   "The spec's invariants, checked between one world and the next. Returns a
@@ -774,6 +808,36 @@
     (doseq [w wakes :when (and (:chat w) (= :running (:status w)))]
       (when-not (= (:id w) (:id (core/running-wake s (:role w)))) (fail! [:chat-not-holding (:id w)])))
     (when-let [p (:problem after)] (fail! p))
+    ;; A tool whose definition changed under a session is never taken
+    ;; without the operator: while the role waits for relay fresh, no wake
+    ;; of it starts a fresh session, and only the operator ends one.
+    (doseq [e batch :when (= "wake/started" (:type e))
+            :let [r (get-in e [:data :role])]
+            :when (get-in (:state before) [:roles r :tools-unavailable :fresh])]
+      (fail! [:wake-while-tools-changed r (:seq e)]))
+    ;; Only relay fresh lifts such a block, by the operator: in the batch
+    ;; that lifts it the operator accepts that very change of that tool.
+    (doseq [[r {:keys [fresh tool got]}] (keep #(when-let [b (get-in % [1 :tools-unavailable])] [(key %) b])
+                                               (:roles (:state before)))
+            :when (and fresh (not (get-in s [:roles r :tools-unavailable :fresh])))]
+      (when-not (and (some #(and (= "hold/session-ended" (:type %)) (= "operator" (:actor %))
+                                 (get-in % [:data :fresh]))
+                           batch)
+                     (or (not (cfg-mcp-tool? tool))
+                         (some #(and (= "tool/pinned" (:type %)) (= "operator" (:actor %))
+                                     (= {:tool tool :digest got} (:data %)))
+                               batch)))
+        (fail! [:tools-block-lifted-without-fresh r])))
+    ;; An accepted definition changes only by relay fresh, and never to
+    ;; one a role was stopped for unless the operator accepts it.
+    (doseq [e batch :when (= "tool/pinned" (:type e))
+            :let [{:keys [tool digest]} (:data e)
+                  was (core/tool-pin (:state before) tool)]
+            :when (and was (not= was digest))]
+      (when-not (= "operator" (:actor e)) (fail! [:accepted-digest-moved tool])))
+    (doseq [e batch :when (and (= "hold/session-ended" (:type e))
+                               (= "the operator started it afresh" (get-in e [:data :why])))]
+      (when-not (= "operator" (:actor e)) (fail! [:fresh-by (:actor e)])))
     ;; OnlyTheOperatorDeclassifies, and only a memo that was waiting.
     (doseq [e batch :when (and (= "memo/declassified" (:type e)) (not= (:state before) s))]
       (when-not (and (= "operator" (:actor e))

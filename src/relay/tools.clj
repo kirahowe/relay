@@ -846,9 +846,21 @@
 (defn- external-tool
   "A tool the operator defined in relay.edn: an external command, given the
   call's `args` after its own, or with :protocol :envelope, given the call
-  as an envelope on stdin and answering with one on stdout."
+  as an envelope on stdin and answering with one on stdout. With :protocol
+  :mcp-stdio it is a tool of an MCP server, which agentloop runs: relay
+  only names it to the harness (:mcp) and polices it like any other."
   [[tool-name {:keys [class description command labels always-hold protocol parameters timeout-seconds] :as spec}]]
-  (if (= :envelope protocol)
+  (case protocol
+    ;; agentloop runs an MCP tool itself, against its server; relay's tool
+    ;; command never does. Its server gives the description and schema.
+    :mcp-stdio
+    [tool-name
+     {:class class
+      :labels (vec labels)
+      :always-hold (boolean always-hold)
+      :mcp (select-keys spec [:server :tool :digest :allow-content])
+}]
+    :envelope
     [tool-name
      {:class class
       :labels (vec labels)
@@ -858,6 +870,7 @@
       :run (fn [_ _ session-labels args]
              (run-envelope-tool tool-name command (vec labels) session-labels args
                                 (* 1000 (or timeout-seconds default-timeout-seconds))))}]
+  ;; A command given the call's arguments.
   [tool-name
    {:class class
     :labels (vec labels)
@@ -948,17 +961,20 @@
 
 (defn manifest
   "What a harness needs to present the tools: names, descriptions and
-  parameter schemas, each tool's class and static labels (none for relay's
-  own), whether every call needs the operator, and for some of relay's
-  own tools an :acp-kind more exact than the class gives
-  (relay.acp/tool-kinds)."
+  parameter schemas (for an MCP tool, its :mcp server and name instead),
+  each tool's class and static labels (none for relay's own), whether
+  every call needs the operator, and for some of relay's own tools an
+  :acp-kind more exact than the class gives (relay.acp/tool-kinds)."
   [config role-id & [opts]]
-  (vec (for [[n {:keys [class description parameters acp-kind labels always-hold]}]
+  (vec (for [[n {:keys [class description parameters acp-kind labels always-hold mcp]}]
              (sort-by key (offered config role-id opts))]
          (cond-> {:name n :class (name class) :description description :parameters parameters
                   :labels (vec labels)}
            always-hold (assoc :always-hold true)
-           acp-kind (assoc :acp-kind acp-kind)))))
+           acp-kind (assoc :acp-kind acp-kind)
+           ;; An MCP tool: its server and the server's name for it. The
+           ;; server gives the description and parameters.
+           mcp (-> (dissoc :description :parameters) (assoc :mcp mcp))))))
 
 (defn policy
   "agentloop's policy for a role's tools and a session seeded with
@@ -1056,6 +1072,10 @@
       ;; session's labels, as any refusal that quotes the call does.
       (nil? tool)
       {:error (str "You have no tool called " tool-name ".") :labels (core/union labels)}
+      ;; agentloop calls an MCP tool's server itself; a call that reaches
+      ;; relay's tool command did not come through it, and is not run.
+      (:mcp tool)
+      {:error (str "The tool " tool-name " comes from an MCP server, which agentloop runs.") :labels []}
       :else
       (let [args (coerce-input (or args {}))]
         (if-let [problem (input-problem (:parameters tool) args)]

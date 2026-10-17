@@ -77,6 +77,9 @@ Every command needs the data directory, from --data <dir> or from the file
   relay approve <hold>                let a held tool call run
   relay deny <hold> [why] [--end]     refuse a held tool call; --end also starts the
                                       role's next wake afresh instead of in that session
+  relay fresh <role>                  end the session a role's next wake would carry on,
+                                      so it starts afresh; this is how you accept an MCP
+                                      tool whose definition changed under the session
   relay release <memo>                deliver a quarantined memo to its role
   relay declassify <memo>             make a memo to a public role public, so the
                                       role is shown it
@@ -93,8 +96,8 @@ Every command needs the data directory, from --data <dir> or from the file
   relay tool --data <dir> --role <r> [--wake <w>] <name>
                                       run a role's tool call (harnesses use this)
 
-approve, deny, release, declassify, trust, trust-level, review and revert
-show you what they are about on the terminal and ask you to type a code
+approve, deny, fresh, release, declassify, trust, trust-level, review and
+revert show you what they are about on the terminal and ask you to type a code
 back there, so only a person at the terminal can make those decisions.
 
 --untrusted on memo, put, add, update and routine marks what you write as
@@ -488,6 +491,36 @@ and --instructions marks the id public too.")
                (decide-hold! sys "deny" "deny" (some-> h parse-long)
                              (or (:message opts) (when (seq why) (str/join " " why)))
                              (:end opts)))
+      "fresh" (let [[r] more
+                    st (state)]
+                (when-not r (fail! "usage: relay fresh <role>"))
+                (when-not (core/active-role? st r) (fail! (str r " is not an active role.")))
+                (when-not (core/session-to-carry-on st r)
+                  (fail! (str r " has no session to end: its next wake starts afresh.")))
+                ;; What is shown is what is sent: core refuses if it has
+                ;; changed by the time the code is typed.
+                (let [{:keys [tool got] :as expect} (core/fresh-expectation st r)
+                      others (core/roles-released-by-fresh st r)
+                      dropped (fn [role]
+                                (for [h (core/holds-dropped-by-fresh st role)]
+                                  (str "  " role " hold " (:id h) ": " (:tool h) " ("
+                                       (if (= :open (:status h)) "open, will be denied" "approved, not yet run")
+                                       ")")))]
+                  (confirm! "start afresh"
+                            (concat
+                             [(str "End the session " r "'s next wake would carry on. The next wake starts a"
+                                   " new session, with " r "'s open memos.")
+                              (if tool
+                                (str "This accepts the definition of the MCP tool " tool " that agentloop saw"
+                                     " when the wake was stopped (sha256 " got "), for every role granted it.")
+                                "No tool definition changes.")]
+                             (when (seq others)
+                               [(str "The same change stopped " (str/join ", " others) ": their sessions end"
+                                     " too, and their next wakes start afresh.")])
+                             (when-let [ls (seq (mapcat dropped (cons r others)))]
+                               (cons "These held calls will never run:" ls))))
+                  (submit! sys :role/fresh {:role r :expect expect})
+                  (result 0 (str r "'s next wake starts afresh."))))
       "release" (let [id (some-> (first more) parse-long)
                       m (core/memo (state) id)]
                   (when-not (and m (core/quarantined? (:config sys) m)) (fail! (str "Memo " (first more) " is not quarantined.")))

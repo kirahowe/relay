@@ -173,6 +173,15 @@
                   (not (#{"limited" "unreachable" "needs-attention"} (:outcome %))))
             (vals (:wakes state)))))
 
+(defn waiting-on-tools?
+  "Whether the dispatcher leaves a role alone because its MCP tools could
+  not be set up: until the operator starts it afresh (relay fresh) when a
+  tool's definition changed under its session, otherwise until its retry
+  time."
+  [state role-id now]
+  (when-let [{:keys [fresh retry-at]} (get-in state [:roles role-id :tools-unavailable])]
+    (or fresh (nil? retry-at) (after? retry-at now))))
+
 (defn running-away? [state role-id config now]
   (>= (count (recent-wakes state role-id config now)) (:runaway-wakes config)))
 
@@ -278,6 +287,7 @@
                             (seq (sessions-from-before-public state config id)))
                         (not (running? state id))
                         (not (paused-until state (harness-of state config id) now))
+                        (not (waiting-on-tools? state id now))
                         (not (running-away? state id config now))
                         (not (unwakeable-public-role? state config id)))]
          id)))
@@ -923,7 +933,33 @@
       ;; stopped for the operator to decide on a call, is kept to be
       ;; resumed. A conversation is not.
       (and (or (not= "ran" outcome) cut-short (seq held)) (not (get-in state [:wakes wake :chat])))
-      (assoc-in [:roles role-id :interrupted-wake] wake))))
+      (assoc-in [:roles role-id :interrupted-wake] wake)
+      ;; A wake that ran had its tools. A block for a changed definition
+      ;; is cleared only by the wake that carried its session on; a
+      ;; conversation never clears one.
+      (let [block (get-in state [:roles role-id :tools-unavailable])
+            w (get-in state [:wakes wake])]
+        (and (= "ran" outcome) block (not (:chat w))
+             (or (not (:fresh block))
+                 (= (:session block) (get-in state [:wakes (:resumes w) :session])))))
+      (update-in [:roles role-id] dissoc :tools-unavailable))))
+
+(defmethod evolve* "tool/pinned" [state {:keys [data]}]
+  ;; Only records the digest. A role's block is lifted by relay fresh
+  ;; ending its session (hold/session-ended with :fresh).
+  (assoc-in state [:tool-pins (:tool data)] (:digest data)))
+
+(defn tool-pin
+  "The definition digest relay accepted for an MCP tool, by its name in
+  relay.edn, or nil before its first use."
+  [state tool]
+  (get-in state [:tool-pins tool]))
+
+(defmethod evolve* "role/tools-unavailable" [state {:keys [at data]}]
+  (let [{:keys [role wake session server tool got fresh retry-at tries]} data]
+    (assoc-in state [:roles role :tools-unavailable]
+              {:wake wake :session session :server server :tool tool :got got :since (inst at)
+               :fresh (true? fresh) :retry-at (inst retry-at) :tries tries})))
 
 (defn- clean [labels] (vec (remove #{contaminated-label} labels)))
 
@@ -984,7 +1020,12 @@
                                                      (assoc :abandoned true))))))
       ;; The next wake starts afresh, carrying the role's open memos.
       (= session (get-in state [:wakes interrupted :session]))
-      (assoc-in [:roles role :interrupted-wake] nil))))
+      (assoc-in [:roles role :interrupted-wake] nil)
+      ;; A session whose tools could not be set up is done with too. A
+      ;; block for a changed definition stays until relay fresh accepts it.
+      (let [block (get-in state [:roles role :tools-unavailable])]
+        (and block (= session (:session block)) (or (not (:fresh block)) (:fresh data))))
+      (update-in [:roles role] dissoc :tools-unavailable))))
 
 (defmethod evolve* "hold/requeued" [state {:keys [data]}]
   (update-in state [:holds (:hold data)] dissoc :delivered))
@@ -1505,6 +1546,18 @@
                      session)))
            sort vec))))
 
+(defn- end-session
+  "Ends a role's session, so that no wake carries it on: each call still
+  open in it is denied with `reason`, and its memos go on in a fresh
+  session."
+  [tx role-id session why reason & [extra]]
+  (as-> tx tx
+    (reduce (fn [tx {h :id}] (emit tx "hold/resolved" {:hold h :verdict "deny" :reason reason}))
+            tx (sort-by :id (filter #(and (= session (:session %)) (= :open (:status %)))
+                                    (vals (:holds (:state tx))))))
+    (emit tx "hold/session-ended" (merge {:role role-id :session session :why why}
+                                         (when (:fresh extra) {:fresh true})))))
+
 (defn- end-sessions-from-before-public
   "Ends a public role's held sessions from before it was public: they may
   hold private text no label records (the operator's AGENTS.md, what was
@@ -1512,25 +1565,27 @@
   memos they kept go on in fresh sessions. roles-to-wake wakes the role for
   this, so a session whose calls nobody decides cannot strand them."
   [{:keys [state config] :as tx} role-id]
-  (let [sessions (sessions-from-before-public state config role-id)]
-    (reduce (fn [tx session]
-              (as-> tx tx
-                (reduce (fn [tx {h :id}]
-                          (emit tx "hold/resolved" {:hold h :verdict "deny"
-                                                    :reason "The role was made public, so this session was ended."}))
-                        tx (sort-by :id (filter #(and (= session (:session %)) (= :open (:status %)))
-                                                (vals (:holds (:state tx))))))
-                (emit tx "hold/session-ended" {:role role-id :session session :why "the role was made public"})))
-            tx sessions)))
+  (reduce #(end-session %1 role-id %2 "the role was made public"
+                        "The role was made public, so this session was ended.")
+          tx (sessions-from-before-public state config role-id)))
 
 (defn- start-wake
   "What :wake/start does once the role is known to be free."
   [{:keys [state config now actor] :as tx} {{role-id :role :keys [note dispatched chat pid pid-start]} :args}]
   (let [harness (harness-of state config role-id)]
+    ;; A tool whose definition changed is taken only through relay fresh:
+    ;; no wake, conversation or wake by hand starts while the role waits
+    ;; for it. This runs after a public role's old sessions are ended, so
+    ;; it sees what the wake would really carry on.
+    (when (get-in state [:roles role-id :tools-unavailable :fresh])
+      (reject! :paused (str "A tool of " role-id "'s changed its definition. Run relay fresh " role-id
+                            " first.")))
     (when dispatched
       (when (paused-until state harness now) (reject! :paused (str harness " is paused.")))
       (when (running-away? state role-id config now)
-        (reject! :runaway (str role-id " has been stopped by the runaway guard."))))
+        (reject! :runaway (str role-id " has been stopped by the runaway guard.")))
+      (when (waiting-on-tools? state role-id now)
+        (reject! :paused (str role-id "'s tools could not be set up."))))
     ;; A conversation with the operator holds the role like a wake, so no
     ;; wake runs alongside it, but it carries no memos: what the role does
     ;; with them there is up to the conversation, and nothing counts against
@@ -1766,10 +1821,88 @@
                       "Check what was done before carrying on.")]
         (with-public tx public #(emit % "journal/written" {:owner role :text text} copied))))))
 
+(defn wake-tools-error
+  "Why a role's MCP tools could not be set up, as a wake records it:
+  {:message} with any of :server, :tool, :pinned and :got, all strings, or
+  nil when `e` is not that."
+  [e]
+  (when (and (map? e) (string? (:message e)) (not (blank? (:message e))))
+    (into {} (filter (fn [[k v]] (and (#{:message :server :tool :pinned :got} k) (string? v)))) e)))
+
+(defn- record-pins
+  "Remembers the definition digest of each MCP tool a wake's session
+  pinned that relay has not seen before (trust on first use, as SSH's
+  known_hosts). Every later request names it, so any session, of any
+  role, that is offered another definition stops for the operator."
+  [{:keys [state config] :as tx} wake pins]
+  (if (or (:chat wake) (not (map? pins)))
+    tx
+    (reduce (fn [tx [tool digest]]
+              (let [tool (if (keyword? tool) (name tool) tool)]
+                (if (and (string? tool) (string? digest) (re-matches #"[0-9a-f]{64}" digest)
+                         (config/mcp-tool? (get-in config [:tools tool]))
+                         (nil? (tool-pin (:state tx) tool)))
+                  (emit tx "tool/pinned" {:tool tool :digest digest})
+                  tx)))
+            tx (sort-by (comp str key) pins))))
+
+(defn- tools-unavailable
+  "Records that a wake's MCP tools could not be set up, and tells the
+  operator once. When a tool's definition changed under the session (the
+  session pinned another), nothing carries the session on and nothing
+  starts a fresh one by itself, which would take the new definition
+  unseen: the role waits for relay fresh. Otherwise the role is tried
+  again after a wait that doubles, as a harness is."
+  [{:keys [state config ^Instant now] :as tx} wake session {:keys [message server tool pinned got]}]
+  (let [role (:role wake)
+        before (get-in state [:roles role :tools-unavailable])
+        relay-pin (get-in config [:tools tool :digest])
+        changed (boolean (and pinned got))
+        ;; A changed definition that relay.edn's :digest pins is refused
+        ;; whatever the session, so a fresh session would not help.
+        fresh (and changed (not= pinned relay-pin))
+        tries (inc (or (:tries before) 0))
+        retry-at (when-not fresh (.plusSeconds now (config/retry-delay-seconds config tries)))
+        ;; A tool seen to change before relay accepted any definition of
+        ;; it is held to the one it changed from, so a first use elsewhere
+        ;; can never adopt the changed one.
+        tx (if (and fresh tool (config/mcp-tool? (get-in config [:tools tool])) (nil? (tool-pin state tool))
+                    (string? pinned) (re-matches #"[0-9a-f]{64}" pinned))
+             (emit tx "tool/pinned" {:tool tool :digest pinned})
+             tx)
+        tx (emit tx "role/tools-unavailable" (cond-> {:role role :wake (:id wake) :session session
+                                                      :fresh fresh :tries tries}
+                                               server (assoc :server server)
+                                               tool (assoc :tool tool)
+                                               (and fresh got) (assoc :got got)
+                                               retry-at (assoc :retry-at (str retry-at))))]
+    (if (and before (= fresh (:fresh before)))
+      tx
+      (notify tx "tools-unavailable"
+              (if fresh (str role "'s session cannot go on") (str role "'s tools could not be set up"))
+              (str "agentloop said:\n\n" message "\n\n"
+                   (cond
+                     fresh
+                     (str "relay does not carry a session on with a tool whose definition changed, and does"
+                          " not start a fresh one by itself, since that would take the new definition"
+                          " unchecked. Check the change. To accept it, run `relay fresh " role "`: the"
+                          " session ends and the next wake starts a new one. Its memos wait until then.")
+                     changed
+                     (str "The definition no longer matches the :digest relay.edn gives " tool ". Check"
+                          " the change. To accept it, set :digest to " got " and run `relay fresh " role
+                          "`. Its memos wait until then.")
+                     :else
+                     (str "Nothing ran and nothing is dropped. relay tries " role " again after a wait that"
+                          " doubles each time; `relay wake " role "` tries at once.")))
+              :role role :labels (:said-labels tx)))))
+
 (defn- end-wake [{:keys [state config] :as tx} wake-id {:keys [outcome exit crashed cut-short session sessions said
-                                                              transcript resets-at held labels usage cost-usd]
+                                                              transcript resets-at held labels usage cost-usd
+                                                              tools-error pins]
                                                        :as report}]
   (let [wake (get-in state [:wakes wake-id])
+        tools-error (when (and (= "needs-attention" outcome) (not (:chat wake)))
+                      (wake-tools-error tools-error))
         ;; What the session said, and the input of any call it left held,
         ;; are its own text, with the labels it had gathered by the end:
         ;; as its harness reports them, or when it does not, every label
@@ -1798,9 +1931,15 @@
                               (some? sessions) (assoc :sessions (vec sessions))
                               (seq held) (assoc :held (mapv :id held))
                               (wake-usage usage) (assoc :usage (wake-usage usage))
-                              (wake-cost cost-usd) (assoc :cost-usd (wake-cost cost-usd)))
+                              (wake-cost cost-usd) (assoc :cost-usd (wake-cost cost-usd))
+                              tools-error (assoc :tools-error tools-error))
             (:said-labels tx))
-      (note-harness tx (:harness wake) outcome resets-at said)
+      (record-pins tx wake pins)
+      ;; Tools that could not be set up are the role's trouble, not its
+      ;; harness's: no model was called.
+      (if tools-error
+        (tools-unavailable tx wake session tools-error)
+        (note-harness tx (:harness wake) outcome resets-at said))
       (if cut-short (journal-cut-short tx wake) tx)
       (reduce #(open-hold %1 wake session %2) tx held)
       ;; A wake stopped for the operator has not failed its memos: it is
@@ -2047,6 +2186,87 @@
                   (str "Its calls were denied " denied " times, so its next wake starts afresh,"
                        " with its open memos.")
                   :role (:role h) :labels (id-labels state (:role h))))))))
+
+(defn session-to-carry-on
+  "The session relay fresh ends: the one whose tool changed, when the role
+  waits for relay fresh, even if it has ended; otherwise the interrupted
+  wake's, or the one whose tools could not be set up, unless it has
+  ended. Nil when there is none."
+  [state role-id]
+  (let [block (get-in state [:roles role-id :tools-unavailable])
+        interrupted (get-in state [:roles role-id :interrupted-wake])]
+    (if (and (:fresh block) (not (blank? (:session block))))
+      (:session block)
+      (let [session (or (get-in state [:wakes interrupted :session]) (:session block))]
+        (when-not (or (blank? session) (get-in state [:ended-sessions session]))
+          session)))))
+
+(defn holds-dropped-by-fresh
+  "The calls relay fresh would drop from a role's session: those still
+  open, which it denies, and those approved that never ran, since no
+  wake carried the decision back to a run that went on."
+  [state role-id]
+  (when-let [session (session-to-carry-on state role-id)]
+    (->> (vals (:holds state))
+         (filter #(and (= session (:session %))
+                       (or (= :open (:status %))
+                           (and (= :allowed (:status %))
+                                (let [d (:delivered %)]
+                                  (or (nil? d) (not= "ran" (get-in state [:wakes d :outcome]))))))))
+         (sort-by :id)
+         vec)))
+
+(defn fresh-expectation
+  "What relay fresh would act on for a role, as the operator is shown it
+  and must confirm: the session it ends, and for a changed tool, the tool
+  and the digest it accepts. Nil values where there is none."
+  [state role-id]
+  (let [{:keys [fresh tool got]} (get-in state [:roles role-id :tools-unavailable])]
+    {:session (session-to-carry-on state role-id)
+     :tool (when fresh tool)
+     :got (when fresh got)}))
+
+(defn roles-released-by-fresh
+  "The other roles relay fresh for `role-id` lets go: those stopped by the
+  same change of the same tool, sorted. Their blocked sessions end too,
+  since one that pinned the old definition would only stop them again."
+  [state role-id]
+  (let [{:keys [fresh tool got]} (get-in state [:roles role-id :tools-unavailable])]
+    (when (and fresh tool got)
+      (vec (sort (keep (fn [[r {b :tools-unavailable}]]
+                         (when (and (not= r role-id) (:fresh b) (= tool (:tool b)) (= got (:got b))
+                                    (not (blank? (:session b))))
+                           r))
+                       (:roles state)))))))
+
+(defmethod decide* :role/fresh [{:keys [state] :as tx} {{role-id :role :keys [expect]} :args}]
+  ;; Starting afresh accepts the tool definition the operator was shown,
+  ;; so only the operator does it, and only for what they saw.
+  (operator-only! tx "starts a role's session afresh")
+  (active-role! state role-id)
+  (when (running? state role-id)
+    (reject! :busy (str role-id " is running.") (id-labels state role-id)))
+  (let [{:keys [session tool got] :as now} (fresh-expectation state role-id)
+        accept? (and tool got (config/mcp-tool? (get-in (:config tx) [:tools tool])))]
+    (when-not session
+      (reject! :invalid (str role-id " has no session to end: its next wake starts afresh.")))
+    (when-not (= now {:session (:session expect) :tool (:tool expect) :got (:got expect)})
+      (reject! :invalid (str "What relay fresh would do for " role-id " has changed since it was shown."
+                             " Nothing was done. Run relay fresh " role-id " again and look again.")))
+    (as-> tx tx
+      ;; The changed definition is accepted: every later session, of any
+      ;; role granted the tool, is held to it.
+      (if accept? (emit tx "tool/pinned" {:tool tool :digest got}) tx)
+      (end-session tx role-id session "the operator started it afresh"
+                   "The operator started the role afresh, so this session was ended."
+                   {:fresh true})
+      ;; Other roles stopped by the same change are let go the same way.
+      (reduce (fn [tx r]
+                (end-session tx r (get-in (:state tx) [:roles r :tools-unavailable :session])
+                             "the operator accepted a changed tool"
+                             "The operator accepted a changed tool, so this session was ended."
+                             {:fresh true}))
+              tx (if accept? (roles-released-by-fresh state role-id) [])))))
 
 (defmethod decide* :wake/end [{:keys [state] :as tx} {{:keys [wake] :as args} :args}]
   (dispatcher-only! tx)

@@ -14,6 +14,8 @@
     :tools          the tools the role is offered (relay.tools/manifest)
     :quarantine     the tools the role may read through a quarantined
                     reader (its :quarantine grant), or nil
+    :mcp-servers    the MCP servers the role's MCP tools come from, by
+                    name, as relay.edn gives them
     :tool-command   the command a harness runs for a tool call, given the
                     tool's name as its last argument: relay's own `tool`
                     command with the data directory and role already named.

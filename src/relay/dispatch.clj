@@ -153,7 +153,14 @@
         {shown-notes :shown withheld-notes :withheld} (core/prompt-notes state config role)
         holds (map #(core/hold state %) resolves)
         script {:script? (tools/script-role? state config role)}
-        manifest (tools/manifest config role script)
+        ;; Each MCP tool is held to the definition relay.edn's :digest
+        ;; gives it, else the one relay accepted first or with relay
+        ;; fresh, so a changed one stops any session, not only its own.
+        manifest (mapv (fn [{tool-name :name :keys [mcp] :as t}]
+                         (if-let [d (and mcp (or (:digest mcp) (core/tool-pin state tool-name)))]
+                           (assoc-in t [:mcp :digest] d)
+                           t))
+                       (tools/manifest config role script))
         public? (core/public-role? config role)
         labels (core/wake-labels state config wake)]
     ;; decide refuses a wake whose prompts would give a public role
@@ -191,6 +198,8 @@
      ;; The tools the role may read through agentloop's quarantined
      ;; reader, if the operator granted any.
      :quarantine (when-not (:script? script) (config/quarantine-tools config role))
+     ;; The MCP servers the role's granted tools come from, and no others.
+     :mcp-servers (config/mcp-servers-for config (map :name manifest))
      :resolve (vec (for [{:keys [call status reason input-sha256]} holds]
                      (cond-> {:call_id call :verdict (if (= :allowed status) "allow" "deny")}
                        (not (str/blank? reason)) (assoc :reason reason)
@@ -262,7 +271,7 @@
   "The :wake/end args for a harness's report on a wake."
   [wake-id report]
   (-> (select-keys report [:outcome :exit :crashed :cut-short :session :said :resets-at :held :labels
-                           :refused :forbidden :usage :cost-usd])
+                           :refused :forbidden :usage :cost-usd :tools-error :pins])
       (update :exit exit-field)
       (update :resets-at #(some-> % str))
       (assoc :wake wake-id

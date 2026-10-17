@@ -72,7 +72,7 @@
 (defn- role-line-labels [state id]
   (core/union (core/role-labels state id) (core/id-labels state (:reports-to (core/role state id)))))
 
-(defn- role-status [state zone id]
+(defn- role-status [state zone now id]
   (let [{:keys [title reports-to]} (core/role state id)
         id-ls (core/id-labels state id)]
     (concat
@@ -85,7 +85,15 @@
      (map #(text/for-operator (core/union (:labels %) id-ls) (open-memo zone %)) (core/unread-memos state id))
      (for [{memo-id :id :keys [subject labels]} (core/dead-memos state id)]
        (text/for-operator (core/union labels id-ls)
-                          (format "    dead  [%d] %s (relay retry %s)" memo-id subject id))))))
+                          (format "    dead  [%d] %s (relay retry %s)" memo-id subject id)))
+     (when-let [{:keys [server tool fresh retry-at]} (get-in state [:roles id :tools-unavailable])]
+       [(text/for-operator id-ls
+                           (str "    tools unavailable"
+                                (cond tool (str ": " tool) server (str ": server " server))
+                                (cond
+                                  (or fresh (nil? retry-at)) (str " changed (relay fresh " id ")")
+                                  (.isAfter ^Instant retry-at now) (str ", next try " (local retry-at zone))
+                                  :else ", tried again at the next tick")))]))))
 
 (defn- dollars
   "An amount in US dollars to the cent. One above zero that rounds to
@@ -128,7 +136,7 @@
    (when paused
      (concat paused [""]))
    ["Roles"]
-   (mapcat #(role-status state zone %) (core/active-role-ids state))
+   (mapcat #(role-status state zone now %) (core/active-role-ids state))
    (mapcat (fn [line] ["" line])
     (for [[h {:keys [condition paused-until]}] (sort-by key (:harnesses state))]
      (str "Harness " h ": "

@@ -55,7 +55,8 @@
             [cheshire.core :as json]
             [clojure.string :as str]
             [relay.acp :as acp]
-            [relay.harness :as harness])
+            [relay.harness :as harness]
+            [relay.text :as text])
   (:import (java.time Instant)))
 
 (def default-model "claude-opus-5-5")
@@ -108,6 +109,21 @@
                         (when (str/includes? line "\"outcome\"") ::unreadable))))))
        last))
 
+(defn parse-pins
+  "The tool definitions a run's session pinned, from its pins entries
+  (agentloop writes one when a session first pins a tool), as {tool-name
+  sha256}. Lines that are not such an entry are passed over."
+  [text]
+  (into {}
+        (for [line (str/split-lines (str text))
+              :when (str/includes? line "\"pins\"")
+              :let [e (try (json/parse-string line) (catch Exception _ nil))]
+              :when (and (map? e) (= "pins" (get e "type")))
+              [tool digest] (let [p (get-in e ["pins" "pins"])] (when (map? p) p))
+              :when (and (string? tool) (re-matches #"[A-Za-z0-9_-]{1,64}" tool)
+                         (string? digest) (re-matches #"[0-9a-f]{64}" digest))]
+          [tool digest])))
+
 (defn- instant [s]
   (when (and (string? s) (not (str/blank? s)))
     (try (Instant/parse s) (catch Exception _ nil))))
@@ -145,6 +161,34 @@
   [x]
   (when (and (number? x) (Double/isFinite (double x)) (>= (double x) 0.0))
     (double x)))
+
+(def tools-message-limit
+  "The most of a tools_error message relay keeps, in code points. The
+  message can quote what an MCP server printed."
+  300)
+
+(defn tools-error
+  "An outcome line's tools_error as relay records it: {:message :server
+  :tool :pinned :got}, each only when it has the shape agentloop gives it.
+  The message can hold a server's own text, so it is cut to
+  tools-message-limit and its links are broken (relay.text/defang); the
+  edge that shows it applies visible. Nil when there is no message."
+  [e]
+  (when (map? e)
+    (let [{:keys [message server tool pinned got]} e
+          name? #(and (string? %) (re-matches #"[A-Za-z0-9_-]{1,64}" %))
+          digest? #(and (string? %) (re-matches #"[0-9a-f]{64}" %))
+          cut (fn [^String s]
+                (if (> (.codePointCount s 0 (count s)) tools-message-limit)
+                  (str (subs s 0 (.offsetByCodePoints s 0 tools-message-limit)) "...")
+                  s))]
+      (when (and (string? message) (not (str/blank? message)))
+        ;; One line: it goes into notifications and status lines.
+        (cond-> {:message (cut (text/defang (str/replace (str/trim message) #"\s+" " ")))}
+          (name? server) (assoc :server server)
+          (name? tool) (assoc :tool tool)
+          (digest? pinned) (assoc :pinned pinned)
+          (digest? got) (assoc :got got))))))
 
 (defn classify
   "How a run ended. Pure: takes the parsed outcome line (nil when there was
@@ -197,6 +241,14 @@
                             :said "agentloop did not run the session: it holds a label it may not hold."
                             :forbidden (if (sequential? forbidden) (vec forbidden) []))
         "canceled" (report "ran" :crashed true :said "Stopped at the wake deadline.")
+        ;; The role's MCP tools could not be set up, so nothing ran: a
+        ;; server did not start, or a tool's definition is not the one the
+        ;; request or the session pinned. The role needs the operator; its
+        ;; harness is fine.
+        "tools_unavailable"
+        (let [te (or (tools-error (:tools_error line))
+                     {:message "agentloop could not set up the role's MCP tools."})]
+          (report "needs-attention" :said (:message te) :tools-error te))
         "model_error"
         (case (:kind error)
           "rate_limited" (report "limited" :resets-at (reset-time error now))
@@ -213,9 +265,33 @@
 (def ^:private no-bin
   "agentloop not found: set :bin, put agentloop on PATH, or run `make -C ../agentloop build`.")
 
+(defn request-tool
+  "One tool as the request names it. A command tool gives its description
+  and schema. An MCP tool gives its server and the server's name for it,
+  and the digest and content kinds relay.edn gives it, if any; its server
+  gives the rest."
+  [{:keys [mcp] :as tool}]
+  (if mcp
+    (let [{:keys [server digest allow-content]} mcp]
+      (cond-> {:name (:name tool) :protocol "mcp-stdio" :server server :tool (:tool mcp)}
+        digest (assoc :digest digest)
+        (seq allow-content) (assoc :allow_content (vec allow-content))))
+    (select-keys tool [:name :description :parameters])))
+
+(defn request-mcp-servers
+  "The MCP servers as the request gives them. agentloop runs a
+  :credentials-command and puts what it prints in a private file for the
+  server; relay passes only the command, never a secret."
+  [servers]
+  (into (sorted-map)
+        (for [[n {:keys [command credentials-command send-labels]}] servers]
+          [n (cond-> {:command (vec command)}
+               credentials-command (assoc :credentials_command (vec credentials-command))
+               send-labels (assoc :send_labels true))])))
+
 (defn- base-request
   "What every agentloop request holds, whatever the mode."
-  [{:keys [harness model system-prompt tools tool-command policy quarantine]} work]
+  [{:keys [harness model system-prompt tools tool-command policy quarantine mcp-servers]} work]
   (let [{:keys [provider effort base-url retry limits tool-timeout-seconds api-key-command]} harness
         limit-keys {:max-turns :max_turns :max-tool-calls :max_tool_calls :max-tokens :max_tokens}
         retry-keys {:retries :retries :backoff-seconds :backoff_seconds
@@ -225,7 +301,7 @@
              :effort (or effort default-effort)
              :api_key_command (vec api-key-command)
              :system system-prompt
-             :tools (mapv #(select-keys % [:name :description :parameters]) tools)
+             :tools (mapv request-tool tools)
              :tool_command (vec tool-command)
              ;; Every tool is policed: the session's starting labels and
              ;; each tool's class and labels, with calls and results in
@@ -234,7 +310,11 @@
              :tool_protocol "envelope"
              :tool_env (harness/base-env {})
              :tool_dir (str work)
+             ;; Always given, so agentloop's own default (120 seconds once
+             ;; there are MCP servers) never applies: every tool call, an
+             ;; MCP one included, gets the harness's timeout.
              :tool_timeout_seconds (or tool-timeout-seconds default-tool-timeout-seconds)}
+      (seq mcp-servers) (assoc :mcp_servers (request-mcp-servers mcp-servers))
       base-url (assoc :base_url base-url)
       (seq limits) (assoc :limits (into {} (keep (fn [[k v]] (when-let [k2 (limit-keys k)] [k2 v])) limits)))
       (seq retry) (assoc :retry (into {} (keep (fn [[k v]] (when-let [k2 (retry-keys k)] [k2 v])) retry)))
@@ -303,7 +383,9 @@
        :session id})))
 
 (defmethod harness/wake-report :agentloop [_ {:keys [session]} {:keys [exit out err now]}]
-  (classify {:outcome (parse-outcome out) :exit exit :stderr err :session session :now now}))
+  (let [pins (parse-pins out)]
+    (cond-> (classify {:outcome (parse-outcome out) :exit exit :stderr err :session session :now now})
+      (seq pins) (assoc :pins pins))))
 
 (defmethod harness/acp-command :agentloop [{:keys [session-dir] :as request}]
   (let [{:keys [problem work file bin env] :as prepared} (prepare! request (fn [_ work] (acp-request-json request work)))]

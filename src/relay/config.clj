@@ -55,6 +55,7 @@
    ;; these arguments.
    :chat-client ["acp-tui"]
    :tools {}
+   :mcp-servers {}
    :grants {}})
 
 (def notify-kinds #{:ntfy :command :macos :file :none})
@@ -273,6 +274,111 @@
           (problem! (str "relay.edn's :brief names " (pr-str n) " as its " (name k) " tool, which"
                          " must be a :read tool in :tools.")))))))
 
+;; --- MCP servers and their tools
+
+(def credentials-placeholder
+  "In an MCP server's :command, the path of the file that holds what its
+  :credentials-command printed. agentloop runs that command, writes the
+  file and fills in the path; relay never sees the secret."
+  "{credentials_file}")
+
+(def mcp-name
+  "An MCP server's name, and an MCP tool's name in :tools: agentloop's
+  tool names."
+  #"[A-Za-z0-9_-]{1,64}")
+
+(def mcp-content-kinds
+  "What an MCP tool's :allow-content may name: the kinds of non-text
+  content its results may hold. Any other fails the call."
+  #{"image" "audio" "resource_link" "resource"})
+
+(defn mcp-tool? [tool] (= :mcp-stdio (:protocol tool)))
+
+(defn- argv? [x]
+  (and (vector? x) (seq x) (every? #(and (string? %) (not (str/includes? % "\u0000"))) x)
+       (not (str/blank? (first x)))))
+
+(defn- check-mcp-server
+  "One entry of :mcp-servers, with agentloop's rules for it, so that relay
+  refuses a bad one before agentloop would."
+  [server-name {:keys [command credentials-command send-labels] :as server}]
+  (let [where (str "The MCP server " (pr-str server-name) " in relay.edn")]
+    (when-not (and (string? server-name) (re-matches mcp-name server-name))
+      (problem! (str "relay.edn's :mcp-servers has " (pr-str server-name) ", which is not a server name:"
+                     " a string of 1 to 64 letters, digits, - or _.")))
+    (when-not (and (map? server) (every? #{:command :credentials-command :send-labels} (keys server)))
+      (problem! (str where " is {:command [...]}, and may give :credentials-command and :send-labels,"
+                     " and nothing else.")))
+    (when-not (argv? command)
+      (problem! (str where " needs a :command, such as [\"/usr/local/bin/files-mcp\"].")))
+    (when (str/includes? (first command) credentials-placeholder)
+      (problem! (str where " cannot run " credentials-placeholder ".")))
+    (when-not (or (nil? credentials-command) (argv? credentials-command))
+      (problem! (str where " has a :credentials-command that is not a command, such as"
+                     " [\"security\" \"find-generic-password\" \"-s\" \"files\" \"-w\"].")))
+    (let [holds (some #(str/includes? % credentials-placeholder) command)]
+      (when (and holds (nil? credentials-command))
+        (problem! (str where " has " credentials-placeholder " in its :command but no :credentials-command.")))
+      (when (and credentials-command (not holds))
+        (problem! (str where " has a :credentials-command, but no argument of its :command holds "
+                       credentials-placeholder ", the file it is written to."))))
+    (when-not (or (nil? send-labels) (boolean? send-labels))
+      (problem! (str where " has :send-labels " (pr-str send-labels) "; it must be true or false.")))))
+
+(def mcp-tool-keys #{:class :labels :always-hold :protocol :server :tool :digest :allow-content})
+
+(defn- check-mcp-tool
+  "A tool with :protocol :mcp-stdio. Its server gives its description and
+  schema, so it takes none; agentloop runs it, so it has no :command, and
+  the harness's :tool-timeout-seconds bounds a call."
+  [tool-name {:keys [server tool digest allow-content] :as spec} servers]
+  (let [where (str "Tool " tool-name " in relay.edn")]
+    (when-not (and (string? tool-name) (re-matches mcp-name tool-name))
+      (problem! (str where " is an MCP tool, so its name must be 1 to 64 letters, digits, - or _.")))
+    (when-let [extra (seq (remove mcp-tool-keys (keys spec)))]
+      (problem! (str where " is an MCP tool and cannot have " (str/join ", " (map pr-str (sort-by str extra)))
+                     ". Its server gives its description and parameters, agentloop runs it, and the"
+                     " harness's :tool-timeout-seconds bounds a call.")))
+    (when-not (contains? servers server)
+      (problem! (str where " needs :server, naming one of :mcp-servers"
+                     (when (some? server) (str "; there is no MCP server " (pr-str server))) ".")))
+    (when-not (and (string? tool) (not (str/blank? tool)) (not (str/includes? tool "\u0000")))
+      (problem! (str where " needs :tool, the server's own name for the tool.")))
+    (when-not (or (nil? digest) (and (string? digest) (re-matches #"[0-9a-f]{64}" digest)))
+      (problem! (str where " has :digest " (pr-str digest) "; it must be a SHA-256 in lowercase hex.")))
+    (when-not (or (nil? allow-content)
+                  (and (vector? allow-content) (apply distinct? nil allow-content)
+                       (every? mcp-content-kinds allow-content)))
+      (problem! (str where " has :allow-content " (pr-str allow-content) "; it must be a vector of"
+                     " distinct kinds from " (str/join ", " (sort mcp-content-kinds)) ".")))))
+
+(defn- check-mcp
+  "The :mcp-servers and the tools that come from them. A server no tool
+  uses is refused, as agentloop refuses one, and so is a server's tool
+  under two names."
+  [{:keys [mcp-servers tools]}]
+  (when-not (map? mcp-servers)
+    (problem! "relay.edn's :mcp-servers is a map of server names to {:command [...]}."))
+  (doseq [[n s] mcp-servers] (check-mcp-server n s))
+  ;; agentloop adds read_quarantined itself and refuses a tool of that name.
+  (when (contains? tools "read_quarantined")
+    (problem! "Tool read_quarantined in relay.edn has the name of agentloop's quarantined reader. Name it otherwise."))
+  (doseq [[n t] tools]
+    (if (mcp-tool? t)
+      (check-mcp-tool n t mcp-servers)
+      (when-let [extra (seq (filter #(contains? t %) [:server :tool :digest :allow-content]))]
+        (problem! (str "Tool " n " in relay.edn has " (str/join ", " (map pr-str extra))
+                       ", which only a tool with :protocol :mcp-stdio takes.")))))
+  (let [mcp (filter (comp mcp-tool? val) tools)]
+    (doseq [[[server remote] names] (group-by (fn [[_ t]] [(:server t) (:tool t)]) mcp)
+            :when (next names)]
+      (problem! (str "Tools " (str/join " and " (sort (map key names))) " in relay.edn are both the tool "
+                     (pr-str remote) " of the MCP server " server ".")))
+    (doseq [n (sort (keys mcp-servers))
+            :when (not-any? #(= n (:server (val %))) mcp)]
+      (problem! (str "The MCP server " n " in relay.edn gives none of :tools. Name a tool from it, or"
+                     " remove it.")))))
+
 (defn validate
   "Returns the config, or throws describing the first problem found."
   [{:keys [tools grants max-attempts chat-client] :as config}]
@@ -295,11 +401,11 @@
                            " always carries, from " (sort label-names) "; [] for none"
                            (when (contains? tool :labels) (str ", not " (pr-str labels))) ".")
                       {:tool tool-name :relay/usage true})))
-    (when-not (contains? #{nil :plain :envelope} (:protocol tool))
+    (when-not (contains? #{nil :plain :envelope :mcp-stdio} (:protocol tool))
       (throw (ex-info (str "Tool " tool-name " has :protocol " (pr-str (:protocol tool))
-                           "; it is :envelope, or left out for a command given its arguments.")
+                           "; it is :envelope, :mcp-stdio, or left out for a command given its arguments.")
                       {:tool tool-name :relay/usage true})))
-    (when (and (some? (:parameters tool))
+    (when (and (some? (:parameters tool)) (not (mcp-tool? tool))
                (not (and (= :envelope (:protocol tool)) (map? (:parameters tool))
                          (= "object" (get-in tool [:parameters :type])))))
       (throw (ex-info (str "Tool " tool-name " has :parameters, which an :envelope tool may give as a"
@@ -319,6 +425,7 @@
              (some (fn [[_ g]] (or (seq (:tools g)) (:may-add g))) grants))
     (problem! (str "The default harness in relay.edn is a :script harness, which gets no tools,"
                    " so no role may be granted :tools or :may-add.")))
+  (check-mcp config)
   (check-grants config)
   (check-verifier config)
   (check-budget config)
@@ -378,6 +485,13 @@
   "The roles granted :reports, sorted."
   [config]
   (sort (keep (fn [[role g]] (when (contains? g :reports) role)) (:grants config))))
+
+(defn mcp-servers-for
+  "The :mcp-servers that the named tools come from, by name: those a
+  request for a role granted them must start, and no others."
+  [config tool-names]
+  (select-keys (:mcp-servers config)
+               (keep #(let [t (get-in config [:tools %])] (when (mcp-tool? t) (:server t))) tool-names)))
 
 (def verifier-timeout-seconds
   "How long one verifier call may run when :verifier does not say. Each
