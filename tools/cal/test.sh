@@ -4,5 +4,5 @@ set -e
 cd "$(dirname "$0")"
 out="$(mktemp -d)"
 trap 'rm -rf "$out"' EXIT
-swiftc -O Core.swift tests/main.swift -o "$out/cal-tests"
+swiftc -O Core.swift ../shared/Escape.swift ../shared/EscapeTests.swift tests/main.swift -o "$out/cal-tests"
 "$out/cal-tests"

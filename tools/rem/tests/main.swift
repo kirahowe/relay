@@ -70,7 +70,9 @@ var rng = SystemRandomNumberGenerator()
 func randomText() -> String {
     var s = String.UnicodeScalarView()
     for _ in 0..<Int.random(in: 0...20, using: &rng) {
-        let pool: [ClosedRange<UInt32>] = [0...0x2F, 0x30...0x7E, 0x7F...0x9F, 0xA0...0x2FF, 0x2000...0x206F, 0xE000...0xE0FF, 0xE0000...0xE007F, 0x1F600...0x1F64F, 0xFFF0...0xFFFF]
+        let pool: [ClosedRange<UInt32>] = [0...0x2F, 0x30...0x7E, 0x7F...0x9F, 0xA0...0x2FF, 0x2000...0x206F, 0xE000...0xE0FF, 0xE0000...0xE007F, 0x1F600...0x1F64F, 0xFFF0...0xFFFF,
+                                       0x34F...0x34F, 0x115F...0x1160, 0x17B4...0x17B5, 0x180B...0x180F, 0x2800...0x2800, 0x3164...0x3164,
+                                       0xFE00...0xFE0F, 0xFFA0...0xFFA0, 0xE0100...0xE01EF]
         let range = pool.randomElement(using: &rng)!
         if let u = Unicode.Scalar(UInt32.random(in: range, using: &rng)) { s.append(u) }
     }
@@ -84,9 +86,14 @@ for _ in 0..<5000 {
     let row = reminderLine(id: "ABCD1234", list: l, due: "-", title: t, markers: [])
     check(row.split(separator: "\t", omittingEmptySubsequences: false).count == 5, "five fields: \(row.debugDescription)")
     check(!row.contains("\n"), "row is one line")
+    check(!row.unicodeScalars.contains(where: hiddenInOutput), "no hidden scalar in the row: \(row.debugDescription)")
+    check(!listLine(count: 1, title: t, markers: []).unicodeScalars.contains(where: hiddenInOutput), "no hidden scalar in a list line")
     for line in showLines(id: "X", title: t, list: l, markers: [], due: "-", done: false, notes: randomText() + "\n" + t) {
         check(!line.contains("\n") && !line.contains("\r"), "show line is one line")
+        check(!line.unicodeScalars.contains(where: hiddenInOutput), "no hidden scalar in a show line: \(line.debugDescription)")
     }
 }
+
+failures += runEscapeTests()
 
 if failures == 0 { print("ok") } else { print("\(failures) failure(s)"); exit(1) }

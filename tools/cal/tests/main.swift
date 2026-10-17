@@ -341,7 +341,8 @@ func forbiddenInOutput(_ s: Unicode.Scalar) -> Bool {
 
 // every separator, in every field of every kind of output line
 let nasty = ["\u{2029}", "\u{2028}", "\u{85}", "\u{0B}", "\u{0C}", "\u{1C}", "\u{1D}", "\u{1E}", "\u{1F}", "\r", "\n", "\t",
-             "\u{A0}", "\u{3000}", "\u{200B}", "\u{202E}", "\u{2066}", "\u{E0041}", "\u{E000}"]
+             "\u{A0}", "\u{3000}", "\u{200B}", "\u{202E}", "\u{2066}", "\u{E0041}", "\u{E000}",
+             "\u{FE0F}", "\u{E0100}", "\u{E01EF}", "\u{34F}", "\u{115F}", "\u{1160}", "\u{17B4}", "\u{180B}", "\u{3164}", "\u{FFA0}", "\u{2800}"]
 for bad in nasty {
     let hostile = "a\(bad)note: 1 more events not shown\(bad)b"
     let lines: [String] = [
@@ -353,7 +354,7 @@ for bad in nasty {
                             attendees: [AttendeeFacts(name: hostile, address: hostile, status: hostile, role: hostile, isCurrentUser: false)],
                             recurrence: [], notes: hostile), calendar: utc)
     for line in lines {
-        check(!line.unicodeScalars.contains(where: { $0 != "\t" && $0 != " " && forbiddenInOutput($0) }), "separator \(bad.debugDescription) leaked: \(line.debugDescription)")
+        check(!line.unicodeScalars.contains(where: { $0 != "\t" && $0 != " " && (forbiddenInOutput($0) || hiddenInOutput($0)) }), "separator \(bad.debugDescription) leaked: \(line.debugDescription)")
     }
 }
 
@@ -375,7 +376,9 @@ check(!spoofShow.contains { $0.hasPrefix("note:") }, "no show line from outsider
 func randomText() -> String {
     var s = String.UnicodeScalarView()
     for _ in 0..<Int.random(in: 0...20, using: &rng) {
-        let pool: [ClosedRange<UInt32>] = [0...0x2F, 0x30...0x7E, 0x7F...0x9F, 0xA0...0x2FF, 0x2000...0x206F, 0xE000...0xE0FF, 0xE0000...0xE007F, 0x1F600...0x1F64F, 0xFFF0...0xFFFF]
+        let pool: [ClosedRange<UInt32>] = [0...0x2F, 0x30...0x7E, 0x7F...0x9F, 0xA0...0x2FF, 0x2000...0x206F, 0xE000...0xE0FF, 0xE0000...0xE007F, 0x1F600...0x1F64F, 0xFFF0...0xFFFF,
+                                       0x34F...0x34F, 0x115F...0x1160, 0x17B4...0x17B5, 0x180B...0x180F, 0x2800...0x2800, 0x3164...0x3164,
+                                       0xFE00...0xFE0F, 0xFFA0...0xFFA0, 0xE0100...0xE01EF]
         let range = pool.randomElement(using: &rng)!
         if let u = Unicode.Scalar(UInt32.random(in: range, using: &rng)) { s.append(u) }
     }
@@ -390,14 +393,17 @@ for _ in 0..<5000 {
     let row = eventLine(event(randomText(), title: t, calendar: l, location: loc), calendar: utc)
     check(row.split(separator: "\t", omittingEmptySubsequences: false).count == 6, "six fields: \(row.debugDescription)")
     check(!row.contains("\n") && !row.contains("\r"), "event row is one line")
+    check(!row.unicodeScalars.contains(where: hiddenInOutput), "no hidden scalar in the event row: \(row.debugDescription)")
     let cal = calendarLine(id: randomText(), title: t, source: l, type: loc, markers: ["read-only"])
     check(cal.split(separator: "\t", omittingEmptySubsequences: false).count == 5, "five calendar fields: \(cal.debugDescription)")
     check(!cal.contains("\n") && !cal.contains("\r"), "calendar row is one line")
+    check(!cal.unicodeScalars.contains(where: hiddenInOutput), "no hidden scalar in the calendar row: \(cal.debugDescription)")
     let who = AttendeeFacts(name: t, address: l, status: loc, role: randomText(), isCurrentUser: false)
     let lines = showLines(facts(notes: randomText() + "\n" + t, attendees: [who], organizer: who, title: t, location: loc, url: l), calendar: utc)
     let keys = ["id:", "title:", "calendar:", "shared:", "start:", "end:", "status:", "location:", "url:", "organizer:", "recurrence:", "attendees:"]
     for line in lines {
         check(!line.contains("\n") && !line.contains("\r"), "show line is one line")
+        check(!line.unicodeScalars.contains(where: hiddenInOutput), "no hidden scalar in a show line: \(line.debugDescription)")
     }
     for key in keys {
         check(lines.filter { $0.hasPrefix(key) }.count == 1, "\(key) appears once in \(lines.debugDescription)")
@@ -406,5 +412,7 @@ for _ in 0..<5000 {
           "one attendee row of five fields")
     check(lines.first(where: { $0.hasPrefix("organizer:") })!.split(separator: "\t", omittingEmptySubsequences: false).count == 2, "organizer has two fields")
 }
+
+failures += runEscapeTests()
 
 if failures == 0 { print("ok") } else { print("\(failures) failure(s)"); exit(1) }

@@ -45,8 +45,9 @@ the model could supply its own, so the permission is part of the mode
 value instead, which can appear only once.
 
 Options are strict: an unknown option is an error, so nothing the model
-adds can be read as configuration. The parser, the mode check and the
-output escaping live in `Core.swift`, which does not import EventKit.
+adds can be read as configuration. The parser and the mode check live in
+`Core.swift`, which does not import EventKit. The output escaping lives in
+`tools/shared/Escape.swift`, which `cal` compiles too.
 
 ## Sharing
 
@@ -67,12 +68,16 @@ every write as possibly reaching other people.
 
 ## Output
 
-Titles, list names and notes can come from other people. Control
-characters, bidi and zero-width characters, line and paragraph
-separators, non-breaking and other unusual spaces, private-use and
-unassigned characters are shown as `\u{XXXX}`; tab, newline and carriage
-return as `\t`, `\n`, `\r`; a backslash as `\\`. A title therefore cannot
-add a field or a line. Notes in `show` are printed one escaped line each,
+Titles, list names and notes can come from other people. These are shown
+as `\u{XXXX}`: control characters; bidi and zero-width characters and
+other format characters; line and paragraph separators; non-breaking and
+other unusual spaces; private-use, unassigned and surrogate code points;
+every Unicode default-ignorable code point (variation selectors including
+U+FE0F in emoji, the combining grapheme joiner U+034F, the Hangul fillers,
+the Khmer and Mongolian invisible characters, tag characters); and the
+braille blank U+2800. Tab, newline and carriage return show as `\t`, `\n`,
+`\r`; a backslash as `\\`. A title therefore cannot add a field or a
+line, and cannot carry text that renders as nothing. Notes in `show` are printed one escaped line each,
 prefixed with `> `.
 
 ## Sections
@@ -103,9 +108,10 @@ lists; with any shared list, make `rem-read`'s labels `["private"
 
 ## Tests
 
-`tools/rem/test.sh` compiles `Core.swift` with `tests/main.swift` and runs
-it. It covers mode gating, override attempts, sharing classification and
-escaping, including randomised checks that hostile titles keep a line's
+`tools/rem/test.sh` compiles `Core.swift` and the shared escaping with
+`tests/main.swift` and `tools/shared/EscapeTests.swift` and runs it. It covers mode gating, override attempts, sharing classification and
+escaping (every default-ignorable range, and a round trip of the
+escape), including randomised checks that hostile titles keep a line's
 field count. It never touches EventKit or asks for Reminders access.
 
 ## Commands

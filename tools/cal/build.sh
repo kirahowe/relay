@@ -3,5 +3,5 @@
 # macOS can show why it wants Calendar access.
 set -e
 cd "$(dirname "$0")"
-swiftc -O main.swift Core.swift -o cal \
+swiftc -O main.swift Core.swift ../shared/Escape.swift -o cal \
   -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker Info.plist
