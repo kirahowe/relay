@@ -1548,6 +1548,10 @@ rule OpenConversation {
         -- an interrupted wake and leaves it to be resumed later. It
         -- may open while a call of the role's waits for the operator,
         -- since it runs in a session of its own.
+        -- Every session a conversation opens starts empty: the client
+        -- can open and close sessions but not load, resume or list
+        -- earlier ones, so no conversation carries on another's history
+        -- or labels.
         -- A conversation runs over ACP, so any ACP client can hold one;
         -- relay chat is one such client, on the operator's terminal.
         -- Its system prompt says when the conversation started, with the

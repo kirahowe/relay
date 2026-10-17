@@ -417,6 +417,12 @@ disconnects, and the wake records the ACP sessions the client used. Their
 logs are kept in `<data>/runs/<role>/conversations/`, apart from the
 role's wake sessions.
 
+Every conversation starts empty. A client can open new sessions and
+close them, but cannot load, resume or list earlier ones, so no
+conversation takes on another's history or labels. What a role should
+carry from one conversation to the next goes in its notes, facts and
+journal, as it does between wakes.
+
 To set up a client, give it the command `relay` with the arguments
 `acp <role> --data <dir>`, or leave out `--data` when
 `~/.config/relay/config.edn` names the data directory. The client needs

@@ -203,15 +203,17 @@
     (seq resolve) (assoc :resolve (vec resolve))))
 
 (defn acp-request-json
-  "The request `agentloop acp` reads. The client opens and loads sessions,
-  so the request names their directory instead of one session, and has no
-  prompt and no deadline: an ACP turn ends when the client cancels it. It
-  adds what only a client shows: each tool's ACP kind, and a title,
-  \"relay · <role id>\", for the client to name the conversation by.
-  agentloop asks the provider for the model's context window itself."
+  "The request `agentloop acp` reads. The client opens sessions, so the
+  request names their directory instead of one session, and has no prompt
+  and no deadline: an ACP turn ends when the client cancels it. Every
+  conversation starts empty: new_sessions_only stops a client loading,
+  resuming or listing an earlier one, whose history and labels it would
+  carry on. It adds what only a client shows: each tool's ACP kind, and a
+  title, \"relay · <role id>\", for the client to name the conversation
+  by. agentloop asks the provider for the model's context window itself."
   [{:keys [session-dir tools role] :as request} work]
   (let [kinds (acp/tool-kinds tools)]
-    (cond-> (assoc (base-request request work) :session_dir (str session-dir))
+    (cond-> (assoc (base-request request work) :session_dir (str session-dir) :new_sessions_only true)
       (:id role) (assoc :title (str "relay · " (:id role)))
       (seq kinds) (assoc :tool_kinds kinds))))
 

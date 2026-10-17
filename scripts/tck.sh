@@ -25,6 +25,12 @@ if [ -z "$TCK_REF" ] || [ -z "$ALLOWED_SKIPS" ]; then
 	echo "tck: could not read TCK_REF and ALLOWED_SKIPS from $agentloop_tck" >&2
 	exit 1
 fi
+# relay asks agentloop for new sessions only, so a conversation never
+# reopens an earlier one: load, resume and list are not advertised.
+ALLOWED_SKIPS="$ALLOWED_SKIPS
+ACP-LIST-001 ACP-LIST-002
+ACP-LOAD-001 ACP-LOAD-002 ACP-LOAD-003
+ACP-RESUME-001 ACP-RESUME-002"
 
 # The sibling checkout's build, never the agentloop on PATH, which may be
 # the live install.

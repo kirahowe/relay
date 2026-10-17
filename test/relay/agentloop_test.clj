@@ -309,8 +309,9 @@
            (not-any? #(contains? acp %) [:session :prompt :timeout_seconds])
            (= {:inbox "read"} (update-keys (:tool_kinds acp) keyword))
            (= "relay · clerk" (:title acp))
+           (true? (:new_sessions_only acp))
            (= (dissoc run :session :prompt :timeout_seconds)
-              (dissoc acp :session_dir :tool_kinds :title))))))
+              (dissoc acp :session_dir :tool_kinds :title :new_sessions_only))))))
 
 (deftest an-acp-request-differs-from-a-run-request-only-in-its-sessions
   (let [result (tc/quick-check 300 an-acp-request-is-a-run-request-for-a-session-directory)]
