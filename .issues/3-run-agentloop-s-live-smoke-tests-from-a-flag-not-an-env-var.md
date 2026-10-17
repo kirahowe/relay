@@ -14,3 +14,5 @@ This is agentloop work tracked here. The live smoke tests are gated by AGENTLOOP
 ## Plan
 
 ## Log
+
+- 2026-10-17: landed in agentloop main (xqykmpps, pslwzqwx). `make live` takes no env var. The live test fails without a thinking block.

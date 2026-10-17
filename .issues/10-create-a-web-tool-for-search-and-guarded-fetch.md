@@ -17,3 +17,5 @@ A new Go repo speaking the envelope protocol. It gives roles `web_search` and `w
 ## Plan
 
 ## Log
+
+- 2026-10-17: landed in the new repo ~/code/projects/webtool, main = ztynurut. Round 12 converged with NITs only, filed separately. There is no GitHub remote; creating one and the repo's name are Kira's call.

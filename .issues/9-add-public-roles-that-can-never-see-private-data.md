@@ -18,3 +18,5 @@ Research roles read the open web, so they must not be able to leak anything priv
 ## Plan
 
 ## Log
+
+- 2026-10-17: landed on main (yxlsvoyl, yppnmwvo, vpnsnouq) after 402 tests, 5/5 scenarios and 35/35 pentest. It needs the new agentloop (forbid_labels, spsqzktx). Decisions for Kira to confirm: declassify gives the role exactly the text shown (defanged, NFC, plain-spaced). Any role a public role should see or message needs its text rewritten with `--public`, the hub included.

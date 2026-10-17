@@ -15,3 +15,5 @@ The relay topic is open on 127.0.0.1:2586 and on the tailnet, and ntfy accepts a
 ## Plan
 
 ## Log
+
+- 2026-10-17: setup/ntfy/lockdown landed on main (nsmlykno). Its token is in the keychain item relay-ntfy (wusmqlow). Kira still has to run it; it needs the phone login.

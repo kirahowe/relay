@@ -1,0 +1,11 @@
+{:id 24
+ :title "Fix the small deploy and pause gaps from review"
+ :status :inbox
+ :type :bug
+ :priority :p3
+ :created "2026-10-17"
+ :updated "2026-10-17"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "24-fix-the-small-deploy-and-pause-gaps-from-review.md"}

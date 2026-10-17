@@ -3,20 +3,19 @@
 
 ## Open
 
+### Inbox
+
+| ID | Title | Type | Priority |
+| --- | --- | --- | --- |
+| [24](24-fix-the-small-deploy-and-pause-gaps-from-review.md) | Fix the small deploy and pause gaps from review | bug | P3 |
+| [25](25-label-the-clock-error-echoes-consistently.md) | Label the clock error echoes consistently | bug | P3 |
+| [26](26-tidy-small-webtool-findings.md) | Tidy small webtool findings | feature | P3 |
+
 ### Ready
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
-| [1](1-lock-down-the-ntfy-server.md) | Lock down the ntfy server | feature | P1 |
-| [4](4-give-conversations-the-time-and-add-a-clock-tool.md) | Give conversations the time, and add a clock tool | feature | P1 |
-| [6](6-add-a-staging-relay-and-scenario-runner.md) | Add a staging relay and scenario runner | feature | P1 |
-| [9](9-add-public-roles-that-can-never-see-private-data.md) | Add public roles that can never see private data | feature | P1 |
-| [10](10-create-a-web-tool-for-search-and-guarded-fetch.md) | Create a web tool for search and guarded fetch | feature | P1 |
 | [2](2-trust-the-legacy-contaminated-items.md) | Trust the legacy contaminated items | chore | P2 |
-| [3](3-run-agentloop-s-live-smoke-tests-from-a-flag-not-an-env-var.md) | Run agentloop's live smoke tests from a flag, not an env var | chore | P2 |
-| [5](5-support-reminder-sections-in-rem.md) | Support reminder sections in rem | feature | P2 |
-| [7](7-add-bb-deploy-and-bb-rollback-for-kira-to-run.md) | Add bb deploy and bb rollback for Kira to run | feature | P2 |
-| [19](19-read-the-calendar.md) | Read the calendar | feature | P2 |
 | [20](20-send-one-morning-brief.md) | Send one morning brief | feature | P2 |
 | [21](21-make-agentloop-cleanroom-s-reader.md) | Make agentloop cleanroom's reader | feature | P3 |
 | [22](22-show-spend-per-role-per-week-in-relay-status.md) | Show spend per role per week in relay status | feature | P3 |
@@ -26,7 +25,16 @@
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
+| [1](1-lock-down-the-ntfy-server.md) | Lock down the ntfy server | feature | P1 |
+| [4](4-give-conversations-the-time-and-add-a-clock-tool.md) | Give conversations the time, and add a clock tool | feature | P1 |
+| [6](6-add-a-staging-relay-and-scenario-runner.md) | Add a staging relay and scenario runner | feature | P1 |
 | [8](8-write-the-escalation-rules-for-development-agents.md) | Write the escalation rules for development agents | feature | P1 |
+| [9](9-add-public-roles-that-can-never-see-private-data.md) | Add public roles that can never see private data | feature | P1 |
+| [10](10-create-a-web-tool-for-search-and-guarded-fetch.md) | Create a web tool for search and guarded fetch | feature | P1 |
+| [3](3-run-agentloop-s-live-smoke-tests-from-a-flag-not-an-env-var.md) | Run agentloop's live smoke tests from a flag, not an env var | chore | P2 |
+| [5](5-support-reminder-sections-in-rem.md) | Support reminder sections in rem | feature | P2 |
+| [7](7-add-bb-deploy-and-bb-rollback-for-kira-to-run.md) | Add bb deploy and bb rollback for Kira to run | feature | P2 |
+| [19](19-read-the-calendar.md) | Read the calendar | feature | P2 |
 
 ### Blocked
 

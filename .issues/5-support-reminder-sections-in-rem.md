@@ -14,3 +14,5 @@ EventKit exposes no sections, so rem cannot see or set which section of a Remind
 ## Plan
 
 ## Log
+
+- 2026-10-17: koqtsxow added tools/rem/SECTIONS.md. There is no supported route to list sections. Kira should check Shortcuts by hand for a Section field; the details are in SECTIONS.md.

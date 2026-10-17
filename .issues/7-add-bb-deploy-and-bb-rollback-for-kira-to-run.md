@@ -15,3 +15,5 @@ Deploys are Kira's to run. Agents never run these tasks against the live checkou
 ## Plan
 
 ## Log
+
+- 2026-10-17: landed on main with the staging work (rntkuwvy, xlvnmvsp): the pause file, `bb deploy` and `bb rollback`. The round-9 NITs are filed separately.

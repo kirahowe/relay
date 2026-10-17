@@ -15,3 +15,5 @@ Chats (relay acp/chat) get only the system prompt, so they never learn the time.
 ## Plan
 
 ## Log
+
+- 2026-10-17: landed on main (qqnvmnvp, vymtlzvw): the clock tool and the time a conversation started. Decision for Kira to confirm: the time zone is not private.

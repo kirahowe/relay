@@ -14,3 +14,5 @@ Read-only calendar access through EventKit. Invites are other people's text, so 
 ## Plan
 
 ## Log
+
+- 2026-10-17: tools/cal landed on main (vxpzvxzq), with Swift escaping shared with rem (uupprymu). After deploy, build cal, approve Calendar access once in a terminal, and add cal to relay.edn.

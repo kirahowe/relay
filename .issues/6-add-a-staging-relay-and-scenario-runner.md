@@ -15,3 +15,5 @@ Development agents need to exercise relay without touching Kira's live data. Sta
 ## Plan
 
 ## Log
+
+- 2026-10-17: landed on main (yowqpxsu through xlvnmvsp): the :file notifier, `bb staging init`, and the scenario runner (`bb scenario`, `bb scenarios`, also run by bb test). Review converged at round 9.
