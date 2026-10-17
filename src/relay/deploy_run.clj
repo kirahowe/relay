@@ -13,8 +13,8 @@
   see which wakes are running, and is passed to the final `relay status`.
   One run at a time: it holds an operating system lock on
   ~/Library/Application Support/relay/deploy.lock. If it is stopped (Ctrl-C)
-  before a checkout is touched, it lifts the pause it made and forgets the
-  check workspaces.
+  before a checkout is touched, it lifts the pause it made, forgets the
+  check workspaces and says so.
 
   A deploy first checks that the relay working copy it runs from is clean
   and that every checkout has an empty working copy on a single commit that
@@ -163,7 +163,14 @@
 ;;   :workspaces  forget the check workspaces
 ;;   :finish      close the run's record, while nothing has been touched
 ;;   :notice      say how to recover, shown when the pause stays
+;;
+;; A stop that lifts :pause says so, since nothing was touched. Registering
+;; :pause and making the pause file happen under `pause-gate`, as does the
+;; hook's swap, so the hook cannot lift the pause between the two and leave
+;; the file to be made after it.
 (def ^:private on-exit (atom {}))
+
+(def ^:private pause-gate (Object.))
 
 (defn- begin-touch!
   "Called before the first change to a checkout. True when it may go ahead."
@@ -172,13 +179,17 @@
     (not (:closing before))))
 
 (defn- run-exit-cleanup! []
-  (let [[before _] (swap-vals! on-exit (constantly {:closing true}))]
-    ;; The pause first: a kill between the two then leaves a closed record
-    ;; and no pause, which is safe, not a pause with a closed record.
-    (doseq [k [:pause :workspaces :finish] :let [g (get before k)] :when g]
-      (try (g) (catch Throwable _ nil)))
-    (when (and (:notice before) (not (:pause before)) (not (:closing before)))
-      (try ((:notice before)) (catch Throwable _ nil)))))
+  (let [[before _] (locking pause-gate (swap-vals! on-exit (constantly {:closing true})))
+        run! (fn [k] (when-let [g (get before k)] (try (g) true (catch Throwable _ false))))
+        ;; The pause first: a kill between the two then leaves a closed record
+        ;; and no pause, which is safe, not a pause with a closed record.
+        lifted? (run! :pause)]
+    (run! :workspaces)
+    (run! :finish)
+    (cond
+      (:closing before) nil
+      lifted? (println "Interrupted before any checkout was touched. Nothing was changed and relay is not paused.")
+      (:notice before) (try ((:notice before)) (catch Throwable _ nil)))))
 
 (defn- with-exit-cleanup [f]
   (let [hook (Thread. ^Runnable run-exit-cleanup!)]
@@ -431,12 +442,18 @@
 
 (declare refuse!)
 
+(defn- paused-notice
+  "What an interrupt prints when this run is not the one that will lift the
+  pause: how to recover, if the pause file is there."
+  [{:keys [pause-file kind]}]
+  #(when (pause/reason pause-file)
+     (println (str "Interrupted. " (paused-advice pause-file kind false)))))
+
 (defn- register-notice!
   "Registers the advice an interrupt prints when relay is paused and this run
   is not the one that will lift it."
-  [{:keys [pause-file kind]}]
-  (swap! on-exit (fn [m] (if (:closing m) m
-                             (assoc m :notice #(println (str "Interrupted. " (paused-advice pause-file kind false))))))))
+  [o]
+  (swap! on-exit (fn [m] (if (:closing m) m (assoc m :notice (paused-notice o))))))
 
 (defn- under-pause
   "Pauses relay, waits for wakes and ticks to finish, runs `f` and lifts the
@@ -447,18 +464,20 @@
   deploy's) is never lifted by anything but a run that works, since the
   machine may be mixed. `o` carries :kind, :deploy or :rollback. The run's
   record is already written, since a pause made here must have one."
-  [{:keys [pause-file say kind] :as o} why f]
+  [{:keys [pause-file say] :as o} why f]
   (let [inherited? (some? (pause/reason pause-file))
         lift! #(when-not inherited? (pause/resume! pause-file))
         forget! #(swap! on-exit dissoc :pause :notice :finish)
-        notice #(println (str "Interrupted. " (paused-advice pause-file kind false)))]
+        notice (paused-notice o)]
     ;; Registered before the file exists, so a stop at any moment can lift
-    ;; it; and the file is only made if that registration took.
-    (let [[before _] (swap-vals! on-exit (fn [m] (if (:closing m) m
-                                                     (cond-> (assoc m :notice notice)
-                                                       (not inherited?) (assoc :pause lift!)))))]
-      (when (:closing before) (throw (usage-error "Interrupted before anything was changed.")))
-      (when-not inherited? (pause/pause! pause-file why)))
+    ;; it; and the file is only made if that registration took. The gate
+    ;; holds a stop back until the file is made, so it lifts that file.
+    (locking pause-gate
+      (let [[before _] (swap-vals! on-exit (fn [m] (if (:closing m) m
+                                                       (cond-> (assoc m :notice notice)
+                                                         (not inherited?) (assoc :pause lift!)))))]
+        (when (:closing before) (throw (usage-error "Interrupted before anything was changed.")))
+        (when-not inherited? (pause/pause! pause-file why))))
     (let [out (try
                 (when (:closing @on-exit)
                   (throw (usage-error "Interrupted before anything was changed.")))
@@ -544,8 +563,12 @@
 
 (def ^:dynamic *inherited-pause*
   "The pause file when relay was already paused as this run began (a failed
-  deploy's), else nil. A refusal then says how to lift it."
+  deploy's), else nil. A refusal then says how to lift it. Read once for
+  the checks before the lock and again once it is held, since a run that
+  held it may have made or lifted the pause in between."
   nil)
+
+(defn- paused-file [pause-file] (when (pause/reason pause-file) pause-file))
 
 (defn- refuse! [problems]
   (throw (usage-error (str "Nothing was changed.\n"
@@ -611,11 +634,12 @@
   :poll-ms, :settle-ms, :quiet-timeout-ms. Returns the record."
   [opts]
   (let [o0 (assoc (settle opts) :kind :deploy)]
-   (binding [*inherited-pause* (when (pause/reason (:pause-file o0)) (:pause-file o0))]
+   (binding [*inherited-pause* (paused-file (:pause-file o0))]
     (let [{:keys [sh paths bookmark say confirm pause-file clock record] :as o} (preflight! o0)]
     (with-lock
       o
       (fn []
+       (binding [*inherited-pause* (paused-file (:pause-file o))]
         (when *inherited-pause* (register-notice! o))
         (let [from (str (fs/normalize (fs/absolutize (or (:from opts) "."))))
               at (str (clock))]
@@ -652,7 +676,7 @@
                          (apply-plan! o (:steps plan) (start-record {:id (str "deploy " at) :kind :deploy :at at} (:steps plan)))))
                   rec (finished o :deploy out)]
               (say (str "Deployed. Records are in " record "."))
-              rec)))))))))
+              rec))))))))))
 
 (defn- lift-only!
   "The newest run stopped before it touched anything, so there is nothing to
@@ -679,11 +703,12 @@
   pause."
   [opts]
   (let [o0 (assoc (settle opts) :kind :rollback)]
-   (binding [*inherited-pause* (when (pause/reason (:pause-file o0)) (:pause-file o0))]
+   (binding [*inherited-pause* (paused-file (:pause-file o0))]
     (let [{:keys [sh paths say confirm record clock] :as o} (preflight! o0)]
     (with-lock
       o
       (fn []
+       (binding [*inherited-pause* (paused-file (:pause-file o))]
         (when *inherited-pause* (register-notice! o))
         (let [at (str (clock))
               {:keys [problem lift-only] source :record} (deploy/rollback-source (read-records record) (some? (pause/reason (:pause-file o))))]
@@ -719,7 +744,7 @@
                                                               steps))))
                     rec (finished o :rollback out)]
                 (say (str "Rolled back. Records are in " record "."))
-                rec))))))))))
+                rec)))))))))))
 
 ;; --- bb tasks
 

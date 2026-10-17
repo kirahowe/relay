@@ -736,7 +736,7 @@ checkout was touched (a move that errors or a build that starts counts), relay
 stays paused and the message says so. If every checkout got to its target and
 only `relay status` failed, the message says that and gives the `rm` command
 that lifts the pause. Ctrl-C before any checkout is touched lifts the pause it
-made and forgets the check workspaces. Only one deploy or rollback runs at a
+made, forgets the check workspaces and says so. Only one deploy or rollback runs at a
 time, through a lock on `~/Library/Application Support/relay/deploy.lock`.
 
 A relay from before the pause file does not know it. If the relay now running,

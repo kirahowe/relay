@@ -880,16 +880,19 @@
         (testing "while waiting for wakes"
           (let [wake (start-wake! data)
                 after (atom :unset)
+                printed (atom nil)
                 interrupter (future
                               (loop [n 0]
                                 (when (and (nil? (pause/reason pause-file)) (< n 1000)) (Thread/sleep 20) (recur (inc n))))
-                              (#'run/run-exit-cleanup!)
+                              (reset! printed (with-out-str (#'run/run-exit-cleanup!)))
                               (reset! after (pause/reason pause-file))
                               (end-wake! wake))]
             ;; The process would be gone; here it carries on, and must not touch anything.
             (is (str/includes? (threw #(run/deploy! (opts w))) "Interrupted"))
             @interrupter
             (is (nil? @after) "the cleanup a Ctrl-C runs lifted the pause")
+            ;; Regression (relay#24): the stop printed nothing.
+            (is (str/includes? @printed "Nothing was changed and relay is not paused") "and said so")
             (is (on-previous? w))))
         (testing "while the commits are being tested"
           (let [seen (atom nil)
@@ -1336,3 +1339,65 @@
             (is (thrown-with-msg? clojure.lang.ExceptionInfo #"boom"
                                   (#'run/under-pause o "bb deploy at test" (fn [] (throw (ex-info "boom" {}))))))
             (is (nil? (pause/reason pause-file)))))))))
+
+;; --- relay#24
+
+(deftest a-stop-between-registering-the-pause-and-making-it-lifts-it
+  ;; Regression (relay#24): the hook could run after the pause was
+  ;; registered and before the file was made, lift nothing, and leave the
+  ;; file to be made after it.
+  (when jj?
+    (with-world
+      (fn [{:keys [data pause-file] :as w}]
+        (let [o (assoc (opts w) :kind :deploy :pause-file pause-file :data data)
+              hook (atom nil)
+              real pause/pause!
+              on-exit @#'run/on-exit]
+          (try
+            (with-redefs [pause/pause! (fn [& a]
+                                         (reset! hook (doto (Thread. #(binding [*out* (java.io.StringWriter.)]
+                                                                       (#'run/run-exit-cleanup!)))
+                                                        .start))
+                                         (Thread/sleep 300)
+                                         (apply real a))]
+              (threw #(#'run/under-pause o "bb deploy at test" (fn [] (throw (ex-info "stopped" {}))))))
+            (.join ^Thread @hook 5000)
+            (is (nil? (pause/reason pause-file)) "relay is not left paused")
+            (finally (reset! on-exit {}))))))))
+
+(deftest the-interrupt-notice-says-paused-only-while-it-is
+  ;; Regression (relay#24): a rollback that found relay paused registers the
+  ;; notice, and it said PAUSED after the rollback had lifted the pause.
+  (when jj?
+    (with-world
+      (fn [{:keys [pause-file record] :as w}]
+        (run/deploy! (opts w))
+        (spit record (deploy/record->line
+                      (deploy/make-record {:id "deploy x" :kind :deploy :at "x" :status :started
+                                           :repos (zipmap deploy/repo-keys (repeat {:path "/p" :state :pending}))}))
+              :append true)
+        (pause/pause! pause-file "bb deploy at x")
+        (let [printed (atom "")
+              real pause/resume!]
+          (with-redefs [pause/resume! (fn [f]
+                                        (let [r (real f)]
+                                          (swap! printed str (with-out-str (#'run/run-exit-cleanup!)))
+                                          r))]
+            (run/rollback! (opts w)))
+          (is (nil? (pause/reason pause-file)))
+          (is (not (str/includes? @printed "PAUSED")) @printed))))))
+
+(deftest the-pause-is-read-again-once-the-lock-is-held
+  ;; Regression (relay#24): *inherited-pause* was read before the lock, so
+  ;; a pause made by a run that held the lock went without its advice.
+  (when jj?
+    (with-world
+      (fn [{:keys [pause-file] :as w}]
+        (let [real run/try-lock!
+              msg (with-redefs [run/try-lock! (fn [f]
+                                                (pause/pause! pause-file "bb deploy at x")
+                                                (real f))]
+                    (threw #(run/deploy! (opts w))))]
+          (is (str/includes? msg "already paused"))
+          (is (str/includes? msg (str "rm '" (staging/canonical pause-file (System/getProperty "user.home")) "'"))
+              "the refusal names the way out"))))))

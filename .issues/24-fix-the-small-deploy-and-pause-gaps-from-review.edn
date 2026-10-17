@@ -1,6 +1,6 @@
 {:id 24
  :title "Fix the small deploy and pause gaps from review"
- :status :inbox
+ :status :review
  :type :bug
  :priority :p3
  :created "2026-10-17"
