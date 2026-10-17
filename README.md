@@ -487,6 +487,43 @@ not under launchd. Without `--live`, the model is the mock server answering
 from a script in the scenario. With `--live` it is the real model, using the
 keychain key, so it costs a little. `bb test` runs the mock scenarios too.
 
+### Behaviour evals
+
+Tests show that the code works. An eval measures whether a role does its job
+well: records a closure with both ends, supersedes a fact instead of
+correcting it, keeps quiet when nothing needs the operator. An eval case is a
+scenario with `:graders` added, and `bb scenarios` still plays it.
+
+```sh
+bb eval [<case> ...] [--out <dir>] [--live] [--trials n] [--model m] [--max-cost usd] [--agentloop <path>]
+```
+
+Without `--live` the model is the mock server playing the case's oracle
+script, which costs nothing and checks the harness. With `--live` it is the
+real model, `claude-haiku-5-5` unless `--model` names another, five trials a
+case unless `--trials` says otherwise. `--max-cost` stops starting trials once
+the spend recorded so far plus the dearest trial so far would pass it.
+
+Every trial gets a fresh staging directory, kept under
+`<out>/<run-id>/trials/<case>/<n>/`. `--out` defaults to
+`~/code/projects/.relay-evals`, and the same places `staging init` refuses
+are refused here. A failed precondition, a step that threw, a wake that ended
+needs-attention, limited or unreachable, a model other than the one asked for,
+or a spent budget makes the trial an error. It is run once more, then left
+out of the pass rate and counted beside it.
+
+A run directory holds `run.json` (the command, the model, relay's and
+agentloop's change ids, a digest of the prompt surface and of each case),
+`results.jsonl` (one row per scored trial in Inspect AI's sample shape, with
+scores `C` and `I`), `errors.jsonl`, `summary.json` (pass rate with a Wilson
+interval, pass^k for k of 1, 3 and the trial count, per-grader pass counts,
+mean wakes, requests, tokens and cost) and the terminal report. Usage and cost
+come from agentloop's transcripts, at the served model's rates. Judge graders
+may appear in a case but are not run yet; they are recorded as skipped.
+
+In `bb test`, every case's oracle must pass all its checks and each foil (a
+known-bad script) must fail exactly the checks it names.
+
 ### Deploy and rollback
 
 These are for you to run, not an agent. Run `bb deploy` from a relay working

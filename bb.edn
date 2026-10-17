@@ -22,6 +22,10 @@
              :extra-paths ["test"]
              :requires ([relay.scenario-runner :as runner])
              :task (runner/scenarios-main)}
+  eval {:doc "Run eval cases and record the results: bb eval [<case> ...] --out <dir> [--live] [--trials n] [--model m] [--max-cost usd] [--agentloop <path>]"
+        :extra-paths ["test"]
+        :requires ([relay.eval-runner :as eval-runner])
+        :task (apply eval-runner/eval-main *command-line-args*)}
   deploy {:doc "For the operator: move the live checkouts to main, build, check. See README."
           :requires ([relay.deploy-run :as deploy-run])
           :task (apply deploy-run/deploy-main *command-line-args*)}
