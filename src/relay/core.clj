@@ -14,6 +14,7 @@
   memo that event 42 sent."
   (:require [clojure.string :as str]
             [relay.config :as config]
+            [relay.reports :as reports]
             [relay.schedule :as schedule]
             [relay.text :as text])
   (:import (java.time Duration Instant LocalDate LocalDateTime)))
@@ -63,6 +64,7 @@
 (def empty-state
   {:roles {} :memos {} :routines {} :wakes {} :dead-letters {} :harnesses {}
    :notifications {} :guards {} :facts {} :notes {} :journals {} :docs {} :holds {}
+   :reports {} :ledger {} :trust-levels {}
    ;; Every label any event has carried, which bounds what a session that
    ;; could read anything in relay may have seen.
    :seen-labels []
@@ -658,7 +660,8 @@
   :public when their writer was public (decide sets it, never a role's
   input), and the item keeps it."
   #{"memo/sent" "routine/written" "fact/added" "fact/superseded" "fact/corrected"
-    "note/written" "journal/written" "doc/put" "doc/removed" "role/added" "role/updated"})
+    "note/written" "journal/written" "doc/put" "doc/removed" "role/added" "role/updated"
+    "report/submitted"})
 
 (defn evolve [state {:keys [seq at] :as event}]
   (when-not (= seq (:next-seq state))
@@ -2267,3 +2270,35 @@
     (when (or (nil? v) (:removed v) (and (public-actor? tx) (not (doc-shown-to-public? state path v))))
       (reject! :not-found (str "There is no doc at " path ".")))
     (emit tx "doc/removed" {:path path})))
+
+;; research reports
+;;
+;; A public role granted :reports writes what it found as a report: a
+;; summary and findings in a strict schema (relay.reports/parse-report).
+;; The tick has each new report checked by the verifier in a process of
+;; its own (relay verify), which records what came back; flags are worked
+;; out from it here. The role is never told how its report fared, so it
+;; cannot learn to pass the checks. The operator reviews each finding not
+;; seen before and accepts it into the ledger or rejects it.
+
+(defn report [state id] (get-in state [:reports id]))
+
+(defmethod evolve* "report/submitted" [state {:keys [seq at data labels public]}]
+  (assoc-in state [:reports seq] {:id seq :role (:role data) :summary (:summary data)
+                                  :findings (vec (:findings data)) :submitted-at (inst at)
+                                  :labels (union labels) :public (true? public)
+                                  :status :submitted :attempts 0 :retry-at nil}))
+
+(defmethod decide* :report/submit [{:keys [config actor] :as tx} {:keys [args]}]
+  (caller-role! tx)
+  (let [kinds (config/report-kinds config actor)]
+    (when-not (and kinds (public-actor? tx))
+      (reject! :forbidden (str actor " may not submit reports.")))
+    ;; Only from a session that began public, so the report is public: it
+    ;; holds an outsider's text and nothing of the operator's.
+    (when-not (:public tx)
+      (reject! :forbidden (str "This session began before " actor " was public, so it cannot submit a report."
+                               " The next wake can.")))
+    (let [{:keys [report problem]} (reports/parse-report kinds args)]
+      (when problem (reject! :invalid problem))
+      (emit tx "report/submitted" (assoc report :role actor)))))

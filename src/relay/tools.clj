@@ -27,7 +27,8 @@
             [relay.config :as config]
             [relay.core :as core]
             [relay.harness :as harness]
-            [relay.inbound :as inbound])
+            [relay.inbound :as inbound]
+            [relay.reports :as reports])
   (:import (java.time Instant LocalTime)
            (java.time.format DateTimeFormatter)))
 
@@ -564,6 +565,20 @@
            (submit sys actor labels :role/remove args)
            (str "Removed " (:id args) "."))}
 
+   "report_submit"
+   {:class :write
+    :grant :reports
+    :description (str "Submit a report of what you found: a short summary and the findings, each with the"
+                      " page it is on and evidence quoted word for word from pages you fetched. relay"
+                      " checks every quote against its page before the operator reads the report. You"
+                      " are not told how the checks went.")
+    ;; The kinds come from the role's grant (offered).
+    :parameters (reports/input-schema [])
+    :run (fn [sys actor labels args]
+           (let [id (:seq (first (filter #(= "report/submitted" (:type %))
+                                         (submit sys actor labels :report/submit args))))]
+             (str "Report " id " submitted; it will be checked.")))}
+
    "dead_letters_retry"
    {:class :act
     :grant :dead-letter-handler
@@ -700,9 +715,14 @@
                    nil true
                    :may-add (config/may-add? config role-id)
                    :dead-letter-handler (or (= role-id (:dead-letter-handler config))
-                                            (config/may-add? config role-id))))]
-    (merge (into {} (filter #(holds? (:grant (val %))) builtin))
-           (into {} (map external-tool (select-keys (:tools config) tools)))))))
+                                            (config/may-add? config role-id))
+                   :reports (some? (config/report-kinds config role-id))
+                   :not-public (not (config/public? config role-id))))]
+    (cond-> (merge (into {} (filter #(holds? (:grant (val %))) builtin))
+                   (into {} (map external-tool (select-keys (:tools config) tools))))
+      ;; report_submit's schema names the kinds this role may report.
+      (holds? :reports) (assoc-in ["report_submit" :parameters]
+                                  (reports/input-schema (config/report-kinds config role-id)))))))
 
 (defn grants-summary
   "What a role is granted, in a few sentences for its prompt, so it knows
@@ -720,6 +740,9 @@
                 (conj "Work that other roles could not finish comes to you as dead letters.")
                 (contains? offered "dead_letters_retry")
                 (conj "You can put a role's dead letters back in its inbox with `dead_letters_retry`.")
+                (contains? offered "report_submit")
+                (conj (str "You report what you find with `report_submit`, as findings of the kinds "
+                           (str/join ", " (config/report-kinds config role-id)) "."))
                 (core/public-role? config role-id)
                 (conj (str "You are a public role: you may search and browse the web, so you are shown only what"
                            " is public, and whatever you write is public. The operator's private data never"
@@ -871,7 +894,9 @@
                        :let [schema (get props (name k))]
                        :when (or (nil? schema) (not (type-ok? schema v)))]
                    (if schema
-                     (str (name k) " must be " (if (= "array" (:type schema)) "a list of strings" (str "a " (:type schema))) ".")
+                     (str (name k) " must be " (case (:type schema)
+                                                 "array" (if (= "string" (get-in schema [:items :type])) "a list of strings" "a list")
+                                                 (str "a " (:type schema))) ".")
                      ;; Fixed text: a tool's refusal carries no labels, so it
                      ;; must not quote the call's own key.
                      (str "The input has an argument this tool does not take. It takes "

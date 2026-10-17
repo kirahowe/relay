@@ -102,14 +102,25 @@
  ;;              :description "Fetch a page."
  ;;              :command ["/path/to/web-fetch"]}
 
- ;; What each role is granted beyond relay's own tools: :tools, :may-add
- ;; and :public, and nothing else. A public role never holds your private
- ;; data, so it may search and browse without asking you. It is shown only
- ;; what is public (written with --public, by a public role, or
+ ;; How relay checks a research role's reports: webtool's check, run on
+ ;; the envelope protocol (see webtool's README). relay runs it itself, in
+ ;; a process of its own for each report; no role is granted it. Each call
+ ;; fetches up to twenty pages, so give it time. Needed once any role is
+ ;; granted :reports.
+ ;; :verifier {:command ["/path/to/webtool/bin/webtool" "--config" "/path/to/webtool.json" "check"]
+ ;;            :timeout-seconds 600}
+
+ ;; What each role is granted beyond relay's own tools: :tools, :may-add,
+ ;; :public and :reports, and nothing else. A public role never holds your
+ ;; private data, so it may search and browse without asking you. It is
+ ;; shown only what is public (written with --public, by a public role, or
  ;; declassified), and it may not have :may-add, a tool whose :labels
- ;; include "private", or the dead letter handler's job.
+ ;; include "private", or the dead letter handler's job. :reports lets a
+ ;; public role write research reports of the kinds named, which relay
+ ;; checks and you review with relay review.
  :grants
  {"hub" {:may-add true :tools ["rem-read" "rem"]}
   ;; Add it with relay add grant-search --public, so its own text is public.
-  ;; "grant-search" {:public true :tools ["web-search" "web-fetch"]}
+  ;; "grant-search" {:public true :tools ["web-search" "web-fetch"]
+  ;;                 :reports {:kinds ["grant"]}}
   }}
