@@ -47,6 +47,15 @@
         (parse-long (str/trim (slurp f)))
         (when (< n 100) (Thread/sleep 20) (recur (inc n)))))))
 
+(deftest a-command-with-a-slash-runs-as-written
+  (let [ok (script! "ok" "echo \"$@\"")]
+    (testing "relative to relay's directory"
+      (is (= {:out "a\n" :labels []}
+             (tools/run-external! "t" {:command [(str (fs/relativize (fs/cwd) ok))] :labels []} ["a"]))))
+    (testing "a path that is not there cannot start"
+      (is (:error (binding [*err* (java.io.StringWriter.)]
+                    (tools/run-external! "t" {:command [(str *dir* "/missing")] :labels []} [])))))))
+
 (deftest the-runner-honours-the-tool-s-time-limit
   (testing "a tool that answers in time"
     (is (= {:out "a b\n" :labels ["private"]}

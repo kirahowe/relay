@@ -727,8 +727,13 @@
   timeout every process in its group is ended. Throws when it cannot
   start."
   [command in ms]
-  (let [prog (or (fs/which (first command) {:paths (str/split (get (harness/base-env {}) "PATH") #":")})
-                 (throw (ex-info (str "Cannot run program " (first command)) {})))
+  (let [program (first command)
+        ;; A bare name is found on the clean PATH; a path with a slash is
+        ;; taken as written, relative to relay's directory, as Java runs it.
+        prog (or (if (str/includes? program "/")
+                   (let [f (fs/absolutize program)] (when (fs/executable? f) f))
+                   (fs/which program {:paths (str/split (get (harness/base-env {}) "PATH") #":")}))
+                 (throw (ex-info (str "Cannot run program " program) {})))
         proc (p/process (into in-own-group (cons (str prog) (rest command)))
                         {:in in :out :stream :err :stream :env (harness/base-env {})})
         out (future (slurp (:out proc)))
