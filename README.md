@@ -337,7 +337,8 @@ so a redirect cannot hide it. The canonical form drops the fragment
 unless it starts `#/` or `#!`, which single-page sites route by. A
 finding that matches a ledger entry, a finding waiting for review, or
 one the operator judged not relevant is seen before: it is not shown,
-and the review says how many were hidden and what each matched. One
+and the review says how many were hidden, what each matched and, for a
+match that was waiting and has since been decided, how. One
 that matches a finding rejected as fake is shown again, flagged. That
 holds for one already hidden, too: once the finding it matched is
 rejected as fake, it waits for review with the same flag, and `relay

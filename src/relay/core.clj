@@ -2484,19 +2484,25 @@
   "A report as it stands now. Whether a finding stays hidden as seen
   before is worked out from the current state, not fixed when it was
   checked: once what it matched is rejected as fake, it waits for the
-  operator, flagged, as one checked after the rejection would."
+  operator, flagged, as one checked after the rejection would. One that
+  matched a finding waiting for review, since decided, carries that
+  decision in :seen-as, so the header can say how it went."
   [state r]
   (if-not (get-in r [:verification :findings])
     r
     (update-in r [:verification :findings]
                (fn [fs]
                  (mapv (fn [f]
-                         (if (and (:seen-before f) (= "fake" (matched-decision state r (:seen-as f))))
-                           (-> (dissoc f :seen-as)
-                               (assoc :seen-before false)
-                               (update :flags #(vec (distinct (conj (vec %) {:kind "rejected-as-fake-before"
-                                                                             :url (:canonical-url f)})))))
-                           f))
+                         (let [d (when (:seen-before f) (matched-decision state r (:seen-as f)))]
+                           (cond
+                             (= "fake" d)
+                             (-> (dissoc f :seen-as)
+                                 (assoc :seen-before false)
+                                 (update :flags #(vec (distinct (conj (vec %) {:kind "rejected-as-fake-before"
+                                                                               :url (:canonical-url f)})))))
+                             (and d (= "pending" (get-in f [:seen-as :kind])))
+                             (assoc-in f [:seen-as :decision] d)
+                             :else f)))
                        fs)))))
 
 (defn report [state id] (some->> (get-in state [:reports id]) (as-it-stands state)))

@@ -839,15 +839,26 @@
                                (not= (:state before) s))
             :let [r (core/report s (get-in e [:data :report]))]]
       (when (some :auto (get-in r [:verification :findings])) (fail! [:unread-kept-after-fake (:id r)])))
-    ;; A finding stays hidden as seen before only behind another with its
-    ;; URL that is shown and not rejected as fake: waiting, accepted or
-    ;; set aside (relay#27).
-    (let [fs (for [r (map #(core/report s %) (keys (:reports s))) :when (= :verified (:status r))
-                   [i f] (map-indexed vector (get-in r [:verification :findings]))]
-               (assoc f :at [(:id r) i]))
-          backing (set (keep #(when-not (or (:seen-before %) (= "fake" (:decision %))) (:canonical-url %)) fs))]
-      (doseq [f fs :when (and (:seen-before f) (not (backing (:canonical-url f))))]
-        (fail! [:hidden-behind-nothing (:at f)])))
+    ;; A finding stays hidden as seen before only behind the finding its
+    ;; :seen-as names, which has its URL, is shown and is not rejected as
+    ;; fake: waiting, accepted or set aside (relay#27, relay#28). A ledger
+    ;; entry names the finding that made it, withdrawn or not.
+    (doseq [id (keys (:reports s))
+            :let [r (core/report s id)]
+            :when (= :verified (:status r))
+            [i f] (map-indexed vector (get-in r [:verification :findings]))
+            :when (:seen-before f)
+            :let [{:keys [kind entry report finding]} (:seen-as f)
+                  [tid ti] (case kind
+                             ("pending" "not-relevant") [report finding]
+                             "earlier" [id finding]
+                             "ledger" (some-> (or (get-in s [:ledger entry]) (get-in s [:withdrawn entry]))
+                                              ((juxt :report :finding)))
+                             nil)
+                  t (when tid (get-in (core/report s tid) [:verification :findings ti]))]]
+      (when-not (and t (not= [tid ti] [id i]) (not (:seen-before t)) (not= "fake" (:decision t))
+                     (= (:canonical-url t) (:canonical-url f)))
+        (fail! [:hidden-behind-the-wrong-finding [id i] (:seen-as f)])))
     ;; OnlyTheOperatorRaisesATrustLevel, and only on the record they saw.
     (doseq [e batch :when (and (= "role/trust-level" (:type e)) (= 1 (get-in e [:data :level])) (not= (:state before) s))]
       (when-not (= (get-in e [:data :sha256]) (core/record-digest (:state before) (get-in e [:data :role])))
@@ -898,6 +909,34 @@
 
 (defn- json-round-trip [events]
   (mapv #(json/parse-string (json/generate-string %) true) events))
+
+(deftest the-hidden-finding-invariant-follows-seen-as
+  ;; relay#28: the invariant once checked by URL, so a finding hidden behind
+  ;; the wrong finding passed whenever another shown one had its URL.
+  (let [start (-> (world)
+                  (run "operator" :role/add {:id "courier" :instructions "c"} true)
+                  (step [:report "courier" "seed" false])
+                  (step [:verify 0 :found false])
+                  (step [:review "operator" 0 "accept" false]))
+        w (reduce #(step (dissoc %1 :problem) %2) start
+                  [[:report "courier" "a" false] [:verify 0 :found false]
+                   [:report "courier" "a" false] [:verify 0 :found false]])
+        [seed a b] (sort (keys (:reports (:state w))))
+        hidden? #(some (fn [p] (= :hidden-behind-the-wrong-finding (first p))) %)]
+    (is (= {:kind "pending" :report a :finding 0} (get-in (:state w) [:reports b :verification :findings 0 :seen-as])))
+    (testing "behind the finding it names, waiting or accepted, it holds"
+      (is (not (hidden? (check-step w w))))
+      (let [w' (step w [:review "operator" 0 "accept" false])]
+        (is (not (hidden? (check-step w w'))))
+        (testing "and pointed at another finding it fails, though one with its URL is shown"
+          (let [wrong (assoc-in w' [:state :reports b :verification :findings 0 :seen-as]
+                                {:kind "pending" :report seed :finding 0})]
+            (is (hidden? (check-step w' wrong)))))))
+    (testing "with the relay#27 view switched off, a match rejected as fake fails it"
+      (let [w' (step w [:review "operator" 0 "fake" false])]
+        (is (not (hidden? (check-step w w'))))
+        (with-redefs [core/report (fn [state id] (get-in state [:reports id]))]
+          (is (hidden? (check-step w w'))))))))
 
 (defspec the-rules-hold-under-any-sequence-of-commands 1000
   (prop/for-all [steps (gen/vector gen-step 1 80)]

@@ -489,10 +489,15 @@
        (cons "  flags:" (map #(str "    - " (text/for-operator labels (flag-text %))) flags))
        ["  flags: none"]))))
 
-(defn- seen-as-text [{:keys [kind entry report finding]}]
+(defn- seen-as-text [{:keys [kind entry report finding decision]}]
   (case kind
     "ledger" (str "matches ledger entry " entry)
-    "pending" (str "matches finding " (some-> finding inc) " of report " report ", waiting for review")
+    "pending" (str "matches finding " (some-> finding inc) " of report " report
+                   (case decision
+                     nil ", waiting for review"
+                     "accept" ", which has since been accepted"
+                     "not-relevant" ", which you have since judged not relevant"
+                     (str ", since decided " decision)))
     "not-relevant" (str "matches finding " (some-> finding inc) " of report " report ", which you judged not relevant")
     "earlier" (str "matches finding " (some-> finding inc) " of this report")
     "matches something seen before"))

@@ -16,7 +16,6 @@
 | --- | --- | --- | --- |
 | [2](2-trust-the-legacy-contaminated-items.md) | Trust the legacy contaminated items | chore | P2 |
 | [23](23-decide-who-syncs.md) | Decide who syncs ~/Sync/relay | chore | P3 |
-| [28](28-tighten-the-hidden-finding-invariant-and-header-text.md) | Tighten the hidden-finding invariant and header text | chore | P3 |
 | [29](29-polish-the-morning-brief-text-and-share-a-timed-tool-runner.md) | Polish the morning brief text and share a timed tool runner | chore | P3 |
 
 ### Review
@@ -45,6 +44,7 @@
 | [22](22-show-spend-per-role-per-week-in-relay-status.md) | Show spend per role per week in relay status | feature | P3 |
 | [24](24-fix-the-small-deploy-and-pause-gaps-from-review.md) | Fix the small deploy and pause gaps from review | bug | P3 |
 | [26](26-tidy-small-webtool-findings.md) | Tidy small webtool findings | feature | P3 |
+| [28](28-tighten-the-hidden-finding-invariant-and-header-text.md) | Tighten the hidden-finding invariant and header text | chore | P3 |
 
 ### Blocked
 

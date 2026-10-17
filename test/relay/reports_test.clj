@@ -891,7 +891,12 @@
               w (verified w a)
               [w b] (submitted w a-report)
               w (-> w (verified b) (reviewed a [[0 d]]))]
-          (is (empty? (core/pending-findings (core/report (:state w) b))) d))))))
+          (is (empty? (core/pending-findings (core/report (:state w) b))) d)
+          ;; relay#28: the header said "waiting for review" after the match was decided.
+          (is (some #{(str "    - finding 1 matches finding 1 of report " a
+                           (if (= "accept" d) ", which has since been accepted" ", which you have since judged not relevant"))}
+                    (relay.render/report-header java.time.ZoneOffset/UTC (core/report (:state w) b)))
+              d))))))
 
 (defn- tty
   "A terminal that answers in turn from `answers`, a function of what was
