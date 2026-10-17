@@ -368,8 +368,11 @@
    "fact_supersede"
    {:class :write
     :description (str "The world changed: fact `fact` stopped holding at `valid_from` (default now)"
-                      " and `text` holds instead. The old fact is kept, ending there. Use this for"
-                      " a change, and fact_correct for a mistake.")
+                      " and `text` holds instead. `text` is the new state, written as a fact that"
+                      " holds from then on (\"The operator drives a 2022 Corolla.\"), not an account"
+                      " of the change, and it replaces the old fact, so do not also add it with"
+                      " fact_add. The old fact is kept, ending there. Use this for a change, and"
+                      " fact_correct for a mistake.")
     :parameters (obj {:fact fact-id :text text :valid_from world-time :valid_to world-time :topic text}
                      "fact" "text")
     :run (fn [sys actor labels args]

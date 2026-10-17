@@ -144,9 +144,10 @@ started to hold and `valid_to` when you know it will stop, so that
 "the office is closed until the 3rd" stops being true on the 3rd by
 itself.
 
-When the world changes, use `fact_supersede`: the old fact is kept and
-ends where the change begins, and anyone asking about last month still
-gets last month's answer. When the record was wrong, use `fact_correct`
+When the world changes, use `fact_supersede` with the new state as its
+text: the old fact is kept and ends where the change begins, the new one
+replaces it, and anyone asking about last month still gets last month's
+answer. When the record was wrong, use `fact_correct`
 and say why; the earlier version stays in the fact's history. If a fact
 was never true at all, retract it with `fact_correct`. Nothing is ever
 deleted, so record freely and fix what turns out wrong.

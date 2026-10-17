@@ -141,7 +141,8 @@
               " you close it with `memo_close`, saying what you did. If you cannot do"
               " one, use `memo_block` and say why. A memo you leave open is given back"
               " to you later, and after enough tries it is taken off you. Close only"
-              " what you have done.\n\n# Memos\n"
+              " what you have done. Before you stop, write one journal entry saying"
+              " what you did and what is still open.\n\n# Memos\n"
               (str/join (map #(fmt-memo zone %) memos)))
          "You have no open memos.\n")
        (when-not (str/blank? note)
