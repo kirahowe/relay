@@ -276,6 +276,7 @@ enum NotificationKind {
     | harness_needs_attention | harness_unreachable
     | hold_opened | memo_quarantined | permission_refused | session_ended
     | report_verified | report_verify_failed | trust_level_lowered
+    | budget_reached
 }
 enum ToolClass { read | write | egress | act }
 enum Label { private | contaminated }
@@ -664,6 +665,10 @@ entity Notification {
     harness: Harness?
     memo: Memo?
     dead_letter: DeadLetter?
+    -- For budget_reached: the week, by its Monday, and the share of
+    -- the weekly budget it reached, 80 or 100.
+    week: Date?
+    percent: Integer?
     created_at: Timestamp
     delivery: pending | delivered | failed
 
@@ -923,6 +928,11 @@ config {
     verifier_batch: Integer = 20
     -- At trust level 1, one finding in this many is drawn for review.
     sample_one_in: Integer = 5
+
+    -- What the roles may spend in a week, all together, in US dollars,
+    -- from :budget {:weekly-usd n} in the settings. Null for none. relay
+    -- only warns as spend nears it (WarnOfSpend).
+    weekly_budget: Decimal? = null
 }
 
 ------------------------------------------------------------
@@ -2255,8 +2265,43 @@ rule NotificationFailed {
 -- each of the four weeks before. It is worked out from the wakes when
 -- asked, and nothing is recorded for it. A wake belongs to the week it
 -- ended in, so one that ends at Monday 00:00 belongs to the new week.
--- Spend is shown and nothing more: relay never stops or slows a role
--- for what it costs.
+-- Spend is shown and warned of, nothing more: relay never stops or
+-- slows a role for what it costs.
+
+rule WarnOfSpend {
+    when: wake: Wake.status transitions_to ended
+
+    let week = week_of(now)                              -- black box: the WeekSpend holding now
+    let total = week.cost_usd.values.sum
+    let told = (Notifications where kind = budget_reached and week = week.week).map(n => n.percent).max ?? 0
+    let percent = if total >= config.weekly_budget: 100
+                  else if total * 100 >= config.weekly_budget * 80: 80
+                  else: 0
+
+    requires: config.weekly_budget != null
+    requires: wake.cost_usd != null
+    requires: percent > told
+
+    ensures: Notification.created(
+        kind: budget_reached,
+        title: if percent = 100: "relay has spent its weekly budget"
+               else: "relay has spent 80% of its weekly budget",
+        body: spend_text(total, week.week, config.weekly_budget),   -- black box: the total, the week and the budget
+        week: week.week,
+        percent: percent,
+        created_at: now,
+        delivery: pending
+    )
+
+    @guidance
+        -- The total is every role's spend this week together. The
+        -- operator is told once when it reaches 80% of the budget and
+        -- once when it reaches 100%, at most once each a week. A wake
+        -- that takes the total past both at once tells only 100%: one
+        -- warning that the budget is spent says all two would. Only a
+        -- wake with a cost can move the total, so only such a wake is
+        -- checked. A new week starts with nothing told.
+}
 
 -- Tools
 

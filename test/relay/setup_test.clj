@@ -85,3 +85,16 @@
                            ["an agentloop with no key command"
                             (update-in complete [:harnesses :agentloop] dissoc :api-key-command)]]]
       (is (thrown? clojure.lang.ExceptionInfo (config/resolve-config broken)) what))))
+
+(deftest a-budget-is-optional-and-checked
+  (let [complete {:timezone "UTC" :default-harness :agentloop
+                  :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"]}}
+                  :notify {:kind :none}}]
+    (is (nil? (:budget (config/resolve-config complete))) "no budget unless one is set")
+    (doseq [ok [15 15.5 0.01]]
+      (is (= {:weekly-usd ok} (:budget (config/resolve-config (assoc complete :budget {:weekly-usd ok})))) (pr-str ok)))
+    (doseq [bad [nil 15 {} {:weekly-usd 0} {:weekly-usd -5} {:weekly-usd "15"} {:weekly-usd 1/2}
+                 {:weekly-usd ##Inf} {:weekly 15} {:weekly-usd 15 :hard true}]]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":budget is \{:weekly-usd 15\}"
+                            (config/resolve-config (assoc complete :budget bad)))
+          (pr-str bad)))))

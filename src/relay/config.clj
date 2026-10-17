@@ -197,6 +197,20 @@
     (when (contains? g :reports)
       (check-reports-grant role g))))
 
+(defn- check-budget
+  "The optional :budget, a weekly amount in US dollars. relay only warns
+  when spend nears it, so a wrong one stops nothing; it is still checked,
+  so a typo is not taken for no budget."
+  [config]
+  (when (contains? config :budget)
+    (let [{:keys [weekly-usd] :as budget} (:budget config)]
+      (when-not (and (map? budget) (= #{:weekly-usd} (set (keys budget)))
+                     (number? weekly-usd) (not (ratio? weekly-usd))
+                     (Double/isFinite (double weekly-usd)) (pos? weekly-usd))
+        (problem! (str "relay.edn's :budget is {:weekly-usd 15}, a weekly amount in US dollars"
+                       " greater than 0, and nothing else"
+                       (when (some? budget) (str ", not " (pr-str budget))) "."))))))
+
 (defn validate
   "Returns the config, or throws describing the first problem found."
   [{:keys [tools grants max-attempts chat-client] :as config}]
@@ -241,6 +255,7 @@
                    " so no role may be granted :tools or :may-add.")))
   (check-grants config)
   (check-verifier config)
+  (check-budget config)
   (doseq [[role {granted :tools}] grants
           t granted]
     (when-not (contains? tools t)

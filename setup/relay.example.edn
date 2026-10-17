@@ -30,6 +30,11 @@
  ;; The role that is sent dead letters to sort out.
  :dead-letter-handler "hub"
 
+ ;; A weekly budget in US dollars for all roles together. relay notifies
+ ;; you when the week's spend (from Monday) reaches 80% of it and 100%.
+ ;; It never stops anything. Leave it out for no budget.
+ ;; :budget {:weekly-usd 15}
+
  ;; Tools beyond relay's own, each an external command given the call's
  ;; arguments after its own, with no -- in between: such a tool must
  ;; refuse flags in the model's part, as rem does. New tools

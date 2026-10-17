@@ -49,7 +49,11 @@
   [wakes ^ZoneId zone ^Instant now weeks]
   (let [this (week-of now zone)
         mondays (mapv #(.minusWeeks this (long %)) (range weeks))
-        by-week (group-by #(week-of (:ended-at %) zone) (filter :ended-at wakes))]
+        ;; Only the wakes in the window, found cheaply, before any is
+        ;; put in its week.
+        from (week-start (peek mondays) zone)
+        by-week (group-by #(week-of (:ended-at %) zone)
+                          (filter #(some-> ^Instant (:ended-at %) (.isBefore from) not) wakes))]
     (vec (for [monday mondays
                :let [roles (reduce add-wake {} (sort-by :id (get by-week monday)))]]
            {:week monday

@@ -81,7 +81,8 @@ browsing. Nothing reads an export back.
 
 `<data>/relay.edn` holds the operator's settings: harnesses, where
 notifications go, limits, the dead letter handler, external tools, the
-verifier for research reports and what each role is granted.
+verifier for research reports, an optional weekly budget and what each
+role is granted.
 `setup/relay.example.edn` shows each of them. No role can read this
 file. Every external tool has a class (`read`, `write`,
 `egress` or `act`) and the labels its output carries (see below), and
@@ -497,6 +498,12 @@ starts on Monday at midnight in relay's time zone.
 A wake on a model agentloop has no prices for has no cost, which is not
 the same as costing nothing. relay never counts it as 0. Status shows
 how many wakes ran without a cost beside the spend.
+
+An optional weekly budget in relay.edn, `:budget {:weekly-usd 15}`,
+sets a warning level for all roles together. relay sends you one
+notification when the week's spend reaches 80% of it and one when it
+reaches 100%. A wake that passes both at once sends only the 100% one.
+The budget never stops or slows anything.
 
 ### relay chat
 

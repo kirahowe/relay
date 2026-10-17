@@ -16,6 +16,7 @@
             [relay.config :as config]
             [relay.reports :as reports]
             [relay.schedule :as schedule]
+            [relay.spend :as spend]
             [relay.text :as text])
   (:import (java.time Duration Instant LocalDate LocalDateTime)))
 
@@ -923,7 +924,10 @@
       (= "public-role-cannot-run" kind)
       (assoc-in [:unwakeable-told role] (:reason data))
       (= "public-role-can-run" kind)
-      (update :unwakeable-told dissoc role))))
+      (update :unwakeable-told dissoc role)
+      ;; The highest share of the weekly budget told for each week.
+      (= "budget-reached" kind)
+      (update-in [:budget-told (:week data)] (fnil max 0) (:percent data)))))
 
 (defmethod evolve* "notification/delivered" [state {:keys [data]}]
   (assoc-in state [:notifications (:notification data) :delivery] :delivered))
@@ -1629,6 +1633,28 @@
   (when (and (number? x) (Double/isFinite (double x)) (>= (double x) 0.0))
     (double x)))
 
+(defn- warn-of-spend
+  "Tells the operator when the week's spend, all roles together, reaches
+  80% of the weekly budget and when it reaches 100%, once each a week. A
+  wake that passes both at once tells only 100%. A warning only: relay
+  never stops or slows a role for what it costs."
+  [{:keys [state config now] :as tx}]
+  (if-let [budget (get-in config [:budget :weekly-usd])]
+    (let [{:keys [week cost-usd]} (spend/this-week (vals (:wakes state)) (config/zone config) now)
+          percent (spend/threshold-reached budget cost-usd (get-in state [:budget-told (str week)]))
+          usd #(format "$%.2f" (double %))]
+      (if-not percent
+        tx
+        (notify tx "budget-reached"
+                (if (= 100 percent)
+                  "relay has spent its weekly budget"
+                  (str "relay has spent " percent "% of its weekly budget"))
+                (str "The roles have spent " (usd cost-usd) " this week, from Monday " week
+                     ", against a weekly budget of " (usd budget) ". Nothing is stopped or slowed;"
+                     " relay status shows spend per role.")
+                :week (str week) :percent percent)))
+    tx))
+
 (defn- end-wake [{:keys [state config] :as tx} wake-id {:keys [outcome exit crashed cut-short session sessions said
                                                               transcript resets-at held labels usage cost-usd]
                                                        :as report}]
@@ -1669,6 +1695,8 @@
       ;; resumed once they decide.
       (if (and (= "ran" outcome) (empty? held)) (settle-memos tx wake said) tx)
       (tell-refusals tx wake report)
+      ;; Only a cost can move the week's total.
+      (if (wake-cost cost-usd) (warn-of-spend tx) tx)
       (dissoc tx :said-labels)))))
 
 ;; the operator's say over contaminated text

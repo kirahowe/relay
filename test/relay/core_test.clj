@@ -297,6 +297,56 @@
         (is (not-any? #(contains? (:data %) :cost-usd) events))
         (is (= {} (kept (core/replay events))))))))
 
+(defn- spend-world
+  "A world whose clerk ends a wake costing each of `costs` in turn, under
+  `config`, a day apart from Wednesday 2026-10-14 on."
+  [config costs]
+  (let [run-with (fn [{:keys [state now] :as w} actor type args]
+                   (let [[state' events] (core/run-command state {:type type :actor actor :args args}
+                                                           {:now now :config config})]
+                     (-> w (assoc :state state') (update :events into events))))]
+    (reduce (fn [w cost]
+              (let [w (run-with w "operator" :wake/start {:role "clerk" :note "Go."})
+                    wake-id (:id (core/running-wake (:state w) "clerk"))]
+                (-> w
+                    (run-with "dispatcher" :wake/end {:wake wake-id :outcome "ran" :cost-usd cost})
+                    (advance 86400))))
+            (seed) costs)))
+
+(defn- budget-warnings [w]
+  (for [n (sort-by :id (vals (:notifications (:state w))))
+        :when (= "budget-reached" (:kind n))]
+    [(:week n) (:percent n)]))
+
+(deftest a-weekly-budget-warns-once-at-80-and-once-at-100-percent
+  (let [budget (assoc cfg :budget {:weekly-usd 15})]
+    (testing "one warning per threshold per week, and nothing ever stopped"
+      ;; 5, 10, 13 (80%), 14, 15 (100%), 20: Wednesday to Monday, which
+      ;; starts the next week.
+      (let [w (spend-world budget [5 5 3 1 1 5])]
+        (is (= [["2026-10-12" 80] ["2026-10-12" 100]] (budget-warnings w)))
+        (is (every? #(= :ended (:status %)) (vals (:wakes (:state w)))))))
+    (testing "the warnings say the week's total and the budget"
+      (let [[n] (filter #(= "budget-reached" (:kind %)) (vals (:notifications (:state (spend-world budget [12])))))]
+        (is (= "relay has spent 80% of its weekly budget" (:title n)))
+        (is (str/includes? (:body n) "$12.00 this week, from Monday 2026-10-12"))
+        (is (str/includes? (:body n) "weekly budget of $15.00"))))
+    (testing "a wake that passes both at once tells only 100"
+      (is (= [["2026-10-12" 100]] (budget-warnings (spend-world budget [20 1 1])))))
+    (testing "a new week starts over"
+      ;; Wednesday to Tuesday: 13 in the week of the 12th, then 12 on
+      ;; Monday the 19th.
+      (is (= [["2026-10-12" 80] ["2026-10-19" 80]]
+             (budget-warnings (spend-world budget [13 0 0 0 0 12])))))
+    (testing "an unpriced wake moves nothing"
+      (is (= [] (budget-warnings (spend-world budget [11 nil nil])))))
+    (testing "no budget, no warnings"
+      (is (= [] (budget-warnings (spend-world cfg [100 100])))))
+    (testing "what was told survives the log"
+      (let [w (spend-world budget [13 2])]
+        (is (= (:budget-told (:state w)) (:budget-told (core/replay (json-round-trip (:events w))))))
+        (is (= {"2026-10-12" 100} (:budget-told (:state w))))))))
+
 (deftest a-conversation-records-the-sessions-it-used-in-order
   (let [w (run (seed) "operator" :wake/start {:role "clerk" :chat true})
         chat (core/running-wake (:state w) "clerk")
