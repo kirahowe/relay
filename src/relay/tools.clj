@@ -7,7 +7,8 @@
   are defined here; the ones that remove something also say so as their
   :acp-kind, which an ACP client shows. The operator can grant further
   tools in relay.edn, each one an external command given the call's
-  arguments on its command line.
+  arguments on its command line or an envelope on stdin, or a tool of an
+  MCP server, which agentloop runs.
   Which tools a role is offered depends on its grants, and a call to a tool
   the role was not offered is refused, whatever the harness let through.
 

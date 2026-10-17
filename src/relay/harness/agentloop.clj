@@ -49,6 +49,17 @@
   and the policy an entry for it of class read. agentloop adds the tool
   itself and decides the labels of its answers.
 
+  A role granted tools from MCP servers (relay.edn's :mcp-servers) gets
+  them in its request as agentloop names them: each tool by its relay.edn
+  name with its server and the server's name for it, and mcp_servers
+  holding only the servers those tools come from, each with its command
+  and credentials command. agentloop runs the servers and their calls.
+  tool_timeout_seconds is always sent, so every call, an MCP one
+  included, gets the harness's :tool-timeout-seconds (300 by default),
+  never agentloop's own default. A run whose MCP tools could not be set
+  up (reason tools_unavailable) needs the operator: relay.core decides
+  what happens to the role.
+
   How a run ended is read from the outcome line, never from the exit code:
   agentloop exits 0 whenever it reaches an outcome."
   (:require [babashka.fs :as fs]

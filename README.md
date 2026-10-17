@@ -133,6 +133,66 @@ and what it printed goes to relay's stderr. An envelope tool may give its input 
 is one such tool; the example settings show how to add it, with `:labels
 ["private"]` since every answer comes from the operator's mail.
 
+A tool can also come from an [MCP](https://modelcontextprotocol.io)
+server that agentloop runs over stdio. `:mcp-servers` in relay.edn names
+each server, and a tool with `:protocol :mcp-stdio` names its `:server`
+and the server's own name for it, `:tool`:
+
+```clojure
+:mcp-servers {"files" {:command ["/usr/local/bin/files-mcp" "--token-file" "{credentials_file}"]
+                       :credentials-command ["security" "find-generic-password" "-s" "files" "-w"]}}
+:tools {"file_read" {:protocol :mcp-stdio :server "files" :tool "read"
+                     :class :read :labels ["private"]}}
+```
+
+The tool takes its class and labels from relay.edn, like any other, and
+is granted by its name in relay.edn. Its server gives its description
+and schema, so it has no `:description`, `:parameters` or `:command`.
+agentloop calls the server itself, and `relay tool` refuses a call to
+it. A `:digest`, the SHA-256 of the definition, makes agentloop refuse a
+server that offers any other; `:allow-content` lets results hold
+`"image"`, `"audio"`, `"resource_link"` or `"resource"` content, which
+otherwise fails the call; `:send-labels true` on a server shows it the
+session's labels. A server gets only PATH and HOME. A secret comes from
+its `:credentials-command`, which agentloop runs and writes to a private
+file that the server's `:command` names as `{credentials_file}`, so relay
+never sees it. relay checks all of this as agentloop does, and refuses a
+server that no tool uses. A role's request starts only the servers its
+own tools come from. The harness's `:tool-timeout-seconds` (five minutes
+by default) bounds each call, MCP or not; relay always sends it, so
+agentloop's own default for MCP servers never applies.
+
+relay holds each MCP tool to one definition, as SSH's known_hosts holds
+a host to one key. The first wake that uses the tool records the SHA-256
+of its definition (from agentloop's `pins` entry), and from then on every
+request, for any role and any conversation, names that digest, or the
+tool's `:digest` when relay.edn gives one. agentloop refuses a server
+that offers another definition, and also refuses one that differs from
+what a session itself pinned. So a changed description or schema never
+reaches a model until the operator accepts it. What this does not cover:
+the first definition is taken on trust, and a conversation held before
+any wake has used the tool gets whatever the server offers then.
+
+A run whose server will not start, or whose tool's definition changed,
+runs nothing and ends needing the operator. That is the role's trouble,
+so its harness is not paused and other roles go on. relay tells the
+operator once, with what agentloop said, and `relay status` shows it on
+the role. A server that would not start is tried again after the usual
+doubling wait, in the same session, or now with `relay wake <role>`. A
+changed definition waits for the operator: no tick, `relay wake` or
+conversation starts the role. `relay fresh <role>` accepts the
+definition agentloop saw when the wake was stopped, after showing it,
+any other roles stopped by the same change and any held calls it will
+drop, and asking for the code. If any of that has changed by the time
+the code is typed, it does nothing and asks you to look again. It
+records the new digest and ends the role's session, and the sessions of
+those other roles, since a session that pinned the old definition could
+not go on; each next wake starts a new session with the role's open
+memos. A tool seen to change before relay accepted any definition of it
+is held to the one it changed from, so a first use elsewhere cannot
+take the new one. When relay.edn's `:digest` is what refuses it, set
+the new digest there and then run `relay fresh`.
+
 A typed answer from cleanroom (a date, a number, a record) holds no text
 an outsider chose, which is why it can come back clean, but it is still
 a value an outsider can influence: the mail decides what date or number
@@ -219,7 +279,7 @@ session does the same, and tells the operator. In
 a conversation agentloop asks the ACP client instead, and `relay acp`
 passes the request through.
 
-`relay approve`, `deny`, `release`, `declassify` and `trust` print what
+`relay approve`, `deny`, `fresh`, `release`, `declassify` and `trust` print what
 they are about on the terminal (`/dev/tty`, never stdin) and ask for a
 four-character code to be typed back there, so no harness or pipe can
 answer for the operator.
@@ -839,6 +899,9 @@ checks that:
 - a page read through the quarantined reader with a closed schema
   leaves the role clean, and with a free-text schema contaminates it and
   has its posts held
+- an MCP tool gets its credentials without relay seeing them, and one
+  whose definition changes under a session runs nothing until the
+  operator runs `relay fresh`
 - clean, everyday use is not held
 - a research role sent to an attack page from the red-team corpus ends
   flagged, refused or harmless, as the corpus says it must
@@ -860,7 +923,8 @@ release build does not count. `--build` builds a
 sibling that is missing. A scenario that needs a missing piece, or a
 cleanroom without `relay-tool`, is reported as SKIP with the reason. It
 needs a python3 (`/usr/bin/python3`, or `--python`) for `pty/drive.py`,
-which starts its processes and drives terminals. `--keep`
+which starts its processes and drives terminals. The MCP scenario
+builds agentloop's test server, `internal/cmd/mcpserver`, with Go. `--keep`
 keeps each scenario's directory to look at afterwards, and `--verbose`
 prints every check. Each scenario prints PASS, FAIL or SKIP, with the
 checks that failed, and the command exits 1 if any failed.

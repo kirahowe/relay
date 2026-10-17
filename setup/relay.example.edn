@@ -117,6 +117,24 @@
  ;;              :description "Fetch a page."
  ;;              :command ["/path/to/web-fetch"]}
 
+ ;; A tool can also come from an MCP server that agentloop runs over stdio.
+ ;; :mcp-servers names each server; a tool with :protocol :mcp-stdio names
+ ;; its :server and the server's own name for it, :tool, and has a :class
+ ;; and :labels like any other. The server gives its description and
+ ;; schema. A secret comes from :credentials-command: agentloop runs it
+ ;; and writes what it prints to a private file, whose path replaces
+ ;; {credentials_file} in the server's :command, so relay never sees it.
+ ;; :send-labels true shows the server the session's labels. On a tool,
+ ;; :digest "<sha256>" refuses any other definition, and :allow-content
+ ;; ["image"] lets results hold images. relay remembers each tool's first
+ ;; definition, and a changed one waits for you: relay fresh <role>
+ ;; accepts it.
+ ;; :mcp-servers {"files" {:command ["/path/to/files-mcp" "--token-file" "{credentials_file}"]
+ ;;                        :credentials-command ["security" "find-generic-password" "-s" "files-mcp" "-w"]}}
+ ;; and in :tools
+ ;; "file_read" {:protocol :mcp-stdio :server "files" :tool "read"
+ ;;              :class :read :labels ["private"]}
+
  ;; How relay checks a research role's reports: webtool's check, run on
  ;; the envelope protocol (see webtool's README). relay runs it itself, in
  ;; a process of its own for each report; no role is granted it. Each call
