@@ -17,3 +17,5 @@ webtool (~/code/projects/webtool, main = ztynurut) has no tracker of its own, so
 ## Plan
 
 ## Log
+
+- 2026-10-17: fixed in webtool tsqqnrmu, with lmwvtlrk on top, both on webtool main. Vertical tab reads as a space again: treated as a break, it made pages too large for the read-back cap, and it hides nothing. NEL and U+2029 end the bidi paragraph. U+2028 breaks the text. One Opus review round had no in-scope defect.

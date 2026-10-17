@@ -9,7 +9,6 @@
 | --- | --- | --- | --- |
 | [24](24-fix-the-small-deploy-and-pause-gaps-from-review.md) | Fix the small deploy and pause gaps from review | bug | P3 |
 | [25](25-label-the-clock-error-echoes-consistently.md) | Label the clock error echoes consistently | bug | P3 |
-| [26](26-tidy-small-webtool-findings.md) | Tidy small webtool findings | feature | P3 |
 
 ### Ready
 
@@ -41,6 +40,7 @@
 | [14](14-add-a-per-role-trust-ladder-for-research-roles.md) | Add a per-role trust ladder for research roles | feature | P2 |
 | [15](15-keep-a-ledger-of-findings.md) | Keep a ledger of findings | feature | P2 |
 | [19](19-read-the-calendar.md) | Read the calendar | feature | P2 |
+| [26](26-tidy-small-webtool-findings.md) | Tidy small webtool findings | feature | P3 |
 
 ### Blocked
 

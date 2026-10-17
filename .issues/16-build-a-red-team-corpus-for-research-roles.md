@@ -22,3 +22,5 @@ Prior-art survey, 2026-10-17. Reuse where a source exists and write only what is
 - webtool refuses localhost, so the fixture server needs a test-only fixture mode in webtool. Consider a Go build tag that only test builds have.
 
 ## Log
+
+- 2026-10-17: webtool now has a fixture build (tzsqzmrt, make fixture, bin/webtool-fixture). It reaches exactly one loopback origin, given as an IP literal (http://127.0.0.1:PORT/), and serves search from a local results file. Every other private address stays refused, the tailnet included.
