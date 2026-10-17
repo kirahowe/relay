@@ -1,0 +1,11 @@
+{:id 36
+ :title "Clean up after an interrupted deploy, and leave no check dirs in TMPDIR"
+ :status :ready
+ :type :bug
+ :priority :p3
+ :created "2026-10-17"
+ :updated "2026-10-17"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "36-clean-up-after-an-interrupted-deploy-and-leave-no-check.md"}
