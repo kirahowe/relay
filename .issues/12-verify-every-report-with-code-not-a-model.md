@@ -18,3 +18,5 @@ Reports are checked by deterministic code. Checks produce flags only. Nothing is
 ## Plan
 
 ## Log
+
+- 2026-10-17: landed on main as yzzmpnvn, with the docs in qwssvysx. At the tip: 494 tests and 9/9 scenarios green. Two Opus review rounds; round 2 had no in-scope defect. Its one non-blocking finding is relay#27.

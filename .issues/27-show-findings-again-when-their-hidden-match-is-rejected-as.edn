@@ -1,0 +1,11 @@
+{:id 27
+ :title "Show findings again when their hidden match is rejected as fake"
+ :status :ready
+ :type :bug
+ :priority :p2
+ :created "2026-10-17"
+ :updated "2026-10-17"
+ :tags #{}
+ :blocked-by #{}
+ :related #{"relay#13"}
+ :details "27-show-findings-again-when-their-hidden-match-is-rejected-as.md"}
