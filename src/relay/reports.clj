@@ -366,14 +366,37 @@
 
 (def reader-directed-patterns
   "Phrasing that speaks to whoever reads a report rather than describing a
-  finding. Only flagged: a finding about a job can say \"apply now\"."
-  [#"(?i)\bignore\s+(all\s+)?(the\s+)?(previous|prior|above|earlier)" #"(?i)\bdisregard\b"
+  finding. Only flagged: a finding about a job can say \"apply now\". The
+  injection forms follow garak's latentinjection probes and AgentDojo's
+  important_instructions attack: an order to ignore what came before or
+  around it, a task to do first, and a header posing as the system or a
+  turn of the conversation. A false positive only keeps a finding for the
+  operator; a miss can let one into the ledger unread."
+  [;; ignore, disregard or forget what is around it
+   #"(?i)\b(ignore|forget)\s+((all|any|the|this|these|those|that|other|every|your|my|of|and|previous|prior|above|earlier|following|preceding|negative|positive)\s+)*(previous|prior|above|earlier|following|preceding|rest|instructions?|directions?|data|content|context|text|info(rmation)?|rules?|guidelines?|prompts?|messages?|everything|them|it|indicators?|snippets?|documents?)\b"
+   #"(?i)\bdisregard\b"
+   ;; a task to do before the reader's own
+   #"(?i)\bdo\s+the\s+following\s+(first|now|instead|before)\b"
+   #"(?i)\bbefore\s+you\s+(can\s+)?(solve|do|complete|finish|continue|answer|proceed)\b"
+   #"(?i)\bthe\s+task\s+(that\s+)?i\s+gave\s+you\b"
+   #"(?i)\b(an?\s+)?important\s+message\s+from\s+me\b"
+   #"(?i)\b(follow|obey)\s+(these|this|the\s+following|my|new)\s+instructions?\b"
+   #"(?i)\binstead\s+(focus|print|say|report|reply|respond|output)\b"
+   #"(?i)\b(just|only)\s+(print|say|output|reply|respond|report)\b"
+   #"(?i)\bif\s+(the\s+)?(user|anyone|you\s+are)\s+(asks?|asked|questioned)\b|\bif\s+questioned\b"
+   ;; a header posing as the system, an operator or a turn of the conversation
+   #"(?i)\b(system|admin|developer|operator)\s+(message|request|note|notice|instruction|override)s?\b"
+   #"(?i)(^|[\n\[<(*.!?:-])\s*(system|instruction|admin(\s+request)?|assistant|user|human)\s*[:\]>]"
+   #"(?i)\b(core|legal|new|hidden)\s+(instruction|amendment|directive)s?\b|\bfollow\s+instruction\b"
+   #"(?i)\b(note|message)\s+to\s+(the\s+)?(automated|ai|assistant|llm|model|agent|analysis|screening)\b"
+   #"(?i)\bfor\s+automated\s+(screening|analysis|review)\b"
+   ;; ordinary pressure on whoever reads it
    #"(?i)\byou\s+must\b" #"(?i)\bact\s+now\b" #"(?i)\bclick\b" #"(?i)\burgent(ly)?\b"
    #"(?i)\bsend\s+(it\s+|this\s+|them\s+|your\s+\w+\s+)?to\b" #"(?i)\bemail\s+us\b"
    #"(?i)\bcontact\s+us\s+(now|immediately|today)" #"(?i)\breply\s+(to|with)\b"
    #"(?i)\b(password|passcode|login\s+details)\b" #"(?i)\bwire\s+(the\s+)?(money|funds|transfer)"
    #"(?i)\bsystem\s+prompt\b" #"(?i)\b(do\s+not|don't)\s+tell\b" #"(?i)\bimmediately\b"
-   #"(?i)\bnew\s+instructions\b" #"(?i)\bas\s+an\s+ai\b"])
+   #"(?i)\bas\s+an\s+ai\b"])
 
 (defn reader-directed? [s] (boolean (some #(re-find % (str s)) reader-directed-patterns)))
 

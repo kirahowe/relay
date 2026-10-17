@@ -312,7 +312,8 @@ finding on a domain none of its evidence is on, characters that hide or
 pass for others in any field, a deadline that is not a date or has
 passed, an organization whose name is not in its domain (a weak sign), a
 domain relay has not seen before, and phrasing aimed at the reader
-("ignore previous", "click", "email us"). A finding is matched by the
+("ignore previous", "do the following first", a "SYSTEM:" header,
+"click", "email us"). A finding is matched by the
 canonical form of the URL it gives, never by where that page redirects,
 so a redirect cannot hide it. The canonical form drops the fragment
 unless it starts `#/` or `#!`, which single-page sites route by. A
