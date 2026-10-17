@@ -658,6 +658,51 @@
           (:is-error parsed) (throw (ex-info (:content parsed) {:relay/labels (core/union static (:labels parsed))}))
           :else (labelled (:content parsed) static (:labels parsed)))))))
 
+(def verifier-output-limit
+  "The most a verifier may print, in bytes. Twenty pages' worth of check
+  output is far less; past this the run is stopped and counts as failed,
+  so a verifier gone wrong cannot fill memory or the log."
+  (* 8 1024 1024))
+
+(defn- read-bounded
+  "Everything on `in` as UTF-8, or ::too-long once it passes `limit` bytes."
+  [^java.io.InputStream in limit]
+  (let [out (java.io.ByteArrayOutputStream.)
+        buf (byte-array 65536)]
+    (loop [total 0]
+      (let [n (.read in buf)]
+        (cond (neg? n) (String. (.toByteArray out) java.nio.charset.StandardCharsets/UTF_8)
+              (> (+ total n) limit) ::too-long
+              :else (do (.write out buf 0 n) (recur (+ total n))))))))
+
+(defn run-verifier
+  "Runs the :verifier on one check request (relay.reports/check-requests),
+  on the envelope protocol, as a call from a session holding `labels`.
+  Returns {:content the check output parsed as JSON, :labels it reported},
+  or throws saying only that it failed. Its output is read only up to
+  verifier-output-limit; what it prints on stderr is relay's."
+  [{:keys [command timeout-seconds]} labels request call-id]
+  (let [failed (fn [why]
+                 (binding [*out* *err*] (println (str "verifier: " why)) (flush))
+                 (throw (ex-info "The verifier failed." {})))
+        proc (p/process (vec command) {:in (json/generate-string {:input request :labels labels :call_id (str call-id)})
+                                       :out :stream :err :inherit :env (harness/base-env {})})
+        out (future (read-bounded (:out proc) verifier-output-limit))
+        timeout-ms (* 1000 (or timeout-seconds config/verifier-timeout-seconds))
+        text (deref out timeout-ms ::timeout)]
+    (when (#{::timeout ::too-long} text)
+      (p/destroy-tree proc)
+      (failed (if (= ::timeout text) "timed out" "printed more than relay reads")))
+    (let [exit (:exit (deref proc 10000 {:exit ::timeout}))
+          parsed (when (= 0 exit) (parse-result text))
+          v (when parsed (strict-json-value (:content parsed)))]
+      (cond
+        (not= 0 exit) (do (p/destroy-tree proc) (failed (str "exited " exit)))
+        (nil? parsed) (failed "did not print exactly one result envelope")
+        (:is-error parsed) (failed "answered with an error")
+        (= ::bad v) (failed "its content is not one JSON value")
+        :else {:content v :labels (:labels parsed)}))))
+
 (defn- external-tool
   "A tool the operator defined in relay.edn: an external command, given the
   call's `args` after its own, or with :protocol :envelope, given the call

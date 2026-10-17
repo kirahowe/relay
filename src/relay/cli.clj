@@ -53,6 +53,8 @@ Every command needs the data directory, from --data <dir> or from the file
   relay tick [--pause-file <f>]       one dispatcher pass (launchd runs this); does
                                       nothing while the pause file exists, which
                                       bb deploy makes
+  relay verify <report>               check a research report now (the tick does this
+                                      by itself)
   relay facts [<topic>] [--search <s>] [--as-of <t>] [--known-at <t>] [--all]
                                       what relay knows; times as for facts
   relay fact <id>                     every version of a fact
@@ -355,6 +357,12 @@ and --instructions marks the id public too.")
               (when-not r (fail! "usage: relay acp <role> [--trace <file>]"))
               (result (dispatch/acp! sys r {:trace (:trace opts) :approvals (:approvals opts)})))
       "tick" (do (dispatch/tick! sys) (result 0))
+      "verify" (let [id (some-> (first more) parse-long)]
+                 (when-not id (fail! "usage: relay verify <report>"))
+                 (let [{r :result :keys [message]} (dispatch/verify! sys id {:by-hand (not (:dispatched opts))})]
+                   (if (= :verified r)
+                     (result 0 (str "Checked report " id "."))
+                     (result 1 (str "Report " id " was not checked: " message)))))
       "facts" (knowledge sys :facts {:topic (first more) :search (:search opts)
                                      :as-of (:as-of opts) :known-at (:known-at opts) :all (:all opts)})
       "fact" (let [[sub a b] more]

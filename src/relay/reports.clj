@@ -267,9 +267,19 @@
                       (check-urls report))]
     (mapv (fn [batch] {:items (vec batch)}) (partition-all max-items items))))
 
+(def field-limits
+  "The longest any string from the verifier is kept: what comes from a
+  page is cut there, so no page can grow the log."
+  {:url 4000 :error 1000 :reason 1000 :domain 300 :sha256 64})
+
+(defn clip
+  "A string cut to `n` characters, with an ellipsis when it was longer."
+  [s n]
+  (let [s (str s)] (if (> (count s) n) (str (subs s 0 n) "…") s)))
+
 (defn- host-info [h]
   (when (map? h)
-    {:name (str (get h "name")) :unicode (str (get h "unicode"))
+    {:name (clip (get h "name") (:domain field-limits)) :unicode (clip (get h "unicode") (:domain field-limits))
      :punycode (true? (get h "punycode")) :mixed-scripts (true? (get h "mixed_scripts"))}))
 
 (def ^:private item-keys
@@ -298,26 +308,35 @@
                                      (sequential? (get item "quotes")) (= (count quotes) (count (get item "quotes")))
                                      (every? #(and (map? %) (boolean? (get % "found"))) (get item "quotes")))
                             {:fetched (get item "fetched") :complete (get item "complete")
-                             :uncheckable (get item "uncheckable") :error (get item "error")
-                             :status (get item "status") :final-url (get item "final_url")
+                             :uncheckable (clip (get item "uncheckable") (:reason field-limits))
+                             :error (clip (get item "error") (:error field-limits))
+                             :status (get item "status") :final-url (clip (get item "final_url") (:url field-limits))
                              :crosses-domains (get item "crosses_domains")
-                             :domain (get item "domain") :final-domain (get item "final_domain")
+                             :domain (clip (get item "domain") (:domain field-limits))
+                             :final-domain (clip (get item "final_domain") (:domain field-limits))
                              :host (host-info (get item "host")) :final-host (host-info (get item "final_host"))
-                             :sha256 (get item "sha256")
+                             :sha256 (clip (get item "sha256") (:sha256 field-limits))
                              :quotes (mapv (fn [q r] {:quote q :found (get r "found")}) quotes (get item "quotes"))}))
                         items asked)]
         (when (every? some? parsed) (vec parsed))))))
 
+(def ^:private fetch-keys [:fetched :complete :uncheckable :status])
+
 (defn checked-urls
   "What the verifier found for each URL a report cites, in order: the
-  first answer for its fetch, and every quote's answer. `results` are the
-  parsed items of every request, in order."
+  first answer for its fetch, every quote's answer, and under :others any
+  further fetches of a URL with more quotes than one item holds. Each
+  quote's answer carries the standing of the fetch it was checked
+  against, so a quote is judged by its own fetch. `results` are the parsed
+  items of every request, in order."
   [report results]
   (let [asked (mapcat :items (check-requests report))
         by-url (reduce (fn [m [{:keys [url]} r]]
-                         (if (contains? m url)
-                           (update-in m [url :quotes] into (:quotes r))
-                           (assoc m url (assoc r :url url))))
+                         (let [quotes (mapv #(merge % (select-keys r fetch-keys)) (:quotes r))]
+                           (if (contains? m url)
+                             (-> m (update-in [url :quotes] into quotes)
+                                 (update-in [url :others] (fnil conj []) (dissoc r :quotes)))
+                             (assoc m url (assoc r :url url :quotes quotes)))))
                        {} (map vector asked results))]
     (mapv #(get by-url (:url %)) (check-urls report))))
 
@@ -326,7 +345,24 @@
 (def flag-kinds
   ["quote-not-found" "page-uncheckable" "fetch-failed" "cross-domain-redirect" "suspicious-host"
    "domain-mismatch" "hidden-characters" "lookalikes" "deadline-unparseable" "deadline-past"
-   "organization-not-in-domain" "first-seen-domain" "reader-directed"])
+   "organization-not-in-domain" "first-seen-domain" "reader-directed" "rejected-as-fake-before"])
+
+(defn refusal-kind
+  "What a fetch error says the verifier refused, from webtool's words:
+  \"guard\" when its guard refused the cited URL itself (a private
+  address, a local name, a port, credentials), \"redirect\" when the page
+  sent the fetch on somewhere refused or too far, \"content\" when the
+  page is of a kind it does not read, and nil when it is no refusal."
+  [error]
+  (let [e (str/triml (str error))]
+    (when (str/starts-with? e "refused: ")
+      (let [r (subs e (count "refused: "))]
+        (cond (or (str/starts-with? r "a redirect to ") (re-matches #"more than \d+ redirects.*" r)
+                  (str/starts-with? r "not an absolute URL") (str/starts-with? r "not a URL that can be requested"))
+              "redirect"
+              (or (str/starts-with? r "the page is a PDF") (str/starts-with? r "the content type"))
+              "content"
+              :else "guard")))))
 
 (def reader-directed-patterns
   "Phrasing that speaks to whoever reads a report rather than describing a
@@ -397,15 +433,16 @@
   (let [f (:final-url checked)]
     (if (and (:fetched checked) (not (str/blank? f))) f url)))
 
-(defn- url-flags
-  "Flags from what the verifier found at one URL."
+(defn- fetch-flags
+  "Flags from what the verifier found in one fetch of a URL."
   [url c]
   (let [hosts (remove nil? [(:host c) (:final-host c)])]
     (concat
      (cond
        (nil? c) [{:kind "fetch-failed" :url url :error "the verifier gave no answer for it" :refused false}]
-       (not (:fetched c)) [{:kind "fetch-failed" :url url :error (str (:error c))
-                            :refused (str/starts-with? (str/lower-case (str/triml (str (:error c)))) "refused")}]
+       (not (:fetched c)) [(let [k (refusal-kind (:error c))]
+                             (cond-> {:kind "fetch-failed" :url url :error (str (:error c)) :refused (= "guard" k)}
+                               k (assoc :refusal k)))]
        (not (str/blank? (:uncheckable c))) [{:kind "page-uncheckable" :url url :reason (:uncheckable c)}]
        :else nil)
      (when (:crosses-domains c)
@@ -414,12 +451,19 @@
        {:kind "suspicious-host" :url url :host (:name h) :unicode (:unicode h)
         :punycode (:punycode h) :mixed-scripts (:mixed-scripts h)}))))
 
+(defn- url-flags
+  "Flags from every fetch of one URL."
+  [url c]
+  (distinct (mapcat #(fetch-flags url %) (cons c (:others c)))))
+
 (defn- quote-flags
-  "A quote not found on a page that was fetched and could be checked."
+  "A quote not found on a page that was fetched and could be checked, by
+  the fetch it was checked against."
   [url quote c]
-  (when (and c (:fetched c) (str/blank? (:uncheckable c))
-             (not (some #(and (= quote (:quote %)) (:found %)) (:quotes c))))
-    [{:kind "quote-not-found" :url url :quote quote :status (:status c) :incomplete (not (:complete c))}]))
+  (let [q (first (filter #(= quote (:quote %)) (:quotes c)))
+        fetch (merge (select-keys c fetch-keys) (when q (select-keys q fetch-keys)))]
+    (when (and c (:fetched fetch) (str/blank? (:uncheckable fetch)) (not (:found q)))
+      [{:kind "quote-not-found" :url url :quote quote :status (:status fetch) :incomplete (not (:complete fetch))}])))
 
 (defn- deadline-flags [deadline ^LocalDate today]
   (when deadline
@@ -429,24 +473,31 @@
 
 (defn verify
   "Flags for every finding of a report, from what the verifier found
-  (`checked`, checked-urls), what relay already knows (`known`: the
-  :domains and :urls of the ledger and earlier findings) and the
+  (`checked`, checked-urls), what relay already knows (`known`) and the
   operator's date `today`. Returns {:flags for the report's own text,
-  :findings [{:flags :seen-before :canonical-url :final-url :domain}]}.
-  A finding whose canonical final URL, or canonical URL, matches one
-  already known, or one earlier in the report, is seen before."
-  [{:keys [summary findings]} checked {:keys [domains urls]} ^LocalDate today]
+  :findings [{:flags :seen-before :seen-as :canonical-url :final-url
+  :domain}]}.
+
+  `known` has the registrable :domains of the ledger, :seen, the
+  canonical URLs that hide a finding as seen before, each with what it
+  matched (a ledger entry, a finding waiting for review, one judged not
+  relevant), and :fake, those of findings rejected as fake. A finding is
+  matched by the canonical URL it gives, never by where that landed, so a
+  redirect cannot hide it. One matching a finding rejected as fake is
+  shown again, flagged."
+  [{:keys [summary findings]} checked {:keys [domains seen fake]} ^LocalDate today]
   (let [by-url (into {} (map (juxt :url identity) checked))]
     {:flags (vec (text-flags [["report summary" summary]]))
      :findings
      (first
       (reduce
-       (fn [[out seen] {:keys [url evidence organization deadline] :as f}]
+       (fn [[out earlier] [i {:keys [url evidence organization deadline] :as f}]]
          (let [c (by-url url)
                domain (url-domain c url)
                evidence-domains (set (map #(url-domain (by-url (:url %)) (:url %)) evidence))
-               canonical (canonical-url (final-url c url))
-               seen-before (boolean (or (seen canonical) (seen (canonical-url url))))
+               canonical (canonical-url url)
+               seen-as (or (get seen canonical)
+                           (when-let [j (get earlier canonical)] {:kind "earlier" :finding j}))
                flags (vec (distinct
                            (concat
                             (mapcat (fn [u] (url-flags u (by-url u))) (distinct (cons url (map :url evidence))))
@@ -458,12 +509,15 @@
                             (when-not (org-in-domain? organization domain)
                               [{:kind "organization-not-in-domain" :domain domain}])
                             (when-not (contains? domains domain)
-                              [{:kind "first-seen-domain" :domain domain}]))))]
-           [(conj out {:flags flags :seen-before seen-before :canonical-url canonical
-                       :final-url (final-url c url) :domain domain})
-            (conj seen canonical (canonical-url url))]))
-       [[] (set urls)]
-       findings))}))
+                              [{:kind "first-seen-domain" :domain domain}])
+                            (when (and (not seen-as) (contains? fake canonical))
+                              [{:kind "rejected-as-fake-before" :url canonical}]))))]
+           [(conj out (cond-> {:flags flags :seen-before (some? seen-as) :canonical-url canonical
+                               :final-url (final-url c url) :domain domain}
+                        seen-as (assoc :seen-as seen-as)))
+            (if (contains? earlier canonical) earlier (assoc earlier canonical i))]))
+       [[] {}]
+       (map-indexed vector findings)))}))
 
 (defn demotion-reason
   "Why a verified report takes its role back to trust level 0, or nil: a
@@ -472,7 +526,8 @@
   [{:keys [findings]}]
   (let [flags (mapcat :flags findings)]
     (cond (some #(= "quote-not-found" (:kind %)) flags) "a quote was not found on the page it cited"
-          (some #(and (= "fetch-failed" (:kind %)) (:refused %)) flags) "the verifier's guard refused a page it cited"
+          (some #(and (= "fetch-failed" (:kind %)) (:refused %)) flags)
+          "the verifier's guard refused the address of a page it cited"
           :else nil)))
 
 (def sample-one-in

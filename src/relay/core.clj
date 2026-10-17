@@ -1965,7 +1965,9 @@
   before relay could record the end."
   "The conversation's client went away without letting relay record the end.")
 
-(defmethod decide* :tick [{:keys [state] :as tx} {{:keys [lost-wakes]} :args}]
+(declare verify-failed)
+
+(defmethod decide* :tick [{:keys [state] :as tx} {{:keys [lost-wakes lost-verifications]} :args}]
   (dispatcher-only! tx)
   (as-> tx tx
     ;; A wake whose runner process is gone ended without saying how. It
@@ -1982,6 +1984,14 @@
                   :else (end-wake tx id {:outcome "ran" :crashed true
                                          :said "The process running this wake disappeared."}))))
             tx (sort lost-wakes))
+    ;; A verify process that is gone failed, and is tried again later:
+    ;; only the very process the tick found gone, by pid and start time.
+    (reduce (fn [tx {id :report :keys [pid pid-start]}]
+              (let [v (get-in (:state tx) [:reports id :verifying])]
+                (if (and v (= pid (:pid v)) (= pid-start (:pid-start v)))
+                  (verify-failed tx id "The process checking it disappeared.")
+                  tx)))
+            tx (sort-by :report (filter map? lost-verifications)))
     (fire-routines tx)
     (trip-guards tx)
     (report-unwakeable tx)
@@ -2302,3 +2312,164 @@
     (let [{:keys [report problem]} (reports/parse-report kinds args)]
       (when problem (reject! :invalid problem))
       (emit tx "report/submitted" (assoc report :role actor)))))
+
+(defn verifying?
+  "Whether a report's verify process has started and not finished."
+  [r]
+  (some? (:verifying r)))
+
+(defn reports-to-verify
+  "The reports the tick has checked now: submitted, not being checked,
+  and not waiting out a retry delay. None without a :verifier."
+  [state config ^Instant now]
+  (if-not (:verifier config)
+    []
+    (->> (vals (:reports state))
+         (filter #(and (= :submitted (:status %)) (not (verifying? %))
+                       (not (some-> ^Instant (:retry-at %) (.isAfter now)))))
+         (map :id) sort vec)))
+
+(defn ledger-entries [state] (vec (sort-by :id (vals (:ledger state)))))
+
+(defn known-findings
+  "What relay already knows of findings, for flags (relay.reports/verify):
+  the registrable domains of ledger entries; the canonical URLs that hide
+  a finding as seen before, each with what it matched: a ledger entry, a
+  finding waiting for review, or one the operator judged not relevant;
+  and those of findings rejected as fake, which are shown again, flagged.
+  Report `except`'s own findings are left out."
+  [state except]
+  (let [entries (sort-by :id (vals (:ledger state)))
+        findings (for [r (sort-by :id (vals (:reports state)))
+                       :when (and (not= except (:id r)) (= :verified (:status r)))
+                       [i f] (map-indexed vector (get-in r [:verification :findings]))]
+                   [(:id r) i f])
+        by (fn [kind pred] (into {} (for [[r i f] (reverse findings) :when (pred f)]
+                                      [(:canonical-url f) {:kind kind :report r :finding i}])))]
+    {:domains (set (keep :domain entries))
+     ;; A ledger entry wins over a waiting finding, and that over one set
+     ;; aside, when one URL matches several.
+     :seen (merge (by "not-relevant" #(= "not-relevant" (:decision %)))
+                  (by "pending" #(and (not (:seen-before %)) (nil? (:decision %))))
+                  (into {} (for [e (reverse entries)] [(:url e) {:kind "ledger" :entry (:id e)}])))
+     :fake (set (for [[_ _ f] findings :when (= "fake" (:decision f))] (:canonical-url f)))}))
+
+(defn verification-labels
+  "What a report's verification carries: the report's labels, and
+  contaminated, since what the verifier says comes from pages."
+  [r]
+  (union (:labels r) [contaminated-label]))
+
+(defn pending-findings
+  "The findings of a verified report that wait for the operator: not seen
+  before and not yet decided, as their indexes."
+  [r]
+  (if-not (= :verified (:status r))
+    []
+    (vec (keep-indexed (fn [i f] (when-not (or (:seen-before f) (:decision f)) i))
+                       (get-in r [:verification :findings])))))
+
+(defmethod evolve* "report/verify-started" [state {:keys [at data]}]
+  (assoc-in state [:reports (:report data) :verifying] {:pid (:pid data) :pid-start (:pid-start data)
+                                                        :started-at (inst at)}))
+
+(defmethod evolve* "report/verify-failed" [state {:keys [data]}]
+  (update-in state [:reports (:report data)]
+             #(-> (dissoc % :verifying)
+                  (assoc :attempts (:attempt data) :retry-at (inst (:retry-at data)) :error (:error data)
+                         :status (if (:retry-at data) :submitted :failed)))))
+
+(defmethod evolve* "report/verified" [state {:keys [at data labels]}]
+  (update-in state [:reports (:report data)]
+             #(-> (dissoc % :verifying :retry-at)
+                  (assoc :status :verified :verified-at (inst at)
+                         :verification {:flags (vec (:flags data)) :findings (vec (:findings data))
+                                        :urls (vec (:urls data)) :sampled (vec (:sampled data))
+                                        :labels (union labels)}))))
+
+(defn- report! [state id]
+  (or (report state id) (reject! :not-found (str "There is no report " id "."))))
+
+(defmethod decide* :report/verify-start [{:keys [state config now] :as tx} {{id :report :keys [pid pid-start by-hand]} :args}]
+  (dispatcher-only! tx)
+  (let [r (report! state id)]
+    (when-not (:verifier config) (reject! :invalid "relay.edn has no :verifier to check reports with."))
+    (when (verifying? r) (reject! :busy (str "Report " id " is being checked now.")))
+    (when-not (or (= :submitted (:status r)) (and by-hand (= :failed (:status r))))
+      (reject! :invalid (str "Report " id " is " (name (:status r)) ", so there is nothing to check.")))
+    (when (and (not by-hand) (some-> ^Instant (:retry-at r) (.isAfter now)))
+      (reject! :invalid (str "Report " id " is next checked at " (:retry-at r) ".")))
+    (emit tx "report/verify-started" {:report id :pid pid :pid-start pid-start})))
+
+(defn- verification-notice
+  "The one notification for a verified report: counts and what to run,
+  never any of its text."
+  [state id]
+  (let [r (report state id)
+        fs (get-in r [:verification :findings])
+        pending (pending-findings r)]
+    (str "Report " id " from " (:role r) ": " (count fs) " findings, "
+         (count (filter #(seq (:flags %)) fs)) " flagged, " (count (filter :seen-before fs)) " seen before."
+         (when (seq pending) (str " relay review " id)))))
+
+(defn- checking!
+  "Refuses news of a check from any process but the one checking the
+  report now, by pid and start time, so a process from an earlier try, or
+  a tick that saw an earlier one gone, cannot speak for this one."
+  [r pid pid-start]
+  (let [v (:verifying r)]
+    (when-not (and v (= pid (:pid v)) (= pid-start (:pid-start v)))
+      (reject! :invalid (str "Report " (:id r) " is not being checked by that process.")))))
+
+(defmethod decide* :report/verify [{:keys [state config now] :as tx} {{id :report :keys [results sampled labels pid pid-start]} :args}]
+  (dispatcher-only! tx)
+  (let [r (report! state id)
+        asked (mapcat :items (reports/check-requests r))]
+    (checking! r pid pid-start)
+    (when-not (and (or (nil? labels) (sequential? labels)) (every? label-names labels))
+      (reject! :invalid "The verifier's labels must be labels relay knows."))
+    (when-not (and (sequential? results) (= (count asked) (count results)) (every? map? results))
+      (reject! :invalid (str "The verifier's results do not match report " id "'s checks.")))
+    (when-not (and (sequential? sampled) (= (count (:findings r)) (count sampled)) (every? boolean? sampled))
+      (reject! :invalid "The sample must say for every finding whether it was drawn."))
+    (let [checked (reports/checked-urls r results)
+          today (LocalDate/ofInstant now (config/zone config))
+          v (reports/verify r checked (known-findings state id) today)
+          tx (emit tx "report/verified" {:report id :flags (:flags v) :findings (:findings v)
+                                         :urls (mapv #(dissoc % :quotes) checked) :sampled (vec sampled)}
+                   ;; With whatever the verifier said its answers carry.
+                   (union (verification-labels r) labels))]
+      (notify tx "report-verified" (str "Report " id " from " (:role r) " was checked")
+              (verification-notice (:state tx) id)
+              :role (:role r) :report id :labels (id-labels state (:role r))))))
+
+(defn- verify-failed
+  "Records that checking a report failed. It is tried again after a wait
+  that grows, like a memo's, until :max-attempts; the operator is told the
+  first time and when relay gives up."
+  [{:keys [state config now] :as tx} id error]
+  (let [r (report state id)
+        attempt (inc (or (:attempts r) 0))
+        retry-at (when (< attempt (:max-attempts config))
+                   (str (.plusSeconds ^Instant now (config/retry-delay-seconds config attempt))))
+        tx (emit tx "report/verify-failed" {:report id :error (str error) :attempt attempt :retry-at retry-at}
+                 ;; The verifier's own words may come from a page.
+                 (verification-labels r))]
+    (cond
+      (nil? retry-at)
+      (notify tx "report-verify-failed" (str "relay gave up checking report " id)
+              (str "Checking report " id " from " (:role r) " failed " attempt " times. relay verify " id
+                   " tries again; relay log shows why it failed.")
+              :role (:role r) :report id :labels (id-labels state (:role r)))
+      (= 1 attempt)
+      (notify tx "report-verify-failed" (str "relay could not check report " id)
+              (str "Checking report " id " from " (:role r) " failed. relay tries again later by itself;"
+                   " relay log shows why it failed.")
+              :role (:role r) :report id :labels (id-labels state (:role r)))
+      :else tx)))
+
+(defmethod decide* :report/verify-fail [{:keys [state] :as tx} {{id :report :keys [error pid pid-start]} :args}]
+  (dispatcher-only! tx)
+  (let [r (report! state id)]
+    (checking! r pid pid-start)
+    (verify-failed tx id error)))
