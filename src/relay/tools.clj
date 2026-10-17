@@ -887,6 +887,10 @@
                         (str "Beyond relay's own tools, the operator has granted you: "
                              (str/join ", " (map #(str "`" % "`") external)) ".")
                         "You have relay's own tools and nothing beyond them."))
+                (seq (config/quarantine-tools config role-id))
+                (conj (str "You can also read "
+                           (str/join ", " (map #(str "`" % "`") (config/quarantine-tools config role-id)))
+                           " through `read_quarantined`."))
                 :always
                 (conj (str "Only the operator grants tools and powers. If your work needs one you lack,"
                            " ask whoever you report to, or the operator if you report to nobody.")))))))

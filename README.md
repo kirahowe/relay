@@ -141,9 +141,9 @@ outsider can do is pick the wrong one of your options.
 An optional `<data>/AGENTS.md` adds the operator's own instructions to
 every role's system prompt, except a public role's (see below).
 
-A role's grants are `:tools`, `:may-add`, `:public` and `:reports`, and
-relay refuses any other key, so a typo cannot change what a role may
-hold.
+A role's grants are `:tools`, `:may-add`, `:public`, `:reports` and
+`:quarantine`, and relay refuses any other key, so a typo cannot change
+what a role may hold.
 
 ### Labels and holds
 
@@ -296,6 +296,42 @@ in a directory of their own. A reason the operator gave before the role
 was public stays private. A conversation with a
 public role is under the same rules, but what the operator types in it
 goes to the role as it is, and the role may send it out to the web.
+
+#### The quarantined reader
+
+A role that needs one fact from a page or a mail, and not its text, can
+read it through agentloop's quarantined reader. The operator grants it
+in relay.edn, naming tools from the role's `:tools`:
+
+```clojure
+:grants {"hub" {:tools ["web_read"] :quarantine ["web_read"]}}
+```
+
+Each must be a `:read` tool the role holds, without `:always-hold`, or
+relay refuses the settings. Only the operator grants it; no role can. A public role may
+have it too. relay then puts a `quarantine` block in the role's
+agentloop request, and an entry for `read_quarantined` of class `read`
+in its policy:
+
+```json
+"quarantine": {"model": "claude-haiku-5-5", "effort": "low", "tools": ["web_read"]},
+"policy": {"tools": {"read_quarantined": {"class": "read"}, "web_read": {...}}}
+```
+
+agentloop adds the `read_quarantined` tool itself. A call names one of
+those tools, its input, a question and a JSON Schema. A second model
+with no tools reads the tool's output and answers; the role sees only
+the answer, checked against the schema. When the schema admits no free
+text (booleans, numbers, enums, dates, objects with
+`additionalProperties: false`, arrays of at most 100 items), the answer
+does not carry `contaminated`. Otherwise it does. `private` always
+passes through, and a public role's `forbid_labels` still refuses it.
+relay's label code does not change: the labels arrive with the result,
+as for any tool. The reader's model is the harness's `:reader`, by
+default `{:model "claude-haiku-5-5" :effort "low"}`, on the same
+provider and key. A closed answer can still be wrong, since an outsider
+can steer which value the reader picks, so a role treats it as a claim,
+not an instruction.
 
 ### Research roles and reports
 

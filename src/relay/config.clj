@@ -85,6 +85,21 @@
     (when (and (= :file kind) (not (and (string? (:path notify)) (fs/absolute? (:path notify)))))
       (problem! "The file :notify in relay.edn needs a :path, the absolute path of the file to append to."))))
 
+(def efforts #{"low" "medium" "high" "xhigh" "max"})
+
+(defn- check-reader
+  "An agentloop harness's optional :reader: the model its quarantined
+  reader runs on, {:model \"claude-haiku-5-5\" :effort \"low\"}, either
+  or both."
+  [h kind reader]
+  (let [{:keys [model effort]} reader]
+    (when-not (and (= :agentloop kind) (map? reader) (every? #{:model :effort} (keys reader))
+                   (or (nil? model) (and (string? model) (not (str/blank? model))))
+                   (or (nil? effort) (efforts effort)))
+      (problem! (str "Harness " (name h) " in relay.edn has :reader " (pr-str reader) ". An :agentloop"
+                     " harness may give {:model \"claude-haiku-5-5\" :effort \"low\"}, the quarantined"
+                     " reader's model and effort, with effort one of " (str/join ", " (sort efforts)) ".")))))
+
 (defn- check-required
   [{:keys [timezone default-harness harnesses notify]}]
   (when-not (and (string? timezone)
@@ -93,9 +108,11 @@
                    (when timezone (str "; " (pr-str timezone) " is not one")) ".")))
   (when-not (and (map? harnesses) (seq harnesses))
     (problem! "relay.edn needs :harnesses, saying how to run a model."))
-  (doseq [[h {:keys [kind api-key-command]}] harnesses]
+  (doseq [[h {:keys [kind api-key-command] :as harness}] harnesses]
     (when-not kind
       (problem! (str "Harness " (name h) " in relay.edn needs a :kind.")))
+    (when (contains? harness :reader)
+      (check-reader h kind (:reader harness)))
     (when (and (= :agentloop kind)
                (not (and (sequential? api-key-command) (seq api-key-command))))
       (problem! (str "Harness " (name h) " in relay.edn needs :api-key-command, "
@@ -119,7 +136,7 @@
 (def grant-keys
   "What a role can be granted. Anything else is refused, so a typo such as
   :pubic cannot leave a role able to hold private data."
-  #{:tools :may-add :public :reports})
+  #{:tools :may-add :public :reports :quarantine})
 
 (def kind-pattern
   "A report kind's name: lower case letters, digits and hyphens."
@@ -140,6 +157,29 @@
                    (every? #(and (string? %) (re-matches kind-pattern %)) kinds))
       (problem! (str "The :reports :kinds for " role " in relay.edn must be a vector of distinct names of lower"
                      " case letters, digits and hyphens, such as [\"job\" \"grant\"].")))))
+
+(defn- check-quarantine-grant
+  "A :quarantine grant names tools the role may read through agentloop's
+  quarantined reader, read_quarantined. Each must be one of the role's
+  :tools, of class :read and not :always-hold: the reader runs it and
+  shows the role only a checked answer about its output, and a hold on it
+  would be a hold on read_quarantined, which relay cannot show as one on
+  the tool."
+  [role {:keys [quarantine] granted :tools} tools]
+  (when-not (and (vector? quarantine) (seq quarantine) (apply distinct? quarantine)
+                 (every? string? quarantine))
+    (problem! (str "The :quarantine grant for " role " in relay.edn is a vector of distinct tool names,"
+                   " such as [\"web_fetch\"].")))
+  (doseq [t quarantine]
+    (when-not (some #{t} granted)
+      (problem! (str "Role " role " has " t " in :quarantine, which it is not granted in :tools."
+                     " It may read only through its own tools.")))
+    (when-not (= :read (get-in tools [t :class]))
+      (problem! (str "Role " role " has " t " in :quarantine, which is not a :read tool in :tools."
+                     " The reader reads only through :read tools.")))
+    (when (true? (get-in tools [t :always-hold]))
+      (problem! (str "Role " role " has " t " in :quarantine, which has :always-hold. A call held"
+                     " through the reader could not be shown or decided as a call to " t ".")))))
 
 (defn- check-verifier
   "The :verifier relay checks reports with: webtool's check, on the
@@ -195,7 +235,9 @@
         (problem! (str "Role " role " is :public, and the default harness is a :script harness,"
                        " whose program can claim any labels. A public role needs agentloop."))))
     (when (contains? g :reports)
-      (check-reports-grant role g))))
+      (check-reports-grant role g))
+    (when (contains? g :quarantine)
+      (check-quarantine-grant role g tools))))
 
 (defn- check-budget
   "The optional :budget, a weekly amount in US dollars. relay only warns
@@ -325,6 +367,12 @@
   when it writes no reports."
   [config role]
   (get-in (grants config role) [:reports :kinds]))
+
+(defn quarantine-tools
+  "The tools a role may read through the quarantined reader (its
+  :quarantine grant), or nil."
+  [config role]
+  (not-empty (:quarantine (grants config role))))
 
 (defn research-roles
   "The roles granted :reports, sorted."

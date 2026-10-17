@@ -177,6 +177,20 @@ contract Tools {
         -- name. A grant to a tool the settings do not define is an
         -- error in the settings.
 
+    @invariant AQuarantinedReaderIsGrantedByTheOperator
+        -- The settings may grant a role the quarantined reader over
+        -- some of its own read tools (quarantine_tools). Each must be a
+        -- tool it is granted, of class read and not always held, or the
+        -- settings are an error. A role granted one gets agentloop's read_quarantined,
+        -- which runs such a tool and shows the session only another
+        -- model's answer to its question, checked against its schema.
+        -- agentloop gives the answer the inner tool's labels, less
+        -- contaminated when the schema admits no free text; private
+        -- always passes through, and a public role's forbid applies.
+        -- relay takes the labels from the result as for any tool and
+        -- decides nothing about them itself. A role with no such grant
+        -- is not offered read_quarantined.
+
     @invariant AnUnofferedToolIsRefused
         -- A call to a tool the role was not offered is refused,
         -- whatever the harness let through. So is any call by a role
@@ -407,6 +421,9 @@ entity Role {
     -- may be.
     report_kinds: Set<String>?
     is_research_role: report_kinds != null
+    -- Granted :quarantine [...] in the settings: read tools it holds
+    -- that it may also read through the quarantined reader.
+    quarantine_tools: Set<Tool>
     -- How far relay trusts its reports: 0, where the operator reads
     -- every finding, or 1, where a finding nothing flags may go into the
     -- ledger unread. Every role starts at 0.

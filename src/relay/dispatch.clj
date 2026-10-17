@@ -188,6 +188,9 @@
      ;; The session starts with the labels of everything in its prompts,
      ;; and each tool is policed by its class and static labels.
      :policy (tools/policy manifest labels {:public? public?})
+     ;; The tools the role may read through agentloop's quarantined
+     ;; reader, if the operator granted any.
+     :quarantine (when-not (:script? script) (config/quarantine-tools config role))
      :resolve (vec (for [{:keys [call status reason input-sha256]} holds]
                      (cond-> {:call_id call :verdict (if (= :allowed status) "allow" "deny")}
                        (not (str/blank? reason)) (assoc :reason reason)

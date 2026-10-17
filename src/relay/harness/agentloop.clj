@@ -19,7 +19,10 @@
                  :limits {:max-turns 200 :max-tool-calls 400 :max-tokens 2000000}
                  ;; stops one tool call that hangs, so it cannot eat the
                  ;; whole wake; the default is 300
-                 :tool-timeout-seconds 300}}
+                 :tool-timeout-seconds 300
+                 ;; the quarantined reader, for roles granted :quarantine;
+                 ;; these are the defaults
+                 :reader {:model \"claude-haiku-5-5\" :effort \"low\"}}}
 
   A run stopped at the wake deadline, by agentloop (reason \"canceled\") or
   by relay killing it (exit \"timeout\"), is reported as :cut-short, so the
@@ -41,6 +44,11 @@
   run: `agentloop acp request.json`, whose request names the conversations
   directory instead of one session.
 
+  A role granted :quarantine also gets agentloop's read_quarantined: the
+  request carries a quarantine block naming the tools it reads through,
+  and the policy an entry for it of class read. agentloop adds the tool
+  itself and decides the labels of its answers.
+
   How a run ended is read from the outcome line, never from the exit code:
   agentloop exits 0 whenever it reaches an outcome."
   (:require [babashka.fs :as fs]
@@ -54,6 +62,24 @@
 (def default-effort "medium")
 (def default-provider "anthropic")
 (def default-tool-timeout-seconds 300)
+(def default-reader {:model "claude-haiku-5-5" :effort "low"})
+
+(def reader-tool
+  "The tool agentloop adds for a quarantine block."
+  "read_quarantined")
+
+(defn- with-reader
+  "A request with the quarantined reader turned on over `inner`, the tools
+  the role may read through, when there are any. The reader's own policy
+  entry is class read with no labels: agentloop gives each answer its
+  labels from the inner tool's."
+  [req harness inner]
+  (if (seq inner)
+    (let [{:keys [model effort]} (merge default-reader (:reader harness))]
+      (-> req
+          (assoc :quarantine {:model model :effort effort :tools (vec inner)})
+          (assoc-in [:policy :tools reader-tool] {:class "read"})))
+    req))
 
 (defn- repo-root []
   (some-> (System/getProperty "relay.bin") fs/real-path fs/parent fs/parent str))
@@ -189,7 +215,7 @@
 
 (defn- base-request
   "What every agentloop request holds, whatever the mode."
-  [{:keys [harness model system-prompt tools tool-command policy]} work]
+  [{:keys [harness model system-prompt tools tool-command policy quarantine]} work]
   (let [{:keys [provider effort base-url retry limits tool-timeout-seconds api-key-command]} harness
         limit-keys {:max-turns :max_turns :max-tool-calls :max_tool_calls :max-tokens :max_tokens}
         retry-keys {:retries :retries :backoff-seconds :backoff_seconds
@@ -211,7 +237,9 @@
              :tool_timeout_seconds (or tool-timeout-seconds default-tool-timeout-seconds)}
       base-url (assoc :base_url base-url)
       (seq limits) (assoc :limits (into {} (keep (fn [[k v]] (when-let [k2 (limit-keys k)] [k2 v])) limits)))
-      (seq retry) (assoc :retry (into {} (keep (fn [[k v]] (when-let [k2 (retry-keys k)] [k2 v])) retry))))))
+      (seq retry) (assoc :retry (into {} (keep (fn [[k v]] (when-let [k2 (retry-keys k)] [k2 v])) retry)))
+      ;; A role granted :quarantine gets read_quarantined.
+      :always (with-reader harness quarantine))))
 
 (defn request-json
   "The request `agentloop run` reads: the wake's prompt, and one session,
@@ -232,9 +260,11 @@
   resuming or listing an earlier one, whose history and labels it would
   carry on. It adds what only a client shows: each tool's ACP kind, and a
   title, \"relay · <role id>\", for the client to name the conversation
-  by. agentloop asks the provider for the model's context window itself."
-  [{:keys [session-dir tools role] :as request} work]
-  (let [kinds (acp/tool-kinds tools)]
+  by. read_quarantined, when granted, is of kind read. agentloop asks the provider for the model's context window itself."
+  [{:keys [session-dir tools role quarantine] :as request} work]
+  (let [kinds (cond-> (acp/tool-kinds tools)
+                ;; agentloop adds the reader; a client shows it as a read.
+                (seq quarantine) (assoc reader-tool "read"))]
     (cond-> (assoc (base-request request work) :session_dir (str session-dir) :new_sessions_only true)
       (:id role) (assoc :title (str "relay · " (:id role)))
       (seq kinds) (assoc :tool_kinds kinds))))
