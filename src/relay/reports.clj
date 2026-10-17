@@ -535,12 +535,25 @@
   review even when nothing flags it."
   5)
 
+(def report-wide-flags
+  "Flags that say someone is working on whoever reads the report, rather
+  than that one finding is weak: on any finding they keep every finding
+  of the report from going into the ledger unread."
+  #{"reader-directed" "lookalikes" "hidden-characters" "suspicious-host" "cross-domain-redirect"})
+
+(defn unread-allowed?
+  "Whether any finding of a verified report may go into the ledger unread:
+  nothing flags the report's own text, and no finding has a report-wide
+  flag."
+  [{:keys [flags findings]}]
+  (and (empty? flags) (not-any? #(report-wide-flags (:kind %)) (mapcat :flags findings))))
+
 (defn auto-acceptable?
   "Whether a verified finding is accepted without the operator, at trust
-  level 1: nothing flags it or its report, it was not seen before, and
-  it was not drawn for the sample."
-  [report-flags {:keys [flags seen-before]} sampled]
-  (and (empty? report-flags) (empty? flags) (not seen-before) (not sampled)))
+  level 1: its report allows it (unread-allowed?), nothing flags the
+  finding, it was not seen before, and it was not drawn for the sample."
+  [verification {:keys [flags seen-before]} sampled]
+  (and (unread-allowed? verification) (empty? flags) (not seen-before) (not sampled)))
 
 ;; --- what the operator is shown
 

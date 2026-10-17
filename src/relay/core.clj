@@ -2401,6 +2401,8 @@
       (reject! :invalid (str "Report " id " is next checked at " (:retry-at r) ".")))
     (emit tx "report/verify-started" {:report id :pid pid :pid-start pid-start})))
 
+(declare trust-level demote auto-accept)
+
 (defn- verification-notice
   "The one notification for a verified report: counts and what to run,
   never any of its text."
@@ -2410,6 +2412,7 @@
         pending (pending-findings r)]
     (str "Report " id " from " (:role r) ": " (count fs) " findings, "
          (count (filter #(seq (:flags %)) fs)) " flagged, " (count (filter :seen-before fs)) " seen before."
+         (when-let [auto (seq (filter :auto fs))] (str " " (count auto) " went into the ledger unread."))
          (when (seq pending) (str " relay review " id)))))
 
 (defn- checking!
@@ -2435,10 +2438,18 @@
     (let [checked (reports/checked-urls r results)
           today (LocalDate/ofInstant now (config/zone config))
           v (reports/verify r checked (known-findings state id) today)
-          tx (emit tx "report/verified" {:report id :flags (:flags v) :findings (:findings v)
-                                         :urls (mapv #(dissoc % :quotes) checked) :sampled (vec sampled)}
-                   ;; With whatever the verifier said its answers carry.
-                   (union (verification-labels r) labels))]
+          tx (as-> tx tx
+               (emit tx "report/verified" {:report id :flags (:flags v) :findings (:findings v)
+                                           :urls (mapv #(dissoc % :quotes) checked) :sampled (vec sampled)
+                                           :level (trust-level state (:role r))}
+                     ;; With whatever the verifier said its answers carry.
+                     (union (verification-labels r) labels))
+               ;; Lowered first, so a report that lowers the level has
+               ;; nothing accepted unread.
+               (if-let [why (reports/demotion-reason v)]
+                 (demote tx (:role r) (str "in report " id " " why))
+                 tx)
+               (auto-accept tx id))]
       (notify tx "report-verified" (str "Report " id " from " (:role r) " was checked")
               (verification-notice (:state tx) id)
               :role (:role r) :report id :labels (id-labels state (:role r))))))
@@ -2506,7 +2517,9 @@
         (update-in [:reports report :verification :findings finding]
                    #(cond-> (assoc % :entry seq) auto (assoc :decision "accept" :auto true))))))
 
-(defn- ledger-entry-data
+(declare demote withdraw-unread)
+
+(defn ledger-entry-data
   "A ledger entry for a finding: its typed values and text, with the
   canonical URL and domain the verifier found."
   [r i]
@@ -2532,13 +2545,18 @@
     ;; The operator decides on what they were shown, and only that.
     (when-not (every? #(= (:sha256 %) (finding-digest r (:finding %))) decisions)
       (reject! :conflict (str "Report " id " changed since you read it. Nothing was decided; look again.")))
-    (reduce (fn [tx {i :finding :keys [decision sha256]}]
-              (cond-> (emit tx "finding/reviewed" {:report id :finding i :decision decision :sha256 sha256})
-                ;; Read and vouched for: the entry is the operator's, so its
-                ;; text is not contaminated. Reading it adds private, as
-                ;; reading anything relay keeps does.
-                (= "accept" decision) (emit "ledger/entry-added" (ledger-entry-data r i))))
-            tx (sort-by :finding decisions))))
+    (let [fake (sort (keep #(when (= "fake" (:decision %)) (inc (:finding %))) decisions))]
+      (cond-> (reduce (fn [tx {i :finding :keys [decision sha256]}]
+                        (cond-> (emit tx "finding/reviewed" {:report id :finding i :decision decision :sha256 sha256})
+                          ;; Read and vouched for: the entry is the operator's, so
+                          ;; its text is not contaminated. Reading it adds
+                          ;; private, as reading anything relay keeps does.
+                          (= "accept" decision) (emit "ledger/entry-added" (ledger-entry-data r i))))
+                      tx (sort-by :finding decisions))
+        ;; A report with one fake finding is not trusted for the others:
+        ;; those relay accepted unread go back to the operator.
+        (seq fake) (withdraw-unread id)
+        (seq fake) (demote (:role r) (str "you rejected finding " (str/join ", " fake) " of report " id " as fake"))))))
 
 ;; the ledger
 
@@ -2558,3 +2576,109 @@
   (if (= status (:status (ledger-entry state entry)))
     tx
     (emit tx "ledger/status-set" {:entry entry :status status})))
+
+;; the trust ladder
+;;
+;; Every research role starts at trust level 0, where the operator reads
+;; every finding. At level 1 a finding nothing flags, and not drawn for
+;; the sample, goes into the ledger unread: its typed values are clean,
+;; its text stays contaminated. Only the operator raises a level. relay
+;; lowers it by itself, the safe direction, when a report quotes what its
+;; page does not say, cites a page the verifier's guard refused, or has a
+;; finding the operator rejects as fake.
+
+(def trust-levels #{0 1})
+
+(defn trust-level [state role] (get-in state [:trust-levels role :level] 0))
+
+(defmethod evolve* "role/trust-level" [state {:keys [at actor data]}]
+  (assoc-in state [:trust-levels (:role data)] {:level (:level data) :why (:why data) :at (inst at) :by actor}))
+
+(declare research-record)
+
+(defn record-digest
+  "The digest of a research role's record as relay trust-level shows it,
+  which setting the level is bound to."
+  [state role]
+  (sha256 (pr-str (research-record state role))))
+
+(defmethod decide* :role/trust-level [{:keys [state config] :as tx} {{:keys [role level] digest :sha256} :args}]
+  (operator-only! tx "sets a role's trust level")
+  (active-role! state role)
+  (when-not (config/report-kinds config role)
+    (reject! :invalid (str role " writes no reports, so it has no trust level.")))
+  (when-not (trust-levels level) (reject! :invalid "A trust level is 0 or 1."))
+  (when (= level (trust-level state role))
+    (reject! :invalid (str role " is at trust level " level " already.")))
+  ;; The operator decides on the record they were shown: a report checked
+  ;; or reviewed meanwhile changes nothing.
+  (when-not (= digest (record-digest state role))
+    (reject! :conflict (str role "'s record changed since you read it. Nothing was changed; look again.")))
+  (emit tx "role/trust-level" {:role role :level level :why "the operator set it" :sha256 digest}))
+
+(defn- demote
+  "Takes a role back to trust level 0, saying why, and tells the operator.
+  Nothing when it is at 0 already."
+  [{:keys [state] :as tx} role why]
+  (if (zero? (trust-level state role))
+    tx
+    (-> tx
+        (emit "role/trust-level" {:role role :level 0 :why why})
+        (notify "trust-level-lowered" (str role " is back at trust level 0")
+                (str "Because " why ", you review every finding of " role " again. relay trust-level " role
+                     " 1 raises it once you are satisfied.")
+                :role role :labels (id-labels state role)))))
+
+(defn auto-accept
+  "At trust level 1, the findings of a just verified report that go into the
+  ledger unread (relay.reports/auto-acceptable?): each an entry whose text
+  keeps the verification's labels, so it stays contaminated."
+  [{:keys [state] :as tx} id]
+  (let [r (report state id)
+        {:keys [findings sampled] :as v} (:verification r)]
+    (if-not (= 1 (trust-level state (:role r)))
+      tx
+      (reduce (fn [tx i]
+                (if (reports/auto-acceptable? v (nth findings i) (nth sampled i))
+                  (emit tx "ledger/entry-added" (assoc (ledger-entry-data r i) :auto true)
+                        (get-in r [:verification :labels]))
+                  tx))
+              tx (range (count findings))))))
+
+(defn research-record
+  "How a research role's reports have fared: how many reports and
+  findings, how many findings each kind of flag was raised on, and what
+  became of them, up to its latest report."
+  [state role]
+  (let [rs (filter #(= role (:role %)) (vals (:reports state)))
+        vs (mapcat #(get-in % [:verification :findings]) rs)]
+    {:level (trust-level state role)
+     :latest-report (apply max 0 (map :id rs))
+     :verified (count (filter #(= :verified (:status %)) rs))
+     :since (get-in state [:trust-levels role])
+     :reports (count rs)
+     :findings (reduce + (map (comp count :findings) rs))
+     :flags (into (sorted-map) (frequencies (mapcat #(distinct (map :kind (:flags %))) vs)))
+     :accepted (count (filter #(= "accept" (:decision %)) vs))
+     :unread (count (filter :auto vs))
+     :fake (count (filter #(= "fake" (:decision %)) vs))
+     :not-relevant (count (filter #(= "not-relevant" (:decision %)) vs))
+     :seen-before (count (filter :seen-before vs))}))
+
+(defmethod evolve* "ledger/entry-withdrawn" [state {:keys [data]}]
+  (let [{:keys [entry report finding]} data]
+    (-> state
+        (update :ledger dissoc entry)
+        (update-in [:reports report :verification :findings finding] dissoc :decision :auto :entry))))
+
+(defn withdraw-unread
+  "Takes the entries relay accepted unread from a report out of the
+  ledger, so their findings wait for the operator again. The log keeps
+  them."
+  [{:keys [state] :as tx} id]
+  (reduce (fn [tx [i f]]
+            (if (and (:auto f) (:entry f))
+              (emit tx "ledger/entry-withdrawn" {:entry (:entry f) :report id :finding i
+                                                 :why "a finding of its report was rejected as fake"})
+              tx))
+          tx (map-indexed vector (get-in (report state id) [:verification :findings]))))

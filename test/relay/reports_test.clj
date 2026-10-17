@@ -934,3 +934,164 @@
                                            :labels ["contaminated"]}]))]
     (is (= 3 (count lines)))
     (is (str/starts-with? (first lines) "[contaminated] [3] job: A\\u{000a}[9] job: forged"))))
+
+;; --- the trust ladder
+
+(def known-world
+  "A world where example.org is known, so a clean finding there has no
+  flags."
+  (delay (let [[w id] (submitted (world) (assoc-in a-report [:findings 0 :url] "https://jobs.example.org/first"))]
+           (-> w (verified id) (reviewed id [[0 "accept"]])))))
+
+(def mixed-findings
+  "A clean finding and one with a flag that says nothing about the
+  report as a whole."
+  (update a-report :findings conj
+          {:title "Curator" :url "https://jobs.example.org/curator" :organization "Halifax Archives"
+           :kind "job" :summary "Another post." :evidence [{:url "https://jobs.example.org/curator" :quote "curator"}]}))
+
+(defn- at-level-1 [w] (run w "operator" :role/trust-level {:role "scout" :level 1 :sha256 (core/record-digest (:state w) "scout")}))
+
+(deftest only-the-operator-raises-a-level
+  (let [w @known-world]
+    (is (= 0 (core/trust-level (:state w) "scout")) "every role starts at 0")
+    (doseq [actor ["hub" "scout" "dispatcher"]]
+      (is (refusal #(run w actor :role/trust-level {:role "scout" :level 1})) actor))
+    (is (str/includes? (refusal #(run w "operator" :role/trust-level {:role "hub" :level 1})) "writes no reports"))
+    (is (refusal #(run w "operator" :role/trust-level {:role "scout" :level 2})))
+    (is (= 1 (core/trust-level (:state (at-level-1 w)) "scout")))
+    (testing "bound to the record the operator was shown"
+      (let [digest (core/record-digest (:state w) "scout")
+            [w2 id] (submitted w a-report)]
+        (is (str/includes? (refusal #(run w2 "operator" :role/trust-level {:role "scout" :level 1 :sha256 digest}))
+                           "changed since you read it")
+            "a report since changes the record")
+        (is (refusal #(run (verified w2 id) "operator" :role/trust-level {:role "scout" :level 1 :sha256 (core/record-digest (:state w2) "scout")}))
+            "and so does its check")))
+    (is (str/includes? (refusal #(at-level-1 (at-level-1 w))) "already"))))
+
+(deftest at-level-1-a-clean-finding-goes-into-the-ledger-unread
+  (let [w (at-level-1 @known-world)
+        [w id] (submitted w mixed-findings)
+        w (verified w id nil [false false])
+        r (core/report (:state w) id)
+        entries (core/ledger-entries (:state w))
+        auto (last entries)]
+    (is (= [false true] (map #(boolean (seq (:flags %))) (get-in r [:verification :findings])))
+        "the first is clean, the second flagged")
+    (is (= [1] (core/pending-findings r)) "the flagged one still waits for the operator")
+    (is (= 2 (count entries)))
+    (is (false? (:trusted auto)))
+    (is (core/contaminated? (:labels auto)) "its text stays contaminated")
+    (is (str/includes? (get-in (last (filter #(= "notification/created" (:type %)) (:last w))) [:data :body])
+                       "1 went into the ledger unread"))
+    (testing "the ledger shows it as a typed line, its text withheld"
+      (let [r (read-as w "hub" "ledger" {})
+            accepted (read-as w "hub" "ledger" {:accept_contamination true})]
+        (is (str/includes? (:content r) (str "entry " (:id auto) ": job, deadline 2026-11-30, amount 52000 CAD, status new\n  Its text is contaminated")))
+        (is (not (str/includes? (:content r) "example.org/archivist")))
+        (is (= ["private"] (:labels r)))
+        (is (str/includes? (:content accepted) "jobs.example.org/archivist"))
+        (is (= ["contaminated" "private"] (:labels accepted)))))
+    (testing "a finding drawn for the sample waits for the operator"
+      (let [[w id] (submitted w (assoc-in a-report [:findings 0 :url] "https://jobs.example.org/other"))
+            w (verified w id nil [true])]
+        (is (= [0] (core/pending-findings (core/report (:state w) id))))))))
+
+(deftest relay-lowers-the-level-by-itself
+  (let [w (at-level-1 @known-world)]
+    (testing "for a quote not on its page"
+      (let [[w id] (submitted w a-report)
+            w (verified w id (clean-answers a-report {"https://jobs.example.org/archivist" {:quotes [{:quote "We are hiring an archivist" :found false}]}}))]
+        (is (= 0 (core/trust-level (:state w) "scout")))
+        (is (str/includes? (:why (get-in (:state w) [:trust-levels "scout"])) "quote was not found"))
+        (is (some #(= "trust-level-lowered" (get-in % [:data :kind])) (:last w)))
+        (is (= 1 (count (core/ledger-entries (:state w)))) "and nothing in that report went in unread")))
+    (testing "for a page the guard refused"
+      (let [[w id] (submitted w a-report)
+            w (verified w id (clean-answers a-report {"https://jobs.example.org/archivist" {:fetched false :error "refused: 127.0.0.1 is a loopback address"}}))]
+        (is (= 0 (core/trust-level (:state w) "scout")))))
+    (testing "for a finding the operator rejects as fake"
+      (let [[w id] (submitted w two-findings)
+            w (-> w (verified id nil [false false]) (reviewed id [[1 "fake"]]))]
+        (is (= 0 (core/trust-level (:state w) "scout")))
+        (is (= "you rejected finding 2 of report " (subs (:why (get-in (:state w) [:trust-levels "scout"])) 0 33)))))
+    (testing "and the record says how it went"
+      (let [[w id] (submitted w two-findings)
+            w (-> w (verified id nil [false false]) (reviewed id [[1 "fake"]]))
+            rec (core/research-record (:state w) "scout")]
+        (is (= {:level 0 :reports 2 :findings 3 :accepted 1 :unread 0 :fake 1 :not-relevant 0}
+               (select-keys rec [:level :reports :findings :accepted :unread :fake :not-relevant])))
+        (is (pos? (get-in rec [:flags "reader-directed"])))
+        (is (some #(str/includes? % "Research role scout: trust level 0")
+                  (relay.render/status (:state w) java.time.ZoneOffset/UTC t0 cfg)))))))
+
+(deftest relay-trust-level-wants-the-code
+  (with-data "ok" a-report
+    (fn [sys dir _]
+      (binding [cli/*tty* (fn [] (throw (java.io.IOException. "Device not configured")))]
+        (is (thrown? clojure.lang.ExceptionInfo (cli/execute ["--data" dir "trust-level" "scout" "1"]))))
+      (let [shown (atom "")]
+        (binding [cli/*tty* (tty shown [typed-code])]
+          (is (= ["scout is at trust level 1."] (:out (cli/execute ["--data" dir "trust-level" "scout" "1"])))))
+        (is (str/includes? @shown "goes into the ledger without you reading it")))
+      (is (= 1 (core/trust-level (inbound/current-state sys) "scout"))))))
+
+(deftest a-report-that-lowers-the-level-has-nothing-accepted-unread
+  ;; Its other finding passes every check, and still waits for the operator.
+  (let [w (at-level-1 @known-world)
+        clean {:title "Clerk" :url "https://jobs.example.org/clerk" :organization "Example Society" :kind "job"
+               :summary "A post." :evidence [{:url "https://jobs.example.org/clerk" :quote "clerk"}]}
+        rep (update a-report :findings conj clean)
+        [w id] (submitted w rep)
+        before (count (core/ledger-entries (:state w)))
+        w (verified w id (clean-answers rep {"https://jobs.example.org/archivist" {:quotes [{:quote "We are hiring an archivist" :found false}]}})
+                    [false false])
+        r (core/report (:state w) id)]
+    (is (empty? (get-in r [:verification :findings 1 :flags])) "the sibling is clean")
+    (is (= 0 (core/trust-level (:state w) "scout")))
+    (is (= before (count (core/ledger-entries (:state w)))))
+    (is (= [0 1] (core/pending-findings r)))))
+
+(deftest a-flag-aimed-at-the-reader-keeps-the-whole-report-for-review
+  (doseq [[what change answers]
+          [["reader-directed" #(assoc-in % [:findings 1 :summary] "Act now and click here.") {}]
+           ["lookalikes" #(assoc-in % [:findings 1 :title] "Clеrk") {}]
+           ["a punycode host" identity {"https://jobs.example.org/curator" {:host {:name "xn--pple-43d.com" :unicode "аpple.com" :punycode true :mixed-scripts true}}}]
+           ["a redirect elsewhere" identity {"https://jobs.example.org/curator" {:crosses-domains true :final-url "https://x.net/"}}]]]
+    (let [w (at-level-1 @known-world)
+          clean (fn [t u] {:title t :url u :organization "Example Society" :kind "job" :summary "A post."
+                           :evidence [{:url u :quote "a post"}]})
+          rep (change {:summary "Two jobs." :findings [(clean "Clerk" "https://jobs.example.org/clerk")
+                                                       (clean "Curator" "https://jobs.example.org/curator")]})
+          before (count (core/ledger-entries (:state w)))
+          [w id] (submitted w rep)
+          w (verified w id (clean-answers rep answers) [false false])
+          r (core/report (:state w) id)]
+      (is (empty? (get-in r [:verification :findings 0 :flags])) what)
+      (is (= before (count (core/ledger-entries (:state w)))) (str what ": nothing went in unread"))
+      (is (= [0 1] (core/pending-findings r)) what))))
+
+(deftest a-fake-finding-takes-its-report-s-unread-entries-back-to-review
+  (let [w (at-level-1 @known-world)
+        [w id] (submitted w mixed-findings)
+        w (verified w id nil [false false])
+        auto (last (core/ledger-entries (:state w)))
+        w (reviewed w id [[1 "fake"]])
+        r (core/report (:state w) id)]
+    (is (false? (:trusted auto)))
+    (is (nil? (core/ledger-entry (:state w) (:id auto))) "out of the ledger")
+    (is (= [0] (core/pending-findings r)) "and waiting for the operator again")
+    (is (some #(= "ledger/entry-withdrawn" (:type %)) (:last w)))
+    (is (= 0 (core/trust-level (:state w) "scout")))))
+
+(deftest relay-trust-level-refuses-before-asking-for-a-code
+  (with-data "ok" a-report
+    (fn [_ dir _]
+      (let [asked (atom false)]
+        (binding [cli/*tty* (fn [] (reset! asked true) {:say identity :ask (constantly "x")})]
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no role called"
+                                (cli/execute ["--data" dir "trust-level" "nobody" "1"])))
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"already"
+                                (cli/execute ["--data" dir "trust-level" "scout" "0"]))))
+        (is (false? @asked))))))

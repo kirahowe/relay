@@ -14,6 +14,7 @@
             [relay.notify :as notify]
             [relay.pause :as pause]
             [relay.render :as render]
+            [relay.reports :as reports]
             [relay.setup :as setup]
             [relay.text :as text]
             [relay.tools :as tools]))
@@ -85,14 +86,16 @@ Every command needs the data directory, from --data <dir> or from the file
   relay review [<report>]             the research reports waiting for you, or go
                                       through one report's findings: accept each,
                                       reject it as fake, or set it aside
+  relay trust-level <role> <0|1>      how far to trust a research role's reports: at 1,
+                                      findings nothing flags go to the ledger unread
   relay ledger                        the findings accepted from research reports
   relay ledger set <entry> <status>   mark an entry new, seen, applied or passed
   relay tool --data <dir> --role <r> [--wake <w>] <name>
                                       run a role's tool call (harnesses use this)
 
-approve, deny, release, declassify, trust, review and revert show you what they are
-about on the terminal and ask you to type a code back there, so only a
-person at the terminal can make those decisions.
+approve, deny, release, declassify, trust, trust-level, review and revert
+show you what they are about on the terminal and ask you to type a code
+back there, so only a person at the terminal can make those decisions.
 
 --untrusted on memo, put, add, update and routine marks what you write as
 contaminated, for text you copied from somewhere you do not trust.
@@ -524,6 +527,34 @@ and --instructions marks the id public too.")
                 (submit! sys :label/trust {:kind kind :ref ref :version (:version v)
                                            :sha256 (core/sha256 (:text v))})
                 (result 0 (str "Trusted " kind " " ref ".")))
+      "trust-level" (let [[role level] more
+                          level (some-> level parse-long)
+                          st (state)]
+                      (when-not (and role (#{0 1} level))
+                        (fail! "usage: relay trust-level <role> <0|1>"))
+                      ;; Refused before the code is asked for: asking for a
+                      ;; code to do nothing would only teach typing codes.
+                      (when-not (core/active-role? st role) (fail! (str "There is no role called " role ".")))
+                      (when-not (config/report-kinds (:config sys) role)
+                        (fail! (str role " writes no reports, so it has no trust level.")))
+                      (when (= level (core/trust-level st role))
+                        (fail! (str role " is at trust level " level " already.")))
+                      (let [{:keys [reports findings accepted fake latest-report]} (core/research-record st role)
+                            digest (core/record-digest st role)]
+                        (confirm! "set the trust level"
+                                  [(str "Set " role "'s trust level to " level ", from " (core/trust-level st role) ".")
+                                   (str "So far: " reports " reports (the latest " latest-report "), " findings
+                                        " findings, " accepted " accepted, " fake " rejected as fake.")
+                                   ""
+                                   (if (= 1 level)
+                                     (str "At 1, a finding nothing flags, and not drawn for the one-in-"
+                                          reports/sample-one-in " sample, goes into the ledger without you reading it."
+                                          " Its kind, deadline and amount show as clean; its text stays contaminated."
+                                          " relay puts it back to 0 by itself if a quote is not on its page, the"
+                                          " verifier refuses a page, or you reject a finding as fake.")
+                                     "At 0, you review every finding not seen before.")])
+                        (submit! sys :role/trust-level {:role role :level level :sha256 digest}))
+                      (result 0 (str role " is at trust level " level ".")))
       "ledger" (let [[sub entry status] more]
                  (case sub
                    nil (lines (render/ledger zone (core/ledger-entries (state))))

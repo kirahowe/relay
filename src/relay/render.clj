@@ -12,6 +12,7 @@
   (:require [cheshire.core :as json]
             [clojure.walk]
             [clojure.string :as str]
+            [relay.config :as config]
             [relay.core :as core]
             [relay.reports :as reports]
             [relay.text :as text])
@@ -102,6 +103,8 @@
             (str condition ", next try " (local paused-until zone))
             "available"))))
    ["" (format "Operator's inbox: %d open" (count (core/unread-memos state core/operator)))]
+   (when-let [rs (seq (core/reports-waiting state))]
+     [(format "Reports waiting for review: %s (relay review <report>)" (str/join ", " (map :id rs)))])
    (when-let [hs (seq (core/open-holds state))]
      [(format "Held tool calls: %d (relay holds)" (count hs))])
    (when-let [qs (seq (filter #(core/quarantined? config %) (filter #(= :unread (:status %)) (vals (:memos state)))))]
@@ -110,6 +113,19 @@
          :let [why (when config (core/unwakeable-reason state config id))]
          :when why]
      (text/for-operator (core/id-labels state id) (str "Public role " id " cannot run: " why)))
+   (when config
+     (mapcat (fn [role]
+               (let [{:keys [level since reports findings flags accepted unread fake not-relevant seen-before]}
+                     (core/research-record state role)
+                     ls (core/id-labels state role)]
+                 (cons "" (map #(text/for-operator ls %)
+                               [(str "Research role " role ": trust level " level
+                                     (when since (str " since " (local (:at since) zone) ", as " (:why since))))
+                                (str "    " reports " reports, " findings " findings, " seen-before " seen before")
+                                (str "    flags: " (if (seq flags) (str/join ", " (map (fn [[k n]] (str k " " n)) flags)) "none"))
+                                (str "    accepted " accepted (when (pos? unread) (str " (" unread " unread, by relay)"))
+                                     ", rejected as fake " fake ", not relevant " not-relevant)]))))
+             (filter #(core/active-role? state %) (config/research-roles config))))
    (when-let [ds (seq (filter #(core/awaiting-declassification? config %) (filter #(= :unread (:status %)) (vals (:memos state)))))]
      [(format "Memos waiting to be declassified: %s (relay declassify <memo>)" (str/join ", " (sort (map :id ds))))])
    (when-let [recent (seq (take-last 5 (sort-by :id (vals (:wakes state)))))]
