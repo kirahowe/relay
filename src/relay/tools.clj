@@ -18,7 +18,8 @@
   makes the change as the caller, carrying the calling session's labels.
   Either may return plain text, which carries no labels, or {:content
   :labels}."
-  (:require [babashka.process :as p]
+  (:require [babashka.fs :as fs]
+            [babashka.process :as p]
             [cheshire.core :as json]
             [cheshire.factory :as json-factory]
             [clojure.set :as set]
@@ -341,7 +342,7 @@
             (let [public (public-reader? state config actor)
                   f (core/fact state fact)]
               (if (or (nil? f) (and public (not (core/fact-shown-to-public? state (core/fact-as-known f nil)))))
-                (throw (ex-info (str "There is no fact " fact ".") {}))
+                (core/reject! :not-found (str "There is no fact " fact "."))
                 (update (show (for [v (:versions f)
                                     :when (or (not public) (core/fact-shown-to-public? state v))
                                     :let [[who who-labels] (author state (:actor v))]]
@@ -483,11 +484,9 @@
                                               (core/doc-shown-to-public? state path (core/doc-version state path {})))))
                       nil
                       v)]
-              (cond (nil? v) (throw (ex-info (str "There is no doc at " path
-                                                  (when version (str " with version " version)) ".")
-                                             {:relay/quotes-call true}))
-                    (:removed v) (throw (ex-info (str path " was removed in version " (:seq v) ".")
-                                                 {:relay/quotes-call true}))
+              (cond (nil? v) (core/reject! :not-found (str "There is no doc at " path
+                                                             (when version (str " with version " version)) "."))
+                    (:removed v) (core/reject! :not-found (str path " was removed in version " (:seq v) "."))
                     :else (show [(item (str (:content v)
                                             (when (:newer-withheld v) (str "\n\n[relay: " newer-withheld "]")))
                                        (core/item-labels v)
@@ -502,7 +501,7 @@
             (let [public (public-reader? state config actor)
                   vs (get-in state [:docs path :versions])]
               (if (or (empty? vs) (and public (not (core/doc-shown-to-public? state path (peek vs)))))
-                (throw (ex-info (str "There is no doc at " path ".") {:relay/quotes-call true}))
+                (core/reject! :not-found (str "There is no doc at " path "."))
                 (show (for [{:keys [seq at actor content removed] :as v} vs
                             :when (or (not public) (core/doc-shown-to-public? state path v))
                             :let [[who who-labels] (author state actor)]]
@@ -690,6 +689,59 @@
   ([spec] (timeout-seconds spec default-timeout-seconds))
   ([{:keys [timeout-seconds]} default] (or timeout-seconds default)))
 
+;; --- running a tool's command for a limited time
+
+(def ^:private in-own-group
+  ;; perl starts the command in a process group of its own, so a child
+  ;; it leaves behind can be found and ended once the command has exited.
+  ;; The block form of exec never goes through a shell.
+  ["/usr/bin/perl" "-e" "setpgrp(0, 0) or die \"setpgrp: $!\\n\"; exec { $ARGV[0] } @ARGV or die \"$!\\n\"" "--"])
+
+(def ^:private kill-grace-ms 2000)
+
+(defn- signal-group!
+  "Sends `sig` (\"0\" only asks whether any process is left) to the process
+  group `pgid`. True when the group exists."
+  [pgid sig]
+  (zero? (:exit @(p/process ["/bin/kill" (str "-" sig) "--" (str "-" pgid)] {:out :string :err :string}))))
+
+(defn- stop-group!
+  "Ends a command started in its own group, and whatever it started:
+  SIGTERM, then SIGKILL to anything still there after kill-grace-ms."
+  [proc]
+  (let [pgid (.pid ^Process (:proc proc))]
+    (p/destroy-tree proc)
+    (signal-group! pgid "TERM")
+    (loop [waited 0]
+      (when (signal-group! pgid "0")
+        (if (< waited kill-grace-ms)
+          (do (Thread/sleep 50) (recur (+ waited 50)))
+          (signal-group! pgid "KILL"))))))
+
+(defn- run-limited
+  "Runs `command` with `in` on stdin and a clean environment (nothing the
+  harness or relay was started with, such as credentials). Returns {:exit
+  :out :err} once it has exited and closed its output, or ::timeout when
+  that takes longer than `ms`. A child left holding its output keeps it
+  open past its exit, so the output counts against the same limit. On a
+  timeout every process in its group is ended. Throws when it cannot
+  start."
+  [command in ms]
+  (let [prog (or (fs/which (first command) {:paths (str/split (get (harness/base-env {}) "PATH") #":")})
+                 (throw (ex-info (str "Cannot run program " (first command)) {})))
+        proc (p/process (into in-own-group (cons (str prog) (rest command)))
+                        {:in in :out :stream :err :stream :env (harness/base-env {})})
+        out (future (slurp (:out proc)))
+        err (future (slurp (:err proc)))
+        deadline (+ (System/currentTimeMillis) ms)
+        within #(deref % (max 0 (- deadline (System/currentTimeMillis))) ::timeout)
+        exited (within proc)
+        o (within out)
+        e (within err)]
+    (if (some #{::timeout} [exited o e])
+      (do (stop-group! proc) ::timeout)
+      {:exit (:exit exited) :out o :err e})))
+
 (defn run-external!
   "Runs an external tool on the plain protocol: its configured command with
   `args` after it, a clean environment and nothing on stdin, for at most
@@ -707,14 +759,9 @@
                     (print (str err) (str out)) (flush))
                   (merge {:error why} extra))]
      (try
-       ;; A clean environment: nothing the harness or relay was started
-       ;; with, such as credentials, reaches an external command.
-       (let [proc (p/process (into (vec command) (map str args))
-                             {:in "" :out :string :err :string :env (harness/base-env {})})
-             result (deref proc (* 1000 seconds) ::timeout)]
+       (let [result (run-limited (into (vec command) (map str args)) "" (* 1000 seconds))]
          (cond
-           (= ::timeout result) (do (p/destroy-tree proc)
-                                    (failed (str "timed out after " seconds " seconds") "" "" {:timed-out true}))
+           (= ::timeout result) (failed (str "timed out after " seconds " seconds") "" "" {:timed-out true})
            (not (zero? (:exit result))) (failed (str "exited " (:exit result)) (:out result) (:err result))
            :else {:out (:out result) :labels (vec labels)}))
        (catch Exception e (failed (str "could not start: " (ex-message e)) "" ""))))))
@@ -734,11 +781,10 @@
   (let [failed (fn [why out err]
                  (binding [*out* *err*] (println (str tool-name ": " why)) (print err out) (flush))
                  (throw (ex-info (str "The tool " tool-name " failed.") {:relay/labels static})))
-        proc (p/process (vec command) {:in (json/generate-string {:input args :labels labels :call_id (str *call-id*)})
-                                       :out :string :err :string :env (harness/base-env {})})
-        result (deref proc timeout-ms ::timeout)]
+        result (run-limited (vec command) (json/generate-string {:input args :labels labels :call_id (str *call-id*)})
+                            timeout-ms)]
     (if (= ::timeout result)
-      (do (p/destroy-tree proc) (failed "timed out" "" ""))
+      (failed "timed out" "" "")
       (let [{:keys [exit out err]} result
             parsed (when (zero? exit) (parse-result out))]
         (cond
@@ -945,12 +991,13 @@
                  (read (read-ctx sys) actor args)
                  ((:run tool) sys actor labels args)))
        (catch clojure.lang.ExceptionInfo e
-         ;; A refusal that quotes the call shows the session its own text
-         ;; again, so it carries that session's labels. A fixed message
-         ;; (clock's, input-problem's) quotes nothing and carries none.
+         ;; Any refusal may quote the call and show the session its own
+         ;; text again, so every refusal carries that session's labels
+         ;; (core/reject!). Other errors, such as the clock's fixed
+         ;; messages, carry only the labels they were thrown with.
          {:error (ex-message e)
           :labels (core/union (core/rejection-labels e) (:relay/labels (ex-data e))
-                              (when (core/quotes-call? e) labels))})
+                              (when (core/rejection e) labels))})
        (catch Exception e
          {:error (or (ex-message e) (str (class e))) :labels []})))
 

@@ -116,3 +116,40 @@
     (is (not (ok? {:timeout-seconds 0})))
     (is (not (ok? {:timeout-seconds "30"})))
     (is (not (ok? {:timeout-seconds 1.5})))))
+
+(deftest a-child-holding-the-output-does-not-outlast-the-limit
+  ;; relay#32. The command exits at once, but the child it leaves holds
+  ;; stdout open. The timed wait saw the exit and then waited with no limit
+  ;; for the output, so the tool ran as long as the child did.
+  (let [pid-file (str *dir* "/child.pid")
+        command ["sh" "-c" (str "sleep 30 & echo $! > " pid-file "; echo hi")]
+        timed (fn [f]
+                (fs/delete-if-exists pid-file)
+                (let [started (System/nanoTime)
+                      r (binding [*err* (java.io.StringWriter.)] (f))]
+                  [r (/ (- (System/nanoTime) started) 1e6) (child-pid)]))]
+    (testing "a plain tool"
+      (let [[r took-ms pid] (timed #(tools/run-external! "t" {:command command :labels [] :timeout-seconds 1} []))]
+        (is (= {:error "timed out after 1 seconds" :timed-out true} r))
+        (is (< took-ms 2500) (str "returned after " took-ms " ms"))
+        (is (some? pid))
+        (is (not (alive? pid)) "the sleep it left was ended")))
+    (testing "an envelope tool"
+      (with-tool {:class :read :labels [] :description "Leaves a child." :protocol :envelope
+                  :parameters {:type "object"} :command command :timeout-seconds 1}
+        (fn [sys]
+          (let [[r took-ms pid] (timed #(tools/call! sys "clerk" "slow" {} [] "c1"))]
+            (is (= "The tool slow failed." (:error r)))
+            (is (< took-ms 2500) (str "returned after " took-ms " ms"))
+            (is (some? pid))
+            (is (not (alive? pid)) "the sleep it left was ended")))))))
+
+(deftest a-child-that-ignores-sigterm-is-killed
+  (let [pid-file (str *dir* "/child.pid")
+        command ["sh" "-c" (str "sh -c 'trap \"\" TERM; sleep 30' & echo $! > " pid-file "; echo hi")]
+        r (binding [*err* (java.io.StringWriter.)]
+            (tools/run-external! "t" {:command command :labels [] :timeout-seconds 1} []))
+        pid (child-pid)]
+    (is (:timed-out r))
+    (is (some? pid))
+    (is (not (alive? pid)) "SIGKILL after the grace")))

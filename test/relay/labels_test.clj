@@ -14,7 +14,8 @@
   is given (its prompts, its reads) must never carry private: anything
   private that reached it would show up there as a marker whose writer's
   labels need private."
-  (:require [clojure.set :as set]
+  (:require [babashka.fs :as fs]
+            [clojure.set :as set]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [clojure.test.check.clojure-test :refer [defspec]]
@@ -23,6 +24,8 @@
             [relay.config :as config]
             [relay.core :as core]
             [relay.dispatch :as dispatch]
+            [relay.inbound :as inbound]
+            [relay.log :as log]
             [relay.report-support :as report-support]
             [relay.reports :as reports]
             [relay.tools :as tools])
@@ -889,3 +892,51 @@
     (is (core/quarantined? cfg letter))
     (is (some #(and (= "memo-quarantined" (:kind %)) (= (:id letter) (:memo %)))
               (vals (:notifications (:state w)))))))
+
+;; --- refusals that echo the call
+
+(deftest every-refusal-that-echoes-the-call-carries-the-session-s-labels
+  ;; relay#32. Each tool is called with a marker in every text argument,
+  ;; from a session holding private and contaminated. Wherever the marker
+  ;; comes back in an error, the error must carry the session's labels: it
+  ;; shows the session its own text. A new tool or a new refusal that
+  ;; echoes its input is caught here without being listed.
+  (let [dir (str (fs/create-temp-dir {:prefix "relay-echo-test"}))
+        data (str dir "/data")
+        session ["contaminated" "private"]
+        marker "secretXYZ123"]
+    (try
+      (log/init! data)
+      (spit (str data "/relay.edn")
+            (pr-str {:timezone "America/Halifax" :default-harness :a
+                     :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}}
+                     :notify {:kind :none}
+                     :grants {"clerk" {:may-add true}}}))
+      (let [sys (inbound/system data)]
+        (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "clerk" :title "C" :instructions "x"}})
+        (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "other" :title "O" :instructions "x"}})
+        (let [echoes (atom #{})]
+          (doseq [[tool-name tool] (sort-by key (tools/offered (:config sys) "clerk"))
+                  :let [props (get-in tool [:parameters :properties])
+                        texts (for [[k v] props :when (= "string" (:type v)) :when (not (:enum v))] k)]
+                  k texts
+                  ;; The marker alone, and with the other text arguments
+                  ;; filled, so a call gets past its required arguments.
+                  args [{k marker} (into {} (for [t texts] [t (if (= t k) marker "x")]))]
+                  :let [{:keys [error labels]} (tools/call! sys "clerk" tool-name args session "c1")]
+                  :when (and error (str/includes? (str/lower-case error) (str/lower-case marker)))]
+            (swap! echoes conj tool-name)
+            (is (set/subset? (set session) (set labels)) (str tool-name " " (pr-str args) ": " error)))
+          (testing "the sweep reaches the refusals it is there for"
+            (is (set/subset? #{"memo_send" "role_update" "role_remove" "routine_remove" "doc_get" "fact_add"}
+                             @echoes)
+                (pr-str (sort @echoes)))))
+        (testing "the refusals relay#32 named, one by one"
+          (doseq [[tool args] [["memo_send" {:to marker :subject "s" :body "b"}]
+                               ["role_update" {:id marker :title "t"}]
+                               ["role_remove" {:id marker}]
+                               ["routine_remove" {:name marker}]]
+                  :let [{:keys [error labels]} (tools/call! sys "clerk" tool args session "c1")]]
+            (is (str/includes? (str error) marker) tool)
+            (is (= session labels) tool))))
+      (finally (fs/delete-tree dir)))))

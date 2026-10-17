@@ -138,12 +138,14 @@ contract Tools {
         -- shows, and of every role id it shows, and private as well
         -- when it shows relay content: a memo, fact, doc, note, journal
         -- entry or routine's instructions. A refusal that quotes stored
-        -- text carries that text's labels. A refusal that quotes the
-        -- call itself (a time, topic, schedule or doc path relay cannot
-        -- use, or the name of a tool the role lacks) carries the calling
-        -- session's labels, since it shows the session its own text. A
-        -- refusal in fixed text carries none. Over-labelling is allowed;
-        -- under-labelling never is.
+        -- text carries that text's labels. Every refusal of a tool call
+        -- also carries the calling session's labels, since it may quote
+        -- the call itself (an id, a time, a topic, a doc path, the name of
+        -- a tool the role lacks) and so show the session its own text.
+        -- No refusal is marked as quoting, so a new one cannot miss them.
+        -- An error in fixed text from outside relay's refusals (the
+        -- clock's, a schema mismatch) carries none. Over-labelling is
+        -- allowed; under-labelling never is.
 
     @invariant ContaminatedTextIsWithheldUnlessAccepted
         -- Unless the call asks for accept_contamination, a read shows a
@@ -211,8 +213,11 @@ contract Tools {
 
     @invariant ExternalToolsRunForALimitedTime
         -- Every external tool, on either protocol, runs for at most its
-        -- timeout_seconds, external_tool_timeout when it has none. Past
-        -- that relay ends the tool and every process it started. A plain
+        -- timeout_seconds, external_tool_timeout when it has none,
+        -- counting until it has exited and closed its output. Past that
+        -- relay ends the tool and every process it started, a child
+        -- that outlived the tool included, with SIGKILL for any that
+        -- outlast SIGTERM. A plain
         -- tool's caller is told it timed out; an envelope tool's, only
         -- that it failed. The morning brief runs its tools the same way,
         -- with brief_tool_timeout when a tool has none.

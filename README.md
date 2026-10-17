@@ -117,8 +117,10 @@ arguments, or the model could override a flag the operator pinned; `rem`
 reads its pinned flags first and treat anything after
 as the role's command. Prefer the envelope protocol for new tools.
 Every external tool may run for its `:timeout-seconds`, ten minutes by
-default. relay then ends the tool and every process it started, and
-tells the model the tool timed out.
+default. The limit covers its output too, so a child left holding stdout
+open does not keep it running. relay starts each tool in a process group
+of its own and, at the limit, sends the group SIGTERM, then SIGKILL two
+seconds later if anything is left. It tells the model the tool timed out.
 With `:protocol :envelope` it speaks the same envelope protocol as `relay
 tool`: the call arrives on stdin as `{input, labels, call_id}`, the labels
 being the calling session's, and the tool prints exactly one `{content,

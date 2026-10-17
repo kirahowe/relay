@@ -43,7 +43,21 @@
         (when (str/blank? t) (throw (ex-info "The ntfy token is empty." {})))
         t))))
 
-(defn- clip [s n] (let [s (str s)] (if (> (count s) n) (str (subs s 0 n) "…") s)))
+(defn clip
+  "`s`, shown by text/visible, cut to at most `n` UTF-16 units with an
+  ellipsis after it when it is longer. The cut falls between whole code
+  points, escapes (\\u{...}) and escaped backslashes, so it never leaves
+  half a surrogate pair or half an escape."
+  [s n]
+  (let [s (str s)]
+    (if (<= (count s) n)
+      s
+      (str (reduce (fn [^StringBuilder sb t]
+                     (if (> (+ (.length sb) (count t)) n) (reduced sb) (.append sb ^String t)))
+                   (StringBuilder.)
+                   ;; In Java regex . is one code point, a pair included.
+                   (re-seq #"(?s)\\\\|\\u\{[0-9a-f]+\}|." s))
+           "…"))))
 
 (defn push!
   "Sends one notification ({:title :body}). Throws when it could not be sent."

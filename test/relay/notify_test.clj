@@ -4,9 +4,13 @@
             [cheshire.core :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [clojure.test.check.clojure-test :refer [defspec]]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]
             [org.httpkit.server :as http]
             [relay.config :as config]
-            [relay.notify :as notify]))
+            [relay.notify :as notify]
+            [relay.text :as text]))
 
 (defn- with-ntfy [f]
   (let [seen (atom [])
@@ -96,3 +100,44 @@
         (is (str/includes? (problem {:kind :file :path "notifications.log"}) "absolute"))
         (is (str/includes? (problem {:kind :file :path "~/notifications.log"}) "absolute"))))
     (fs/delete-tree dir)))
+
+;; --- cutting the body to ntfy's limit
+
+(defn- unescape
+  "The text that text/visible showed as `s`."
+  [s]
+  (str/replace s #"\\\\|\\u\{([0-9a-f]+)\}"
+               (fn [[_ hex]] (if hex (String. (Character/toChars (Integer/parseInt hex 16))) "\\"))))
+
+(def ^:private gen-text
+  ;; Letters, backslashes, a newline, CJK, emoji (a surrogate pair each)
+  ;; and code points visible escapes, a tag character among them.
+  (gen/fmap (fn [cps] (let [sb (StringBuilder.)] (doseq [cp cps] (.appendCodePoint sb (int cp))) (str sb)))
+            (gen/vector (gen/elements [0x61 0x5C 0x7B 0x75 0x0A 0x4E2D 0x1F600 0x1F44D 0x200B 0x202E 0x07 0xE0041 0xFE0F])
+                        0 40)))
+
+(defspec clip-cuts-between-code-points-and-escapes 500
+  ;; relay#32: clip counted UTF-16 units after escaping, so a body could
+  ;; end in half a surrogate pair or half an escape such as \u{20.
+  (prop/for-all [raw gen-text
+                 n (gen/choose 0 80)]
+    (let [shown (text/visible raw)
+          out (notify/clip shown n)
+          cut? (not= out shown)
+          kept (if cut? (subs out 0 (dec (count out))) out)]
+      (and (if cut? (and (> (count shown) n) (str/ends-with? out "…")) (<= (count shown) n))
+           (<= (count kept) n)
+           (str/starts-with? shown kept)
+           ;; Whole code points: no surrogate is left alone.
+           (not-any? #(<= 0xD800 % 0xDFFF) (iterator-seq (.iterator (.codePoints kept))))
+           ;; Whole escapes and whole escaped backslashes: what is kept
+           ;; reads back as the start of the text it shows.
+           (str/starts-with? raw (unescape kept))
+           (even? (count (re-find #"\\*$" kept)))
+           ;; And no more is dropped than the longest escape, \u{10ffff}.
+           (or (not cut?) (> (count kept) (- n 10)))))))
+
+(deftest clip-keeps-an-escape-whole
+  (is (= "ab…" (notify/clip "ab\\u{200b}cd" 5)))
+  (is (= "ab\\u{200b}…" (notify/clip "ab\\u{200b}cd" 10)))
+  (is (= "a…" (notify/clip (str "a" (String. (Character/toChars 0x1F600)) "b") 2)) "not half an emoji"))
