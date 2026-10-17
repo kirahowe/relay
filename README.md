@@ -19,7 +19,17 @@ routine that has come due, then wakes every role with an open memo, each in
 its own process. A wake runs the role's harness ([agentloop](https://github.com/kirahowe/agentloop) on the Anthropic API)
 with the shared instructions in `resources/AGENTS.md`, the role's own
 instructions, what it has been granted and its notes as the system prompt, and the memos it was woken for as the
-prompt.
+prompt. The prompt ends with the role's last 3 journal entries, each cut
+at 600 characters, and the fact topics with how many facts hold now in
+each, so a role does not spend its first model calls looking them up.
+They go through the same filters as the `journal` and `facts` tools: a
+public role sees only public items, and any other role has contaminated
+entries withheld and contaminated facts left out of the counts. They
+never raise the wake's labels. An entry or fact whose labels the rest of
+the prompt does not already carry is left out, with a line saying so, and
+the role can read it with the tool if it needs it. So a role woken by the
+operator's memo sees private entries and facts, while a role woken by a
+public routine stays clean and is not held on its egress calls.
 
 A role has no files and no shell. It works only through tools, each one a
 `relay tool <name>` call made as that role:
@@ -70,9 +80,17 @@ before the correction still gives the old answer. So relay can answer both
 "what held in March" and "what did we think held in March, as of last
 week".
 
+A `facts` search ranks the facts by how well their text matches, best
+first, with Okapi BM25 over Porter2 stems (`relay.search`). Equal scores
+go by fact id. The topic, time and contamination filters apply before the
+ranking, so a fact left out never moves the others.
+
 Notes are a role's own memory and appear in its prompt. A journal is a
-role's running log. Docs are versioned shared content for things that
-really are files.
+role's running log, and its tail appears in each wake's prompt. When a
+wake is cut short at its deadline before the role wrote an entry, relay
+writes one for it, saying when and which memos it had. It quotes their
+subjects, so it carries their labels. Docs are versioned shared content
+for things that really are files.
 
 `relay export <dir>` writes all of it out as read-only markdown for
 browsing. Nothing reads an export back.

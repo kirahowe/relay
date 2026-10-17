@@ -65,10 +65,11 @@ out.
 
 ## Start of every wake
 
-1. Read your notes, which are already in front of you.
-2. Read the last few entries of your `journal`, so you know what you were
-   in the middle of.
-3. Look up the `facts` that bear on what you were woken for.
+Your notes, your latest journal entries and the fact topics are already
+in front of you, so you know what you were in the middle of. An entry or
+fact that carries data this wake has not seen is left out there; read it
+with `journal` or `facts` if you need it. Look up the `facts` that bear
+on what you were woken for, by topic or search, when you need them.
 
 ## Memos
 
@@ -146,7 +147,9 @@ start of every wake, so keep them short and current. Rewrite a note when
 it changes and remove it when it stops helping.
 
 Your journal is the log of what you did and why. Entries are never
-changed, so write one at the end of each wake rather than as you go.
+changed, so write one at the end of each wake rather than as you go. Each
+wake's prompt shows your last few. If a wake runs out of time before you
+write one, relay writes a short entry saying so and which memos you had.
 
 Docs are for content that really is a file: a plan, a checklist, a long
 reference, anything with structure longer than a fact. Every version of a

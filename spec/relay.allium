@@ -260,7 +260,12 @@ contract Facts {
     @invariant TopicsAreAHierarchy
         -- A topic matches itself and the topics under it, written
         -- with / between levels. household matches household/car and
-        -- not house. Search ignores case and looks in the text.
+        -- not house. Search looks in the text and ranks what it finds
+        -- with Okapi BM25 over Porter2 stems, best first, equal scores
+        -- by fact id. Only facts sharing a word with the search match;
+        -- a search with no words keeps facts whose text contains it,
+        -- ignoring case. Every other filter (topic, time, public,
+        -- contaminated) applies before the ranking.
 }
 
 ------------------------------------------------------------
@@ -1769,7 +1774,17 @@ rule RunWake {
     @guidance
         -- The prompt tells the role who they are and what time it is,
         -- then gives each memo in full with its sender and how many
-        -- earlier wakes left it open, and the note if there is one. A
+        -- earlier wakes left it open, and the note if there is one,
+        -- then the role's last 3 journal entries (each cut at 600
+        -- characters) and the topics of the facts that hold now with a
+        -- count each. These are what the journal and facts tools would
+        -- show the role with no arguments: only public items to a public
+        -- role, and to any other a placeholder for a contaminated entry
+        -- and no contaminated fact in the counts. They never raise the
+        -- wake's labels: an entry whose labels are not all among the
+        -- rest of the prompt's is a placeholder, and such a fact is not
+        -- counted, its topic not shown, with a line saying some facts
+        -- were left out. A
         -- wake that resumes another continues that wake's session where
         -- the harness can and is told it was cut short. A conversation
         -- has no prompt and does not run headless: it runs over ACP, and
@@ -1829,7 +1844,11 @@ rule InterruptedWakeIsKept {
     @guidance
         -- The next ordinary wake of the role carries on from this one.
         -- A wake cut short at its deadline still ran, so its memos are
-        -- settled as for any wake that ran.
+        -- settled as for any wake that ran. If the role wrote no journal
+        -- entry during it, the dispatcher writes one in the same step:
+        -- the wake was cut short, when, and the ids and subjects of its
+        -- memos. It carries those memos' labels, and is public only when
+        -- the wake was a public session and every memo it quotes is.
         -- A conversation cut short is not resumed. A wake that left
         -- calls held is resumed once the operator has decided them.
 }
@@ -2960,7 +2979,9 @@ invariant NoEventDropsWhatItCopies {
 invariant AWakeStartsWithTheLabelsOfItsPrompts {
     -- The role's id, title and instructions, the notes shown, the memos
     -- carried and the ids of their senders, the routines they are runs
-    -- of, and private for any relay content among them.
+    -- of, and private for any relay content among them. The journal
+    -- entries and fact topics the prompt shows add nothing: it shows
+    -- only those whose labels these already include.
     for wake in Wakes:
         includes_all(wake.seed_labels, prompt_labels(wake))   -- black box: see guidance on RunWake
 }
