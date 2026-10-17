@@ -2081,6 +2081,28 @@
                   false))
        (sort-by :id)))
 
+;; the morning brief (relay.brief composes it)
+
+(defn brief-date
+  "The date of the last morning brief relay composed, sent or not, or nil."
+  ^LocalDate [state]
+  (some-> (:brief-date state) LocalDate/parse))
+
+(defmethod evolve* "brief/composed" [state {:keys [data]}]
+  (assoc state :brief-date (:date data)))
+
+(defmethod decide* :brief/send [{:keys [state] :as tx} {{:keys [date title body labels sections]} :args}]
+  ;; Recorded once a day under the log's lock, so two ticks cannot both
+  ;; send one, and a restart sends none twice. A brief with nothing to say
+  ;; is recorded with no title, and nothing is pushed.
+  (dispatcher-only! tx)
+  (let [d (or (try (LocalDate/parse (str date)) (catch Exception _ nil))
+              (reject! (str "A brief needs its date, not " (pr-str date) ".")))]
+    (when (some-> (brief-date state) (.isBefore d) not)
+      (reject! :invalid (str "The brief for " d " was already composed.")))
+    (cond-> (emit tx "brief/composed" {:date (str d) :sent (some? title) :sections sections})
+      title (notify "brief" title body :date (str d) :labels labels))))
+
 ;; knowledge
 
 (defn world-time

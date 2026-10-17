@@ -15,7 +15,6 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [2](2-trust-the-legacy-contaminated-items.md) | Trust the legacy contaminated items | chore | P2 |
-| [20](20-send-one-morning-brief.md) | Send one morning brief | feature | P2 |
 | [21](21-make-agentloop-cleanroom-s-reader.md) | Make agentloop cleanroom's reader | feature | P3 |
 | [23](23-decide-who-syncs.md) | Decide who syncs ~/Sync/relay | chore | P3 |
 | [28](28-tighten-the-hidden-finding-invariant-and-header-text.md) | Tighten the hidden-finding invariant and header text | chore | P3 |
@@ -39,6 +38,7 @@
 | [14](14-add-a-per-role-trust-ladder-for-research-roles.md) | Add a per-role trust ladder for research roles | feature | P2 |
 | [15](15-keep-a-ledger-of-findings.md) | Keep a ledger of findings | feature | P2 |
 | [19](19-read-the-calendar.md) | Read the calendar | feature | P2 |
+| [20](20-send-one-morning-brief.md) | Send one morning brief | feature | P2 |
 | [27](27-show-findings-again-when-their-hidden-match-is-rejected-as.md) | Show findings again when their hidden match is rejected as fake | bug | P2 |
 | [22](22-show-spend-per-role-per-week-in-relay-status.md) | Show spend per role per week in relay status | feature | P3 |
 | [26](26-tidy-small-webtool-findings.md) | Tidy small webtool findings | feature | P3 |

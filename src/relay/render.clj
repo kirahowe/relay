@@ -537,3 +537,45 @@
                          (if trusted ", accepted by you" ", accepted by relay unread"))
                     (str "    " url)]))
             entries)))
+
+;; --- the morning brief (relay.brief)
+;;
+;; One push: a title of counts and a body of short lines. The text from
+;; the calendar and reminders is one field of one line of what the tool
+;; printed, so it holds no line break; the push edge (relay.notify) makes
+;; every character visible and, when the brief's labels say contaminated,
+;; marks the whole brief and breaks its URLs.
+
+(def ^:private brief-names
+  {:calendar ["Calendar" "event" "events"]
+   :reminders ["Reminders due" "reminder" "reminders"]
+   :reports ["Reports waiting for review" "report" "reports"]
+   :holds ["Held calls" "held call" "held calls"]})
+
+(defn- counted [n one many] (str n " " (if (= 1 n) one many)))
+
+(defn- brief-count
+  "A section in the title: its count, or that it is unavailable. Nil for
+  a tool that is not configured."
+  [{:keys [key status count]}]
+  (let [[_ one many] (brief-names key)]
+    (case status
+      :ok (counted count one many)
+      :unavailable (str (name key) " unavailable")
+      :missing nil)))
+
+(defn- brief-section [{:keys [key status count lines tool why]}]
+  (let [[heading] (brief-names key)]
+    (case status
+      :ok (if (zero? count)
+            [(str heading ": none")]
+            (cons (str heading ": " count) (map #(str "  " %) lines)))
+      :unavailable [(str heading ": unavailable, the tool " tool " " why ".")]
+      :missing [(str heading ": not configured, relay.edn has no tool " tool ".")])))
+
+(defn brief
+  "A composed brief (relay.brief/compose) as the push that carries it:
+  {:title :body}."
+  [{:keys [date sections]}]
+  {:title (str "Morning brief for " date ": " (str/join ", " (keep brief-count sections)))
+   :body (str/join "\n" (mapcat brief-section sections))})

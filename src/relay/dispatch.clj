@@ -10,12 +10,14 @@
             [cheshire.core :as json]
             [clojure.string :as str]
             [relay.acp :as acp]
+            [relay.brief :as brief]
             [relay.config :as config]
             [relay.core :as core]
             [relay.harness :as harness]
             [relay.harness.agentloop]
             [relay.inbound :as inbound]
             [relay.prompt :as prompt]
+            [relay.render :as render]
             [relay.reports :as reports]
             [relay.tools :as tools])
   (:import (java.time Duration Instant)))
@@ -744,6 +746,53 @@
         #(:exit (apply p/shell {:continue true}
                        (chat-argv (cons found args) (relay-bin) role-id data)))))))
 
+;; --- the morning brief (relay.brief)
+
+(def brief-tool-timeout-ms
+  "How long the brief waits for cal or rem. A tool that hangs, such as one
+  waiting on a permission prompt nobody sees, must not hold up the tick."
+  60000)
+
+(defn run-brief-tool!
+  "Runs a tool as relay runs an external command (relay.tools): its
+  configured command with `args` after it, a clean environment and nothing
+  on stdin, here with a time limit. Returns {:out :labels}, the labels
+  being the tool's own, or {:error why}. What a failed tool printed goes
+  to stderr, the tick's log, and nowhere else."
+  [tool-name {:keys [command labels]} args]
+  (let [failed (fn [why out err]
+                 (binding [*out* *err*]
+                   (println (str "relay brief: the tool " tool-name " " why))
+                   (print (str err) (str out)) (flush))
+                 {:error why})]
+    (try
+      (let [proc (p/process (into (vec command) args)
+                            {:in "" :out :string :err :string :env (harness/base-env {})})
+            result (deref proc brief-tool-timeout-ms ::timeout)]
+        (cond
+          (= ::timeout result) (do (p/destroy-tree proc) (failed "timed out" "" ""))
+          (not (zero? (:exit result))) (failed (str "exited " (:exit result)) (:out result) (:err result))
+          :else {:out (:out result) :labels (vec labels)}))
+      (catch Exception e (failed (str "could not start: " (ex-message e)) "" "")))))
+
+(defn send-brief!
+  "Composes the morning brief when one is due at `t` and records it, which
+  pushes it when it has something to say. Returns the events appended, or
+  nil when no brief is due."
+  [{:keys [config] :as sys} state ^Instant t]
+  (when-let [date (brief/due config state t)]
+    (let [section (fn [k]
+                    (let [src (brief/source config k)]
+                      (brief/tool-section k src (when (:tool src)
+                                                  (run-brief-tool! (:tool src) (:spec src)
+                                                                   ((brief/tool-args k) date))))))
+          composed (brief/compose state date (section :calendar) (section :reminders))]
+      (inbound/submit! sys {:type :brief/send :actor core/dispatcher
+                            :args (merge {:date (str date) :labels (brief/labels composed)
+                                          :sections (brief/summary composed)}
+                                         (when-not (brief/empty-brief? composed)
+                                           (render/brief composed)))}))))
+
 ;; --- the tick
 
 (def ^:private stale-after (Duration/ofMinutes 2))
@@ -764,7 +813,8 @@
   "One pass: end wakes and report checks whose process has gone, fire due
   routines, report what needs reporting, push notifications left
   stranded, then start a wake for every role with work waiting and a
-  check of every report waiting for one. Returns the roles woken."
+  check of every report waiting for one, and send the morning brief when
+  it is due. Returns the roles woken."
   ([sys] (tick! sys {}))
   ([{:keys [config] :as sys} {:keys [spawn! spawn-verify!] :or {spawn! spawn-wake! spawn-verify! spawn-verify!}}]
    (let [state (inbound/current-state sys)]
@@ -778,4 +828,11 @@
      (doseq [r (core/reports-to-verify state config t)] (spawn-verify! sys r))
      (let [roles (core/roles-to-wake state config t)]
        (doseq [r roles] (spawn! sys r))
+       ;; Last, since it waits on cal and rem. A failure leaves the day's
+       ;; brief unrecorded, so the next tick tries again; a rejection is
+       ;; another tick that recorded it first.
+       (try (send-brief! sys (inbound/current-state sys) t)
+            (catch Exception e
+              (when-not (core/rejection e)
+                (binding [*out* *err*] (println "relay tick: the morning brief failed:" (ex-message e))))))
        roles))))

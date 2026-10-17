@@ -276,7 +276,7 @@ enum NotificationKind {
     | harness_needs_attention | harness_unreachable
     | hold_opened | memo_quarantined | permission_refused | session_ended
     | report_verified | report_verify_failed | trust_level_lowered
-    | budget_reached
+    | budget_reached | brief
 }
 enum ToolClass { read | write | egress | act }
 enum Label { private | contaminated }
@@ -669,6 +669,8 @@ entity Notification {
     -- the weekly budget it reached, 80 or 100.
     week: Date?
     percent: Integer?
+    -- For brief: the day it covers.
+    date: Date?
     created_at: Timestamp
     delivery: pending | delivered | failed
 
@@ -686,6 +688,16 @@ entity Notification {
 
     is_stranded: delivery = pending and created_at + config.stranded_after < now
     is_due_again: delivery = failed and retry_at != null and retry_at <= now
+}
+
+entity Brief {
+    -- That relay composed a day's morning brief, whether or not it had
+    -- anything to say. At most one a day.
+    date: Date
+    sent: Boolean
+    -- Each section's count, or unavailable, or not_configured.
+    sections: Map<String, String>
+    created_at: Timestamp
 }
 
 entity Fact {
@@ -935,6 +947,13 @@ config {
     -- from :budget {:weekly-usd n} in the settings. Null for none. relay
     -- only warns as spend nears it (WarnOfSpend).
     weekly_budget: Decimal? = null
+
+    -- When the morning brief goes out each day, in the time zone, from
+    -- :brief {:at "07:30"} in the settings. Null for no brief. The
+    -- calendar and reminders tools it reads are cal and rem-read unless
+    -- :brief names others; either must be a read tool.
+    brief_at: Time? = null
+    brief_tool_timeout: Duration = 1.minute
 }
 
 ------------------------------------------------------------
@@ -2305,6 +2324,58 @@ rule WarnOfSpend {
         -- checked. A new week starts with nothing told.
 }
 
+-- The morning brief
+
+rule SendMorningBrief {
+    when: DispatcherTicks(lost_wakes)
+
+    let today = local_date(now)                          -- black box: now's date in the time zone
+    let due_at = at_local(today, config.brief_at)        -- black box: a time a clock change skips moves forward by the gap
+    let last = Briefs.map(b => b.date).max
+
+    requires: config.brief_at != null
+    requires: now >= due_at
+    requires: last = null or last < today
+
+    -- black box: runs the calendar tool for today and the reminders
+    -- tool for what is due today or overdue, with their arguments on
+    -- the command line, then makes the sections, title and body
+    let brief = compose_brief(today, Reports where has_pending_findings, Holds where status = open)
+
+    ensures: Brief.created(date: today, sent: not brief.is_empty, sections: brief.sections, created_at: now)
+    ensures:
+        if not brief.is_empty:
+            Notification.created(
+                kind: brief,
+                title: brief.title,
+                body: brief.body,
+                date: today,
+                created_at: now,
+                delivery: pending
+            )
+
+    @guidance
+        -- relay composes the brief itself and wakes no role, so it costs
+        -- no tokens and keeps calendar text, which outsiders write, out
+        -- of every prompt. Four sections, in order: today's calendar,
+        -- reminders due today, reports waiting for review, held calls.
+        -- Each is a count and at most eight short lines. A tool that
+        -- fails, times out, prints what the brief cannot read, or is
+        -- not a read tool on the plain protocol makes its section say
+        -- it is unavailable; a tool relay.edn does not define makes it
+        -- say not configured. The brief is empty when no section has an
+        -- item or is unavailable, and an empty brief is recorded and
+        -- not pushed. The notification carries the labels of what it
+        -- shows, so a brief with calendar text is marked contaminated
+        -- and its URLs broken when it is pushed.
+        -- A day's brief is due from its time until the day ends. A
+        -- tick missed while the Mac slept sends it late the same day;
+        -- a day with no tick past its time has none, and a later day
+        -- never sends an earlier day's. The record is one append, so a
+        -- restart neither repeats a day nor skips one, and a tick that
+        -- fails before the append is followed by one that tries again.
+}
+
 -- Tools
 
 rule RunTool {
@@ -3151,7 +3222,8 @@ surface Clock {
         -- minute. A tick ends wakes whose process is gone, fires due
         -- routines, trips the runaway guard, reports outages that
         -- outlasted the patience, pushes notifications left stranded,
-        -- and then starts a wake for each role with work waiting.
+        -- and then starts a wake for each role with work waiting. Last,
+        -- it sends the morning brief when one is due.
         -- The first four are one event append in this order; rules are
         -- not ordered here, but a later step sees an earlier step's
         -- events.

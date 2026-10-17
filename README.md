@@ -81,8 +81,8 @@ browsing. Nothing reads an export back.
 
 `<data>/relay.edn` holds the operator's settings: harnesses, where
 notifications go, limits, the dead letter handler, external tools, the
-verifier for research reports, an optional weekly budget and what each
-role is granted.
+verifier for research reports, an optional weekly budget, an optional
+morning brief and what each role is granted.
 `setup/relay.example.edn` shows each of them. No role can read this
 file. Every external tool has a class (`read`, `write`,
 `egress` or `act`) and the labels its output carries (see below), and
@@ -508,6 +508,34 @@ sets a warning level for all roles together. relay sends you one
 notification when the week's spend reaches 80% of it and one when it
 reaches 100%. A wake that passes both at once sends only the 100% one.
 The budget never stops or slows anything.
+
+### Morning brief
+
+With `:brief {:at "07:30"}` in relay.edn, relay sends you one
+notification each morning at that time in its time zone. It has four
+sections: today's calendar, reminders due today or overdue, reports
+waiting for review and held calls. Each gives a count and up to eight
+short lines. relay composes it itself and wakes no role, so it costs no
+tokens and no calendar invite reaches a prompt.
+
+The calendar comes from the tool named `cal` in `:tools`, run as `cal
+events --from <today> --to <today>`. Reminders come from `rem-read`, run
+as `rem ... ls --today`. `:brief {:at "07:30" :calendar "my-cal"
+:reminders "my-rem"}` names other tools. The brief runs only `:read`
+tools that take their arguments on the command line, since nobody is
+there to approve a call. It gives each tool a minute.
+
+A section whose tool fails, times out or prints something the brief
+cannot read says it is unavailable. A section whose tool is not in
+relay.edn says it is not configured. When no section has anything to
+say, and none is unavailable, nothing is sent. The brief carries the
+labels of what it shows, so one with calendar text is marked
+contaminated and its links broken when it reaches your phone.
+
+It goes out at most once a day. If the Mac was asleep at the time, it
+goes out at the first tick after, the same day. A day the Mac sleeps
+through has no brief: the next morning's does not repeat it. The log
+records each day's brief, sent or empty, as a `brief/composed` event.
 
 ### relay chat
 

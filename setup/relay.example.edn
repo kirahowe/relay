@@ -35,6 +35,13 @@
  ;; It never stops anything. Leave it out for no budget.
  ;; :budget {:weekly-usd 15}
 
+ ;; A morning brief at 07:30 in :timezone: today's calendar, reminders due,
+ ;; reports waiting and held calls, in one notification. relay composes it
+ ;; itself, with the "cal" and "rem-read" tools defined below; :calendar and
+ ;; :reminders name other :read tools. Nothing is sent on a day with
+ ;; nothing to say. Leave it out for no brief.
+ ;; :brief {:at "07:30"}
+
  ;; Tools beyond relay's own, each an external command given the call's
  ;; arguments after its own, with no -- in between: such a tool must
  ;; refuse flags in the model's part, as rem does. New tools

@@ -211,6 +211,26 @@
                        " greater than 0, and nothing else"
                        (when (some? budget) (str ", not " (pr-str budget))) "."))))))
 
+(defn- check-brief
+  "The optional :brief: {:at \"07:30\"}, the time each day, and the tools
+  it reads, :calendar and :reminders, when they are not cal and rem-read.
+  A tool named here must be a :read tool in :tools: the brief runs it with
+  nobody there to approve a call."
+  [{:keys [brief tools] :as config}]
+  (when (contains? config :brief)
+    (let [{:keys [at]} brief
+          hhmm (when (string? at) (re-matches #"(\d{2}):(\d{2})" at))]
+      (when-not (and (map? brief) (every? #{:at :calendar :reminders} (keys brief))
+                     hhmm (<= 0 (parse-long (nth hhmm 1)) 23) (<= 0 (parse-long (nth hhmm 2)) 59))
+        (problem! (str "relay.edn's :brief is {:at \"07:30\"}, a time of day as HH:MM, and may name"
+                       " its :calendar and :reminders tools"
+                       (when (some? brief) (str ", not " (pr-str brief))) ".")))
+      (doseq [k [:calendar :reminders] :when (contains? brief k)
+              :let [n (get brief k)]]
+        (when-not (= :read (get-in tools [n :class]))
+          (problem! (str "relay.edn's :brief names " (pr-str n) " as its " (name k) " tool, which"
+                         " must be a :read tool in :tools.")))))))
+
 (defn validate
   "Returns the config, or throws describing the first problem found."
   [{:keys [tools grants max-attempts chat-client] :as config}]
@@ -256,6 +276,7 @@
   (check-grants config)
   (check-verifier config)
   (check-budget config)
+  (check-brief config)
   (doseq [[role {granted :tools}] grants
           t granted]
     (when-not (contains? tools t)
