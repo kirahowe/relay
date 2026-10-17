@@ -82,6 +82,24 @@
     (is (= "last" (:text (agentloop/parse-outcome text))))
     (is (nil? (agentloop/parse-outcome "")))))
 
+(deftest reading-what-a-run-used-and-cost
+  (testing "usage and cost come from the outcome line, whatever the outcome"
+    (doseq [o [(ended "completed" :cost_usd 0.0123
+                      :usage {:input_tokens 10 :output_tokens 5 :cache_read_tokens 7 :cache_write_tokens 2})
+               (assoc (model-error "rate_limited") :cost_usd 0.0123
+                      :usage {:input_tokens 10 :output_tokens 5 :cache_read_tokens 7 :cache_write_tokens 2})]]
+      (is (= [{:input 10 :output 5 :cache-read 7 :cache-write 2} 0.0123]
+             ((juxt :usage :cost-usd) (classify o)))
+          (pr-str o))))
+  (testing "a missing cost stays missing, never 0"
+    (is (not (contains? (classify (ended "completed")) :cost-usd)))
+    (is (= {:input 10 :output 5 :cache-read 0 :cache-write 0} (:usage (classify (ended "completed"))))))
+  (testing "a cost that is not an amount is left out"
+    (doseq [bad [-1 "0.5" nil]]
+      (is (not (contains? (classify (ended "completed" :cost_usd bad)) :cost-usd)) (pr-str bad))))
+  (testing "no outcome line, no usage"
+    (is (not-any? #(contains? (classify nil :exit 1) %) [:usage :cost-usd]))))
+
 ;; --- whole wakes against the stand-in
 
 (def bin
@@ -189,7 +207,11 @@
             (is (= ["Closed memo 3." "Closed memo 4."]
                    (sort (map :text (mock/last-tool-results (last requests)))))))
           (testing "the transcript is kept with the wake"
-            (is (fs/exists? (get-in (state) [:wakes (:wake result) :transcript])))))))))
+            (is (fs/exists? (get-in (state) [:wakes (:wake result) :transcript]))))
+          (testing "the wake keeps what its calls used and cost"
+            (let [{:keys [usage cost-usd]} (get-in (state) [:wakes (:wake result)])]
+              (is (= {:input 30 :output 15 :cache-read 0 :cache-write 0} usage))
+              (is (and (number? cost-usd) (pos? cost-usd))))))))))
 
 (deftest credentials-never-reach-a-tool
   (when bin

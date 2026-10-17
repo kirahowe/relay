@@ -53,6 +53,10 @@
     :session     the session id, so an interrupted wake can be resumed
     :said        the last thing the harness said, for a person to read
     :resets-at   when a rate limit lifts, if the harness said
+    :usage       what the run's model calls used, {:input :output
+                 :cache-read :cache-write} in tokens, if the harness said
+    :cost-usd    what they cost in US dollars, if the harness knows;
+                 left out, never 0, when it does not
 
   The dispatcher adds :transcript, the out-file.
 

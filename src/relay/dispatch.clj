@@ -252,7 +252,7 @@
   "The :wake/end args for a harness's report on a wake."
   [wake-id report]
   (-> (select-keys report [:outcome :exit :crashed :cut-short :session :said :resets-at :held :labels
-                           :refused :forbidden])
+                           :refused :forbidden :usage :cost-usd])
       (update :exit exit-field)
       (update :resets-at #(some-> % str))
       (assoc :wake wake-id
@@ -329,16 +329,17 @@
 
 (defn conversation-end-args
   "The :wake/end args for a conversation, from what the code that ran it
-  reported: {:exit :sessions :said :crashed}, any of which may be missing.
-  Total: whatever the report holds, core accepts the result, so a
-  conversation that started always ends."
-  [wake-id {:keys [exit sessions said crashed]}]
+  reported: {:exit :sessions :said :crashed :cost-usd}, any of which may
+  be missing. Total: whatever the report holds, core accepts the result,
+  so a conversation that started always ends."
+  [wake-id {:keys [exit sessions said crashed cost-usd]}]
   (let [sessions (when (sequential? sessions)
                    (filterv #(and (string? %) (not (str/blank? %))) sessions))]
     (cond-> {:wake wake-id :outcome "ran" :exit (exit-field exit) :crashed (true? crashed)
              :cut-short false
              :said (if (and (string? said) (not (str/blank? said))) said "Conversation ended.")}
-      (seq sessions) (assoc :sessions sessions))))
+      (seq sessions) (assoc :sessions sessions)
+      (number? cost-usd) (assoc :cost-usd cost-usd))))
 
 (defn with-conversation!
   "Opens a conversation with a role and calls (f request) with its harness

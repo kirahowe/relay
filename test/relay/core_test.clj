@@ -272,6 +272,31 @@
       (let [w (-> w (advance 7200) (run "dispatcher" :tick {}) (advance 60) (run "dispatcher" :tick {}))]
         (is (= ["harness-unreachable"] (notifications w)))))))
 
+(deftest a-wake-keeps-what-its-calls-used-and-cost
+  (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "a" :body "b"})
+              (run "dispatcher" :wake/start {:role "clerk"}))
+        wake-id (:id (core/running-wake (:state w) "clerk"))
+        usage {:input 10 :output 5 :cache-read 7 :cache-write 2}
+        end #(run w "dispatcher" :wake/end (merge {:wake wake-id :outcome "ran"} %))
+        kept #(select-keys (get-in % [:wakes wake-id]) [:usage :cost-usd])]
+    (testing "kept on the wake, and through the log"
+      (let [w (end {:usage usage :cost-usd 0.25})]
+        (is (= {:usage usage :cost-usd 0.25} (kept (:state w))))
+        (is (= {:usage usage :cost-usd 0.25} (kept (core/replay (json-round-trip (:events w))))))))
+    (testing "a missing cost stays missing, never 0"
+      (is (= {:usage usage} (kept (:state (end {:usage usage}))))))
+    (testing "anything that is not a cost or a usage is left out, and the wake still ends"
+      (doseq [bad [{:cost-usd -1} {:cost-usd "1"} {:cost-usd Double/NaN} {:cost-usd Double/POSITIVE_INFINITY}
+                   {:usage {:input -1 :output 0 :cache-read 0 :cache-write 0}} {:usage {:input 1}}
+                   {:usage "lots"}]]
+        (let [w (end bad)]
+          (is (= :ended (get-in (:state w) [:wakes wake-id :status])) (pr-str bad))
+          (is (= {} (kept (:state w))) (pr-str bad)))))
+    (testing "a wake/ended from before relay kept them still replays, with neither"
+      (let [events (json-round-trip (:events (end {})))]
+        (is (not-any? #(contains? (:data %) :cost-usd) events))
+        (is (= {} (kept (core/replay events))))))))
+
 (deftest a-conversation-records-the-sessions-it-used-in-order
   (let [w (run (seed) "operator" :wake/start {:role "clerk" :chat true})
         chat (core/running-wake (:state w) "clerk")

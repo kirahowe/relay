@@ -229,6 +229,34 @@
            (every? #(and (string? %) (not (str/blank? %))) sessions)
            (or (nil? said) (string? said))))))
 
+(def observer-cost-is-a-sum-or-nothing
+  (prop/for-all [lines (gen/vector (gen/tuple (gen/elements [:client :agent :neither nil])
+                                              (gen/one-of [gen-noise gen/any-equatable]))
+                                   0 30)]
+    (let [{:keys [cost-usd]} (acp/report (reduce (fn [o [dir line]] (acp/observe o dir line)) acp/observer lines) 0)]
+      (or (nil? cost-usd) (and (double? cost-usd) (>= cost-usd 0.0))))))
+
+(defn- usage [session cost]
+  [:agent (msg {:method "session/update"
+                :params {:sessionId session
+                         :update (cond-> {:sessionUpdate "usage_update" :used 100 :size 200000}
+                                   cost (assoc :cost cost))}})])
+
+(deftest a-conversation-costs-what-its-sessions-last-reported
+  (check 300 observer-cost-is-a-sum-or-nothing)
+  (let [cost (fn [lines] (:cost-usd (acp/report (reduce (fn [o [d l]] (acp/observe o d l)) acp/observer lines) 0)))]
+    (testing "each session's latest total, summed over its sessions"
+      (is (= 0.75 (cost [(usage "a" {:amount 0.25 :currency "USD"}) (usage "a" {:amount 0.5 :currency "USD"})
+                         (usage "b" {:amount 0.25 :currency "USD"})]))))
+    (testing "nothing reported, no cost"
+      (is (nil? (cost []))))
+    (testing "an update without a cost in dollars makes the whole unknown, never short"
+      (is (nil? (cost [(usage "a" {:amount 0.25 :currency "USD"}) (usage "b" nil)])))
+      (is (nil? (cost [(usage "a" {:amount 0.25 :currency "EUR"})])))
+      (is (nil? (cost [(usage "a" {:amount -1 :currency "USD"})]))))
+    (testing "from the client, it counts for nothing"
+      (is (nil? (cost [[:client (second (usage "a" {:amount 1 :currency "USD"}))]]))))))
+
 (deftest P6-3-the-observer-is-total-and-finds-the-sessions-used
   (check 500 observer-finds-exactly-the-sessions-used)
   (check 500 observer-is-total)
@@ -379,7 +407,11 @@
               (is (= 1 (count wakes)))
               (is (= [:ended "ran" [sid] 0] ((juxt :status :outcome :sessions :exit) wake)) (pr-str wake))
               (is (= "Conversation ended. Its last turn ended with end_turn." (:said wake)))
-              (is (fs/exists? (session-file sid)))))
+              (is (fs/exists? (session-file sid)))
+              (testing "with what the session last said it cost"
+                (let [last-cost (last (keep #(get-in % ["cost" "amount"]) updates))]
+                  (is (and (number? last-cost) (pos? last-cost)) (pr-str updates))
+                  (is (= (double last-cost) (:cost-usd wake)))))))
           (testing "the trace has both directions"
             (let [entries (map #(json/parse-string % true) (fs/read-all-lines trace))]
               (is (= "initialize" (get-in (first entries) [:message :method])))

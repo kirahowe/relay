@@ -576,11 +576,26 @@ entity Wake {
     -- The labels its session ended with, as the harness reported them,
     -- or with none reported, every label it could have gathered.
     labels: Set<Label>
+    -- What its model calls used, as the harness reported it. Null for a
+    -- conversation, and for a wake from before relay kept it.
+    usage: TokenUsage?
+    -- What its model calls cost in US dollars, as the harness reported
+    -- it. Null when the cost is unknown (a model without prices, a
+    -- harness that does not say, a wake from before relay kept it);
+    -- never taken as 0.
+    cost_usd: Decimal?
 
     transitions status {
         running -> ended
         terminal: ended
     }
+}
+
+value TokenUsage {
+    input: Integer
+    output: Integer
+    cache_read: Integer
+    cache_write: Integer
 }
 
 entity Hold {
@@ -1722,7 +1737,7 @@ rule RunWake {
 }
 
 rule EndWake {
-    when: WakeReported(wake, outcome, exit?, crashed, cut_short, session?, sessions?, said?, transcript?, resets_at?, held?, labels?)
+    when: WakeReported(wake, outcome, exit?, crashed, cut_short, session?, sessions?, said?, transcript?, resets_at?, held?, labels?, usage?, cost_usd?)
 
     requires: wake.status = running
     requires: sessions = null or wake.chat
@@ -1738,6 +1753,8 @@ rule EndWake {
         wake.sessions = sessions ?? []
         wake.held = usable_held_calls(wake, outcome, session, held)   -- black box: see guidance
         wake.labels = labels ?? session_labels_bound(wake.role)       -- black box: see guidance
+        wake.usage = usage
+        wake.cost_usd = cost_usd
 
     @guidance
         -- Only the dispatcher ends wakes. Wakes end by the harness
@@ -1752,6 +1769,11 @@ rule EndWake {
         -- With no labels reported, what the wake said carries every
         -- label anything in relay has, private, and the static labels
         -- of every tool the role is granted.
+        -- A wake's usage and cost come from agentloop's outcome line. A
+        -- conversation's cost is the sum of the last cost agentloop's
+        -- usage_update gave for each of its sessions, and is null if any
+        -- usage_update came without one. A usage or cost that is not
+        -- one is dropped rather than refused, so a wake always ends.
 }
 
 rule InterruptedWakeIsKept {

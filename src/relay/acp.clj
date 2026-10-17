@@ -63,8 +63,10 @@
   "What has been learned so far: the client's requests still waiting for an
   answer (id to method, and the session a load or resume names), the
   sessions the conversation used, in the order it first used them, and
-  how the last answered request ended."
-  {:requests {} :sessions [] :last nil})
+  how the last answered request ended. Also what each session has cost
+  so far, from the agent's usage_update, and whether any usage_update came
+  without a cost."
+  {:requests {} :sessions [] :last nil :costs {} :unpriced false})
 
 (defn- parse [line]
   (try (json/parse-string line) (catch Exception _ nil)))
@@ -86,7 +88,21 @@
                   (assoc :session (when (map? params) (session-id (get params "sessionId"))))))
       obs)))
 
-(defn- agent-said [obs msg]
+(defn- usage-update
+  "What an agent's usage_update says a session has cost so far: the
+  session and an amount in US dollars, or the session and nil when it
+  carries no cost in dollars. Nil for any other message."
+  [msg]
+  (let [params (get msg "params")
+        u (when (map? params) (get params "update"))]
+    (when (and (= "session/update" (get msg "method")) (map? u)
+               (= "usage_update" (get u "sessionUpdate")))
+      (let [{amount "amount" currency "currency"} (let [c (get u "cost")] (when (map? c) c))]
+        [(session-id (get params "sessionId"))
+         (when (and (= "USD" currency) (number? amount) (Double/isFinite (double amount)) (>= amount 0))
+           (double amount))]))))
+
+(defn- agent-answered [obs msg]
   (let [{id "id" result "result" error "error"} msg
         request (when (and (contains? msg "id") (not (contains? msg "method")))
                   (get-in obs [:requests id]))]
@@ -108,6 +124,14 @@
             (if (string? stop) (assoc obs :last {:stop stop}) obs))
           :else obs)))))
 
+(defn- agent-said [obs msg]
+  (if-let [[session cost] (usage-update msg)]
+    ;; Each cost is the session's total so far, so the latest one stands.
+    (if (and session cost)
+      (assoc-in obs [:costs session] cost)
+      (assoc obs :unpriced true))
+    (agent-answered obs msg)))
+
 (defn observe
   "The observer after one complete line went by in a direction. Total: a
   line that is not JSON, or JSON that is not a message relay understands,
@@ -116,7 +140,8 @@
   Sessions come from the answers: the id a successful session/new returns,
   and the id a successful session/load or session/resume named. A load the
   agent refused used no session. Notifications that mention a session
-  (session/update, say) add nothing."
+  (session/update, say) add no session, though a usage_update records
+  what its session has cost so far."
   [obs direction line]
   (let [msg (when (string? line) (parse line))]
     (if-not (map? msg)
@@ -134,11 +159,20 @@
     (:stop last) (str "Conversation ended. Its last turn ended with " (:stop last) ".")
     (:error last) (str "Conversation ended. Its last request failed: " (:error last))))
 
+(defn cost-usd
+  "What the conversation cost in US dollars: the sum of each session's
+  last reported cost. Nil when no session reported one, or when any
+  usage_update came without a cost, since then the sum would be short."
+  [{:keys [costs unpriced]}]
+  (when (and (seq costs) (not unpriced))
+    (reduce + 0.0 (vals costs))))
+
 (defn report
   "The report relay.dispatch/conversation-end-args takes, from what was
   observed and the agent's exit code."
   [obs exit]
-  {:exit exit :sessions (:sessions obs) :said (said obs)})
+  (cond-> {:exit exit :sessions (:sessions obs) :said (said obs)}
+    (cost-usd obs) (assoc :cost-usd (cost-usd obs))))
 
 (defn trace-entry
   "One line of a --trace file: who sent the line, and the message, or the

@@ -102,11 +102,30 @@
          (cond-> {:id id :name name :input input}
            (string? input_sha256) (assoc :input-sha256 input_sha256)))))
 
+(defn usage
+  "A run's token counts from its outcome line, as relay records them, or
+  nil when the line has none. A count that is not a whole number of zero
+  or more is taken as 0."
+  [u]
+  (when (map? u)
+    (let [n (fn [k] (let [x (get u k)] (if (and (integer? x) (>= x 0)) x 0)))]
+      {:input (n :input_tokens) :output (n :output_tokens)
+       :cache-read (n :cache_read_tokens) :cache-write (n :cache_write_tokens)})))
+
+(defn cost-usd
+  "What a run cost in US dollars, from its outcome line's cost_usd, or nil.
+  agentloop leaves it out when any call's model is unpriced, and nil
+  stays nil: an unknown cost is never taken as 0."
+  [x]
+  (when (and (number? x) (Double/isFinite (double x)) (>= (double x) 0.0))
+    (double x)))
+
 (defn classify
   "How a run ended. Pure: takes the parsed outcome line (nil when there was
   none), the exit code, stderr, the session id and the time."
   [{:keys [outcome exit stderr session now]}]
-  (let [{:keys [reason text error held labels label_sources refused forbidden]} (when (map? outcome) outcome)
+  (let [{:keys [reason text error held labels label_sources refused forbidden cost_usd] :as line}
+        (when (map? outcome) outcome)
         error (when (map? error) error)
         ;; Whatever the outcome line held, only strings are shown to a person.
         said-from (fn [x] (when (and (string? x) (not (str/blank? x))) x))
@@ -116,6 +135,9 @@
                                  :crashed (= "timeout" exit)
                                  :cut-short (or (= "timeout" exit) (= "canceled" reason))}
                                 more)
+                   ;; What the run used and cost, whatever came of it.
+                   (usage (:usage line)) (assoc :usage (usage (:usage line)))
+                   (cost-usd cost_usd) (assoc :cost-usd (cost-usd cost_usd))
                    ;; The session's labels at the end, which what it said
                    ;; carries. Without them relay assumes the worst.
                    (sequential? labels) (assoc :labels (vec labels))

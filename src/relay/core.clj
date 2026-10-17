@@ -821,7 +821,7 @@
       true (update :holds (fn [hs] (reduce #(assoc-in %1 [%2 :delivered] seq) hs resolves))))))
 
 (defmethod evolve* "wake/ended" [state {:keys [at data labels]}]
-  (let [{:keys [wake outcome exit crashed cut-short session sessions said transcript held]} data
+  (let [{:keys [wake outcome exit crashed cut-short session sessions said transcript held usage cost-usd]} data
         role-id (get-in state [:wakes wake :role])]
     (cond-> (update-in state [:wakes wake] assoc
                        :status :ended :ended-at (inst at) :outcome outcome :exit exit
@@ -829,6 +829,10 @@
                        :session session :said said :transcript transcript :labels (union labels))
       sessions (assoc-in [:wakes wake :sessions] (vec sessions))
       (seq held) (assoc-in [:wakes wake :held] (vec held))
+      ;; What its model calls used and cost. A wake from before relay kept
+      ;; them, or whose cost is unknown, has none: never 0.
+      (map? usage) (assoc-in [:wakes wake :usage] usage)
+      (number? cost-usd) (assoc-in [:wakes wake :cost-usd] cost-usd)
       ;; A wake the harness failed, one cut short at its deadline, or one
       ;; stopped for the operator to decide on a call, is kept to be
       ;; resumed. A conversation is not.
@@ -1609,8 +1613,25 @@
                    " because they carried private data, which " role " may not see.")
               :role role :labels (id-labels state role)))))
 
+(defn wake-usage
+  "Token counts as a wake records them, {:input :output :cache-read
+  :cache-write}, each a whole number of zero or more, or nil when `u` is
+  not that."
+  [u]
+  (when (and (map? u) (= #{:input :output :cache-read :cache-write} (set (keys u)))
+             (every? #(and (integer? %) (>= % 0)) (vals u)))
+    (into {} (map (fn [[k v]] [k (long v)])) u)))
+
+(defn wake-cost
+  "A cost in US dollars as a wake records it, or nil when `x` is not a
+  finite amount of zero or more."
+  [x]
+  (when (and (number? x) (Double/isFinite (double x)) (>= (double x) 0.0))
+    (double x)))
+
 (defn- end-wake [{:keys [state config] :as tx} wake-id {:keys [outcome exit crashed cut-short session sessions said
-                                                              transcript resets-at held labels] :as report}]
+                                                              transcript resets-at held labels usage cost-usd]
+                                                       :as report}]
   (let [wake (get-in state [:wakes wake-id])
         ;; What the session said, and the input of any call it left held,
         ;; are its own text, with the labels it had gathered by the end:
@@ -1638,7 +1659,9 @@
                                      :cut-short (boolean cut-short) :session session :said said
                                      :transcript transcript}
                               (some? sessions) (assoc :sessions (vec sessions))
-                              (seq held) (assoc :held (mapv :id held)))
+                              (seq held) (assoc :held (mapv :id held))
+                              (wake-usage usage) (assoc :usage (wake-usage usage))
+                              (wake-cost cost-usd) (assoc :cost-usd (wake-cost cost-usd)))
             (:said-labels tx))
       (note-harness tx (:harness wake) outcome resets-at said)
       (reduce #(open-hold %1 wake session %2) tx held)
