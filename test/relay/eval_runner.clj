@@ -24,7 +24,7 @@
 
   The run directory holds run.json (what was run, on what), results.jsonl
   (one row per scored trial, in Inspect AI's sample shape), errors.jsonl,
-  summary.json and prompt-surface.edn (what every staging role sees before
+  traces.otlp.jsonl (see relay.eval-otel), summary.json and prompt-surface.edn (what every staging role sees before
   any memo, whose digest is in run.json)."
   (:require [babashka.cli :as cli]
             [babashka.fs :as fs]
@@ -36,6 +36,7 @@
             [clojure.walk :as walk]
             [relay.dispatch :as dispatch]
             [relay.eval :as eval]
+            [relay.eval-otel :as eval-otel]
             [relay.eval-trial :as trial]
             [relay.inbound :as inbound]
             [relay.render :as render]
@@ -164,6 +165,23 @@
               (record-errors! dir cid t again true)
               again))))))
 
+(defn- agentloop-for-traces
+  "The agentloop binary the run used, for `agentloop otel`."
+  []
+  (let [bin (or support/agentloop-bin (:bin trial/staged-harness))]
+    (when (and bin (fs/executable? bin)) (str bin))))
+
+(defn- record-traces!
+  "Appends a trial's lines to traces.otlp.jsonl. A wake whose export fails
+  is reported on stderr and left out; the run goes on."
+  [dir bin run-id kase t r started ended]
+  (let [{:keys [lines problems]}
+        (eval-otel/trial-lines bin {:run-id run-id :case-id (get-in kase [:eval :id]) :tier (get-in kase [:eval :tier])
+                                    :version (get-in kase [:eval :version]) :trial t :scores (:scores r)
+                                    :errors (:errors r) :started started :ended ended :data-dir (:dir r)})]
+    (spit (str (fs/path dir "traces.otlp.jsonl")) (apply str (map #(str % "\n") lines)) :append true)
+    (doseq [pr problems] (binding [*out* *err*] (println pr)))))
+
 (defn run!
   "Runs `files` (eval cases) and writes the records. Returns {:run :summary
   :dir}."
@@ -175,6 +193,8 @@
         dir (str (fs/path (staging/canonical out (System/getProperty "user.home")) id))
         _ (fs/create-dirs dir)
         _ (spit (str (fs/path dir "errors.jsonl")) "")
+        _ (spit (str (fs/path dir "traces.otlp.jsonl")) "")
+        trace-bin (agentloop-for-traces)
         surface (prompt-surface dir repo-root)
         _ (spit (str (fs/path dir "prompt-surface.edn")) (with-out-str (pprint/pprint surface)))
         asked (if live? (or model default-live-model) (trial/staging-model))
@@ -208,7 +228,10 @@
                                                          (append-json-line (fs/path dir "errors.jsonl")
                                                                            {:class "budget" :id cid :epoch t :message why})
                                                          nil)
-                                                       (play-trial! dir file kase t opts budget))]
+                                                       (let [started (Instant/now)
+                                                             r (play-trial! dir file kase t opts budget)]
+                                                         (record-traces! dir trace-bin id kase t r started (Instant/now))
+                                                         r))]
                                              :when r]
                                          (do (println (trial-line cid t r))
                                              (when-not (:errors r)

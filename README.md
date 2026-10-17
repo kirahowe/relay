@@ -742,7 +742,14 @@ agentloop's change ids, a digest of the prompt surface and of each case),
 `results.jsonl` (one row per scored trial in Inspect AI's sample shape, with
 scores `C` and `I`), `errors.jsonl`, `summary.json` (pass rate with a Wilson
 interval, pass^k for k of 1, 3 and the trial count, per-grader pass counts,
-mean wakes, requests, tokens and cost) and the terminal report. Usage and cost
+mean wakes, requests, tokens and cost), `traces.otlp.jsonl` and the terminal
+report. The traces file is the run as OpenTelemetry GenAI spans in OTLP/JSON,
+one request per line: per trial, an `invoke_workflow` span named for the case
+with a `gen_ai.evaluation.result` event per grader, then one line per wake from
+`agentloop otel` (the same agentloop build the run used) with its runs under
+that workflow span. Content stays out of the wake spans. The GenAI conventions
+are at Development stability, so the names may change. A wake whose export
+fails is reported and left out. Usage and cost
 come from agentloop's transcripts, at the served model's rates. Judge graders
 may appear in a case but are not run yet; they are recorded as skipped.
 
