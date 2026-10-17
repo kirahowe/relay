@@ -89,6 +89,29 @@
     (is (lines "Harness x: limited, next try 2026-10-15 13:00"))
     (is (lines "Harness y: available"))))
 
+(deftest status-shows-this-weeks-spend-per-role
+  (let [at (Instant/parse "2026-10-13T12:00:00Z")
+        wake (fn [id role cost] {:id id :role role :outcome "ran" :status :ended :started-at at :ended-at at
+                                 :cost-usd cost})
+        state (-> core/empty-state
+                  (assoc :wakes {1 (wake 1 "hub" 0.5) 2 (wake 2 "hub" 0.25) 3 (wake 3 "clerk" nil)
+                                 4 (assoc (wake 4 "clerk" 1.0) :ended-at (Instant/parse "2026-10-06T12:00:00Z"))}))
+        lines (vec (render/status state utc t0 {:budget {:weekly-usd 15}}))
+        section (take 5 (drop-while #(not (str/starts-with? % "Spend this week")) lines))]
+    (is (= ["Spend this week, from Monday 2026-10-12"
+            "  clerk                $0.00, 1 wake without a cost"
+            "  hub                  $0.75"
+            "  total                $0.75 of a $15.00 weekly budget, 1 wake without a cost"
+            "  earlier weeks: 2026-10-05 $1.00, 2026-09-28 $0.00, 2026-09-21 $0.00, 2026-09-14 $0.00"]
+           section))
+    (testing "without a budget, the total stands alone"
+      (is (some #{"  total                $0.75, 1 wake without a cost"} (render/status state utc t0))))
+    (testing "a cost under a cent is not shown as nothing"
+      (is (some #{"  total                <$0.01"}
+                (render/status (assoc core/empty-state :wakes {1 (wake 1 "hub" 0.0000105)}) utc t0))))
+    (testing "nothing to show without wakes or a budget"
+      (is (not-any? #(str/starts-with? % "Spend") (render/status core/empty-state utc t0))))))
+
 ;; --- memos, notes and the rest
 
 (deftest an-inbox-indents-every-line-of-a-memo

@@ -598,6 +598,17 @@ value TokenUsage {
     cache_write: Integer
 }
 
+value WeekSpend {
+    -- The Monday the week starts on, at midnight in config.timezone, or
+    -- at that Monday's first moment when a clock change skips midnight.
+    week: Date
+    -- The sum of cost_usd over the wakes that ended in the week, by role.
+    cost_usd: Map<Role, Decimal>
+    -- The wakes that ran in the week with no cost_usd, by role. Their
+    -- cost is unknown, so it is counted beside the sum, never in it.
+    unpriced: Map<Role, Integer>
+}
+
 entity Hold {
     -- A tool call agentloop held for a person. The id is the seq of the
     -- event that opened it.
@@ -2236,6 +2247,16 @@ rule NotificationFailed {
         -- The wait doubles from retry_base up to retry_ceiling, as for a
         -- memo, and relay gives up after notification_attempts tries.
 }
+
+-- Spend
+
+-- relay status shows this week's WeekSpend: each role's spend, the
+-- total, and the wakes that ran without a cost. Below it is the total of
+-- each of the four weeks before. It is worked out from the wakes when
+-- asked, and nothing is recorded for it. A wake belongs to the week it
+-- ended in, so one that ends at Monday 00:00 belongs to the new week.
+-- Spend is shown and nothing more: relay never stops or slows a role
+-- for what it costs.
 
 -- Tools
 

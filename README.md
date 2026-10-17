@@ -482,7 +482,21 @@ Anthropic's API does; OpenAI's does not.
 
 Talk to a role with `relay chat <role>` in this terminal, or from an ACP
 client with `relay acp <role>`. `relay status` shows roles, open work,
-harnesses and recent wakes, and `relay help` lists every command.
+harnesses, this week's spend and recent wakes, and `relay help` lists
+every command.
+
+### Spend
+
+Each wake records the tokens its model calls used and what they cost in
+US dollars, as agentloop reports them on its outcome line. A
+conversation records the cost agentloop last reported for each of its
+sessions. `relay status` shows what each role has spent this week and
+the total, then the total for each of the four weeks before. A week
+starts on Monday at midnight in relay's time zone.
+
+A wake on a model agentloop has no prices for has no cost, which is not
+the same as costing nothing. relay never counts it as 0. Status shows
+how many wakes ran without a cost beside the spend.
 
 ### relay chat
 

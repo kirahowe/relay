@@ -15,6 +15,7 @@
             [relay.config :as config]
             [relay.core :as core]
             [relay.reports :as reports]
+            [relay.spend :as spend]
             [relay.text :as text])
   (:import (java.time Instant ZoneId)
            (java.time.format DateTimeFormatter)))
@@ -86,9 +87,41 @@
        (text/for-operator (core/union labels id-ls)
                           (format "    dead  [%d] %s (relay retry %s)" memo-id subject id))))))
 
+(defn- dollars
+  "An amount in US dollars to the cent. One above zero that rounds to
+  nothing is shown as under a cent, so a priced wake never reads as free."
+  [x]
+  (let [x (double x)]
+    (if (and (pos? x) (< x 0.005)) "<$0.01" (format "$%.2f" x))))
+
+(def spend-weeks
+  "How many weeks `relay status` shows spend for: this one and the ones
+  before it."
+  5)
+
+(defn spend
+  "This week's spend per role and the total, against the weekly budget if
+  there is one, and the total of each week before. `weeks` is
+  relay.spend/weekly's result, newest first. A role's id carries its
+  labels."
+  [state weeks budget]
+  (let [[{:keys [week roles cost-usd unpriced]} & earlier] weeks
+        without (fn [n] (when (pos? n) (str ", " n (if (= 1 n) " wake" " wakes") " without a cost")))]
+    (concat
+     ["" (str "Spend this week, from Monday " week)]
+     (for [[role {c :cost-usd n :unpriced}] (sort-by key roles)]
+       (text/for-operator (core/id-labels state role)
+                          (format "  %-20s %s%s" role (dollars c) (str (without n)))))
+     [(str (format "  %-20s %s" "total" (dollars cost-usd))
+           (when budget (str " of a " (dollars budget) " weekly budget"))
+           (without unpriced))]
+     (when (seq earlier)
+       [(str "  earlier weeks: " (str/join ", " (for [w earlier] (str (:week w) " " (dollars (:cost-usd w))))))]))))
+
 (defn status
   "Roles with their routines and open work, harnesses, the operator's
-  inbox and the latest wakes, as of `now`. `paused` is the lines to show
+  inbox, what the roles spent this week and the weeks before, and the
+  latest wakes, as of `now`. `paused` is the lines to show
   when relay is paused (relay.pause/recovery-lines), or nil."
   [state zone ^Instant now & [config paused]]
   (concat
@@ -128,6 +161,9 @@
              (filter #(core/active-role? state %) (config/research-roles config))))
    (when-let [ds (seq (filter #(core/awaiting-declassification? config %) (filter #(= :unread (:status %)) (vals (:memos state)))))]
      [(format "Memos waiting to be declassified: %s (relay declassify <memo>)" (str/join ", " (sort (map :id ds))))])
+   (let [budget (get-in config [:budget :weekly-usd])]
+     (when (or budget (seq (:wakes state)))
+       (spend state (spend/weekly (vals (:wakes state)) zone now spend-weeks) budget)))
    (when-let [recent (seq (take-last 5 (sort-by :id (vals (:wakes state)))))]
      (list* "" "Recent wakes"
            (for [{:keys [id role started-at status outcome crashed]} recent]
