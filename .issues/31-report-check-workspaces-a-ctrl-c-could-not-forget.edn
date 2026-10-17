@@ -1,0 +1,11 @@
+{:id 31
+ :title "Report check workspaces a Ctrl-C could not forget"
+ :status :ready
+ :type :bug
+ :priority :p3
+ :created "2026-10-17"
+ :updated "2026-10-17"
+ :tags #{}
+ :blocked-by #{}
+ :related #{"relay#24"}
+ :details "31-report-check-workspaces-a-ctrl-c-could-not-forget.md"}

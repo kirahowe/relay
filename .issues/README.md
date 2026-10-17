@@ -17,6 +17,7 @@
 | [2](2-trust-the-legacy-contaminated-items.md) | Trust the legacy contaminated items | chore | P2 |
 | [23](23-decide-who-syncs.md) | Decide who syncs ~/Sync/relay | chore | P3 |
 | [29](29-polish-the-morning-brief-text-and-share-a-timed-tool-runner.md) | Polish the morning brief text and share a timed tool runner | chore | P3 |
+| [31](31-report-check-workspaces-a-ctrl-c-could-not-forget.md) | Report check workspaces a Ctrl-C could not forget | bug | P3 |
 
 ### Review
 
