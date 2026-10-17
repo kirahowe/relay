@@ -14,7 +14,7 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [2](2-trust-the-legacy-contaminated-items.md) | Trust the legacy contaminated items | chore | P2 |
-| [23](23-decide-who-syncs.md) | Decide who syncs ~/Sync/relay | chore | P3 |
+| [34](34-give-the-quarantined-reader-a-read-only-fetch-that-takes-no.md) | Give the quarantined reader a read-only fetch that takes no free URLs | feature | P2 |
 | [33](33-tidy-the-deploy-cleanup-message-and-tool-start-failures.md) | Tidy the deploy cleanup message and tool start failures | chore | P3 |
 
 ### Review
@@ -58,7 +58,9 @@
 
 ## Done
 
-_none_
+| ID | Title | Type | Priority |
+| --- | --- | --- | --- |
+| [23](23-decide-who-syncs.md) | Decide who syncs ~/Sync/relay | chore | P3 |
 
 ## Dropped
 

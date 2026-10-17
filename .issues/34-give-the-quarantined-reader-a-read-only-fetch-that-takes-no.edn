@@ -1,0 +1,11 @@
+{:id 34
+ :title "Give the quarantined reader a read-only fetch that takes no free URLs"
+ :status :ready
+ :type :feature
+ :priority :p2
+ :created "2026-10-17"
+ :updated "2026-10-17"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "34-give-the-quarantined-reader-a-read-only-fetch-that-takes-no.md"}
