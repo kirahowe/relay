@@ -378,3 +378,14 @@
               (eval/case-problems (-> (et/read-case "test/scenarios/fact-validity-window.edn" defaults)
                                       (update :graders conj {:id :j2 :gating? true :judge {:rubric :r :evidence []}}))
                                   defaults)))))
+
+(deftest a-failed-check-shows-instants-as-text
+  (let [at (java.time.Instant/parse "2026-10-06T03:00:00Z")
+        line (scenario/check {:sent [{:at at}]} [:has :sent {:at "never"}])]
+    (is (str/includes? line "\"2026-10-06T03:00:00Z\""))
+    (is (not (str/includes? line "#object")))))
+
+(deftest a-result-row-names-the-served-models
+  (is (= ["claude-haiku-5-5"]
+         (:served_models (eval/result-row {:eval {:id "x" :tier :regression :version 1}} 1 {}
+                                          {:usage {} :models ["claude-haiku-5-5"]} "/d")))))

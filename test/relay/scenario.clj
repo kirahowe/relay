@@ -238,8 +238,10 @@
     :event events
     :sent sent))
 
-(defn- brief [x]
-  (let [s (pr-str x)]
+(defn- brief
+  "x as one line of at most 240 characters, instants as their ISO text."
+  [x]
+  (let [s (pr-str (walk/postwalk #(if (instance? java.time.Instant %) (str %) %) x))]
     (if (> (count s) 240) (str (subs s 0 240) "...") s)))
 
 (defn check

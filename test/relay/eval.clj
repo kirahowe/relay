@@ -257,6 +257,7 @@
              :cache-read (reduce + 0 (map :cache-read-tokens wakes))
              :cache-write (reduce + 0 (map :cache-write-tokens wakes))}
      :cost-usd (when (every? some? costs) (reduce + 0.0 costs))
+     :models (vec (distinct (mapcat :models wakes)))
      :operator-memos (count (filter #(= "operator" (:to %)) (scenario/items world :memo)))
      :sent (count (scenario/items world :sent))}))
 
@@ -391,6 +392,7 @@
    :usage {:input (:input usage) :output (:output usage)
            :cache_read (:cache-read usage) :cache_write (:cache-write usage)}
    :cost_usd cost-usd
+   :served_models (:models totals)
    :wakes (:wakes totals)
    :requests (:requests totals)
    :tool_calls (:tool-calls totals)
