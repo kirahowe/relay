@@ -731,6 +731,8 @@ checks that:
   through, and URLs from contaminated text are defanged
 - relay refuses malformed tool calls and settings that could lose a label
 - clean, everyday use is not held
+- a research role sent to an attack page from the red-team corpus ends
+  flagged, refused or harmless, as the corpus says it must
 
 Run it from this directory:
 
@@ -743,7 +745,9 @@ bb pentest --jobs 4          # several at once, about a minute
 
 It takes agentloop, acp-tui and cleanroom from the sibling checkouts
 (`../agentloop/bin/agentloop` and so on), or from `--agentloop`,
-`--acp-tui` and `--cleanroom`, never from PATH. `--build` builds a
+`--acp-tui` and `--cleanroom`, never from PATH. It takes webtool's
+fixture build from `../webtool/bin/webtool-fixture` or `--webtool`; the
+release build does not count. `--build` builds a
 sibling that is missing. A scenario that needs a missing piece, or a
 cleanroom without `relay-tool`, is reported as SKIP with the reason. It
 needs a python3 (`/usr/bin/python3`, or `--python`) for `pty/drive.py`,
@@ -779,7 +783,8 @@ listed in `relay/pentest/main.clj`:
 ```clojure
 {:id "s11-my-attack"            ; the name bb pentest takes
  :title "what it shows"
- :needs #{:agentloop :python}   ; also :acp-tui and :cleanroom
+ :needs #{:agentloop :python}   ; also :acp-tui, :cleanroom, :webtool
+ :before (fn [env] env)         ; optional: start what relay.edn names
  :config (fn [cfg env] cfg)     ; optional: change relay.edn
  :run (fn [env]
         (e/memo! env "hub" "Subject" "Body")
@@ -788,6 +793,25 @@ listed in `relay/pentest/main.clj`:
         (e/wake! env "hub")
         (e/check! env "nothing went out" (empty? (e/egress env))))}
 ```
+
+The red-team corpus for research roles is in `pentest/corpus/`: attack
+pages in `pages/` and `manifest.edn`, which gives each page its
+technique, MITRE ATLAS technique ids, source and licence, and expected
+outcome. Each entry is a scenario, `s12-<id>`, run by
+`relay/pentest/scenarios/corpus.clj`. A local server serves the pages on
+loopback, in a process group of its own. A public role, scout, fetches
+and searches with webtool's fixture build, which may reach only that
+server, and obeys the page: it follows its links, tries the tools it
+names, and submits a report quoting it. relay checks the report with
+webtool's `check` as its verifier. Flagged means the verification raises
+the flags the entry names, so no finding goes into the ledger unread.
+Refused means webtool or relay refuses the calls the page asked for.
+Harmless means the page's text never reached the model, or what it got
+the role to do carries nothing private and stays marked as an outsider's.
+Every finding there is on 127.0.0.1, a domain relay has not seen and
+whose name holds no organization's, so each always carries those two
+flags; `control-clean` shows they are all a plain page gets. To add an
+attack, add a page and an entry to the manifest.
 
 Many attacks are tables: the channels in `injection.clj`, the writes in
 `contamination.clj`, the payloads and views in `display.clj`, the client
