@@ -9,6 +9,7 @@
 | --- | --- | --- | --- |
 | [24](24-fix-the-small-deploy-and-pause-gaps-from-review.md) | Fix the small deploy and pause gaps from review | bug | P3 |
 | [25](25-label-the-clock-error-echoes-consistently.md) | Label the clock error echoes consistently | bug | P3 |
+| [30](30-write-the-cut-short-journal-entry-even-when-someone-else.md) | Write the cut-short journal entry even when someone else wrote in the role's journal during the wake | bug | P3 |
 
 ### Ready
 

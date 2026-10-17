@@ -1,0 +1,11 @@
+{:id 30
+ :title "Write the cut-short journal entry even when someone else wrote in the role's journal during the wake"
+ :status :inbox
+ :type :bug
+ :priority :p3
+ :created "2026-10-17"
+ :updated "2026-10-17"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "30-write-the-cut-short-journal-entry-even-when-someone-else.md"}
