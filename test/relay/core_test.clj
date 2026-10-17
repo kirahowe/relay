@@ -95,6 +95,30 @@
             w (run w "dispatcher" :wake/end {:wake (:id chat) :outcome "ran" :cut-short true})]
         (is (not= (:id chat) (:interrupted-wake (core/role (:state w) "clerk"))))))))
 
+(deftest a-wake-cut-short-leaves-a-journal-entry
+  (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "File the receipts" :body "b"}))
+        id (last-memo-id w)
+        w (wake w "clerk" {:outcome "ran" :cut-short true :dispatched true})
+        [entry & more] (core/journal (:state w) "clerk" nil)
+        event (last (filter #(= "journal/written" (:type %)) (:events w)))]
+    (is (nil? more))
+    (is (str/includes? (:text entry) "cut short at its deadline, at 2026-10-14 08:00"))
+    (is (str/includes? (:text entry) (str "memo " id " (File the receipts)")))
+    (is (= "dispatcher" (:actor event)))
+    (testing "it carries the labels of the memos it quotes"
+      (is (core/private? (:labels entry))))
+    (testing "not when the role wrote its own entry in that wake"
+      (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "s" :body "b"})
+                  (run "dispatcher" :wake/start {:role "clerk"}))
+            wake-id (:id (core/running-wake (:state w) "clerk"))
+            w (-> w (run "clerk" :journal/write {:text "Started on it."})
+                  (run "dispatcher" :wake/end {:wake wake-id :outcome "ran" :cut-short true}))]
+        (is (= ["Started on it."] (map :text (core/journal (:state w) "clerk" nil))))))
+    (testing "nor when the wake was not cut short"
+      (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "s" :body "b"}))
+            w (wake w "clerk" {:outcome "ran" :dispatched true})]
+        (is (empty? (core/journal (:state w) "clerk" nil)))))))
+
 (deftest a-memo-is-closed-only-by-its-recipient
   (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "File this" :body "Please."}))
         id (last-memo-id w)]
@@ -694,6 +718,22 @@
         (let [kept? (boolean (or (not= "ran" (:outcome w)) (:cut-short w)))
               held (:interrupted-wake (core/role s (:role w)))]
           (when-not (= kept? (= (:id w) held)) (fail! [:interrupted-wake (:id w) kept? held])))))
+    ;; A wake cut short at its deadline leaves a journal entry written
+    ;; while it ran: the role's own, or relay's saying it was cut short,
+    ;; which quotes its memos' subjects and so carries their labels.
+    (doseq [e batch :when (and (= "wake/ended" (:type e)) (get-in e [:data :cut-short]))
+            :let [w (get-in s [:wakes (get-in e [:data :wake])])]
+            :when (not (:chat w))
+            :let [entries (filter #(> (:id %) (:id w)) (get-in s [:journals (:role w)]))
+                  relay's (filter #(= "journal/written" (:type %)) batch)]]
+      (when (empty? entries) (fail! [:cut-short-without-journal (:id w)]))
+      (when (> (count relay's) 1) (fail! [:cut-short-journal-twice (:id w)]))
+      (doseq [j relay's
+              m (:memos w)
+              :let [mm (core/memo s m)]]
+        (when-not (and (str/includes? (get-in j [:data :text]) (:subject mm))
+                       (every? (set (:labels j)) (core/carried-memo-labels s mm)))
+          (fail! [:cut-short-journal-labels (:id w) m]))))
     ;; A routine has at most one open run.
     (doseq [[owner rs] (:routines s), [n _] rs]
       (when (> (count (filter #(and (= owner (:to %)) (= n (:routine %)) (= :unread (:status %))) memos)) 1)

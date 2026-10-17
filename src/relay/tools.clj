@@ -306,7 +306,7 @@
    {:class :read
     :description (str "Look up facts: what relay knows about the world. By default, the facts that"
                       " hold now. Narrow by `topic` (a topic includes those under it) or `search`"
-                      " (words in the text). `as_of` asks what held at another time; `known_at`"
+                      " (words in the text, best matches first). `as_of` asks what held at another time; `known_at`"
                       " asks what relay had recorded by then; `all` lists every fact, past and"
                       " future too.")
     :parameters (obj {:topic text :search text :as_of world-time :known_at world-time :all flag
@@ -314,13 +314,12 @@
     :read (fn [{:keys [state config] :as ctx} actor args]
             (let [public (public-reader? state config actor)
                   accept_contamination (or public (:accept_contamination args))
-                  q (merge (times ctx args) (select-keys args [:all])
-                           ;; A contaminated change never hides a clean record.
-                           {:clean (not accept_contamination) :public-only public})
-                  ;; A contaminated fact's text is not even searched unless
-                  ;; it is accepted, since a match would say something about it.
-                  found (core/facts state (merge q (select-keys args [:topic :search])))
-                  found (if accept_contamination found (remove #(core/contaminated? (:labels %)) found))
+                  ;; A contaminated change never hides a clean record, and
+                  ;; a contaminated fact's text is not even searched unless
+                  ;; it is accepted, since a match, or how it moves the
+                  ;; ranking of the others, would say something about it.
+                  found (core/facts-shown state (merge (times ctx args) (select-keys args [:all :topic :search]))
+                                          {:public public :accept accept_contamination})
                   ;; Said whether or not there are any: how many there are is
                   ;; up to whoever wrote them.
                   note (when-not accept_contamination
@@ -415,11 +414,7 @@
                       :accept_contamination accept})
     :read (fn [{:keys [state config]} actor {:keys [accept_contamination] :as args}]
             (let [public (public-reader? state config actor)
-                  limit (or (:limit args) 10)
-                  entries (if public
-                            (vec (take-last limit (filter #(core/shown-to-public? % (core/item-labels %))
-                                                          (core/journal state (own actor args) nil))))
-                            (core/journal state (own actor args) limit))]
+                  entries (core/journal-shown state (own actor args) (or (:limit args) 10) public)]
               (if (empty? entries)
                 "The journal is empty."
                 (show (for [{:keys [id at text] :as e} entries]

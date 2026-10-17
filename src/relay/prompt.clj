@@ -64,9 +64,65 @@
               " before trying the same thing again."))
        "\n\n" body "\n"))
 
+(def journal-entry-chars
+  "How much of each journal entry a wake's prompt shows. An entry longer
+  than this is cut, and the role can read it whole with `journal`."
+  600)
+
+(defn- cut [s n]
+  (let [s (str/trim (str s))]
+    (if (<= (count s) n)
+      s
+      ;; Never between the halves of a surrogate pair, such as an emoji.
+      (let [n (if (Character/isHighSurrogate (.charAt s (dec n))) (dec n) n)]
+        (str (str/trimr (subs s 0 n)) " [cut; read it whole with `journal`]")))))
+
+(defn- fmt-journal [zone entries public?]
+  (str "\n# Your journal\n\n"
+       (if (empty? entries)
+         "Your journal is empty.\n"
+         (str "Your latest entries, newest last. Read more with `journal`.\n"
+              (str/join (for [{:keys [id at text withheld]} entries]
+                          (str "\n## " (local at zone) "\n\n"
+                               (case withheld
+                                 :contaminated
+                                 (if public?
+                                   ;; A public role's journal reads contaminated
+                                   ;; entries without asking.
+                                   (str "Entry " id " is withheld because it is contaminated. Reading it"
+                                        " with `journal` makes this session contaminated.")
+                                   (str "Entry " id " is withheld because it is contaminated. Read it with"
+                                        " `journal` and accept_contamination only if you need it."))
+                                 :unseen
+                                 (str "Entry " id " carries data this wake has not seen. Read it with"
+                                      " `journal` if you need it.")
+                                 (cut text journal-entry-chars))
+                               "\n")))))))
+
+(defn- fmt-topics [{:keys [topics left-out]} public?]
+  (str "\n# Fact topics\n\n"
+       (cond (seq topics) "How many facts hold now under each topic"
+             left-out "No facts are counted here"
+             :else "No facts hold now")
+       ;; Said whether or not there are any, as the facts tool says it.
+       (when-not public? ", not counting contaminated ones")
+       "."
+       (when (seq topics)
+         (str " Look them up with `facts` by topic or search.\n\n"
+              (str/join ", " (for [{:keys [topic count]} topics]
+                                (str (or topic "(no topic)") " (" count ")")))))
+       (when left-out
+         (str (if (seq topics) "\n\n" " ")
+              "Some facts carry data this wake has not seen, so they are not counted here."
+              " `facts` shows them."))
+       "\n"))
+
 (defn wake
-  "The prompt for one wake."
-  [{:keys [role memos note now zone resumed? decided]}]
+  "The prompt for one wake. `journal` is the tail of the role's journal
+  (relay.core/prompt-journal) and `fact-topics` the topics with a count
+  each (relay.core/prompt-fact-topics); either is left out when nil.
+  Both show only what the wake's labels already cover."
+  [{:keys [role memos note now zone resumed? decided journal fact-topics public?]}]
   (str "You are " (:title role) " (`" (:id role) "`). It is " (local now zone) ".\n\n"
        (cond
          (seq decided)
@@ -89,4 +145,6 @@
               (str/join (map #(fmt-memo zone %) memos)))
          "You have no open memos.\n")
        (when-not (str/blank? note)
-         (str "\n# Note from whoever woke you\n\n" note "\n"))))
+         (str "\n# Note from whoever woke you\n\n" note "\n"))
+       (when journal (fmt-journal zone journal public?))
+       (when fact-topics (fmt-topics fact-topics public?))))

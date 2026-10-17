@@ -16,9 +16,11 @@
             [relay.config :as config]
             [relay.reports :as reports]
             [relay.schedule :as schedule]
+            [relay.search :as search]
             [relay.spend :as spend]
             [relay.text :as text])
-  (:import (java.time Duration Instant LocalDate LocalDateTime)))
+  (:import (java.time Duration Instant LocalDate LocalDateTime)
+           (java.time.format DateTimeFormatter)))
 
 (def operator "operator")
 (def dispatcher "dispatcher")
@@ -328,25 +330,44 @@
 (defn facts
   "The facts holding at world time :as-of, as recorded at :known-at, by id.
   With :all, every fact recorded by then and not retracted, whatever its
-  validity. :topic keeps that topic and the topics under it; :search keeps
-  facts whose text contains it, ignoring case. With :clean, each fact as
+  validity. :topic keeps that topic and the topics under it. :search ranks
+  what is left by how well its text matches (relay.search, BM25), best
+  first and ties by id, keeping only facts that share a word with it; a
+  search with no words in it keeps facts whose text contains it, ignoring
+  case. Every filter applies before the ranking, so the ranking says
+  nothing about the facts left out. With :clean, each fact as
   fact-as-shown gives it, so a contaminated change does not hide it. With
   :public-only, only facts a public role can see now (fact-shown-to-public?
   of the current version, as fact_history asks) whose version shown is
   public too, before any search, so a search or an earlier known_at says
-  nothing about the others."
-  [state {:keys [as-of known-at topic search all clean public-only]}]
+  nothing about the others. With :withhold-contaminated, a fact whose
+  version shown is contaminated is left out, before any search too."
+  [state {:keys [as-of known-at topic search all clean public-only withhold-contaminated]}]
   (let [as-of (or as-of known-at (:last-at state))
-        needle (some-> search str/lower-case)]
-    (->> (vals (:facts state))
-         (filter #(or (not public-only) (fact-shown-to-public? state (fact-as-known % nil))))
-         (keep #(fact-as-shown % known-at clean))
-         (filter #(or (not public-only) (and (:public %) (not (private? (item-labels %))))))
-         (filter #(and (if all (not (:retracted %)) (holds-at? % as-of))
-                       (under-topic? topic (:topic %))
-                       (or (nil? needle) (str/includes? (str/lower-case (:text %)) needle))))
-         (sort-by :id)
-         vec)))
+        found (->> (vals (:facts state))
+                   (filter #(or (not public-only) (fact-shown-to-public? state (fact-as-known % nil))))
+                   (keep #(fact-as-shown % known-at clean))
+                   (filter #(or (not public-only) (and (:public %) (not (private? (item-labels %))))))
+                   (remove #(and withhold-contaminated (contaminated? (:labels %))))
+                   (filter #(and (if all (not (:retracted %)) (holds-at? % as-of))
+                                 (under-topic? topic (:topic %))))
+                   (sort-by :id))]
+    (vec (if (blank? search)
+           found
+           (or (search/rank found search {:text-fn :text :tie-fn :id})
+               (let [needle (str/lower-case search)]
+                 (filter #(str/includes? (str/lower-case (:text %)) needle) found)))))))
+
+(defn facts-shown
+  "The facts a reader is shown for a query (as for facts, without :clean
+  and :public-only, which this sets). A public reader is shown only public
+  facts, contaminated or not. Any other, unless it accepts contamination,
+  is shown each fact as fact-as-shown gives it to a clean reader, and none
+  whose version shown is contaminated."
+  [state q {:keys [public accept]}]
+  (let [accept (or public accept)]
+    (facts state (assoc q :clean (not accept) :public-only (boolean public)
+                        :withhold-contaminated (not accept)))))
 
 (defn notes [state owner] (vec (sort-by :name (vals (get-in state [:notes owner])))))
 
@@ -355,6 +376,17 @@
   [state owner limit]
   (let [entries (get-in state [:journals owner] [])]
     (if limit (vec (take-last limit entries)) entries)))
+
+(declare shown-to-public?)
+
+(defn journal-shown
+  "The last `limit` entries of a role's journal that a reader may be shown,
+  oldest first. A public reader is shown only public entries, and the
+  others are not counted."
+  [state owner limit public]
+  (if public
+    (vec (take-last limit (filter #(shown-to-public? % (item-labels %)) (journal state owner nil))))
+    (journal state owner limit)))
 
 (defn doc-version
   "A doc's version: the one written by event `version` if given, else the
@@ -567,22 +599,67 @@
     (let [{withheld true shown false} (group-by #(contaminated? (:labels %)) (notes state owner))]
       {:shown (vec shown) :withheld (count withheld)})))
 
+(def wake-journal-entries
+  "How many of its latest journal entries a wake's prompt shows a role."
+  3)
+
+(defn- within? [labels base] (every? (set base) labels))
+
+(defn prompt-journal
+  "The tail of a role's journal as a wake's prompt shows it: the entries
+  the journal tool would show for the last wake-journal-entries, oldest
+  first. The prompt never raises the wake's labels, so an entry whose
+  labels are not all among `base` (the wake's labels, wake-labels) is
+  marked :withheld, as :contaminated when it is, else as :unseen. The
+  role can still read it with `journal`, taking its labels on."
+  [state config owner base]
+  (mapv (fn [e]
+          (cond (within? (item-labels e) base) e
+                (contaminated? (:labels e)) (assoc e :withheld :contaminated)
+                :else (assoc e :withheld :unseen)))
+        (journal-shown state owner wake-journal-entries (public-role? config owner))))
+
+(defn prompt-fact-topics
+  "The fact topics a wake's prompt lists for a role: {:topics [{:topic
+  :count}], sorted, :left-out}, counting the facts that hold now under
+  exactly each topic (nil for facts with none). The facts are the ones
+  the facts tool shows with no arguments (only public ones to a public
+  role, none contaminated to any other) whose labels are all among
+  `base`, the wake's labels, so the prompt never raises them. :left-out
+  says whether any other was left out; their topics are not shown."
+  [state config role base]
+  (let [{in true out false} (group-by #(within? (item-labels %) base)
+                                      (facts-shown state {} {:public (public-role? config role)}))]
+    {:topics (->> (group-by :topic in)
+                  (map (fn [[topic group]] {:topic topic :count (count group)}))
+                  (sort-by #(or (:topic %) "~"))
+                  vec)
+     :left-out (boolean (seq out))}))
+
+(defn carried-memo-labels
+  "What a memo carried in a wake adds wherever its text is shown again:
+  memo-labels, and for a run of a routine that is not public, the
+  routine's labels, since its subject is the routine's name. A public memo
+  shows only its own text, which its labels already cover."
+  [state m]
+  (union (memo-labels state m)
+         (when (and (:routine m) (not (:public m))) (routine-labels state (:to m) (:routine m)))))
+
 (defn wake-labels
   "The labels of everything a wake's prompts are made of: the role's id,
   title and instructions, the notes shown, the memos it carries and the
   ids of their senders, the routines they are runs of, the note from
-  whoever woke it unless it was public, and the operator's reasons on the
+  whoever woke it unless it was public, the operator's reasons on the
   holds it carries back, unless the operator gave them knowing the role
   was public. A conversation has no prompt, only the instructions and
-  notes."
+  notes. The journal tail and fact topics in a wake's prompt show only
+  what these labels already cover (prompt-journal, prompt-fact-topics),
+  so they add nothing."
   [state config {:keys [role memos note note-public chat resolves]}]
   (let [ms (keep #(memo state %) memos)]
     (union (role-labels state role)
            (notes-labels (:shown (prompt-notes state config role)))
-           (mapcat #(memo-labels state %) ms)
-           ;; A public memo shows only its own text (a run's subject is the
-           ;; routine's name), which its labels already cover.
-           (mapcat #(when (and (:routine %) (not (:public %))) (routine-labels state (:to %) (:routine %))) ms)
+           (mapcat #(carried-memo-labels state %) ms)
            (when (and (not chat) (not (blank? note)) (not note-public)) [private-label])
            (when (some #(let [h (hold state %)]
                           ;; A reason the operator gave knowing the role was
@@ -1655,6 +1732,32 @@
                 :week (str week) :percent percent)))
     tx))
 
+(defn- journal-cut-short
+  "Writes a journal entry for a role whose wake was cut short at its
+  deadline before it wrote one, so its next wake knows: when, and which
+  memos the wake had. It quotes their subjects, so it carries their
+  labels, and it is public only when the wake was a public session and
+  every memo it quotes is public."
+  [{:keys [state config now] :as tx} wake]
+  (let [role (:role wake)
+        ms (keep #(memo state %) (:memos wake))
+        wrote? (some #(> (:id %) (:id wake)) (journal state role nil))]
+    (if (or (:chat wake) wrote?)
+      tx
+      (let [copied (apply union (map #(carried-memo-labels state %) ms))
+            public (boolean (and (:public-session wake) (not (private? (union (:labels tx) copied)))
+                                 (every? :public ms)))
+            at (.format (.atZone ^Instant now (config/zone config)) (DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm"))
+            text (str "Written by relay: this wake was cut short at its deadline, at " at
+                      ", before you wrote a journal entry. "
+                      (if (seq ms)
+                        (str "It had " (if (next ms) "memos " "memo ")
+                             (str/join ", " (for [m ms] (str (:id m) " (" (:subject m) ")")))
+                             ". ")
+                        "It had no memos. ")
+                      "Check what was done before carrying on.")]
+        (with-public tx public #(emit % "journal/written" {:owner role :text text} copied))))))
+
 (defn- end-wake [{:keys [state config] :as tx} wake-id {:keys [outcome exit crashed cut-short session sessions said
                                                               transcript resets-at held labels usage cost-usd]
                                                        :as report}]
@@ -1690,6 +1793,7 @@
                               (wake-cost cost-usd) (assoc :cost-usd (wake-cost cost-usd)))
             (:said-labels tx))
       (note-harness tx (:harness wake) outcome resets-at said)
+      (if cut-short (journal-cut-short tx wake) tx)
       (reduce #(open-hold %1 wake session %2) tx held)
       ;; A wake stopped for the operator has not failed its memos: it is
       ;; resumed once they decide.

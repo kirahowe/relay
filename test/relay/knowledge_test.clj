@@ -1,7 +1,9 @@
 (ns relay.knowledge-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [relay.core :as core]
-            [relay.core-test :refer [advance run t0 world]])
+            [relay.core-test :refer [advance run t0 world]]
+            [relay.tools :as tools])
   (:import (java.time Instant)))
 
 (defn- seed []
@@ -144,3 +146,59 @@
         (is (= 1 (count (core/docs (:state w) t0))))
         (is (= 3 (count (get-in (:state w) [:docs "household/plan.md" :versions]))))
         (is (= :not-found (:rejected (run w "clerk" :doc/remove {:path "household/plan.md"}))))))))
+
+;; --- search
+
+(defn- add-fact
+  "Adds a fact as clerk, from a session holding `labels`."
+  [w text & [{:keys [topic labels]}]]
+  (let [[state events] (core/run-command (:state w) {:type :fact/add :actor "clerk" :labels (or labels [])
+                                                     :args (cond-> {:text text} topic (assoc :topic topic))}
+                                         {:now (:now w) :config relay.core-test/cfg})]
+    (-> w (assoc :state state :last events) (update :events into events))))
+
+(defn- search-tool
+  "The facts tool's answer to a search, as clerk."
+  [w args]
+  (:content ((:read (get tools/builtin "facts")) {:state (:state w) :config relay.core-test/cfg :now (:now w)}
+             "clerk" args)))
+
+(deftest search-ranks-facts-by-how-well-they-match
+  (let [w (-> (seed)
+              (add-fact "The car insurance renews in March." {:topic "household/car"})
+              (add-fact "The car is blue." {:topic "household/car"})
+              (add-fact "Home insurance is with Acme." {:topic "household"})
+              (add-fact "The dentist is on Main Street."))
+        ids (fn [q] (mapv :id (core/facts (:state w) (assoc q :as-of (:now w)))))
+        [renews blue home _] (ids {})]
+    (testing "a fact matching every word comes first, and one matching none is left out"
+      (is (= renews (first (ids {:search "car insurance"}))))
+      (is (= #{renews blue home} (set (ids {:search "car insurance"})))))
+    (testing "words match by their stem"
+      (is (= [renews] (ids {:search "renewal"}))))
+    (testing "the topic filter applies before the ranking"
+      (is (= [renews blue] (ids {:search "car insurance" :topic "household/car"}))))
+    (testing "the tool keeps its format, best match first"
+      (let [out (search-tool w {:search "insurance renewal"})]
+        (is (str/starts-with? out (str "Fact " renews " [household/car], holds with no known start or end\n"
+                                       "  The car insurance renews in March.\nFact " home)))))))
+
+(deftest equal-matches-go-by-fact-id
+  (let [w (-> (seed) (add-fact "Bins go out on Tuesday.") (add-fact "Bins go out on Tuesday.")
+              (add-fact "Bins go out on Tuesday."))
+        ids (mapv :id (core/facts (:state w) {:as-of (:now w)}))]
+    (is (= ids (mapv :id (core/facts (:state w) {:as-of (:now w) :search "tuesday bins"}))))
+    (is (= ids (sort ids)))))
+
+(deftest a-contaminated-fact-does-not-move-the-ranking-of-the-others
+  ;; BM25 weighs a word by how many facts hold it, so a contaminated fact
+  ;; ranked alongside the others could reorder them. It is left out first.
+  (let [clean (-> (seed) (add-fact "Boat on the lake by the lake.") (add-fact "The car."))
+        dirty (add-fact clean "Car car car car." {:labels ["contaminated"]})
+        q {:search "boat car"}]
+    (is (= (search-tool clean q) (search-tool dirty q)))
+    (is (str/includes? (search-tool clean q) "The car.\nFact"))
+    (testing "accepted, it is ranked with them, and here it reorders them"
+      (let [out (search-tool dirty (assoc q :accept_contamination true))]
+        (is (str/includes? out "Car car car car."))
+        (is (< (str/index-of out "Boat") (str/index-of out "The car.")))))))

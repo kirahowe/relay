@@ -178,7 +178,12 @@
                            :now (not-before (:now inputs) (:last-at state))
                            :zone (config/zone config)
                            :resumed? (some? resumes)
-                           :decided holds})
+                           :decided holds
+                           ;; What the role would otherwise spend its first
+                           ;; calls on, as far as the wake's labels cover.
+                           :journal (core/prompt-journal state config role labels)
+                           :fact-topics (core/prompt-fact-topics state config role labels)
+                           :public? public?})
      :tools manifest
      ;; The session starts with the labels of everything in its prompts,
      ;; and each tool is policed by its class and static labels.

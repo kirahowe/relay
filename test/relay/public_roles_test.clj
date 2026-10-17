@@ -283,6 +283,74 @@
     (testing "its reads accept contamination by default"
       (is (str/includes? (:content (read-as w "scout" "notes" {})) "apply now")))))
 
+(deftest a-wake-prompt-shows-the-journal-tail-and-fact-topics-through-the-public-filter
+  (let [long-entry (apply str "Long. " (repeat 700 "x"))
+        w (-> (world)
+              (run "operator" :journal/write {:owner "hub" :text "First, too old to show."})
+              (run "operator" :journal/write {:owner "hub" :text "Second."})
+              (run "hub" :journal/write {:text "Third, after a page."} ["contaminated"])
+              (run "operator" :journal/write {:owner "hub" :text long-entry})
+              (in-wake "scout" #(run % "scout" :journal/write {:text "Scout found two grants."}))
+              (run "operator" :fact/add {:topic "household/car" :text "The car is blue."})
+              (run "operator" :fact/add {:topic "household/car" :text "The car is insured."})
+              (run "hub" :fact/add {:topic "salary" :text "Kira earns a lot."})
+              (run "hub" :fact/add {:topic "outside" :text "A page said so."} ["contaminated"])
+              (run-public :fact/add {:topic "grants" :text "Grants open in May."})
+              (run-public :memo/send {:to "scout" :subject "Go" :body "Look."})
+              (run "operator" :memo/send {:to "hub" :subject "Go" :body "Look."}))
+        hub (wake-request w "hub")
+        scout (wake-request w "scout")]
+    (testing "the last three entries, newest last, a long one cut, a contaminated one withheld"
+      (is (not (str/includes? (:prompt hub) "First")))
+      (is (< (str/index-of (:prompt hub) "Second.") (str/index-of (:prompt hub) "Long. ")))
+      (is (str/includes? (:prompt hub) "is withheld because it is contaminated"))
+      (is (not (str/includes? (:prompt hub) "after a page")))
+      (is (str/includes? (:prompt hub) "[cut; read it whole with `journal`]"))
+      (is (not (str/includes? (:prompt hub) (apply str (repeat 650 "x"))))))
+    (testing "topics with counts, leaving out contaminated facts"
+      (is (str/includes? (:prompt hub) "grants (1), household/car (2), salary (1)\n"))
+      (is (not (str/includes? (:prompt hub) "outside"))))
+    (testing "the hub's wake carries private, and nothing contaminated it did not show"
+      (is (= ["private"] (get-in hub [:policy :labels]))))
+    (testing "a public role is shown only public entries and public facts"
+      (is (str/includes? (:prompt scout) "Scout found two grants."))
+      (is (str/includes? (:prompt scout) "grants (1)\n"))
+      (is (not (str/includes? (:prompt scout) "salary")))
+      (is (not (str/includes? (:prompt scout) "household")))
+      (is (not (core/private? (get-in scout [:policy :labels])))))
+    (testing "a contaminated public item does not make a clean wake contaminated: it is left out"
+      (let [w (run-public w :fact/add {:topic "leads" :text "A page said apply."} ["contaminated"])
+            scout (wake-request w "scout")]
+        (is (str/includes? (:prompt scout) "grants (1)\n\nSome facts carry data this wake has not seen"))
+        (is (not (str/includes? (:prompt scout) "leads")))
+        (is (= [] (get-in scout [:policy :labels])))))))
+
+(deftest a-wake-s-prompt-never-raises-its-labels
+  ;; A clerk woken by a public memo starts clean. The private fact and
+  ;; journal entry stay out of its prompt rather than making it private,
+  ;; so its egress calls are not held for something it never chose to read.
+  (let [w (-> (world)
+              (run-public :role/add {:id "clerk" :title "Clerk" :instructions "File things."})
+              (run "operator" :fact/add {:topic "salary" :text "Kira earns a lot."})
+              (run-public :fact/add {:topic "office" :text "The office opens at nine."})
+              (run "operator" :journal/write {:owner "clerk" :text "Filed the payslip."})
+              (run-public :journal/write {:owner "clerk" :text "Checked the office hours."})
+              (run-public :memo/send {:to "clerk" :subject "Go" :body "Look."}))
+        clerk (wake-request w "clerk")
+        prompt (:prompt clerk)]
+    (is (= [] (get-in clerk [:policy :labels])))
+    (is (str/includes? prompt "Checked the office hours."))
+    (is (not (str/includes? prompt "payslip")))
+    (is (re-find #"Entry \d+ carries data this wake has not seen. Read it with `journal` if you need it." prompt))
+    (is (str/includes? prompt "office (1)\n\nSome facts carry data this wake has not seen, so they are not counted here."))
+    (is (not (str/includes? prompt "salary")))
+    (testing "woken by a private memo, the same clerk sees them"
+      (let [clerk (wake-request (run w "operator" :memo/send {:to "clerk" :subject "Pay" :body "File it."}) "clerk")]
+        (is (= ["private"] (get-in clerk [:policy :labels])))
+        (is (str/includes? (:prompt clerk) "Filed the payslip."))
+        (is (str/includes? (:prompt clerk) "office (1), salary (1)\n"))
+        (is (not (str/includes? (:prompt clerk) "not counted here")))))))
+
 (deftest a-public-role-is-not-given-the-operator-s-additions
   (let [w (run-public (world) :memo/send {:to "scout" :subject "Go" :body "Look."})
         w (run w "operator" :memo/send {:to "hub" :subject "Go" :body "Look."})
