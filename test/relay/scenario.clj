@@ -8,6 +8,7 @@
     {:doc    \"what it shows\"
      :live?  true                    ; may also run against the real model (default false)
      :model  {\"hub\" [reply ...]}     ; scripted replies, mock mode only
+     :reader [reply ...]             ; the quarantined reader's, mock mode only
      :steps  [step ...]
      :assert [assertion ...]}        ; checked after the last step
 
@@ -41,6 +42,10 @@
 
   A role's replies are used in order, and once they run out it answers
   {:text \"Done.\"}. {:memo-id pattern} works in tool inputs too.
+
+  :reader is a vector of replies too, for agentloop's quarantined
+  reader, whose requests name no role. Each is the reader's whole reply,
+  such as {:text \"{\\\"answer\\\": true}\"}.
 
   An assertion is [:has kind pattern], [:none kind pattern] or
   [:count kind pattern n]. Kind is one of :memo :hold :wake :role :routine
@@ -89,13 +94,16 @@
               time zone; without it the clock starts at the real time
     :settings {:grants {\"clerk\" {:tools [\"fail-demo\"]}}}, merged into the
               staging relay.edn: only :grants, and in them only :tools,
-              naming tools relay.staging defines, and :reports {:kinds
-              [...]}, which relay accepts only for a public role such as
-              the scout. A role's :tools and :reports replace its staging
+              naming tools relay.staging defines, :quarantine, naming
+              stand-in tools the role reads through read_quarantined
+              (relay checks they are :read and in its :tools), and
+              :reports {:kinds [...]}, which relay accepts only for a public role such as
+              the scout. A role's :tools, :quarantine and :reports replace its staging
               ones."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [relay.config :as config]
+            [relay.mock-anthropic :as mock]
             [relay.core :as core]
             [relay.staging :as staging]
             [relay.transcript :as transcript])
@@ -324,6 +332,23 @@
                  (str/join "\n" (keep :text (:system body))))]
     (second (re-find #"Your id is `([^`]+)`" system))))
 
+(def reader
+  "The key the quarantined reader's replies are kept under in a script.
+  The reader's requests name no role, and a keyword is never a role id."
+  ::reader)
+
+(defn script
+  "A scenario's whole script: :model's replies by role, and :reader's
+  under `reader`."
+  [model reader-replies]
+  (cond-> (or model {}) (seq reader-replies) (assoc reader (vec reader-replies))))
+
+(defn requester
+  "Whose turn a model request is: the role it is for, or `reader` for the
+  quarantined reader's."
+  [body]
+  (if (mock/reader-request? body) reader (role-of body)))
+
 (defn next-reply
   "The reply for the next request from `role`, and the counts after it.
   Pure: `used` is how many replies each role has been given."
@@ -375,19 +400,23 @@
       (nil? settings) []
       (not (map? settings)) [":settings is a map."]
       (not= #{:grants} (set (keys settings))) [":settings may hold only :grants."]
-      (not (map? (:grants settings))) [":settings :grants maps a role id to {:tools [...] :reports {:kinds [...]}}."]
+      (not (map? (:grants settings))) [":settings :grants maps a role id to {:tools [...] :quarantine [...] :reports {:kinds [...]}}."]
       :else
       (vec (for [[role grant] (:grants settings)
                  problem [(when-not (string? role) (str "A role in :settings :grants is a string, not " (pr-str role) "."))
-                          (when-not (and (map? grant) (seq grant) (every? #{:tools :reports} (keys grant))
-                                         (or (not (contains? grant :tools)) (vector? (:tools grant))))
-                            (str "The grant for " role " in :settings is {:tools [...] :reports {:kinds [...]}},"
-                                 " either or both, nothing else."))
+                          (when-not (and (map? grant) (seq grant) (every? #{:tools :reports :quarantine} (keys grant))
+                                         (or (not (contains? grant :tools)) (vector? (:tools grant)))
+                                         (or (not (contains? grant :quarantine)) (vector? (:quarantine grant))))
+                            (str "The grant for " role " in :settings is {:tools [...] :quarantine [...]"
+                                 " :reports {:kinds [...]}}, any of them, nothing else."))
                           (when (and (map? grant) (contains? grant :reports)
                                      (not (and (map? (:reports grant)) (= #{:kinds} (set (keys (:reports grant))))
                                                (kinds-ok? (:kinds (:reports grant))))))
                             (str "The :reports grant for " role " in :settings is {:kinds [...]}, a vector of distinct"
                                  " names of lower case letters, digits and hyphens, such as [\"grant\"]."))
+                          (when-let [bad (seq (remove allowed (when (map? grant) (:quarantine grant))))]
+                            (str "The grant for " role " names " (str/join ", " bad) " in :quarantine; :settings may"
+                                 " grant the reader only over " (str/join ", " (sort allowed)) "."))
                           (when-let [bad (seq (remove known (when (map? grant) (:tools grant))))]
                             (str "The grant for " role " names " (str/join ", " bad)
                                  "; :settings may grant only " (str/join ", " (sort known)) "."))]
@@ -400,7 +429,8 @@
   (reduce (fn [s [role grant]]
             (cond-> s
               (contains? grant :tools) (assoc-in [:grants role :tools] (:tools grant))
-              (contains? grant :reports) (assoc-in [:grants role :reports] (:reports grant))))
+              (contains? grant :reports) (assoc-in [:grants role :reports] (:reports grant))
+              (contains? grant :quarantine) (assoc-in [:grants role :quarantine] (:quarantine grant))))
           settings grants))
 
 (defn problems
@@ -440,5 +470,7 @@
                  (when-not (seq assert) ["A scenario needs :assert."])
                  (when-not (or (nil? model) (and (map? model) (every? vector? (vals model))))
                    [":model maps a role id to a vector of replies."])
+                 (when-not (or (nil? (:reader scenario)) (vector? (:reader scenario)))
+                   [":reader is a vector of the quarantined reader's replies."])
                  (keep step-problem steps)
                  (keep assertion-problem all-assertions)))))

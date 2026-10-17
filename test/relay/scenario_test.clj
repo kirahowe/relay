@@ -100,6 +100,15 @@
   (is (= "clerk" (scenario/role-of {:system "Your id is `clerk`"})))
   (is (nil? (scenario/role-of {:system []}))))
 
+(deftest the-readers-requests-have-a-script-of-their-own
+  (let [reader-body {:system "You answer one question about one document.\n\nThe user message holds..."}
+        script (scenario/script {"hub" [{:text "h"}]} [{:text "{\"answer\": true}"}])]
+    (is (= scenario/reader (scenario/requester reader-body)))
+    (is (= "hub" (scenario/requester {:system "Your id is `hub`"})))
+    (is (= {:text "{\"answer\": true}"} (first (scenario/next-reply script {} scenario/reader))))
+    (is (= {:text "h"} (first (scenario/next-reply script {} "hub"))))
+    (is (= {"hub" [{:text "h"}]} (scenario/script {"hub" [{:text "h"}]} nil)))))
+
 (deftest a-malformed-scenario-is-described
   (let [ok {:steps [{:tick 1}] :assert [[:has :memo {}]]}]
     (is (empty? (scenario/problems ok)))
@@ -108,6 +117,8 @@
     (is (seq (scenario/problems (assoc ok :steps [{:tick 1 :run ["x"]}]))))
     (is (seq (scenario/problems (assoc ok :assert [[:has :wombat {}]]))))
     (is (seq (scenario/problems (assoc ok :model {"hub" {:text "x"}}))))
+    (is (seq (scenario/problems (assoc ok :reader {:text "x"}))))
+    (is (empty? (scenario/problems (assoc ok :reader [{:text "x"}]))))
     (testing ":tty goes with :run, as strings"
       (is (empty? (scenario/problems (assoc ok :steps [{:run ["review" "1"] :tty ["a" "n"]}]))))
       (is (seq (scenario/problems (assoc ok :steps [{:tick 1 :tty ["a"]}]))))

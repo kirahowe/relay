@@ -271,7 +271,7 @@
                   ;; Wakes run as separate processes, so requests can arrive
                   ;; together: take this request's place in the script
                   ;; atomically, then choose the reply for that place.
-                  (let [role (scenario/role-of body)
+                  (let [role (scenario/requester body)
                         [before _] (swap-vals! used (fn [u] (second (scenario/next-reply script u role))))
                         [reply _] (scenario/next-reply script before role)]
                     (try
@@ -311,7 +311,7 @@
                            fixed (assoc :clock clock)))
         dir (staging/canonical dir (System/getProperty "user.home"))
         ctx {:dir dir :clock clock :offset offset :stopped-clock? (some? fixed)}
-        mock-model (when-not live? (scripted-model model dir))
+        mock-model (when-not live? (scripted-model (scenario/script model (:reader s)) dir))
         server (when mock-model (mock/start! (:responder mock-model)))
         before (System/getProperty "relay.bin")
         log-lines (atom [])

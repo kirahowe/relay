@@ -826,6 +826,9 @@ checks that:
 - no view the operator reads passes a raw control or format character
   through, and URLs from contaminated text are defanged
 - relay refuses malformed tool calls and settings that could lose a label
+- a page read through the quarantined reader with a closed schema
+  leaves the role clean, and with a free-text schema contaminates it and
+  has its posts held
 - clean, everyday use is not held
 - a research role sent to an attack page from the red-team corpus ends
   flagged, refused or harmless, as the corpus says it must

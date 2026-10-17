@@ -14,6 +14,7 @@
   model, with a context window of `window` tokens. Those requests are not
   recorded and never reach the responder."
   (:require [cheshire.core :as json]
+            [clojure.string :as str]
             [org.httpkit.server :as http]))
 
 (defn- sse [events]
@@ -88,6 +89,18 @@
      :stop #(http/server-stop! server)}))
 
 ;; --- helpers for responders
+
+(def reader-system-start
+  "How the system prompt of agentloop's quarantined reader begins
+  (quarantine.ReaderSystem). A role's system prompt never begins so."
+  "You answer one question about one document.")
+
+(defn reader-request?
+  "Whether a request is the quarantined reader's rather than a role's."
+  [body]
+  (let [system (:system body)
+        text (if (string? system) system (apply str (keep :text system)))]
+    (str/starts-with? (str text) reader-system-start)))
 
 (defn last-tool-results
   "The tool results in the request's last user message, as {:name :text}."

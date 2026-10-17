@@ -276,6 +276,24 @@
     (is (= {:public true :reports {:kinds ["grant"]}} (get-in merged [:grants "scout"])))
     (is (config/resolve-config merged) "relay accepts what it makes")))
 
+(deftest settings-may-grant-the-reader-over-stand-in-tools
+  (is (empty? (scenario/settings-problems {:grants {"hub" {:tools ["web-demo"] :quarantine ["web-demo"]}}})))
+  (is (seq (scenario/settings-problems {:grants {"hub" {:tools ["web-demo"] :quarantine ["rem"]}}}))
+      "only staging's own tools")
+  (is (seq (scenario/settings-problems {:grants {"hub" {:quarantine "web-demo"}}})))
+  (is (seq (scenario/settings-problems {:grants {"hub" {:quarantine ["web-demo"] :public true}}}))
+      "an unknown key beside it is still refused")
+  (let [merged (scenario/merge-settings (staging/settings {:data-dir "/s"})
+                                        {:grants {"hub" {:tools ["web-demo"] :quarantine ["web-demo"]}}})]
+    (is (= {:may-add true :tools ["web-demo"] :quarantine ["web-demo"]} (get-in merged [:grants "hub"])))
+    (is (config/resolve-config merged) "relay accepts what it makes"))
+  (testing "relay itself refuses the reader over a tool the role lacks or that is not :read"
+    (doseq [grant [{:quarantine ["web-demo"]} {:tools ["mail-demo"] :quarantine ["mail-demo"]}]]
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (config/resolve-config (scenario/merge-settings (staging/settings {:data-dir "/s"})
+                                                                   {:grants {"hub" grant}})))
+          (pr-str grant)))))
+
 (deftest a-foil-must-fail-exactly-what-it-says
   (let [scores {:a {:value :pass} :b {:value :fail :explanation "b broke"} :c {:value :fail :explanation "c broke"}}]
     (is (empty? (eval/foil-problems scores #{:b :c})))
