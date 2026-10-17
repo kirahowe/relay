@@ -2539,3 +2539,22 @@
                 ;; reading anything relay keeps does.
                 (= "accept" decision) (emit "ledger/entry-added" (ledger-entry-data r i))))
             tx (sort-by :finding decisions))))
+
+;; the ledger
+
+(defn ledger-entry [state id] (get-in state [:ledger id]))
+
+(defmethod evolve* "ledger/status-set" [state {:keys [data]}]
+  (assoc-in state [:ledger (:entry data) :status] (:status data)))
+
+(defmethod decide* :ledger/set-status [{:keys [state actor] :as tx} {{:keys [entry status]} :args}]
+  ;; The ledger holds what the operator decided, which a public role is
+  ;; never shown, let alone told to change.
+  (when (public-actor? tx)
+    (reject! :forbidden (str actor " is a public role, and a public role has no ledger.")))
+  (when-not (ledger-entry state entry) (reject! :not-found (str "There is no ledger entry " entry ".")))
+  (when-not (some #{status} reports/statuses)
+    (reject! :invalid (str "A ledger entry's status is one of " (str/join ", " reports/statuses) ".")))
+  (if (= status (:status (ledger-entry state entry)))
+    tx
+    (emit tx "ledger/status-set" {:entry entry :status status})))

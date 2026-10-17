@@ -565,6 +565,62 @@
            (submit sys actor labels :role/remove args)
            (str "Removed " (:id args) "."))}
 
+   "ledger"
+   {:class :read
+    :grant :ledger
+    :description (str "List the ledger: the findings of research roles that the operator accepted, with"
+                      " their status (new, seen, applied or passed). An entry relay accepted without the"
+                      " operator shows only its kind, deadline and amount; its text is contaminated and"
+                      " withheld unless you accept contamination.")
+    :parameters (obj {:status {:type "string" :enum reports/statuses :description "Only entries with this status."}
+                      :accept_contamination accept})
+    :read (fn [{:keys [state config]} actor {:keys [status accept_contamination]}]
+            ;; A public role has no ledger: it holds the operator's decisions.
+            (when (public-reader? state config actor)
+              (throw (ex-info "You have no tool called ledger." {})))
+            (let [entries (cond->> (core/ledger-entries state) status (filter #(= status (:status %))))]
+              (if (empty? entries)
+                "The ledger has no entries."
+                (show (for [{:keys [title organization url location] :as e} entries
+                            :let [typed (reports/typed-line e)
+                                  full (str typed "\n  " title " at " organization (when location (str ", " location))
+                                            "\n  " url)]]
+                        (item full (core/item-labels e)
+                              (str typed "\n  Its text is contaminated, withheld. Pass accept_contamination to read it.")
+                              [core/private-label]))
+                      "\n" accept_contamination))))}
+
+   "ledger_status"
+   {:class :write
+    :grant :ledger
+    :description "Set a ledger entry's status, as the operator told you: new, seen, applied or passed."
+    :parameters (obj {:entry {:type "integer" :description "The entry's number."}
+                      :status {:type "string" :enum reports/statuses}}
+                     "entry" "status")
+    :run (fn [sys actor labels args]
+           (submit sys actor labels :ledger/set-status args)
+           (str "Entry " (:entry args) " is " (:status args) "."))}
+
+   "reports"
+   {:class :read
+    :grant :reports
+    :description (str "List the findings you reported before, by title and URL, so you can leave out"
+                      " what you have already reported.")
+    :parameters (obj {})
+    :read (fn [{:keys [state config]} actor _]
+            (let [public (public-reader? state config actor)
+                  rs (->> (vals (:reports state))
+                          (filter #(and (= actor (:role %))
+                                        (or (not public) (core/shown-to-public? % (core/item-labels %)))))
+                          (sort-by :id))]
+              (if (empty? rs)
+                "You have not reported anything yet."
+                ;; What it wrote, and nothing of what relay or the operator
+                ;; made of it.
+                (labelled (str/join "\n" (for [r rs f (:findings r)]
+                                           (str "- " (:title f) "  " (reports/canonical-url (:url f)))))
+                          (mapcat core/item-labels rs)))))}
+
    "report_submit"
    {:class :write
     :grant :reports
@@ -762,7 +818,9 @@
                    :dead-letter-handler (or (= role-id (:dead-letter-handler config))
                                             (config/may-add? config role-id))
                    :reports (some? (config/report-kinds config role-id))
-                   :not-public (not (config/public? config role-id))))]
+                   ;; Only once some role writes reports, so there can be a
+                   ;; ledger at all.
+                   :ledger (and (not (config/public? config role-id)) (seq (config/research-roles config)))))]
     (cond-> (merge (into {} (filter #(holds? (:grant (val %))) builtin))
                    (into {} (map external-tool (select-keys (:tools config) tools))))
       ;; report_submit's schema names the kinds this role may report.
@@ -785,9 +843,13 @@
                 (conj "Work that other roles could not finish comes to you as dead letters.")
                 (contains? offered "dead_letters_retry")
                 (conj "You can put a role's dead letters back in its inbox with `dead_letters_retry`.")
+                (contains? offered "ledger")
+                (conj (str "The ledger holds the research findings the operator accepted. `ledger` lists them,"
+                           " and `ledger_status` records a status the operator gives you for one."))
                 (contains? offered "report_submit")
                 (conj (str "You report what you find with `report_submit`, as findings of the kinds "
-                           (str/join ", " (config/report-kinds config role-id)) "."))
+                           (str/join ", " (config/report-kinds config role-id)) ". `reports` lists what you"
+                           " reported before, so you need not report it again."))
                 (core/public-role? config role-id)
                 (conj (str "You are a public role: you may search and browse the web, so you are shown only what"
                            " is public, and whatever you write is public. The operator's private data never"
@@ -954,7 +1016,7 @@
     (reduce (fn [args k]
               (cond-> args
                 (string? (get args k)) (update k #(or (parse-long (str/trim %)) %))))
-            input [:memo :fact :version :limit])
+            input [:memo :fact :version :limit :entry])
     input))
 
 (defn parse-envelope

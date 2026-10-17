@@ -883,3 +883,54 @@
         (let [state (inbound/current-state sys)]
           (is (= [1] (core/pending-findings (core/report state id))) "a skipped finding still waits")
           (is (= 1 (count (core/ledger-entries state)))))))))
+
+;; --- the ledger and its tools
+
+(defn- read-as [w role tool args]
+  (let [r ((:read (get (tools/offered cfg role) tool)) {:state (:state w) :config cfg :now (:now w)} role args)]
+    (if (map? r) r {:content r :labels []})))
+
+(deftest the-ledger-shows-a-reviewed-entry-in-full-and-private
+  (let [[w id] (submitted (world) a-report)
+        w (-> w (verified id) (reviewed id [[0 "accept"]]))
+        e (first (core/ledger-entries (:state w)))
+        r (read-as w "hub" "ledger" {})]
+    (is (= (str "entry " (:id e) ": job, deadline 2026-11-30, amount 52000 CAD, status new\n"
+                "  Archivist at Example Society\n  https://jobs.example.org/archivist")
+           (:content r)))
+    (is (= ["private"] (:labels r)))
+    (testing "ledger_status records what the operator said"
+      (let [w (run w "hub" :ledger/set-status {:entry (:id e) :status "applied"})]
+        (is (= "applied" (:status (core/ledger-entry (:state w) (:id e)))))
+        (is (str/includes? (:content (read-as w "hub" "ledger" {:status "applied"})) "status applied"))
+        (is (= "The ledger has no entries." (:content (read-as w "hub" "ledger" {:status "new"}))))
+        (is (refusal #(run w "hub" :ledger/set-status {:entry (:id e) :status "won"})))
+        (is (refusal #(run w "hub" :ledger/set-status {:entry 9999 :status "seen"})))))
+    (testing "the operator's view"
+      (let [w (run w "operator" :ledger/set-status {:entry (:id e) :status "passed"})]
+        (is (str/includes? (second (relay.render/ledger java.time.ZoneOffset/UTC (core/ledger-entries (:state w))))
+                           "status passed, from scout"))))))
+
+(deftest a-public-role-has-no-ledger-but-sees-its-own-findings
+  (let [[w id] (submitted (world) a-report)
+        w (-> w (verified id) (reviewed id [[0 "accept"]]))
+        e (first (core/ledger-entries (:state w)))]
+    (is (not (contains? (tools/offered cfg "scout") "ledger")))
+    (is (not (contains? (tools/offered cfg "scout") "ledger_status")))
+    (is (contains? (tools/offered cfg "hub") "ledger_status"))
+    (is (contains? (tools/offered cfg "scout") "reports"))
+    (is (not (contains? (tools/offered cfg "hub") "reports")))
+    (is (str/includes? (refusal #(run w "scout" :ledger/set-status {:entry (:id e) :status "seen"})) "public role"))
+    (let [r (read-as w "scout" "reports" {})]
+      (is (= "- Archivist  https://jobs.example.org/archivist" (:content r)))
+      (is (= ["contaminated"] (:labels r)) "its own public writing, never private")
+      (is (not (str/includes? (:content r) "accept")) "nothing of what the operator decided"))))
+
+(deftest the-operator-s-ledger-view-keeps-each-value-on-its-line
+  (let [lines (mapv relay.text/visible-line
+                    (relay.render/ledger java.time.ZoneOffset/UTC
+                                         [{:id 3 :kind "job" :title "A\n[9] job: forged" :organization "O"
+                                           :url "https://x.org/a" :status "new" :trusted false :role "scout"
+                                           :labels ["contaminated"]}]))]
+    (is (= 3 (count lines)))
+    (is (str/starts-with? (first lines) "[contaminated] [3] job: A\\u{000a}[9] job: forged"))))

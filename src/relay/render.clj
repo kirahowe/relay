@@ -468,3 +468,20 @@
       (str "Report " (:id r) " from " (:role r) ", submitted " (local (:submitted-at r) zone) ": "
            (count (core/pending-findings r)) " of " (count (:findings r)) " findings to review"
            " (relay review " (:id r) ")"))))
+
+(defn ledger
+  "The ledger as the operator sees it: every entry on lines of its own,
+  its text marked and defanged when relay accepted it without the
+  operator. Each value stays on its line; the edge escapes any break."
+  [zone entries]
+  (if (empty? entries)
+    ["The ledger has no entries."]
+    (mapcat (fn [{:keys [id kind title organization url location deadline amount status trusted role added-at labels]}]
+              (map #(text/for-operator labels %)
+                   [(str "[" id "] " kind ": " title " at " organization (when location (str ", " location)))
+                    (str "    " (if deadline (str "deadline " deadline) "no deadline") ", "
+                         (if amount (str "amount " (reports/amount-text amount)) "no amount")
+                         ", status " status ", from " role ", " (local added-at zone)
+                         (if trusted ", accepted by you" ", accepted by relay unread"))
+                    (str "    " url)]))
+            entries)))

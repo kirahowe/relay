@@ -85,6 +85,8 @@ Every command needs the data directory, from --data <dir> or from the file
   relay review [<report>]             the research reports waiting for you, or go
                                       through one report's findings: accept each,
                                       reject it as fake, or set it aside
+  relay ledger                        the findings accepted from research reports
+  relay ledger set <entry> <status>   mark an entry new, seen, applied or passed
   relay tool --data <dir> --role <r> [--wake <w>] <name>
                                       run a role's tool call (harnesses use this)
 
@@ -522,6 +524,12 @@ and --instructions marks the id public too.")
                 (submit! sys :label/trust {:kind kind :ref ref :version (:version v)
                                            :sha256 (core/sha256 (:text v))})
                 (result 0 (str "Trusted " kind " " ref ".")))
+      "ledger" (let [[sub entry status] more]
+                 (case sub
+                   nil (lines (render/ledger zone (core/ledger-entries (state))))
+                   "set" (do (submit! sys :ledger/set-status {:entry (some-> entry parse-long) :status status})
+                             (result 0 (str "Entry " entry " is " status ".")))
+                   (fail! "usage: relay ledger [set <entry> <new|seen|applied|passed>]")))
       "review" (if-let [id (some-> (first more) parse-long)]
                  (review! sys id)
                  (lines (render/reports-waiting zone (core/reports-waiting (state)))))
