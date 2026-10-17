@@ -50,8 +50,10 @@
   [{:keys [kind url topic command] :as settings} {:keys [labels] :as notification}]
   ;; The operator may tap what arrives, so text from a contaminated source
   ;; is marked and its URLs broken, and nothing in it can hide itself.
-  (let [title (text/for-operator labels (:title notification))
-        body (text/for-operator labels (:body notification))]
+  ;; A push is one title and one body, so a line break in the title is
+  ;; escaped; the body may run to several lines.
+  (let [title (text/visible-line (text/for-operator labels (:title notification)))
+        body (text/visible (text/for-operator labels (:body notification)))]
   (case kind
     ;; Published as JSON so that a non-ASCII title is not sent in a header.
     :ntfy (let [tok (token settings)

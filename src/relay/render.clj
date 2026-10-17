@@ -1,6 +1,14 @@
 (ns relay.render
   "What the relay command shows. Pure: each function takes the data to
-  show and returns lines of text, which relay.cli prints."
+  show and returns lines of text, which relay.cli prints, each through
+  text/visible-line.
+
+  One rule keeps a role's or an outsider's text from passing for the
+  screen's own: it never decides where a line starts. A one-line field is
+  part of a line the renderer writes, and any line break in it is escaped
+  where it is printed. Text that may run to several lines is shown with
+  text/block: every line behind text/gutter, which nothing else starts
+  with, under a [contaminated] line when it is contaminated."
   (:require [cheshire.core :as json]
             [clojure.walk]
             [clojure.string :as str]
@@ -14,14 +22,24 @@
   [^Instant at zone]
   (when at (.format (.atZone at ^ZoneId zone) (DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm"))))
 
+(defn when*
+  "An instant as the operator's local time, as a bare date when it is
+  midnight there, or nil."
+  [^Instant at zone]
+  (when at
+    (let [z (.atZone at ^ZoneId zone)]
+      (if (= java.time.LocalTime/MIDNIGHT (.toLocalTime z))
+        (str (.toLocalDate z))
+        (local at zone)))))
+
 (defn memo
   "One memo, as the operator's inbox shows it. One from a contaminated
   source is marked and its URLs broken."
   [zone {:keys [id from subject body sent-at labels]}]
-  [(str "\n[" id "] " (text/for-operator labels subject))
-   (str "    from " from ", " (local sent-at zone))
-   ""
-   (str/replace (text/for-operator labels (str body)) #"(?m)^" "    ")])
+  (concat
+   ["" (str "[" id "] " (text/for-operator labels subject))
+    (str "    from " from ", " (local sent-at zone))]
+   (text/block labels body)))
 
 (defn inbox [zone memos]
   (if (empty? memos)
@@ -63,18 +81,19 @@
      (concat paused [""]))
    ["Roles"]
    (mapcat #(role-status state zone %) (core/active-role-ids state))
-   (for [[h {:keys [condition paused-until]}] (sort-by key (:harnesses state))]
-     (str "\nHarness " h ": "
+   (mapcat (fn [line] ["" line])
+    (for [[h {:keys [condition paused-until]}] (sort-by key (:harnesses state))]
+     (str "Harness " h ": "
           (if (and paused-until (.isAfter ^Instant paused-until now))
             (str condition ", next try " (local paused-until zone))
-            "available")))
-   [(format "\nOperator's inbox: %d open" (count (core/unread-memos state core/operator)))]
+            "available"))))
+   ["" (format "Operator's inbox: %d open" (count (core/unread-memos state core/operator)))]
    (when-let [hs (seq (core/open-holds state))]
      [(format "Held tool calls: %d (relay holds)" (count hs))])
    (when-let [qs (seq (filter #(core/quarantined? config %) (filter #(= :unread (:status %)) (vals (:memos state)))))]
      [(format "Quarantined memos: %s (relay release <memo>)" (str/join ", " (sort (map :id qs))))])
    (when-let [recent (seq (take-last 5 (sort-by :id (vals (:wakes state)))))]
-     (cons "\nRecent wakes"
+     (list* "" "Recent wakes"
            (for [{:keys [id role started-at status outcome crashed]} recent]
              (text/for-operator (core/id-labels state role)
                                 (format "  %-6d %s  %-20s %s" id (local started-at zone) role
@@ -96,8 +115,76 @@
                        (format "%-16s %-18s %s (since %s)" owner name schedule (local baseline zone)))))
 
 (defn notes [zone notes]
-  (for [{:keys [name text written-at labels]} notes]
-    (text/for-operator labels (str "## " name "  (" (local written-at zone) ")\n\n" text "\n"))))
+  (mapcat (fn [{:keys [name text written-at labels]}]
+            (concat [(str "## " name "  (" (local written-at zone) ")")] (text/block labels text) [""]))
+          notes))
+
+(defn- validity [zone {:keys [valid-from valid-to]}]
+  (let [t #(when* % zone)]
+    (cond (and valid-from valid-to) (str "from " (t valid-from) " until " (t valid-to))
+          valid-from (str "from " (t valid-from))
+          valid-to (str "until " (t valid-to))
+          :else "with no known start or end")))
+
+(defn facts
+  "Facts as relay facts shows them, each a line of its own and its text
+  behind the gutter."
+  [state zone facts]
+  (if (empty? facts)
+    ["No facts match."]
+    (mapcat (fn [{:keys [id topic text supersedes superseded-by labels] :as f}]
+              (concat [(str "Fact " id (when topic (str " [" topic "]")) ", holds " (validity zone f)
+                            (when supersedes (str ", replacing fact " supersedes))
+                            (when superseded-by (str ", superseded by fact " superseded-by)))]
+                      (text/block labels text)))
+            facts)))
+
+(defn fact-history
+  "Every version of a fact, as relay fact <id> shows it."
+  [state zone {:keys [id supersedes versions]}]
+  (cons (str "Fact " id (when supersedes (str ", which replaced fact " supersedes)))
+        (mapcat (fn [{:keys [change recorded-at actor why superseded-by labels] :as v}]
+                  (concat [(str "- " (when* recorded-at zone) " by " actor ": "
+                                (case change
+                                  :added "recorded"
+                                  :superseded (str "superseded by fact " superseded-by)
+                                  :corrected (str "corrected, because " (text/for-operator labels why))
+                                  :retracted (str "retracted, because " (text/for-operator labels why))))]
+                          (when-not (#{:superseded :retracted} change)
+                            (cons (str "  holds " (validity zone v) (when (:topic v) (str " [" (:topic v) "]")))
+                                  (text/block labels (:text v))))))
+                versions)))
+
+(defn journal
+  "Journal entries, oldest first, each under its time."
+  [zone entries]
+  (if (empty? entries)
+    ["The journal is empty."]
+    (mapcat (fn [{:keys [at text labels]}] (concat [(when* at zone)] (text/block labels text) [""])) entries)))
+
+(defn docs
+  "The docs, one line each."
+  [state zone docs]
+  (if (empty? docs)
+    ["There are no docs."]
+    (for [{:keys [path at actor content labels]} docs]
+      (text/for-operator labels (str path " (" (count content) " characters, last written "
+                                     (when* at zone) " by " actor ")")))))
+
+(defn doc
+  "One version of a doc: its content, all of it behind the gutter."
+  [{:keys [path seq content removed labels]}]
+  (if removed
+    [(str path " was removed in version " seq ".")]
+    (concat [(str path ", version " seq ":")] (text/block labels content))))
+
+(defn doc-history
+  "The versions of a doc, one line each."
+  [zone path versions]
+  (cons path
+        (for [{:keys [seq at actor content removed labels]} versions]
+          (text/for-operator labels (str "  version " seq ", " (when* at zone) " by " actor
+                                         (if removed ": removed" (str ", " (count content) " characters")))))))
 
 (defn log
   "Events one to a line, the last `tail` of them when given: as JSON, or
@@ -192,8 +279,8 @@
         (cons "    look closely, the input has characters that can pass for others:"
               (map #(str "      " %) odd)))
       [(str "    session " session ", call " call)
-       "    input:"
-       (str/replace input-text #"(?m)^" "      ")]))))
+       "    input:"]
+      (text/block [] input-text)))))
 
 (defn holds
   ([hs] (holds hs nil))

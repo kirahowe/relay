@@ -198,15 +198,32 @@ contaminated, for text you copied from somewhere you do not trust.")
       :else
       (result 0 (tools/envelope (tools/call! sys role tool-name input labels call-id))))))
 
-(defn- tool-output
-  "Runs one of relay's own read tools as the operator, for its text. The
-  operator sees everything, contaminated or not."
-  [sys tool-name args]
-  (let [{:keys [ok error labels]} (tools/run-tool sys core/operator (get tools/builtin tool-name)
-                                                  (assoc args :accept_contamination true) [])]
-    (when error (fail! error))
-    ;; Contaminated text is shown marked and with its URLs broken.
-    (result 0 (text/for-operator labels ok))))
+(defn- knowledge
+  "The operator's views of what relay knows. The operator sees everything,
+  contaminated or not, each role-written text behind the gutter."
+  [sys what args]
+  (let [state (inbound/current-state sys)
+        config (:config sys)
+        zone (config/zone config)]
+    {:exit 0
+     :out (case what
+            :facts (let [{:keys [as-of known-at topic search all]} args
+                         at #(core/world-time config % %2)]
+                     (render/facts state zone (core/facts state {:as-of (or (at as-of "as_of") ((:clock sys)))
+                                                                 :known-at (at known-at "known_at")
+                                                                 :topic topic :search search :all all})))
+            :fact (let [f (core/fact state (:fact args))]
+                    (when-not f (fail! (str "There is no fact " (:fact args) ".")))
+                    (render/fact-history state zone f))
+            :journal (render/journal zone (core/journal state (:owner args) (or (:limit args) 10)))
+            :docs (render/docs state zone (core/docs state nil))
+            :doc (let [{:keys [path version]} args
+                       v (core/doc-version state path {:version version})]
+                   (when-not v (fail! (str "There is no doc at " path (when version (str " with version " version)) ".")))
+                   (render/doc v))
+            :doc-history (let [vs (get-in state [:docs (:path args) :versions])]
+                           (when (empty? vs) (fail! (str "There is no doc at " (:path args) ".")))
+                           (render/doc-history zone (:path args) vs)))}))
 
 ;; --- decisions only a person at the terminal makes
 
@@ -238,7 +255,7 @@ contaminated, for text you copied from somewhere you do not trust.")
                                (catch Exception _
                                  (fail! (str "relay " verb " asks you to confirm on a terminal, and there is none."))))
         code (confirmation-code)]
-    (say (str (str/join "\n" (map text/visible lines)) "\n\nType " code " to " verb ": "))
+    (say (str (str/join "\n" (map text/visible-line lines)) "\n\nType " code " to " verb ": "))
     (when-not (= code (some-> (ask) str/trim str/upper-case))
       (fail! "That is not the code. Nothing was changed."))))
 
@@ -319,9 +336,8 @@ contaminated, for text you copied from somewhere you do not trust.")
               (when-not r (fail! "usage: relay acp <role> [--trace <file>]"))
               (result (dispatch/acp! sys r {:trace (:trace opts) :approvals (:approvals opts)})))
       "tick" (do (dispatch/tick! sys) (result 0))
-      "facts" (tool-output sys "facts" {:topic (first more) :search (:search opts)
-                                        :as_of (:as-of opts) :known_at (:known-at opts)
-                                        :all (:all opts)})
+      "facts" (knowledge sys :facts {:topic (first more) :search (:search opts)
+                                     :as-of (:as-of opts) :known-at (:known-at opts) :all (:all opts)})
       "fact" (let [[sub a b] more]
                (case sub
                  "add" (let [events (submit! sys :fact/add {:text a :topic (:topic opts)
@@ -338,35 +354,36 @@ contaminated, for text you copied from somewhere you do not trust.")
                                 version (some-> b parse-long)
                                 v (first (filter #(= version (:seq %)) (:versions (core/fact (state) id))))]
                             (when-not v (fail! "usage: relay fact revert <fact> <version>, a version from relay fact <fact>"))
-                            (confirm! "revert" [(str "Fact " id " back to version " version ":") ""
-                                                (str (when (:topic v) (str "[" (:topic v) "] ")) (:text v))
-                                                (str "holds from " (or (:valid-from v) "the start") " until "
-                                                     (or (:valid-to v) "further notice"))
-                                                "" (labels-line (:labels v))])
+                            (confirm! "revert" (concat [(str "Fact " id " back to version " version ":" (when (:topic v) (str " [" (:topic v) "]")))]
+                                                       (text/block (:labels v) (:text v))
+                                                       [(str "holds from " (or (:valid-from v) "the start") " until "
+                                                             (or (:valid-to v) "further notice"))
+                                                        "" (labels-line (:labels v))]))
                             (submit! sys :fact/revert {:fact id :version version})
                             (result 0 (str "Reverted fact " id " to version " version ".")))
-                 (tool-output sys "fact_history" {:fact (some-> sub parse-long)})))
+                 (knowledge sys :fact {:fact (some-> sub parse-long)})))
       "notes" (let [[r] more]
                 (when-not r (fail! "usage: relay notes <role>"))
                 (lines (render/notes zone (core/notes (state) r))))
       "journal" (let [[r] more]
                   (when-not r (fail! "usage: relay journal <role> [-n <count>]"))
-                  (tool-output sys "journal" {:owner r :limit (:tail opts)}))
-      "docs" (tool-output sys "docs" {})
+                  (knowledge sys :journal {:owner r :limit (:tail opts)}))
+      "docs" (knowledge sys :docs {})
       "doc" (let [[path a b] more]
               (when-not path (fail! "usage: relay doc <path> [--version <n>] [--history]"))
               (when (= "revert" path)
                 (let [version (some-> b parse-long)
                       v (core/doc-version (state) a {:version version})]
                   (when-not v (fail! "usage: relay doc revert <path> <version>, a version from relay doc <path> --history"))
-                  (confirm! "revert" [(str a " back to version " version ":") ""
-                                      (if (:removed v) "(removed)" (:content v)) "" (labels-line (:labels v))])
+                  (confirm! "revert" (concat [(str a " back to version " version ":")]
+                                             (if (:removed v) ["(removed)"] (text/block (:labels v) (:content v)))
+                                             ["" (labels-line (:labels v))]))
                   (submit! sys :doc/revert {:path a :version version})))
               (cond
                 (= "revert" path) (result 0 (str "Reverted " a " to version " b "."))
                 (:history opts)
-                (tool-output sys "doc_history" {:path path})
-                :else (tool-output sys "doc_get" {:path path :version (:version opts)})))
+                (knowledge sys :doc-history {:path path})
+                :else (knowledge sys :doc {:path path :version (:version opts)})))
       "put" (let [[path] more]
               (lines (render/doc-put path (submit! sys :doc/put {:path path :content (stdin-text)}))))
       "export" (let [[dir] more]
@@ -393,15 +410,17 @@ contaminated, for text you copied from somewhere you do not trust.")
                 (when-not v (fail! "usage: relay trust <kind> <ref>, naming something relay keeps"))
                 ;; Shown with its URLs broken, like anything contaminated;
                 ;; only what is shown is changed, not what is trusted.
-                (confirm! "trust" [(str kind " " ref ":") "" (text/defang (:text v)) "" (labels-line (:labels v))
-                                   "Trusting it clears contaminated from what it says now."])
+                (confirm! "trust" (concat [(str kind " " ref ":")]
+                                          (text/block ["contaminated"] (:text v))
+                                          ["" (labels-line (:labels v))
+                                           "Trusting it clears contaminated from what it says now."]))
                 ;; What was shown, so a change while the operator read it
                 ;; trusts nothing.
                 (submit! sys :label/trust {:kind kind :ref ref :version (:version v)
                                            :sha256 (core/sha256 (:text v))})
                 (result 0 (str "Trusted " kind " " ref ".")))
       "tool" (run-tool sys (:role opts) (first more))
-      (result 1 usage))))
+      (apply result 1 (str/split-lines usage)))))
 
 (defn- report-broken-settings!
   "When the tick cannot load relay.edn, nothing else runs, so it says so:
@@ -470,8 +489,8 @@ contaminated, for text you copied from somewhere you do not trust.")
           ;; break it.
           result
           (cond-> result
-            (:out result) (update :out #(mapv text/visible %))
-            (:err result) (update :err #(mapv text/visible %)))))))
+            (:out result) (update :out #(mapv text/visible-line %))
+            (:err result) (update :err #(mapv text/visible-line %)))))))
 
 (defn execute
   "Runs one command line. Returns {:exit :out}, :out being the lines to
@@ -481,14 +500,14 @@ contaminated, for text you copied from somewhere you do not trust.")
   (let [{:keys [cmd more opts]} (parse-line args)]
     (cond
       (or (nil? cmd) (#{"help" "-h" "--help"} cmd))
-      (result 0 usage)
+      (apply result 0 (str/split-lines usage))
       ;; A tick marks itself as running before it looks for the pause file,
       ;; and a paused tick touches nothing else (see relay.pause).
       (= "tick" cmd)
       (pause/while-ticking
        (pause-file opts)
        #(if-let [why (pause/reason (pause-file opts))]
-          (result 0 (str "relay tick: paused (" (pause-file opts) "): " why))
+          (result 0 (text/visible-line (str "relay tick: paused (" (pause-file opts) "): " why)))
           (run-command cmd more opts)))
       :else
       (run-command cmd more opts))))
@@ -504,6 +523,6 @@ contaminated, for text you copied from somewhere you do not trust.")
 (defn -main [& args]
   (let [code (try (run args)
                   (catch clojure.lang.ExceptionInfo e
-                    (binding [*out* *err*] (println (text/visible (ex-message e))))
+                    (binding [*out* *err*] (println (text/visible-line (ex-message e))))
                     (if (or (core/rejection e) (:relay/usage (ex-data e))) 1 2)))]
     (System/exit code)))

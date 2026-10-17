@@ -70,12 +70,12 @@
                         state (take woken ids))
           lines (vec (render/status state utc t0))
           headers (filter #(re-matches #"  r\d+ +T r\d+.*" %) lines)
-          recent (rest (drop-while #(not= "\nRecent wakes" %) lines))]
+          recent (rest (drop-while #(not= "Recent wakes" %) lines))]
       (and (= "Roles" (first lines))
            (= (sort ids) (sort (map #(second (re-find #"^  (\S+)" %)) headers)))
            (= (min woken (count ids)) (count (filter #(str/includes? % "[running]") headers)))
            (<= (count recent) 5)
-           (some #{"\nOperator's inbox: 0 open"} lines)))))
+           (some #{"Operator's inbox: 0 open"} lines)))))
 
 (deftest status-shows-every-role-and-at-most-five-wakes
   (quick 200 status-lists-every-role-once))
@@ -86,14 +86,14 @@
                                                   "y" {:condition "limited"
                                                        :paused-until (.minusSeconds t0 60)}})
         lines (set (render/status state utc t0))]
-    (is (lines "\nHarness x: limited, next try 2026-10-15 13:00"))
-    (is (lines "\nHarness y: available"))))
+    (is (lines "Harness x: limited, next try 2026-10-15 13:00"))
+    (is (lines "Harness y: available"))))
 
 ;; --- memos, notes and the rest
 
 (deftest an-inbox-indents-every-line-of-a-memo
   (is (= ["Nothing waiting."] (render/inbox utc [])))
-  (is (= ["\n[4] Lunch" "    from clerk, 2026-10-15 12:00" "" "    Noon?\n    \n    Or one."]
+  (is (= ["" "[4] Lunch" "    from clerk, 2026-10-15 12:00" "  │ Noon?" "  │ " "  │ Or one."]
          (render/inbox utc [{:id 4 :from "clerk" :subject "Lunch" :body "Noon?\n\nOr one." :sent-at t0}]))))
 
 (deftest routines-are-shown-for-one-role-or-all
@@ -126,9 +126,9 @@
       (log/init! data)
       (let [printed (with-out-str
                       (is (= {:exit 0 :out ["Nothing waiting."]} (cli/execute ["--data" data "inbox"])))
-                      (is (= ["Roles" "\nOperator's inbox: 0 open"]
+                      (is (= ["Roles" "" "Operator's inbox: 0 open"]
                              (:out (cli/execute ["--data" data "status"]))))
                       (testing "an unknown command shows the usage and fails"
-                        (is (= {:exit 1 :out [cli/usage]} (cli/execute ["--data" data "nonsense"])))))]
+                        (is (= {:exit 1 :out (str/split-lines cli/usage)} (cli/execute ["--data" data "nonsense"])))))]
         (is (= "" printed)))
       (finally (fs/delete-tree dir)))))
