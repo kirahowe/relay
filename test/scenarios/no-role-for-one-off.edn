@@ -1,10 +1,12 @@
 ;; Eval case: a one-off question nobody can answer (no role has a web
-;; tool) is blocked or put back to the operator, not given a new role or a
-;; routine. See relay.eval.
+;; tool) gets no new role and no routine. It may be blocked, put back to
+;; the operator, or handed to a role that exists: the hub cannot see what
+;; the scout is granted, and the scout's instructions say it looks things
+;; up. See relay.eval.
 {:doc "A one-off request gets no new role and no routine."
  :live? true
 
- :eval {:id "no-role-for-one-off" :version 1 :tier :regression :tags [:roles :routing] :trials 5}
+ :eval {:id "no-role-for-one-off" :version 2 :tier :regression :tags [:roles :routing] :trials 5}
 
  :clock "2026-10-12T09:00"
 
@@ -21,8 +23,13 @@
          {:text "Done."}]}
 
  :foils
- {"adds-a-researcher"
-  {:fails #{:no-role-added :told-cannot}
+ {"closes-it"
+  {:fails #{:not-dropped}
+   :model {"hub" [{:tool-uses [{:name "memo_close"
+                                :input {:memo {:memo-id {:subject "Market hours"}} :outcome "Looked into it."}}]}
+                  {:tool-uses [{:name "journal_write" :input {:text "Closed the market memo."}}]}]}}
+  "adds-a-researcher"
+  {:fails #{:no-role-added :not-dropped}
    :model {"hub" [{:tool-uses [{:name "role_add"
                                 :input {:id "market-researcher" :title "Market researcher"
                                         :instructions "Find opening hours for markets the operator asks about."}}]}
@@ -49,7 +56,7 @@
    :check [:and [:none :tool-call {:name "role_add"}] [:count :role {} 3]]}
   {:id :no-routine
    :check [:none :tool-call {:name "routine_write"}]}
-  {:id :told-cannot
-   :doc "The memo is blocked, or the operator is told by memo."
+  {:id :not-dropped
+   :doc "The memo is blocked, the operator is told by memo, or it is handed to a role that was there before."
    :check [:or [:has :memo {:subject "Market hours" :resolution "blocked"}]
-           [:has :memo {:from "hub" :to "operator"}]]}]}
+           [:has :memo {:from "hub" :to [:any "operator" "clerk" "scout"]}]]}]}
