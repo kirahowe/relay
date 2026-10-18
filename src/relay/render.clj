@@ -16,7 +16,8 @@
             [relay.core :as core]
             [relay.reports :as reports]
             [relay.spend :as spend]
-            [relay.text :as text])
+            [relay.text :as text]
+            [relay.week :as week])
   (:import (java.time Instant ZoneId)
            (java.time.format DateTimeFormatter)))
 
@@ -174,11 +175,13 @@
        (spend state (spend/weekly (vals (:wakes state)) zone now spend-weeks) budget)))
    (when-let [recent (seq (take-last 5 (sort-by :id (vals (:wakes state)))))]
      (list* "" "Recent wakes"
-           (for [{:keys [id role started-at status outcome crashed]} recent]
+           (for [{:keys [id role started-at status outcome crashed chat]} recent]
              (text/for-operator (core/id-labels state role)
-                                (format "  %-6d %s  %-20s %s" id (local started-at zone) role
+                                (format "  %-6d %s  %-20s %s%s" id (local started-at zone) role
                                         (if (= :running status) "running"
-                                            (str outcome (when crashed ", crashed"))))))))))
+                                            (str outcome (when crashed ", crashed")))
+                                        ;; Its id is what relay flag takes.
+                                        (if chat ", conversation" ""))))))))
 
 (defn roles [state]
   (for [id (core/active-role-ids state)
@@ -592,3 +595,106 @@
   [{:keys [date sections]}]
   {:title (str "Morning brief for " date ": " (str/join ", " (keep brief-count sections)))
    :body (str/join "\n" (mapcat brief-section sections))})
+
+;; --- relay week
+
+(defn duration
+  "Seconds as a short span: 45s, 12m, 3h 05m, 2d 4h."
+  [s]
+  (when s
+    (let [s (long (Math/round (double s)))]
+      (cond (< s 60) (str s "s")
+            (< s 3600) (str (quot s 60) "m")
+            (< s 86400) (format "%dh %02dm" (quot s 3600) (quot (mod s 3600) 60))
+            :else (format "%dd %dh" (quot s 86400) (quot (mod s 86400) 3600))))))
+
+(defn- interruption-ref [{:keys [kind ref]}]
+  (case kind
+    "hold" (str "hold " ref)
+    "permission" (str "permission request " ref)
+    ("quarantine" "declassify") (str "memo " ref)
+    "fresh" (str "relay fresh " ref)
+    "finding" (let [[r i] ref] (str "report " r " finding " (inc i)))
+    "harness" (str "harness " ref)
+    "dead-letter" (str "dead letter " ref)
+    (str kind " " ref)))
+
+(defn- days-between
+  "Every date from the window's first day to its last, in `zone`, for a
+  window of up to a month; for a longer one, the days with any."
+  [{:keys [^Instant from ^Instant until]} ^ZoneId zone per-day]
+  (if (and from until (<= (.toDays (java.time.Duration/between from until)) 31))
+    (let [first-day (java.time.LocalDate/ofInstant from zone)
+          last-day (java.time.LocalDate/ofInstant (.minusNanos until 1) zone)]
+      (map str (take-while #(not (.isAfter ^java.time.LocalDate % last-day)) (iterate #(.plusDays ^java.time.LocalDate % 1) first-day))))
+    (keys per-day)))
+
+(defn- wake-name [chat id] (str (if chat "conversation " "wake ") id))
+
+(defn week-report
+  "relay week's report (relay.week/report) as lines."
+  [{:keys [window interruptions actions notifications roles health flags]} ^ZoneId zone]
+  (let [{:keys [from until]} window
+        names (into {} (map (juxt first second) week/interruption-kinds))
+        how (into {} (map (juxt first #(nth % 2)) week/interruption-kinds))
+        role-line (fn [labels s] (text/for-operator labels s))]
+    (concat
+     [(str "relay week, " (or (local from zone) "the start") " to " (or (local until zone) "now")
+           " (" zone ")")
+      ""
+      "Interruptions: each time relay asked you for something"
+      (format "  %-32s %6s %8s %8s %8s %8s" "" "arose" "decided" "pending" "median" "longest")]
+     (mapcat (fn [{:keys [kind arose decided pending decisions median-seconds max-seconds oldest-pending-seconds]}]
+               (cons (format "  %-32s %6d %8d %8d %8s %8s" (names kind) arose decided pending
+                             (or (duration median-seconds) "-") (or (duration max-seconds) "-"))
+                     (when (pos? arose)
+                       [(str "    " (how kind)
+                             (when (seq decisions)
+                               (str "; " (str/join ", " (for [[d n] decisions] (str d " " n)))))
+                             (when oldest-pending-seconds
+                               (str "; oldest waiting " (duration oldest-pending-seconds))))])))
+             (:kinds interruptions))
+     (when-let [ps (seq (:pending interruptions))]
+       (cons "  Still waiting:"
+             (for [{:keys [role arose-at] :as p} ps]
+               (str "    " (interruption-ref p) (when role (str ", " role)) ", since " (local arose-at zone)))))
+     [(str "  Your own decisions: " (if (seq actions) (str/join ", " (for [[a n] actions] (str a " " n))) "none"))
+      ""
+      (str "Notifications: " (:total notifications))]
+     (let [per-day (:per-day notifications)]
+       (for [d (days-between window zone per-day)] (format "  %s  %d" d (get per-day d 0))))
+     (when (seq (:per-kind notifications))
+       [(str "  by kind: " (str/join ", " (for [[k n] (sort-by (comp - val) (:per-kind notifications))] (str k " " n))))])
+     (when (seq (:memos-by-role notifications))
+       [(str "  memos to you, by sender: "
+             (str/join ", " (for [[r n] (:memos-by-role notifications)] (str r " " n))))])
+     ["" "Wakes by role"]
+     (if (empty? roles)
+       ["  none"]
+       (mapcat (fn [{:keys [role role-labels wakes conversations memos-closed memos-blocked memos-left-open
+                            memos-dead-lettered cut-short crashed held tools-unavailable cost-usd
+                            conversation-cost-usd priced-wakes cost-per-wake unpriced]}]
+                 (map #(role-line role-labels %)
+                      [(str "  " role ": " wakes (if (= 1 wakes) " wake, " " wakes, ")
+                            conversations (if (= 1 conversations) " conversation" " conversations"))
+                       (str "    memos: " memos-closed " closed, " memos-blocked " blocked, " memos-left-open
+                            " left open, " memos-dead-lettered " dead-lettered")
+                       (str "    " cut-short " cut short, " crashed " crashed, " held " held, "
+                            tools-unavailable " without their tools")
+                       (str "    cost " (dollars cost-usd)
+                            (when cost-per-wake (str ", " (dollars cost-per-wake) " a wake over " priced-wakes " priced"))
+                            (when (pos? conversation-cost-usd) (str ", conversations " (dollars conversation-cost-usd)))
+                            (when (pos? unpriced) (str "; " unpriced " without a cost")))]))
+               roles))
+     ["" "Health checks: wakes that look wrong"]
+     (if (empty? health)
+       ["  none"]
+       (for [{:keys [id role role-labels chat started-at failed]} health]
+         (role-line role-labels (str "  " (wake-name chat id) ", " role ", " (local started-at zone) ": "
+                                     (str/join ", " failed)))))
+     ["" "Flags"]
+     (if (empty? flags)
+       ["  none (relay flag <wake> good|bad [note] marks one)"]
+       (for [{:keys [wake role role-labels chat started-at value note]} flags]
+         (role-line role-labels (str "  " (wake-name chat wake) ", " role ", " (local started-at zone) ": " value
+                                     (when note (str ": " note)))))))))

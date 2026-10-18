@@ -5,36 +5,20 @@
   event per grader (workflow-request, pure), and one line per wake from
   `agentloop otel`, with every wake's runs hung under the workflow span.
 
-  The GenAI conventions are at Development stability, so every
-  gen_ai.* name here may be renamed. convention-version names the schema
-  this file follows, the same one agentloop's otel package pins. The
-  agentloop.* and relay.* attributes are ours."
+  The spans are built by relay.otel, which relay traces uses too, and
+  agentloop is run through relay.traces/agentloop-otel!."
   (:require [babashka.fs :as fs]
-            [babashka.process :as p]
             [cheshire.core :as json]
-            [clojure.string :as str])
-  (:import (java.security MessageDigest)
-           (java.time Instant)))
+            [relay.otel :as otel]
+            [relay.traces :as traces]))
 
-(def convention-version
-  "The GenAI semantic conventions schema these spans follow (stability:
-  development)."
-  "https://opentelemetry.io/schemas/gen-ai-dev/1.42.0-dev")
-
-(defn- sha256-hex [^String s]
-  (apply str (map #(format "%02x" %) (.digest (MessageDigest/getInstance "SHA-256") (.getBytes s "UTF-8")))))
+(def convention-version otel/convention-version)
 
 (defn ids
   "The workflow span's ids for a trial, from (run id, case, trial) alone, so
   exporting the same run twice gives the same ids."
   [run-id case-id trial]
-  (let [h (sha256-hex (pr-str [run-id case-id trial]))]
-    {:trace-id (subs h 0 32) :span-id (subs (sha256-hex (str h "/workflow")) 0 16)}))
-
-(defn- nanos [^Instant t] (str (+ (* (.getEpochSecond t) 1000000000) (.getNano t))))
-
-(defn- s-attr [k v] {:key k :value {:stringValue (str v)}})
-(defn- i-attr [k v] {:key k :value {:intValue (str v)}})
+  (otel/ids run-id case-id trial))
 
 (defn- label [value] (case value :pass "pass" :fail "fail" :skipped "skipped" (name value)))
 
@@ -46,42 +30,21 @@
   [{:keys [run-id case-id tier version trial scores errors started ended]}]
   (let [{:keys [trace-id span-id]} (ids run-id case-id trial)
         end (or ended started)]
-    {:resourceSpans
-     [{:resource {:attributes [(s-attr "service.name" "relay-eval")]}
-       :scopeSpans
-       [{:scope {:name "relay.eval-otel"}
-         :schemaUrl convention-version
-         :spans
-         [(cond-> {:traceId trace-id :spanId span-id
-                   :name (str "invoke_workflow " case-id)
-                   :kind 1
-                   :startTimeUnixNano (nanos started)
-                   :endTimeUnixNano (nanos end)
-                   :attributes (cond-> [(s-attr "gen_ai.operation.name" "invoke_workflow")
-                                        (s-attr "gen_ai.workflow.name" case-id)
-                                        (s-attr "relay.eval.run_id" run-id)
-                                        (s-attr "relay.eval.case_id" case-id)
-                                        (i-attr "relay.eval.trial" trial)
-                                        (s-attr "relay.eval.tier" (name tier))
-                                        (i-attr "relay.eval.case_version" version)]
-                                 (seq errors) (conj (s-attr "error.type" "trial_error")))
-                   :events (vec (for [[id {:keys [value explanation]}] (sort-by (comp str key) scores)]
-                                  {:timeUnixNano (nanos end)
-                                   :name "gen_ai.evaluation.result"
-                                   :attributes (cond-> [(s-attr "gen_ai.evaluation.name" (name id))
-                                                        (s-attr "gen_ai.evaluation.score.label" (label value))]
-                                                 explanation (conj (s-attr "gen_ai.evaluation.explanation" explanation)))}))}
-            (seq errors) (assoc :status {:code 2 :message "trial error"}))]}]}]}))
+    (otel/request
+     "relay-eval" "relay.eval-otel"
+     [(otel/workflow-span
+       {:trace-id trace-id :span-id span-id :workflow case-id :started started :ended end
+        :attributes (cond-> [(otel/s-attr "relay.eval.run_id" run-id)
+                             (otel/s-attr "relay.eval.case_id" case-id)
+                             (otel/i-attr "relay.eval.trial" trial)
+                             (otel/s-attr "relay.eval.tier" (name tier))
+                             (otel/i-attr "relay.eval.case_version" version)]
+                      (seq errors) (conj (otel/s-attr "error.type" "trial_error")))
+        :events (for [[id {:keys [value explanation]}] (sort-by (comp str key) scores)]
+                  (otel/evaluation-event end (name id) (label value) explanation))
+        :error (when (seq errors) "trial error")})])))
 
-(defn transcript-session-id
-  "The agentloop session id a transcript names, from its closing outcome
-  line (the session file's name without its extension), or nil."
-  [transcript-text]
-  (when-let [line (last (remove str/blank? (str/split-lines transcript-text)))]
-    (when-let [session (try (get (json/parse-string line) "session") (catch Exception _ nil))]
-      (when (string? session)
-        (let [n (str (fs/file-name session))]
-          (not-empty (str/replace n #"\.[^.]*$" "")))))))
+(def transcript-session-id otel/transcript-session-id)
 
 (defn wake-transcripts
   "[{:role :wake :file}] for the wakes under a trial's data dir, by role and
@@ -110,15 +73,10 @@
   (reduce
    (fn [acc w]
      (let [conv (wake-conversation-id case-id trial w)
-           {:keys [exit out err]} (p/shell {:out :string :err :string :continue true}
-                                           bin "otel" "--conversation-id" conv
-                                           "--parent-trace" trace-id "--parent-span" span-id (:file w))
-           line (str/trim (str out))]
-       (if (and (zero? exit)
-                (try (contains? (json/parse-string line) "resourceSpans") (catch Exception _ false)))
+           {:keys [line problem]} (traces/agentloop-otel! bin conv {:trace-id trace-id :span-id span-id} (:file w))]
+       (if line
          (update acc :lines conj line)
-         (update acc :problems conj (str case-id " #" trial " " (:role w) "/" (:wake w)
-                                         ": agentloop otel failed: " (str/trim (str err)))))))
+         (update acc :problems conj (str case-id " #" trial " " (:role w) "/" (:wake w) ": " problem)))))
    {:lines [] :problems []}
    (wake-transcripts data-dir)))
 

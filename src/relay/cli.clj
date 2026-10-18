@@ -7,8 +7,10 @@
             [clojure.string :as str]
             [relay.config :as config]
             [relay.core :as core]
+            [cheshire.core :as json]
             [relay.dispatch :as dispatch]
             [relay.export :as export]
+            [relay.harness.agentloop :as agentloop]
             [relay.inbound :as inbound]
             [relay.log :as log]
             [relay.notify :as notify]
@@ -17,7 +19,9 @@
             [relay.reports :as reports]
             [relay.setup :as setup]
             [relay.text :as text]
-            [relay.tools :as tools]))
+            [relay.tools :as tools]
+            [relay.traces :as traces]
+            [relay.week :as week]))
 
 (def usage
   "relay: a relay of agent roles, with an append-only log as the record.
@@ -93,6 +97,17 @@ Every command needs the data directory, from --data <dir> or from the file
                                       findings nothing flags go to the ledger unread
   relay ledger                        the findings accepted from research reports
   relay ledger set <entry> <status>   mark an entry new, seen, applied or passed
+  relay week [--since <date>] [--until <date>] [--json]
+                                      how often relay asked you for something and how
+                                      long it waited, what each role's wakes did and
+                                      cost, wakes that look wrong, and your flags;
+                                      the last 7 days unless dates (YYYY-MM-DD) say
+  relay flag <wake> good|bad [note]   mark a wake or conversation (its id from relay
+                                      status or relay week) to find it later
+  relay traces --out <dir> [--since <date>] [--until <date>] [--agentloop <bin>]
+                                      write the wakes and conversations as OpenTelemetry
+                                      traces to <dir>/traces.otlp.jsonl, offline; they
+                                      hold no content
   relay tool --data <dir> --role <r> [--wake <w>] <name>
                                       run a role's tool call (harnesses use this)
 
@@ -361,6 +376,27 @@ and --instructions marks the id public too.")
                              (str/join ", " (for [[r i] again] (str "finding " (inc i) " of report " r)))
                              ". relay review lists them.")]))))))))
 
+(defn- date-option [opts k]
+  (when-let [v (get opts k)]
+    (try (java.time.LocalDate/parse v)
+         (catch Exception _ (fail! (str "--" (name k) " takes a date such as 2026-10-18, not " v "."))))))
+
+(defn- week-rows
+  "The window --since and --until name, the log, and the wakes and
+  conversations that started in it with what their run files say."
+  [sys opts]
+  (let [zone (config/zone (:config sys))
+        win (week/window zone ((:clock sys)) (date-option opts :since) (date-option opts :until))
+        events (log/read-events (:data-dir sys))
+        walked (week/walk-log events)
+        wakes (filter #(week/in-window? win (:started-at %)) (vals (:wakes (:state walked))))
+        facts (traces/read-facts (:data-dir sys) wakes)]
+    {:win win :events events :facts facts :rows (week/wake-rows walked win facts)}))
+
+(defn- week-report [sys opts]
+  (let [{:keys [win events facts]} (week-rows sys opts)]
+    (week/report events (config/zone (:config sys)) ((:clock sys)) win facts)))
+
 (def ^:private spec
   {:alias {:s :subject :m :message :n :tail}
    :coerce {:subject :string :message :string :title :string :reports-to :string
@@ -368,7 +404,7 @@ and --instructions marks the id public too.")
             :tail :long :data :string :search :string :as-of :string :known-at :string
             :version :long :wake :long :role :string :trace :string :untrusted :boolean :public :boolean :approvals :boolean
             :topic :string :from :string :to :string :why :string :text :string :end :boolean
-            :pause-file :string}})
+            :pause-file :string :since :string :until :string :out :string :agentloop :string}})
 
 (defn- command
   "Runs one command with the data directory's system. Returns {:exit :out},
@@ -603,6 +639,30 @@ and --instructions marks the id public too.")
       "review" (if-let [id (some-> (first more) parse-long)]
                  (review! sys id)
                  (lines (render/reports-waiting zone (core/reports-waiting (state)))))
+      "week" (let [r (week-report sys opts)]
+               (if (:json opts)
+                 (result 0 (-> (json/generate-string (week/json-ready r) {:escape-non-ascii true})
+                               (str/replace "\u007f" "\\u007f")))
+                 (lines (render/week-report r zone))))
+      "flag" (let [[id value & note] more
+                   wake-id (some-> id parse-long)]
+               (when-not (and wake-id value)
+                 (fail! "usage: relay flag <wake> good|bad [note]"))
+               (submit! sys :wake/flag {:wake wake-id :value value
+                                        :note (or (:message opts) (str/join " " note))})
+               (let [w (get-in (state) [:wakes wake-id])]
+                 (result 0 (str "Flagged " (if (:chat w) "conversation " "wake ") wake-id " (" (:role w) ") " value "."))))
+      "traces" (let [out (:out opts)
+                     _ (when (str/blank? out) (fail! "usage: relay traces --out <dir> [--since <date>] [--until <date>]"))
+                     config (:config sys)
+                     bin (or (:agentloop opts)
+                             (agentloop/agentloop-bin (get-in config [:harnesses (:default-harness config)])))
+                     _ (when-not bin (fail! "relay traces needs agentloop: pass --agentloop <bin>."))
+                     {:keys [rows]} (week-rows sys opts)
+                     {:keys [file lines wakes conversations problems]} (traces/export! dir bin rows out)]
+                 (apply result 0 (str "Wrote " lines " lines for " wakes " wakes and " conversations
+                                      " conversations to " file ".")
+                        problems))
       "tool" (run-tool sys (:role opts) (first more) (:wake opts))
       (apply result 1 (str/split-lines usage)))))
 
@@ -669,7 +729,7 @@ and --instructions marks the id public too.")
         ;; Everything printed may hold text a role wrote, so nothing
         ;; that could drive the terminal is printed raw. relay tool's
         ;; output is a JSON envelope for the harness, not a terminal.
-        (if (or (= "tool" cmd) (and (= "log" cmd) (:json opts)))
+        (if (or (= "tool" cmd) (and (#{"log" "week"} cmd) (:json opts)))
           ;; JSON escaped by its encoder, not by visible, which would
           ;; break it.
           result
