@@ -1,0 +1,64 @@
+;; Eval case: after finishing multi-step work that will come back, the hub
+;; writes a skill for it at skills/hub/<slug>.md, with a title line and a
+;; "Use when:" line. See relay.eval and relay.skills.
+{:doc "The hub writes a skill after the first time it finishes work that recurs."
+ :live? true
+
+ :eval {:id "skill-written-after-multistep" :version 1 :tier :capability :tags [:skills] :trials 5}
+
+ :clock "2026-10-12T09:00"
+
+ :model
+ {"hub" [{:tool-uses [{:name "facts" :input {:topic "projects"}}]}
+         {:tool-uses [{:name "facts" :input {:topic "office"}}]}
+         {:tool-uses [{:name "memo_send"
+                       :input {:to "operator" :subject "Draft: monthly Lighthouse reminder"
+                               :body "Hello all. The Lighthouse project meets this month [[fact:7]]. The office is closed on Mondays [[fact:5]], so please plan around that. Thanks."}}]}
+         {:tool-uses [{:name "doc_put"
+                       :input {:path "skills/hub/monthly-reminder.md"
+                               :content "# Monthly reminder email\n\nUse when: the operator asks for the monthly reminder email.\n\n1. Look up the project name (topic projects) and the closed day (topic office).\n2. Draft three short sentences and cite the facts.\n3. Send the draft to the operator to approve.\n"}}]}
+         {:tool-uses [{:name "memo_close"
+                       :input {:memo {:memo-id {:subject "Monthly reminder"}} :outcome "Drafted the reminder and wrote a skill for it."}}]}
+         {:tool-uses [{:name "journal_write"
+                       :input {:text "Drafted the monthly reminder for approval. It comes back every month, so I wrote skills/hub/monthly-reminder.md."}}]}
+         {:text "Done."}]}
+
+ :foils
+ {"no-skill"
+  {:fails #{:skill-written :skill-shaped}
+   :model {"hub" [{:tool-uses [{:name "facts" :input {:topic "projects"}}]}
+                  {:tool-uses [{:name "memo_send"
+                                :input {:to "operator" :subject "Draft: monthly Lighthouse reminder"
+                                        :body "Hello all. The Lighthouse project meets this month. Thanks."}}]}
+                  {:tool-uses [{:name "memo_close"
+                                :input {:memo {:memo-id {:subject "Monthly reminder"}} :outcome "Drafted the reminder."}}]}
+                  {:tool-uses [{:name "journal_write" :input {:text "Drafted the reminder."}}]}]}}
+  "shapeless-skill"
+  {:fails #{:skill-shaped}
+   :model {"hub" [{:tool-uses [{:name "memo_send"
+                                :input {:to "operator" :subject "Draft: monthly Lighthouse reminder"
+                                        :body "Hello all. The Lighthouse project meets this month."}}]}
+                  {:tool-uses [{:name "doc_put"
+                                :input {:path "skills/hub/monthly-reminder.md" :content "Remember to draft the reminder."}}]}
+                  {:tool-uses [{:name "memo_close"
+                                :input {:memo {:memo-id {:subject "Monthly reminder"}} :outcome "Drafted."}}]}
+                  {:tool-uses [{:name "journal_write" :input {:text "Drafted."}}]}]}}}
+
+ :steps
+ [{:run ["memo" "hub" "-s" "Monthly reminder"
+         "-m" "Draft this month's reminder email to the team. Mention the project name and the day the office is closed. I need this every month."]}
+  {:tick 1}]
+
+ :assert
+ [[:has :wake {:role "hub" :outcome "ran"}]]
+
+ :graders
+ [{:id :skill-written
+   :doc "A doc exists under skills/hub/."
+   :check [:has :doc {:path [:regex "^skills/hub/[a-z0-9-]+\\.md$"]}]}
+  {:id :skill-shaped
+   :doc "It starts with a title line and has a Use when line."
+   :check [:has :doc {:path [:regex "^skills/hub/"] :content [:all [:regex "\\A# .+"] [:regex "(?m)^Use when:"]]}]}
+  {:id :drafted
+   :doc "The draft still reached the operator."
+   :check [:has :memo {:to "operator"}]}]}

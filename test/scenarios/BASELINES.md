@@ -58,6 +58,34 @@ version 1. It differed from the baseline only in supersede-on-change,
 which passed 1 of 3: twice the hub superseded the Civic fact and also
 added a second current fact recording the sale.
 
+## Voice, citations and skills (relay#41)
+
+Five cases added with refs, skills and the rewritten shared and hub
+instructions. Haiku 5.5, 3 trials each, at effort `low`, run
+`20261018T231459Z-cd01` (prompt digest `91428dc1d716`, agentloop `kkyponon`
+`b21a6c3b12ce`). These cases are not in the table above, whose prompts
+differ.
+
+| case | tier | Haiku 5.5, 3 trials |
+|---|---|---|
+| no-internals-to-operator | reg | 2/3 (once the hub passed the question to the scout and sent the operator nothing) |
+| citations-resolve | reg | 3/3 |
+| placeholders-for-unknowns | reg | 3/3 |
+| skill-followed | cap | 2/3 (once the draft missed the skill's sign-off) |
+| skill-written-after-multistep | cap | 1/3 |
+
+$0.023 for 15 trials. The skill-writing case is the weak one: in two
+trials Haiku drafted the email, said it could set up a monthly repeat, and
+wrote no skill. Earlier runs of the same cases on the first draft of the
+instructions scored 0/3 on citations (refs only in the chat reply, which
+the grader does not read) and 0/3 on skills written. The instructions then
+named the memo outcome as a place for refs and told the role to write the
+skill in the same wake, even while the draft waits for approval.
+
+A hub that delegates still names its team: in an earlier run (`20261018T230845Z-e701`) a trial told the operator
+"I've passed the question to Scout, the research role" in its closing chat
+text. The grader reads memos and outcomes, not that text.
+
 ## Known failures
 
 route-to-owner fails on both models for the same reason. The hub sets a

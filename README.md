@@ -90,7 +90,50 @@ role's running log, and its tail appears in each wake's prompt. When a
 wake is cut short at its deadline before the role wrote an entry, relay
 writes one for it, saying when and which memos it had. It quotes their
 subjects, so it carries their labels. Docs are versioned shared content
-for things that really are files.
+for things that really are files. A role's skills are docs, and every item
+a read tool shows has a ref (below).
+
+#### Refs
+
+A ref names one thing relay knows, as `[[kind:id]]`. The kinds are `fact`
+(`[[fact:12]]`), `doc` (`[[doc:hear-here/style.md]]`, or a version with
+`@3`), `note` (`[[note:hub/venues]]`, role and name), `memo`, `journal`,
+`report`, `shown` (something the operator was shown,
+`[[shown:2026-10-18/call-9]]`), `rem` (a reminder), `file` and `web`.
+The shared instructions require a role to put a ref after every claim it
+draws from relay's knowledge or a source. The tools `facts`,
+`fact_history`, `docs`, `doc_get`, `doc_history`, `notes`, `journal`,
+`inbox`, `reports` and `ledger` print each item's ref beside it. A path or
+role id that someone else chose is printed in a ref only when the item's
+own labels already cover it.
+
+`relay.refs` is pure. `parse` finds every ref in a text and never throws.
+`ref` and `doc-ref` write one, escaping brackets, percent signs and line
+breaks in the id so that `parse` reads back what was written.
+`resolve` takes the state and a ref and returns `{:ref :kind :status
+:title :text :labels}`. The status is `:ok` when the item exists,
+`:missing` when it does not, was removed or is not a ref, and `:external`
+for `rem`, `file` and `web`, which relay cannot look up. An external
+result carries the id as `:target` for the client to open. A client uses
+`resolve` to mark the refs in an answer that do not resolve. In
+notifications, `relay.refs/plain` writes a ref as short text.
+
+#### Skills
+
+A skill is a doc at `skills/<role id>/<slug>.md`. Its first line is `#
+Title`, a later line starts `Use when:`, and the procedure follows. A
+role's system prompt lists its skills by title, path and use-when line,
+under the same filters as its journal and facts. A skill whose latest
+version a contaminated session wrote is left out, with a line saying that
+some skills are left out, until the operator trusts it. A public role is
+listed its public skills only. The shared instructions tell a role to look
+for a matching skill before multi-step work, to write one after it first
+finishes work that will recur, and to update it when the operator corrects
+it or edits its draft.
+
+A role writes or removes docs under `skills/` only for its own id. `relay
+put` and `doc_put` by any other role refuse the path. The operator may
+edit any skill. Skills shared between roles are not built.
 
 `relay export <dir>` writes all of it out as read-only markdown for
 browsing. Nothing reads an export back.
@@ -869,6 +912,11 @@ are at Development stability, so the names may change. A wake whose export
 fails is reported and left out. Usage and cost
 come from agentloop's transcripts, at the served model's rates. Judge graders
 may appear in a case but are not run yet; they are recorded as skipped.
+
+A check can also look at `:citation` items, one for each ref in what the hub
+said to the operator (a memo to them, or the outcome it gave when closing
+one of theirs), resolved against relay's state. A grader on forbidden words
+is a `:none :memo` check with a `:regex` on the body.
 
 In `bb test`, every case's oracle must pass all its checks and each foil (a
 known-bad script) must fail exactly the checks it names.

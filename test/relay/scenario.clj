@@ -71,6 +71,12 @@
     :report      one per research report, as relay keeps it, with its
                  :verification once checked
     :ledger      one per ledger entry
+    :citation    one per ref (relay.refs) in a memo to the operator, or in
+                 the outcome the hub gave when closing a memo from the
+                 operator, as
+                 relay.refs/resolve gives it (:ref :kind :status :title
+                 :text :labels), with :memo, the memo's id. Refs repeated
+                 in a memo count once.
 
   A :wake also has :requests, :input-tokens, :output-tokens,
   :cache-read-tokens, :cache-write-tokens, :cost-usd, :models (the models
@@ -111,6 +117,7 @@
             [relay.config :as config]
             [relay.mock-anthropic :as mock]
             [relay.core :as core]
+            [relay.refs :as refs]
             [relay.staging :as staging]
             [relay.transcript :as transcript])
   (:import (java.time Instant LocalDate LocalDateTime ZoneId)))
@@ -166,7 +173,7 @@
     :else (= pattern value)))
 
 (def kinds #{:memo :hold :wake :role :routine :dead-letter :notification :event :sent
-             :fact :journal :note :doc :tool-call :report :ledger})
+             :fact :journal :note :doc :tool-call :report :ledger :citation})
 
 ;; --- the newer kinds, from the state and the wakes' transcripts
 
@@ -241,6 +248,17 @@
     (vec (for [e (sort-by :id (mapcat val (:journals state)))]
            (assoc e :wake (:id (last (filter #(and (= (:owner e) (:role %)) (< (:id %) (:id e))) ws))))))))
 
+(defn citation-items
+  "One item per distinct ref in each thing said to the operator (see the
+  namespace doc)."
+  [{:keys [state]}]
+  (vec (for [m (sort-by :id (vals (:memos state)))
+             :let [text (cond (= core/operator (:to m)) (str (:subject m) "\n" (:body m))
+                              (= core/operator (:from m)) (:outcome m))]
+             :when text
+             ref (distinct (map :ref (refs/parse text)))]
+         (assoc (refs/resolve state ref) :memo (:id m)))))
+
 (defn items
   "The things of one kind in a world: {:state :events :sent}, and for the
   newer kinds also :transcripts (wake id to its transcript's entries) and
@@ -262,6 +280,7 @@
     :notification (sort-by :id (vals (:notifications state)))
     :report (sort-by :id (vals (:reports state)))
     :ledger (sort-by :id (vals (:ledger state)))
+    :citation (citation-items world)
     :event events
     :sent sent))
 

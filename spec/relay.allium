@@ -851,6 +851,28 @@ entity Doc {
     is_present: not current.removed
 }
 
+-- Skills. A role's skills are the docs under skills/<role id>/, each with
+-- a `# Title` first line and a line starting `Use when:`. A role writes
+-- or removes docs there only for its own id, and elsewhere under skills/
+-- not at all; the operator may write any. black box: true for a caller
+-- who is not a role, for any path outside skills/, and for a role whose
+-- id is the second segment of a path under skills/.
+-- The system prompt lists each of a role's skills by title and use-when
+-- line, leaving out those whose latest version is contaminated (and
+-- saying that some are left out) until the operator trusts them. A
+-- public role is listed its public skills only.
+
+-- Refs. A ref is [[kind:id]]: a kind from the list below and an id the
+-- kind defines (fact number, doc path with an optional @version, a note
+-- as role/name, memo, journal and report numbers, shown/<date>/<call>,
+-- and for rem, file and web the reminder id, path or URL). Resolving one
+-- against the state gives :ok with the item's title, text and labels,
+-- :missing, or :external for the kinds relay cannot look up.
+value Ref {
+    kind: fact | doc | note | memo | journal | rem | file | web | shown | report
+    id: String
+}
+
 entity DocVersion {
     doc: Doc
     -- The seq of the event that wrote this version.
@@ -2939,6 +2961,7 @@ rule PutNewDoc {
     requires: not exists Doc{path: path}
     -- A path that would be both a file and a folder is refused.
     requires: not doc_clash(path)   -- black box: an existing doc sits inside path/ or at a parent folder of path
+    requires: writes_only_own_skills(caller, path)   -- black box: see the note on skills below
 
     ensures:
         let doc = Doc.created(path: path)
@@ -2960,6 +2983,7 @@ rule PutDoc {
     requires: content != ""
     requires: content.length <= config.max_doc_length
     requires: not doc_clash(path)
+    requires: writes_only_own_skills(caller, path)
     -- Putting the content a doc already has records nothing. A removed
     -- doc has none, so putting it again brings it back.
     requires: not doc.is_present or doc.current.content != content
@@ -2981,6 +3005,7 @@ rule RemoveDoc {
     when: DocRemoveRequested(caller, doc)
 
     requires: doc.is_present
+    requires: writes_only_own_skills(caller, doc.path)
 
     ensures: DocVersion.created(
         doc: doc,

@@ -232,7 +232,7 @@
         root (str (fs/absolutize (or repo-root ".")))
         agentloop-bin (str (fs/normalize (fs/path root ".." "agentloop" "bin" "agentloop")))
         hub-file (fs/path root "setup" "hub.md")
-        hub (if (fs/exists? hub-file) (slurp (str hub-file)) "You run relay for the operator. Be brief.")]
+        hub (if (fs/exists? hub-file) (slurp (str hub-file)) "You are the operator's chief of staff. Be brief.")]
     (when (and force? (fs/directory? dir))
       (doseq [child (fs/list-dir dir)] (fs/delete-tree child)))
     (fs/create-dirs dir)
