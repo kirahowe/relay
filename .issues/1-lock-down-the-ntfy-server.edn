@@ -1,10 +1,10 @@
 {:id 1
  :title "Lock down the ntfy server"
- :status :review
+ :status :done
  :type :feature
  :priority :p1
  :created "2026-10-16"
- :updated "2026-10-17"
+ :updated "2026-10-18"
  :tags #{"needs-kira" "stop-0"}
  :blocked-by #{}
  :related #{}

@@ -23,7 +23,6 @@
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
-| [1](1-lock-down-the-ntfy-server.md) | Lock down the ntfy server | feature | P1 |
 | [4](4-give-conversations-the-time-and-add-a-clock-tool.md) | Give conversations the time, and add a clock tool | feature | P1 |
 | [6](6-add-a-staging-relay-and-scenario-runner.md) | Add a staging relay and scenario runner | feature | P1 |
 | [8](8-write-the-escalation-rules-for-development-agents.md) | Write the escalation rules for development agents | feature | P1 |
@@ -62,6 +61,7 @@
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
+| [1](1-lock-down-the-ntfy-server.md) | Lock down the ntfy server | feature | P1 |
 | [23](23-decide-who-syncs.md) | Decide who syncs ~/Sync/relay | chore | P3 |
 
 ## Dropped
