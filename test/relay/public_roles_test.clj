@@ -255,7 +255,7 @@
                             (read-as w "scout" "doc_get" {:path "private/cv.md"})))
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"There is no doc at private/cv.md"
                             (read-as w "scout" "doc_history" {:path "private/cv.md"})))
-      (is (= "Look for arts grants." (:content (read-as w "scout" "doc_get" {:path "public/brief.md"}))))
+      (is (str/starts-with? (:content (read-as w "scout" "doc_get" {:path "public/brief.md"})) "Look for arts grants."))
       (is (re-find #"There is no doc" (refusal #(run w "scout" :doc/remove {:path "private/cv.md"}))))
       (testing "it does not write over a doc it cannot see, whatever that says"
         (is (= "private/cv.md cannot be used. Choose another path."

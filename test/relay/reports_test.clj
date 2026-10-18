@@ -960,7 +960,7 @@
         w (-> w (verified id) (reviewed id [[0 "accept"]]))
         e (first (core/ledger-entries (:state w)))
         r (read-as w "hub" "ledger" {})]
-    (is (= (str "entry " (:id e) ": job, deadline 2026-11-30, amount 52000 CAD, status new\n"
+    (is (= (str "entry " (:id e) ": job, deadline 2026-11-30, amount 52000 CAD, status new [[report:" (:report e) "]]\n"
                 "  Archivist at Example Society\n  https://jobs.example.org/archivist")
            (:content r)))
     (is (= ["private"] (:labels r)))
@@ -987,7 +987,7 @@
     (is (not (contains? (tools/offered cfg "hub") "reports")))
     (is (str/includes? (refusal #(run w "scout" :ledger/set-status {:entry (:id e) :status "seen"})) "public role"))
     (let [r (read-as w "scout" "reports" {})]
-      (is (= "- Archivist  https://jobs.example.org/archivist" (:content r)))
+      (is (str/starts-with? (:content r) "- Archivist  https://jobs.example.org/archivist [[report:"))
       (is (= ["contaminated"] (:labels r)) "its own public writing, never private")
       (is (not (str/includes? (:content r) "accept")) "nothing of what the operator decided"))))
 

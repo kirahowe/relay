@@ -940,3 +940,9 @@
             (is (str/includes? (str error) marker) tool)
             (is (= session labels) tool))))
       (finally (fs/delete-tree dir)))))
+
+(deftest a-doc-ref-is-shown-only-under-labels-that-cover-its-path
+  ;; Regression: doc_get checked a doc's ref against labels that counted
+  ;; the version's author, then showed it on an item without them, so a
+  ;; path a contaminated role chose came back labelled private only.
+  (is (:pass? (every-marker-carries-its-writers-labels-wherever-it-turns-up 43 :seed 1792371211171))))

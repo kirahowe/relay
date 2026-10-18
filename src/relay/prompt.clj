@@ -37,11 +37,31 @@
                      " after reading something an outsider may have written. Read them with"
                      " `notes` and accept_contamination only if you need them.\n"))))))
 
+(defn- fmt-skills [skills withheld]
+  (str "\n# Your skills\n\n"
+       (if (and (empty? skills) (zero? withheld))
+         (str "You have no skills yet. When you finish multi-step work that will come back, write"
+              " a skill for it with `doc_put` at `skills/<your id>/<slug>.md`: a `# Title` line, a"
+              " line starting `Use when:`, then the procedure.\n")
+         (str "Procedures you wrote for work that comes back. Before multi-step work, read the one"
+              " that matches with `doc_get` and follow it. Update it when the operator corrects you."
+              "\n\n"
+              (str/join "\n" (for [{:keys [path title use-when]} skills]
+                               (str "- " (or title path) " (`" path "`)"
+                                    (when use-when (str ". Use when: " use-when)))))
+              (when (seq skills) "\n")
+              (when (pos? withheld)
+                ;; Not how many: that is up to whoever wrote them.
+                (str "\nSome skills are left out because they are contaminated: you wrote them"
+                     " after reading something an outsider may have written. The operator can"
+                     " trust them. Read them with `doc_get` and accept_contamination only if you"
+                     " need them.\n"))))))
+
 (defn instructions
   "The system prompt for a role: the shared instructions, the operator's own
   additions if there are any, the role's own instructions, what it is
-  granted, and its notes."
-  [{:keys [shared operator-additions notes withheld-notes granted]} {:keys [id title instructions]}]
+  granted, its notes and its skills."
+  [{:keys [shared operator-additions notes withheld-notes granted skills withheld-skills]} {:keys [id title instructions]}]
   (str (str/trim shared) "\n\n"
        (when-not (str/blank? operator-additions)
          (str "---\n\n" (str/trim operator-additions) "\n\n"))
@@ -52,7 +72,8 @@
        (str/trim instructions) "\n"
        (when-not (str/blank? granted)
          (str "\n# What you are granted\n\n" granted "\n"))
-       (fmt-notes notes (or withheld-notes 0))))
+       (fmt-notes notes (or withheld-notes 0))
+       (fmt-skills skills (or withheld-skills 0))))
 
 (defn- fmt-memo [zone {:keys [id from subject body sent-at attempts routine]}]
   (str "\n## Memo " id ": " subject "\n\n"

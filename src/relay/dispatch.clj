@@ -151,6 +151,7 @@
         run-dir (fs/path data-dir "runs" role (str id))
         resumed (when resumes (get-in state [:wakes resumes]))
         {shown-notes :shown withheld-notes :withheld} (core/prompt-notes state config role)
+        {shown-skills :shown withheld-skills :withheld} (core/prompt-skills state config role)
         holds (map #(core/hold state %) resolves)
         script {:script? (tools/script-role? state config role)}
         ;; Each MCP tool is held to the definition relay.edn's :digest
@@ -177,6 +178,8 @@
                                           :operator-additions (when-not public? operator-additions)
                                           :notes shown-notes
                                           :withheld-notes withheld-notes
+                                          :skills shown-skills
+                                          :withheld-skills withheld-skills
                                           :granted (tools/grants-summary config role script)}
                                          role-row)
      :prompt (prompt/wake {:role role-row

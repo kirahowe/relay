@@ -98,7 +98,7 @@
           ;; the script now writes what it read, claiming a clean session
           (tools/call! sys "scraper" "memo_send" {:to "clerk" :subject "fyi" :body ok} []))
         (let [m (first (core/unread-memos (inbound/current-state sys) "clerk"))]
-          (is (= "attacker text" (:body m)))
+          (is (str/starts-with? (:body m) "attacker text"))
           (is (core/contaminated? (:labels m)) "contaminated text reaches clerk unquarantined, labelled clean")
           (is (core/quarantined? (:config sys) m)))))))
 

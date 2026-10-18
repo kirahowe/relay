@@ -30,6 +30,7 @@
             [relay.core :as core]
             [relay.harness :as harness]
             [relay.inbound :as inbound]
+            [relay.refs :as refs]
             [relay.reports :as reports])
   (:import (java.time Instant LocalTime)
            (java.time.format DateTimeFormatter)))
@@ -44,7 +45,7 @@
   {:content content :labels (apply core/union label-colls)})
 
 (defn- fmt-memo [{:keys [id from subject body sent-at attempts routine]}]
-  (str "Memo " id ": " subject "\n"
+  (str "Memo " id ": " subject " " (refs/ref :memo id) "\n"
        (if routine
          (str "  Your routine `" routine "` coming due, " sent-at ".")
          (str "  From " from ", sent " sent-at "."))
@@ -88,6 +89,7 @@
   (str "Fact " id (when topic (str " [" topic "]")) ", holds " (validity config f)
        (when supersedes (str ", replacing fact " supersedes))
        (when superseded-by (str ", superseded by fact " superseded-by))
+       " " (refs/ref :fact id)
        "\n  " text
        (when (:newer-withheld f) (str "\n  (" newer-withheld ")"))))
 
@@ -127,6 +129,15 @@
                      " wrote after reading such text. They are withheld by default. Reading one"
                      " marks you contaminated, and from then on the operator must approve your"
                      " calls that act outside relay or send data out.")})
+
+(defn- doc-ref
+  "The ref to show beside a doc version a read returns, or nil. The path
+  is text whoever first wrote the doc chose, so it is shown only when
+  `labels`, the labels the read puts on the item the ref goes in, already
+  cover its labels."
+  [state path labels version]
+  (when (every? (set labels) (core/path-labels state path))
+    (refs/doc-ref path version)))
 
 (defn- author [state actor] (core/shown-id state actor))
 
@@ -352,7 +363,7 @@
                                       (withheld (str "- " (local-time config (:recorded-at v)) " by " who))
                                       who-labels))
                               "\n" (or public accept_contamination))
-                        :content #(str "Fact " fact (when (:supersedes f) (str ", which replaced fact " (:supersedes f)))
+                        :content #(str "Fact " fact " " (refs/ref :fact fact) (when (:supersedes f) (str ", which replaced fact " (:supersedes f)))
                                        "\n" %)))))}
 
    "fact_add"
@@ -423,7 +434,7 @@
               (if (empty? entries)
                 "The journal is empty."
                 (show (for [{:keys [id at text] :as e} entries]
-                        (item (str (local-time config at) "\n" text) (core/item-labels e)
+                        (item (str (local-time config at) " " (refs/ref :journal id) "\n" text) (core/item-labels e)
                               (withheld (str (local-time config at) "\nEntry " id))))
                       "\n\n" (or public accept_contamination)))))}
 
@@ -448,7 +459,13 @@
               (if (empty? ns)
                 "You have no notes."
                 (show (for [{:keys [name text] :as n} ns]
-                        (item (str "## " name "\n\n" text) (core/item-labels n) (withheld "A note")))
+                        (item (str "## " name
+                                   ;; The owner's id is text someone chose, so it is
+                                   ;; shown only when the note's labels cover it.
+                                   (when (every? (set (core/item-labels n)) (core/id-labels state (own actor args)))
+                                     (str " " (refs/ref :note (str (own actor args) "/" name))))
+                                   "\n\n" text)
+                              (core/item-labels n) (withheld "A note")))
                       "\n\n" (or public accept_contamination)))))}
 
    "docs"
@@ -465,7 +482,7 @@
                 (show (for [{:keys [path at actor content seq] :as v} ds
                             :let [[who who-labels] (author state actor)]]
                         (item (str path " (" (count content) " characters, last written "
-                                   (local-time config at) " by " actor ")"
+                                   (local-time config at) " by " actor ") " (refs/doc-ref path nil)
                                    (when (:newer-withheld v) (str " (" newer-withheld ")")))
                               (core/union (core/version-labels state v) (core/path-labels state path))
                               (withheld (str "A doc, version " seq " by " who))
@@ -492,7 +509,8 @@
                                                              (when version (str " with version " version)) "."))
                     (:removed v) (core/reject! :not-found (str path " was removed in version " (:seq v) "."))
                     :else (show [(item (str (:content v)
-                                            (when (:newer-withheld v) (str "\n\n[relay: " newer-withheld "]")))
+                                            (when (:newer-withheld v) (str "\n\n[relay: " newer-withheld "]"))
+                                            (some->> (doc-ref state path (core/item-labels v) (:seq v)) (str "\n\n")))
                                        (core/item-labels v)
                                        (withheld (str "Version " (:seq v) " of the doc")))]
                                 "" accept_contamination))))}
@@ -510,7 +528,8 @@
                             :when (or (not public) (core/doc-shown-to-public? state path v))
                             :let [[who who-labels] (author state actor)]]
                         (item (str "version " seq ", " (local-time config at) " by " actor
-                                   (if removed ": removed" (str ", " (count content) " characters")))
+                                   (if removed ": removed" (str ", " (count content) " characters"))
+                                   (some->> (doc-ref state path (core/version-labels state v) seq) (str " ")))
                               (core/version-labels state v)
                               (withheld (str "version " seq ", " (local-time config at) " by " who))
                               who-labels))
@@ -583,7 +602,8 @@
                 "The ledger has no entries."
                 (show (for [{:keys [title organization url location] :as e} entries
                             :let [typed (reports/typed-line e)
-                                  full (str typed "\n  " title " at " organization (when location (str ", " location))
+                                  full (str typed " " (refs/ref :report (:report e)) "\n  " title " at " organization
+                                            (when location (str ", " location))
                                             "\n  " url)]]
                         (item full (core/item-labels e)
                               (str typed "\n  Its text is contaminated, withheld. Pass accept_contamination to read it.")
@@ -618,7 +638,8 @@
                 ;; What it wrote, and nothing of what relay or the operator
                 ;; made of it.
                 (labelled (str/join "\n" (for [r rs f (:findings r)]
-                                           (str "- " (:title f) "  " (reports/canonical-url (:url f)))))
+                                           (str "- " (:title f) "  " (reports/canonical-url (:url f))
+                                                " " (refs/ref :report (:id r)))))
                           (mapcat core/item-labels rs)))))}
 
    "report_submit"

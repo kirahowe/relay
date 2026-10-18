@@ -17,6 +17,7 @@
             [relay.reports :as reports]
             [relay.schedule :as schedule]
             [relay.search :as search]
+            [relay.skills :as skills]
             [relay.spend :as spend]
             [relay.text :as text])
   (:import (java.time Duration Instant LocalDate LocalDateTime)
@@ -637,6 +638,29 @@
                 :else (assoc e :withheld :unseen)))
         (journal-shown state owner wake-journal-entries (public-role? config owner))))
 
+(defn prompt-skills
+  "A role's skills as its system prompt lists them: {:shown [{:path :title
+  :use-when :labels}] :withheld n}. The skills are the docs under
+  skills/<role>/ whose latest version exists. A contaminated one is left
+  out and counted, since a session that took in outside text wrote it,
+  until the operator trusts it. A public role is shown its public skills,
+  contaminated or not, and its other skills are not even counted."
+  [state config role]
+  (let [prefix (str "skills/" role "/")
+        public (public-role? config role)
+        vs (->> (keys (:docs state))
+                (filter #(str/starts-with? % prefix))
+                sort
+                (keep #(let [v (doc-version state % {})] (when (and v (not (:removed v))) v))))
+        shown? (fn [v] (if public
+                         (doc-shown-to-public? state (:path v) v)
+                         (not (contaminated? (:labels v)))))
+        {shown true out false} (group-by (comp boolean shown?) vs)]
+    {:shown (vec (for [v shown]
+                   (assoc (skills/parse (:content v)) :path (:path v)
+                          :labels (union (item-labels v (version-labels state v)) (path-labels state (:path v))))))
+     :withheld (if public 0 (count out))}))
+
 (defn prompt-fact-topics
   "The fact topics a wake's prompt lists for a role: {:topics [{:topic
   :count}], sorted, :left-out}, counting the facts that hold now under
@@ -677,6 +701,7 @@
   (let [ms (keep #(memo state %) memos)]
     (union (role-labels state role)
            (notes-labels (:shown (prompt-notes state config role)))
+           (mapcat :labels (:shown (prompt-skills state config role)))
            (mapcat #(carried-memo-labels state %) ms)
            (when (and (not chat) (not (blank? note)) (not note-public)) [private-label])
            (when (some #(let [h (hold state %)]
@@ -2667,8 +2692,16 @@
                     " underscores, joined by /, such as household/insurance.md.")))
     p))
 
+(defn- own-skills-only!
+  "A role writes skills only under skills/<its own id>/. The operator may
+  write anywhere."
+  [{:keys [state actor]} path]
+  (when (and (role state actor) (not (skills/writable-by? actor path)))
+    (reject! :forbidden (str "A role writes only its own skills, under skills/" actor "/. " path " is not there."))))
+
 (defmethod decide* :doc/put [{:keys [state] :as tx} {{:keys [path content]} :args}]
-  (let [path (doc-path path)]
+  (let [path (doc-path path)
+        _ (own-skills-only! tx path)]
     (when (blank? content) (reject! "A doc's content must not be empty. To remove a doc, remove it."))
     (when (> (count content) 500000) (reject! "A doc is at most 500000 characters."))
     (when-let [clash (first (filter #(or (str/starts-with? (:path %) (str path "/"))
@@ -2706,6 +2739,7 @@
 
 (defmethod decide* :doc/remove [{:keys [state] :as tx} {{:keys [path]} :args}]
   (let [path (doc-path path)
+        _ (own-skills-only! tx path)
         v (doc-version state path {})]
     (when (or (nil? v) (:removed v) (and (public-actor? tx) (not (doc-shown-to-public? state path v))))
       (reject! :not-found (str "There is no doc at " path ".")))

@@ -180,7 +180,7 @@
       (is (= [renews blue] (ids {:search "car insurance" :topic "household/car"}))))
     (testing "the tool keeps its format, best match first"
       (let [out (search-tool w {:search "insurance renewal"})]
-        (is (str/starts-with? out (str "Fact " renews " [household/car], holds with no known start or end\n"
+        (is (str/starts-with? out (str "Fact " renews " [household/car], holds with no known start or end [[fact:" renews "]]\n"
                                        "  The car insurance renews in March.\nFact " home)))))))
 
 (deftest equal-matches-go-by-fact-id
