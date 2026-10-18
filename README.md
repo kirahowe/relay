@@ -628,6 +628,51 @@ notification when the week's spend reaches 80% of it and one when it
 reaches 100%. A wake that passes both at once sends only the 100% one.
 The budget never stops or slows anything.
 
+### Reviewing a week
+
+`relay week` looks back over the last seven days, or from `--since` to
+`--until` (dates in relay's time zone, the last day included). `--json`
+prints the same report as JSON. It writes nothing and wakes nothing.
+
+It starts with the interruptions: each time relay asked you for
+something. These are held calls, permission requests in a conversation,
+quarantined memos, memos waiting for `relay declassify`, MCP tools
+waiting for `relay fresh`, report findings waiting for review, a harness
+that needs you, and work given up and sent to you. For each kind it
+says how many arose, how many you decided and how, how many still wait,
+and the median and longest wait. One decided after the window ends
+counts as waiting. Then the notifications sent, per day and per kind,
+and the memos to you per role. Then each role's wakes and conversations:
+memos closed, blocked, left open and dead-lettered, wakes cut short,
+crashed, held or without their tools, and what they cost. A wake belongs
+to the window it started in.
+
+Health checks list the wakes that look wrong: a wake that ran and wrote
+no journal entry, left a memo open with no call held, had a tool call
+refused or failed (read from its transcript), was cut short or crashed,
+or sent you three memos or more.
+
+`relay flag <wake> good|bad [note]` marks a wake or a conversation so
+you can find it later. A conversation's id is a wake id; `relay status`
+lists the latest and `relay week` lists the ones it mentions. The flag
+grants nothing, so it asks for no code. Flags set in the window are at
+the end of `relay week`.
+
+`relay traces --out <dir>` writes the wakes and conversations in the
+window as OpenTelemetry traces to `<dir>/traces.otlp.jsonl`, with
+`--since` and `--until` as for `relay week`. Each line is one OTLP/JSON
+request. Per wake or conversation there is one `invoke_workflow` span
+with its role, id, outcome, labels, cost, held calls and memos, and its
+health checks and flags as `gen_ai.evaluation.result` events. Each of
+its run files then goes through `agentloop otel`, with the runs hung
+under that span. It runs offline and makes no requests. agentloop comes
+from the default harness's `:bin`, as for a wake, or from `--agentloop`.
+
+A trace holds no content: no memo, fact or doc text, no tool input or
+result, and only a flag's value, never its note. So it can be loaded
+into any OTel viewer without your data going with it. It does name your
+roles and tools and the labels each session held.
+
 ### Morning brief
 
 With `:brief {:at "07:30"}` in relay.edn, relay sends you one
@@ -696,8 +741,9 @@ its agent command. relay starts the role's agentloop and passes bytes
 between the client and agentloop unchanged. A connection holds the role
 like a wake: no other wake of that role runs until the client
 disconnects, and the wake records the ACP sessions the client used. Their
-logs are kept in `<data>/runs/<role>/conversations/`, apart from the
-role's wake sessions.
+logs are kept in `<data>/runs/<role>/conversations-labelled/` (for a
+public role, `conversations-public/`), apart from the role's wake
+sessions.
 
 Every conversation starts empty. A client can open new sessions and
 close them, but cannot load, resume or list earlier ones, so no
