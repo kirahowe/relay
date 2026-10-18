@@ -35,29 +35,35 @@ with sources, and nothing reaches the outside world until Kira approves it.
 
 ## D1. Effect classes
 
-Tool classes become `read`, `write`, `house`, `egress`, `act`.
+Tool classes are `read`, `write`, `edit`, `egress` and `act`. Kira chose
+the name `edit` on 2026-10-18. It fits the verbs, and an edit is one that
+can be undone.
 
-| class   | meaning | rule |
-|---------|---------|------|
-| read    | returns content, changes nothing, sends nothing out | allow |
-| write   | changes relay's own data only | allow |
-| house   | changes the operator's own things outside relay that nobody else sees and that can be undone (own reminders, a draft in the operator's mail tool) | allow, whatever the labels |
-| egress  | can put data the model chose where an outsider can see it (search query, fetch URL) | hold when the session is private and contaminated (unchanged) |
-| act     | others see it, it spends money, or it cannot be undone (send a campaign, refund, post, pay) | always needs consent: hold every call unless a standing consent rule matches it, whatever the labels |
+| class  | meaning | rule |
+|--------|---------|------|
+| read   | returns content, changes nothing, sends nothing out | allow |
+| write  | changes relay's own data, whose labels relay tracks | allow |
+| edit   | changes the operator's own things outside relay. Nobody else sees the change, and the earlier state survives (own reminders, a private draft) | hold when the session is contaminated |
+| egress | can put data the model chose where an outsider can see it (a search query, a fetch URL) | hold when the session is private and contaminated (unchanged) |
+| act    | others see it, it spends money, or it cannot be undone (send a campaign, refund, post, pay) | always needs consent: hold every call unless a standing consent rule matches it, whatever the labels |
+
+`write` is free whatever the labels because relay carries the labels with
+the text. `edit` is not, because relay cannot follow labels outside itself.
+Text a contaminated session puts in Reminders would come back from
+rem-read labelled only private, and a clean session would take it in as
+trusted. A tool that overwrites or deletes without keeping history, or
+reaches anything shared with other people, is `act`.
 
 `always_hold` stays and still holds every call. An unknown class is still
-held.
-
-relay's own registry, routine and dead-letter tools are internal and
-reversible (the log is append-only). They become `house`. Text a
-contaminated session writes keeps its labels, so a role added by a
-contaminated session has contaminated instructions and starts every wake
-contaminated. The weekly budget already notifies about spend.
+held. relay's own registry, routine and dead-letter tools write relay's log,
+so they are `write`. Text a contaminated session writes keeps its labels, so
+a role added by a contaminated session has contaminated instructions and
+starts every wake contaminated.
 
 Migration: an existing relay.edn that declares `rem` as `:act` now gets every
 rem call held. That is the safe direction. The example config, `relay init`
-and the docs declare rem write as `:house`, with a note that a list shared
-with other people should stay `:act`. Write a short deploy note for Kira.
+and the docs declare rem write as `:edit`, with a note that a list shared
+with other people stays `:act`. Write a short deploy note for Kira.
 
 ## D2. Standing consent
 
@@ -252,7 +258,7 @@ in a closed answer are page numbers (integers), which the display maps to
   you can do for them. When something needs setting up, name the one thing
   the operator would do, in plain words.
 - `relay init` and the example config give the hub web (D8) and the
-  workbench (D7), with rem write as `:house`. Setup asks for a search key and
+  workbench (D7), with rem write as `:edit`. Setup asks for a search key and
   says what it is for.
 
 ## D11. Verification, codified
@@ -270,7 +276,7 @@ in a closed answer are page numbers (integers), which the display maps to
   placeholders.
 - New pentest scenarios for: the sandbox escapes listed in D7, display
   content never reaching the model, `act` always held without a matching
-  consent rule, consent matching exactly, `house` never held, fixed and
+  consent rule, consent matching exactly, `edit` held exactly when contaminated, fixed and
   hidden args enforced, and a remote MCP tool's definition changing after
   connect.
 
