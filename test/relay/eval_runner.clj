@@ -1,14 +1,15 @@
 (ns relay.eval-runner
   "Runs eval cases (see relay.eval) and records the results:
 
-    bb eval [<case> ...] [--out <dir>] [--live] [--trials n] [--model m] [--max-cost usd]
-            [--agentloop <path>]
+    bb eval [<case> ...] [--out <dir>] [--live] [--trials n] [--model m] [--effort e]
+            [--max-cost usd] [--agentloop <path>]
 
   Each trial is one play of a case in its own fresh staging directory,
   <out>/<run-id>/trials/<case>/<n>/, kept afterwards (it is artificial
   data). Without --live the model is the mock server playing the case's
   oracle script. With --live it is the real model: claude-haiku-5-5 unless
-  --model names another, the key coming from the keychain item
+  --model names another, at the staging harness's effort (low) unless
+  --effort names another, the key coming from the keychain item
   relay-anthropic through the staging harness's :api-key-command. Nothing
   here reads the operator's relay.edn, config or ~/Sync.
 
@@ -34,6 +35,7 @@
             [clojure.pprint :as pprint]
             [clojure.string :as str]
             [clojure.walk :as walk]
+            [relay.config :as config]
             [relay.dispatch :as dispatch]
             [relay.eval :as eval]
             [relay.eval-otel :as eval-otel]
@@ -143,12 +145,13 @@
 (defn- play-trial!
   "One trial of a case, run once more if it errored and the budget allows.
   Updates `budget` ({:spent :dearest}) and returns the last attempt."
-  [dir file kase t {:keys [live? model repo-root max-cost]} budget]
+  [dir file kase t {:keys [live? model effort repo-root max-cost]} budget]
   (let [cid (get-in kase [:eval :id])
         attempt (fn [suffix]
                   (let [tdir (str (fs/path dir "trials" cid (str t suffix)))]
                     (fs/create-dirs tdir)
-                    (let [r (try (trial/run-trial! file kase {:dir tdir :live? live? :model model :repo-root repo-root})
+                    (let [r (try (trial/run-trial! file kase {:dir tdir :live? live? :model model :effort effort
+                                                                         :repo-root repo-root})
                                  (catch Exception e
                                    {:errors [{:class :step :message (str "The trial threw: " (ex-message e))}]
                                     :dir tdir}))
@@ -185,7 +188,7 @@
 (defn run!
   "Runs `files` (eval cases) and writes the records. Returns {:run :summary
   :dir}."
-  [files {:keys [out live? model trials max-cost repo-root args]}]
+  [files {:keys [out live? model effort trials max-cost repo-root args]}]
   (let [repo-root (or repo-root ".")
         defaults (trial/read-defaults)
         cases (mapv (fn [f] [f (trial/read-case f defaults)]) files)
@@ -198,9 +201,10 @@
         surface (prompt-surface dir repo-root)
         _ (spit (str (fs/path dir "prompt-surface.edn")) (with-out-str (pprint/pprint surface)))
         asked (if live? (or model default-live-model) (trial/staging-model))
-        opts {:live? live? :model (when live? asked) :repo-root repo-root :max-cost max-cost}
+        effort (or (when live? effort) (:effort trial/staged-harness))
+        opts {:live? live? :model (when live? asked) :effort effort :repo-root repo-root :max-cost max-cost}
         run-info (merge {:run-id id :started (str (Instant/now)) :command (into ["bb" "eval"] args)
-                         :live (boolean live?) :model asked :effort (:effort trial/staged-harness)
+                         :live (boolean live?) :model asked :effort effort
                          :trials trials :max-cost-usd max-cost
                          :relay-commit (commit-of repo-root)
                          :agentloop-bin support/agentloop-bin
@@ -252,17 +256,19 @@
 ;; --- bb eval
 
 (def ^:private spec
-  {:coerce {:live :boolean :trials :long :model :string :out :string :max-cost :double :agentloop :string}})
+  {:coerce {:live :boolean :trials :long :model :string :effort :string :out :string :max-cost :double :agentloop :string}})
 
-(def usage-line "usage: bb eval [<case> ...] [--out <dir>] [--live] [--trials n] [--model m] [--max-cost usd] [--agentloop <path>]")
+(def usage-line "usage: bb eval [<case> ...] [--out <dir>] [--live] [--trials n] [--model m] [--effort e] [--max-cost usd] [--agentloop <path>]")
 
 (defn eval-main [& args]
   (let [{names :args o :opts} (cli/parse-args args spec)
         home (System/getProperty "user.home")
         out (str/replace-first (or (:out o) default-out) #"^~(?=/|$)" home)]
     (try
-      (when (and (:model o) (not (:live o)))
-        (throw (trial/usage-error "--model only means something with --live.")))
+      (when (and (or (:model o) (:effort o)) (not (:live o)))
+        (throw (trial/usage-error "--model and --effort only mean something with --live.")))
+      (when (and (:effort o) (not (config/efforts (:effort o))))
+        (throw (trial/usage-error (str "--effort is one of " (str/join ", " (sort config/efforts)) "."))))
       (when-let [path (:agentloop o)] (support/use-agentloop! path))
       (when-let [why (out-problem out "." home)] (throw (trial/usage-error why)))
       (let [all (trial/eval-case-files)
@@ -273,7 +279,7 @@
                                                         (str/join ", " (sort (keys by-name))) "."))))
                           names)
                     all)
-            {:keys [run summary dir]} (run! files {:out out :live? (:live o) :model (:model o)
+            {:keys [run summary dir]} (run! files {:out out :live? (:live o) :model (:model o) :effort (:effort o)
                                                    :trials (:trials o) :max-cost (:max-cost o)
                                                    :args (vec args)})]
         (println)

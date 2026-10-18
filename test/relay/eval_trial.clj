@@ -50,13 +50,16 @@
 
 (defn run-trial!
   "Plays a case once in `dir` (a fresh directory) and scores it. `script`
-  replaces the case's oracle (a foil's), in mock mode. Returns {:errors
+  replaces the case's oracle (a foil's), in mock mode. `effort`, with
+  `live?`, replaces the staging harness's effort. Returns {:errors
   [...]} when it produced no score, else {:scores :passed :totals}; both
   with :dir and :world."
-  [file kase {:keys [dir live? model script repo-root]}]
+  [file kase {:keys [dir live? model effort script repo-root]}]
   (let [asked (or model (staging-model))
         run (runner/run-scenario! file (cond-> {:data dir :fresh? true :keep? true :live? live?
-                                                :harness (cond-> {:limits trial-limits} support/agentloop-bin (assoc :bin support/agentloop-bin))
+                                                :harness (cond-> {:limits trial-limits}
+                                                           support/agentloop-bin (assoc :bin support/agentloop-bin)
+                                                           (and live? effort) (assoc :effort effort))
                                                 :repo-root (or repo-root ".")}
                                          live? (assoc :model asked)
                                          script (assoc :script script)))

@@ -826,13 +826,14 @@ correcting it, keeps quiet when nothing needs the operator. An eval case is a
 scenario with `:graders` added, and `bb scenarios` still plays it.
 
 ```sh
-bb eval [<case> ...] [--out <dir>] [--live] [--trials n] [--model m] [--max-cost usd] [--agentloop <path>]
+bb eval [<case> ...] [--out <dir>] [--live] [--trials n] [--model m] [--effort e] [--max-cost usd] [--agentloop <path>]
 ```
 
 Without `--live` the model is the mock server playing the case's oracle
 script, which costs nothing and checks the harness. With `--live` it is the
-real model, `claude-haiku-5-5` unless `--model` names another, five trials a
-case unless `--trials` says otherwise. `--max-cost` stops starting trials once
+real model, `claude-haiku-5-5` unless `--model` names another, at effort
+`low` unless `--effort` names another, five trials a case unless `--trials`
+says otherwise. `--max-cost` stops starting trials once
 the spend recorded so far plus the dearest trial so far would pass it.
 
 Every trial gets a fresh staging directory, kept under
