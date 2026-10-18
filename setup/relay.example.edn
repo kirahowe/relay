@@ -52,27 +52,37 @@
  ;; call can do:
  ;;   :read    returns content and sends nothing out
  ;;   :write   changes relay's own data only
+ ;;   :edit    changes your own things outside relay: nobody else sees the
+ ;;            change, and it can be undone, as with your own reminders
+ ;;            (a tool that overwrites or deletes for good is :act)
  ;;   :egress  can send what the model chooses where an outsider can see it
- ;;   :act     does something in your name outside relay
+ ;;   :act     others see it, it spends money, or it cannot be undone
  ;; and :labels, the labels its output always carries, as strings:
  ;; "contaminated" when an outsider could have written any of it (a web
  ;; page, an email, someone else's repository), "private" when it is your
- ;; private data. [] means neither. A session that has seen both private
- ;; and contaminated text needs your approval for an :egress call, and
- ;; one that has seen anything contaminated needs it for an :act call
- ;; (relay holds, relay approve). :always-hold true asks every time.
+ ;; private data. [] means neither. A session that has seen contaminated
+ ;; text needs your approval for an :edit call, and one that has seen
+ ;; private data too needs it for an :egress call. Every
+ ;; :act call needs it, whatever the session has seen (relay holds, relay
+ ;; approve), unless the tool's :consent covers the call:
+ ;;   :consent [{"group" "Kira only"}]
+ ;; lets a call whose input has "group": "Kira only" run without asking.
+ ;; :preview ["/path/to/command"] runs an envelope command on a held call's
+ ;; input and shows you what it says the call would do. :always-hold true
+ ;; asks every time.
  :tools
  ;; Reminders is two tools over one binary. The operator fixes --mode here;
  ;; the model's arguments come after it and cannot change it. Reading is
- ;; labelled private only, which trusts every list's text. If any list is
- ;; shared with other people, add "contaminated": their text could carry
- ;; instructions, and writing can send text to them. See
- ;; tools/rem/README.md.
+ ;; labelled private only, which trusts every list's text. Changing your
+ ;; own reminders is :edit: nobody else sees them, and a change can be
+ ;; undone. If any list is shared with other people, add "contaminated" to
+ ;; rem-read, since their text could carry instructions, and make rem
+ ;; :act, since writing sends text to them. See tools/rem/README.md.
  {"rem-read" {:class :read
               :labels ["private"]
               :description "Read Apple Reminders. Run with [\"help\"] for the commands."
               :command ["/path/to/relay/tools/rem/rem" "--mode" "read"]}
-  "rem" {:class :act
+  "rem" {:class :edit
          :labels ["private"]
          :description "Change Apple Reminders. Run with [\"help\"] for the commands."
          :command ["/path/to/relay/tools/rem/rem" "--mode" "write"]}

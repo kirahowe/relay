@@ -5,8 +5,8 @@
   first argument after the tool's name, and nothing is read or written
   outside it.
 
-    fail-demo <data>   act: sets a pretend reminder, but refuses one with no
-                       HH:MM time in it
+    fail-demo <data>   edit: sets a pretend reminder, but refuses one with
+                       no HH:MM time in it
     web-demo <data>    read, contaminated: prints <data>/web/<page>, a page
                        copied from test/scenarios/fixtures by staging init
     web-ask-demo <data> egress, contaminated: standing in for webtool ask,

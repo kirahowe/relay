@@ -145,7 +145,7 @@ notifications go, limits, the dead letter handler, external tools, the
 verifier for research reports, an optional weekly budget, an optional
 morning brief and what each role is granted.
 `setup/relay.example.edn` shows each of them. No role can read this
-file. Every external tool has a class (`read`, `write`,
+file. Every external tool has a class (`read`, `write`, `edit`,
 `egress` or `act`) and the labels its output carries (see below), and
 relay refuses a tool that lacks either. A role on a `:script` harness gets
 no tools at all, relay's own included: a script is any program, nothing
@@ -304,15 +304,90 @@ once: the operator's private data, text an outsider could have written,
 and a way to send data out. It does this with labels, not by asking the
 model to behave.
 
+Each tool has a class, which says what a call to it can do:
+
+| class | what a call does | when it waits for the operator |
+|---|---|---|
+| `read` | returns content, changes nothing, sends nothing out | never |
+| `write` | changes relay's own data, which keeps its labels | never |
+| `edit` | changes the operator's own things outside relay: nobody else sees the change, and the earlier state survives (their own reminders, a draft in their mail) | when the session is contaminated |
+| `egress` | can put data the model chose where an outsider can see it: a search query, a URL to fetch | when the session is private and contaminated |
+| `act` | others see it, it spends money, or it cannot be undone: a campaign, a refund, a post, a payment | every call, unless the operator's standing consent covers it |
+
+`:always-hold true` makes every call to a tool wait, whatever its class.
+A class agentloop does not know is held too.
+
+`edit` is for a change the operator could undo. A tool that overwrites or
+deletes with no history kept is `act`. An edit call waits once the
+session is contaminated because labels do not follow text out of relay.
+Injected text a contaminated session wrote into the operator's reminders
+would come back through `rem-read` labelled only `private`, and a clean
+session would take it in as clean. relay's own data keeps the labels of
+whoever wrote it, so only `write` runs whatever the session has seen.
+
 A session has the labels of what it has seen. `private` comes from
 reading anything relay keeps: a memo, fact, doc, note, journal entry or a
 routine's instructions. `contaminated` comes from text an outsider could
 have written, such as the output of a tool whose `:labels` say so, or
 anything a contaminated session wrote. Labels only grow. agentloop
 enforces the policy: once a session holds both labels, a call to an
-`:egress` tool waits for the operator, and once it is contaminated, so
-does a call to an `:act` tool. relay's own tools that change the
-registry, routines or dead letters are `act`.
+`:egress` tool waits for the operator; once it is contaminated, so does
+a call to an `:edit` tool; and every call to an `:act` tool waits,
+however clean the session is. relay's own tools that change the
+registry, routines or dead letters are `write`: they change only relay's
+log, which keeps every earlier version and its labels. What a contaminated
+session writes keeps its labels, so a role it adds starts every wake
+contaminated, and a routine it writes fires contaminated memos.
+
+A list or account that other people share is not the operator's own. A
+reminders list shared with family, say, should stay `:act`, with
+`:labels ["private" "contaminated"]` on the tool that reads it, since
+others write it too.
+
+#### Standing consent
+
+The operator can consent to some act calls in advance. An `:act` tool
+may have `:consent`, a vector of rules. A rule is a map from the call's
+argument names to the exact values the call must give them:
+
+```clojure
+"campaign_send" {:class :act :labels ["private"] :protocol :envelope
+                 :command ["campaign-send"]
+                 :consent [{"group" "Kira only"}]}
+```
+
+A call whose input has every pair of some rule runs without asking, on any
+session; agentloop records which rule allowed it. The match is exact.
+Key order, spacing and string escapes in the input do not matter, but a
+number matches only one written the same way (`1` is not `1.0`), a
+string only the same characters (`"Kira only "` and `"kira only"` are
+held), and input that names a key twice, or two keys that differ only
+in case, matches nothing. Arguments a rule
+does not name are free, so name every argument that matters. relay
+refuses `:consent` on a tool of any other class, beside `:always-hold`,
+or with an empty rule, which would cover every call.
+
+#### Previews
+
+A held call is a proposal, and the operator decides it from what the
+service says it would do, not from what the role says. A tool may have
+`:preview`, a command relay runs when the call is held. It speaks the
+envelope protocol: it gets `{input, labels, call_id}`, the held call's
+input and the session's labels, on stdin and prints one `{content,
+is_error, labels}`, whose content is markdown saying what the call would
+do. For an email: subject, body, the group and how many people are in it,
+and when it goes out, read from the mail service. relay keeps the preview
+with the hold, under the labels it reports, the tool's static labels and
+the session's. A preview command that fails, or runs past 30 seconds,
+leaves a note saying so, and the hold opens all the same.
+
+`relay holds`, `relay approve` and `relay deny` show the preview. So does
+the permission request in a conversation (see [ACP clients](#acp-clients)).
+Links in a preview to a host that no preview the operator approved
+before had are listed as new, and characters in it that can pass for
+others are named. Approval still binds to the call's input, by its
+digest. The preview is what the service said at hold time: the service
+can change before the call runs, and a preview cannot show that.
 
 Every event a role's tool call writes carries its session's labels, and
 anything that copies text carries the copied text's labels too. Each
@@ -327,8 +402,7 @@ placeholder in their place and includes them only when called with
 tool of class `act` or `egress` is quarantined: the role is not shown it
 and is not woken for it until the operator runs `relay release <memo>`.
 A role with no such tool reads a contaminated memo like any other and
-becomes contaminated; agentloop then holds its calls to relay's own `act`
-tools. Writing facts and docs is class `write`, so a contaminated session may
+becomes contaminated. Writing facts and docs is class `write`, so a contaminated session may
 retract, supersede, remove or overwrite them without asking. That never
 hides clean content: a read that does not accept contamination shows the
 latest version no contaminated session wrote, with a note that a newer
@@ -358,7 +432,7 @@ time as ever. `relay holds` lists the held calls, and `relay approve` and `relay
 show the same before asking for the code: why the call was held, what
 the tool is, where its data would go, what the session has seen and
 where each label came from, any characters in the input that could pass
-for others (a Cyrillic `а` in `pаypal`), and the whole input. `relay approve
+for others (a Cyrillic `а` in `pаypal`), the tool's preview, and the whole input. `relay approve
 <hold>` or `relay deny <hold> [why]` decides one. Once every call in a
 held session is decided, the next tick that finds the role free carries
 that session on, with its memos, and agentloop carries out the
@@ -399,7 +473,7 @@ make it private, the first page contaminated, and every search after
 that would wait for the operator. Granting it `:public true` in
 relay.edn makes it a public role instead. Its session never holds
 `private`, so its egress calls run without asking. It still becomes
-contaminated, and its `act` calls are still held.
+contaminated, and its `act` calls are held, as every role's are.
 
 A public role is shown only public items. An item is public when the
 operator wrote it with `--public`, a public role wrote it, or the
@@ -946,6 +1020,29 @@ Without `--approvals` (an editor, say), relay refuses the call itself and
 notifies the operator. Each request and its answer are recorded in the
 log with the role, session, tool and a digest of the input.
 
+When the held call's tool has a `:preview`, relay runs it before passing
+the request on and adds the preview to the end of the request's
+`toolCall.content`, as one more item of this shape:
+
+```json
+{"type": "content",
+ "_meta": {"relay/preview": true},
+ "content": {"type": "text", "text": "<markdown>", "_meta": {"relay/preview": true}}}
+```
+
+The markdown is the preview command's content inside a code fence, with
+characters that draw as nothing shown as `\u{XXXX}`, then after a `---`
+line, in a fence of their own, the hosts of links the operator has not
+approved before and any characters that can pass for others. The fence
+keeps text an outsider wrote into the preview from rendering as a remote
+image, which a client would fetch before anyone approves, or as a link
+whose text names another place than it goes. The link check also reads
+hosts the way a renderer would, after character references such as
+`&#58;` and backslash escapes. A client shows it as relay's description
+of what the call would do, apart from anything the model wrote.
+Everything else in the request is as agentloop sent it. The log records
+the preview with the request.
+
 relay acp also answers three ACP extension methods of its own, which
 never reach agentloop. `_relay/items` lists a session's shown docs and
 the permission requests relay passed on, with their previews.
@@ -1136,9 +1233,14 @@ checks that:
   operator releases it, by any route (a memo, a block explanation, a dead
   letter, a routine, a doc, fact, note or journal entry, a pasted ACP
   resource, mail through cleanroom)
-- a session that has seen it has its posts and acts held, and a held call
-  runs once, only after a person approves it on a terminal, whatever
-  ticks, wakes, crashes and ACP clients do
+- a session that has seen it has its posts held, and a held call runs
+  once, only after a person approves it on a terminal, whatever ticks,
+  wakes, crashes and ACP clients do
+- every act call is held, on a clean session too, unless the operator's
+  standing consent covers its exact input (a near miss is held); an edit
+  call is held once the session is contaminated, and only then; and a
+  held call shows the operator its tool's preview,
+  on the terminal and in the ACP permission request
 - approvals cannot come from stdin, a pipe, a forged or misdirected ACP
   answer, or a client that hangs up
 - no view the operator reads passes a raw control or format character
@@ -1167,6 +1269,7 @@ Run it from this directory:
 ```sh
 bb pentest                   # every scenario, about two minutes
 bb pentest s1 s5-acp-cancel  # by name, or by prefix
+bb pentest consent           # act, consent, edit and previews
 bb pentest --list            # the scenarios and what each needs
 bb pentest --jobs 4          # several at once, about a minute
 ```
@@ -1189,7 +1292,7 @@ Everything it uses is artificial. Each scenario gets a fresh temporary
 data directory, a scripted stand-in for the Anthropic API on localhost
 (`test/relay/mock_anthropic.clj`) with a dummy key from `/bin/echo`, a
 stand-in ntfy server, and stand-in tools (`pentest/standins/`) for
-Reminders, the web and the mail source, which only write to files in that
+Reminders, the web, a mail campaign service and the mail source, which only write to files in that
 directory. It never calls a model, touches Reminders, the keychain or
 launchctl, or reads `~/.config/relay`, and it refuses to start if any
 path it would use lies under `~/Sync` or `~/.config/relay`. Every

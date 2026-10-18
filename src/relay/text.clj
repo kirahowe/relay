@@ -149,3 +149,49 @@
        (str "\"" w "\" mixes " (str/join " and " (sort scripts))))
      (for [cp (distinct cps) :when (> cp 127)]
        (format "U+%04X %s" cp (or (Character/getName (int cp)) "unnamed"))))))
+
+;; --- links
+
+(def ^:private link-pattern
+  ;; A scheme, then the authority: everything up to a path, query,
+  ;; fragment, space or a character that ends a link in prose or markdown.
+  #"(?i)\b(?:https?|ftp)://([^\s/?#<>()\[\]{}\"'`\\|^]+)")
+
+(defn- host-of
+  "The host of a link's authority, lower case, with the fullwidth and
+  ideographic full stops a browser reads as dots made dots. A host with
+  lookalike letters keeps them, so it never equals the host it imitates."
+  [authority]
+  (-> authority
+      (str/replace #"^.*@" "")
+      (str/replace #"[\u3002\uFF0E\uFF61]" ".")
+      (str/replace #":\d*$" "")
+      (str/replace #"\.$" "")
+      str/lower-case))
+
+(def ^:private named-entities
+  {"colon" ":" "sol" "/" "period" "." "commat" "@" "amp" "&" "lt" "<" "gt" ">"
+   "quot" "\"" "apos" "'" "num" "#" "quest" "?" "bsol" "\\" "nbsp" " "})
+
+(defn- unescape
+  "s as a markdown or HTML renderer would read its characters: character
+  references (&#58;, &#x3a;, &colon;) decoded and backslash escapes of
+  punctuation dropped. Close enough to find a link a renderer would make."
+  [s]
+  (-> (str s)
+      (str/replace #"(?i)&#x([0-9a-f]{1,6});"
+                   (fn [[_ h]] (let [cp (Long/parseLong h 16)] (if (<= cp 0x10FFFF) (String. (Character/toChars cp)) ""))))
+      (str/replace #"&#([0-9]{1,7});"
+                   (fn [[_ d]] (let [cp (Long/parseLong d)] (if (<= cp 0x10FFFF) (String. (Character/toChars cp)) ""))))
+      (str/replace #"&([a-zA-Z]+);" (fn [[m n]] (get named-entities (str/lower-case n) m)))
+      (str/replace #"\\([!-/:-@\[-`{-~])" "$1")))
+
+(defn link-hosts
+  "The hosts of the links in s that a reader could follow (http, https and
+  ftp URLs), in order, without repeats: those in s as written, and those a
+  markdown or HTML renderer would find once it decodes character
+  references and escapes, so a link cannot hide its host from the check."
+  [s]
+  (vec (distinct (for [t [(str s) (unescape s)]
+                       [_ authority] (re-seq link-pattern t)]
+                   (host-of authority)))))

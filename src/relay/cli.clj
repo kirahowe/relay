@@ -321,12 +321,13 @@ and --instructions marks the id public too.")
   (str "Labels: " (if (seq labels) (str/join ", " labels) "none")))
 
 (defn- decide-hold! [sys verb verdict hold-id reason & [end]]
-  (let [h (core/hold (inbound/current-state sys) hold-id)]
+  (let [st (inbound/current-state sys)
+        h (core/hold st hold-id)]
     (when-not h (fail! (str "There is no hold " hold-id ".")))
     ;; Asking for a code to do nothing would only teach typing codes.
     (when-not (= :open (:status h))
       (fail! (str "Hold " hold-id " was already decided: " (name (:status h)) ".")))
-    (confirm! verb (concat (render/hold h (:config sys))
+    (confirm! verb (concat (render/hold h (:config sys) (core/approved-hosts st))
                            (when end ["" "The session will not be carried on: the role's next wake starts afresh."])
                            ;; The role is shown the reason, and may send it out.
                            (when (and (= "deny" verdict) (core/public-role? (:config sys) (:role h)))
@@ -531,7 +532,7 @@ and --instructions marks the id public too.")
                  (when-not dir (fail! "usage: relay export <dir>"))
                  (result 0 (str "Wrote " (export/export! sys dir) " files to " dir)))
       "log" (lines (render/log (log/read-events (:data-dir sys)) opts))
-      "holds" (lines (render/holds (core/open-holds (state)) (:config sys)))
+      "holds" (let [st (state)] (lines (render/holds (core/open-holds st) (:config sys) (core/approved-hosts st))))
       "approve" (let [[h] more]
                   (decide-hold! sys "approve" "allow" (some-> h parse-long) nil))
       "deny" (let [[h & why] more]

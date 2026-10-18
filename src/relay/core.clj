@@ -501,14 +501,13 @@
   (assoc m :from (first (shown-id state (:from m)))))
 
 (defn quarantines?
-  "Whether a role holds an external tool that acts in the operator's name
-  or sends data out. Such a role may not take in a contaminated memo by
-  itself: the operator releases it. relay's own act tools do not count,
-  since agentloop holds them anyway once the role is contaminated. A role
-  without such tools reads a contaminated memo like any other and
-  becomes contaminated."
+  "Whether a role holds an external tool that changes things outside
+  relay or sends data out: class edit, act or egress. Such a role may not
+  take in a contaminated memo by itself: the operator releases it. relay's
+  own tools are write and do not count. A role without such tools reads a
+  contaminated memo like any other and becomes contaminated."
   [config role-id]
-  (boolean (some #(#{:act :egress} (get-in config [:tools % :class]))
+  (boolean (some #(#{config/edit-class :act :egress} (get-in config [:tools % :class]))
                  (:tools (config/grants config role-id)))))
 
 (defn public-role?
@@ -1015,6 +1014,12 @@
                                   :tool tool :input input :input-sha256 input-sha256
                                   :label-sources label-sources
                                   :status :open :opened-at (inst at) :labels (union labels)})))
+
+(defmethod evolve* "hold/previewed" [state {:keys [data labels]}]
+  (let [{:keys [hold content is-error]} data]
+    (cond-> state
+      (get-in state [:holds hold])
+      (assoc-in [:holds hold :preview] {:content content :is-error (true? is-error) :labels (union labels)}))))
 
 (defmethod evolve* "hold/resolved" [state {:keys [at actor data]}]
   (let [{:keys [hold verdict reason reason-public]} data]
@@ -1750,11 +1755,37 @@
   (and (map? c) (string? (:id c)) (not (blank? (:id c))) (string? (:name c)) (not (blank? (:name c)))
        (string? (:input-sha256 c)) (not (blank? (:input-sha256 c)))))
 
+(defn preview-of
+  "The preview relay.dispatch ran for a held call, when it is one relay can
+  keep: {:content text :is-error bool :labels [...]}. Nil for anything else."
+  [p]
+  (when (and (map? p) (string? (:content p)) (boolean? (:is-error p))
+             (sequential? (:labels p)) (every? label-names (:labels p)))
+    (-> (select-keys p [:content :is-error]) (assoc :labels (union (:labels p))))))
+
+(defn preview-labels
+  "The labels a preview's text carries: what the preview command said, the
+  tool's static labels, since it reads the same service, and the labels of
+  the session whose input it was given, since it may repeat that input."
+  [config tool preview session-labels]
+  (union (:labels preview) (get-in config [:tools tool :labels]) session-labels))
+
+(defn approved-hosts
+  "The hosts of every link in a preview the operator approved: of a hold
+  they allowed, or a call they allowed in a conversation. A link in a new
+  preview to any other host is marked."
+  [state]
+  (into #{}
+        (mapcat #(text/link-hosts (get-in % [:preview :content])))
+        (concat (filter #(and (= :allowed (:status %)) (= operator (:resolved-by %))) (vals (:holds state)))
+                (filter #(and (= "allow_once" (:outcome %)) (= "client" (:by %))) (vals (:permissions state))))))
+
 (defn- open-hold
   "Records a call held in a wake's session, unless it is already known: a
   hold still open stays as it is, and one decided and carried back that is
-  held again was never received, so it is carried back again."
-  [{:keys [state] :as tx} wake session {:keys [id name input input-sha256 label-sources]}]
+  held again was never received, so it is carried back again. A preview
+  relay ran for it is kept with it, under labels of its own."
+  [{:keys [state] :as tx} wake session {:keys [id name input input-sha256 label-sources preview]}]
   (let [known (first (filter #(and (= session (:session %)) (= id (:call %))) (vals (:holds state))))]
     (cond
       (nil? known)
@@ -1762,7 +1793,12 @@
                                                :call id :tool name :input input :input-sha256 input-sha256}
                                         (map? label-sources) (assoc :label-sources label-sources))
                      (:said-labels tx))
-            hold-id (last-id tx)]
+            hold-id (last-id tx)
+            preview (preview-of preview)
+            tx (cond-> tx
+                 preview (emit "hold/previewed" {:hold hold-id :content (:content preview)
+                                                 :is-error (:is-error preview)}
+                               (preview-labels (:config tx) name preview (:said-labels tx))))]
         ;; The input stays in relay holds: it may hold private data, and a
         ;; notification goes to a phone.
         (notify tx "hold-opened" (str (:role wake) " wants to use " (or (held-tool name input) name))
@@ -1770,7 +1806,7 @@
                      (when (and (= reader-tool name) (held-tool name input)) " through the reader")
                      ", "
                      (if-let [c (get-in (:config tx) [:tools (held-tool name input) :class])]
-                       (str (if (#{:act :egress} c) "an " "a ") (clojure.core/name c) " tool")
+                       (str (if (#{:act :egress config/edit-class} c) "an " "a ") (clojure.core/name c) " tool")
                              "one of relay's own tools")
                      ". It is waiting for you: relay holds shows it in full.")
                 :role (:role wake) :hold hold-id
@@ -2159,13 +2195,18 @@
     (union labels)
     (session-labels-bound state config role)))
 
-(defmethod decide* :permission/asked [{:keys [state] :as tx} {{:keys [wake session call tool input-sha256 labels]} :args}]
+(defmethod decide* :permission/asked [{:keys [state config] :as tx} {{:keys [wake session call tool input-sha256 labels preview]} :args}]
   (dispatcher-only! tx)
-  (let [role (get-in state [:wakes wake :role])]
+  (let [role (get-in state [:wakes wake :role])
+        labels (permission-labels tx role labels)
+        preview (preview-of preview)]
     (when-not (get-in state [:wakes wake :chat]) (reject! "Only a conversation asks its client."))
-    (emit tx "permission/asked" {:wake wake :role role :session session :call call :tool tool
-                                 :input-sha256 input-sha256}
-          (permission-labels tx role labels))))
+    ;; The preview is what the operator was shown when they answered. Its
+    ;; labels go on the event, which holds its text.
+    (emit tx "permission/asked" (cond-> {:wake wake :role role :session session :call call :tool tool
+                                         :input-sha256 input-sha256}
+                                  preview (assoc :preview (dissoc preview :labels)))
+          (cond-> labels preview (union (preview-labels config tool preview labels))))))
 
 (def ^:private refusal-reasons
   {"no-approvals" "Its ACP client was not started with --approvals, so relay refused the call for it. To decide such calls yourself, talk with it through relay chat."

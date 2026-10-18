@@ -7,7 +7,7 @@
 
   The directory gets a relay.edn (Halifax time, the agentloop built beside
   this repository, the keychain key, and a :file notifier that reaches
-  nobody), a hub, a clerk that holds an :act tool, and a few facts. All of
+  nobody), a hub, a clerk that holds an :edit tool, and a few facts. All of
   it is made up. It also defines the stand-in tools in `stand-in-tools`,
   which no role holds until an eval case grants them, and a stand-in
   :verifier for research reports, which no role writes until a scenario
@@ -38,7 +38,7 @@
 (def stand-in-tools
   "The tools staging defines beyond remind-demo, by name: what an eval case
   may grant (see relay.staging-tools). None is granted by default."
-  {"fail-demo" {:class :act
+  {"fail-demo" {:class :edit
                 :labels []
                 :description "Set a reminder. Give the reminder's text, with its time as HH:MM."
                 :parameters {:type "object"
@@ -96,7 +96,7 @@
    ;; Reaches nobody: notifications are appended to a file in the directory.
    :notify {:kind :file :path (str (fs/path data-dir "notifications.log"))}
    :wake-timeout-minutes 5
-   :tools (into {"remind-demo" {:class :act
+   :tools (into {"remind-demo" {:class :edit
                                 :labels []
                                 :description "Pretend to set a reminder. It only echoes its arguments."
                                 :command ["echo" "reminder noted:"]}}

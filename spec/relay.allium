@@ -110,20 +110,45 @@ contract Tools {
     @invariant ToolsAreNamedAndClassed
         -- Every tool has a name and one class: read (returns content
         -- and sends nothing out), write (changes relay data only),
-        -- egress (can send what the model chooses where an outsider can
-        -- see it) or act (does something in the operator's name outside
-        -- relay). relay's own tools that change the registry, routines
-        -- or dead letters are act. An external tool also names the
+        -- edit (changes the operator's own things outside relay: nobody
+        -- else sees the change and the earlier state survives), egress
+        -- (can send what the model chooses where an outsider can see
+        -- it) or act (others see it, it spends money, or it cannot be
+        -- undone, as when a tool overwrites or deletes with no history).
+        -- relay's own tools that change the registry, routines or dead
+        -- letters are write. An external tool also names the
         -- labels its output always carries; the settings refuse a tool
         -- without them, or with a label relay does not know.
 
     @invariant ThePolicyFollowsTheClass
         -- agentloop decides each call from the session's labels and the
         -- tool's class: an egress call waits for a person once the
-        -- session holds private and contaminated, an act call once it
-        -- holds contaminated, and a tool marked always_hold always does.
+        -- session holds private and contaminated, an edit call once it
+        -- holds contaminated, every act call unless a standing consent
+        -- rule matches it, and a tool marked always_hold always does.
+        -- Only read and write calls run whatever the labels: relay's
+        -- own data keeps the labels of whoever wrote it, and text an
+        -- edit call writes outside relay would come back without them.
+        -- A class agentloop does not know waits.
         -- The tool's static labels join the session when the call is
         -- decided, and its result's labels when the result arrives.
+
+    @invariant StandingConsentIsExact
+        -- Only an act tool may have consent: rules, each a map from
+        -- argument names to the exact JSON values a call must give
+        -- them. A call whose input has every pair of some rule runs
+        -- unheld, and agentloop records the rule's index. Values match
+        -- after JSON normalisation and no further: a number as written,
+        -- a string character for character. Input naming a key twice
+        -- matches nothing, and an empty rule is refused.
+
+    @invariant PreviewsComeFromTheService
+        -- A tool may have a preview command. relay runs it on a held
+        -- call's input when the call is held, and the operator is shown
+        -- what it says (relay holds, approve, deny, and the ACP
+        -- permission request), never the model's account of the call.
+        -- The preview is what the service said at hold time; approval
+        -- still binds to the input digest.
 
     @invariant CallsComeInEnvelopes
         -- A call reaches relay as exactly {input, labels, call_id}, the
@@ -357,7 +382,7 @@ enum NotificationKind {
     | report_verified | report_verify_failed | trust_level_lowered
     | budget_reached | brief | tools_unavailable | shown
 }
-enum ToolClass { read | write | egress | act }
+enum ToolClass { read | write | edit | egress | act }
 enum Label { private | contaminated }
 enum HoldStatus { open | allowed | denied }
 enum HoldVerdict { allow | deny }
@@ -480,9 +505,8 @@ entity Role {
     -- every finding, or 1, where a finding nothing flags may go into the
     -- ledger unread. Every role starts at 0.
     trust_level: Integer = 0
-    -- Whether the settings grant it an external tool of class act or
-    -- egress. relay's own act tools do not count: agentloop holds them
-    -- anyway once the session is contaminated. A role that does not
+    -- Whether the settings grant it an external tool of class edit, act
+    -- or egress. relay's own tools are write and do not count. A role that does not
     -- quarantine reads a contaminated memo like any other and becomes
     -- contaminated.
     quarantines: Boolean
@@ -703,6 +727,15 @@ value WakeFlag {
     at: Timestamp
 }
 
+value Preview {
+    -- What a tool's preview command said a held call would do, as
+    -- markdown, and whether the command failed.
+    content: String
+    is_error: Boolean
+    -- What it reported, the tool's static labels and the session's.
+    labels: Set<Label>
+}
+
 value ToolsError {
     message: String
     server: String?
@@ -743,6 +776,8 @@ entity Hold {
     input_sha256: String
     -- The session's labels when it held the call.
     labels: Set<Label>
+    -- The tool's preview of the call, run when it was held.
+    preview: Preview?
     status: HoldStatus
     reason: String?
     resolved_by: Caller?
@@ -2085,6 +2120,7 @@ rule OpenHold {
             input: call.input,
             input_sha256: call.input_sha256,
             labels: labels ?? session_labels_bound(wake.role),
+            preview: call.preview,
             status: open
         )
 
@@ -3688,6 +3724,9 @@ surface ConversationBoundary {
 
     @guidance
         -- relay acp sees the agent's session/request_permission go by.
+        -- When the call's tool has a preview command, relay runs it and
+        -- adds its markdown to the request's toolCall.content, marked
+        -- _meta relay/preview, before the client sees the request.
 }
 
 surface NotificationBoundary {

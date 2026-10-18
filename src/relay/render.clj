@@ -306,11 +306,36 @@
   (let [ls (set labels)]
     (cond
       always-hold "the tool is set to always ask you"
+      (= :act class)
+      "others would see it, it spends money, or it cannot be undone, and no consent of yours in relay.edn covers this input"
+      (and (= config/edit-class class) (ls "contaminated"))
+      "it changes your things outside relay, and the session has seen an outsider's text"
       (and (= :egress class) (ls "private") (ls "contaminated"))
       "it can send data out, and the session has seen both your private data and an outsider's text"
-      (and (= :act class) (ls "contaminated"))
-      "it acts in your name, and the session has seen an outsider's text"
       :else "the policy held it")))
+
+(defn preview
+  "A held call's preview, as screen lines: what its tool's :preview command
+  read from the service about what the call would do, never what the role
+  said it would do. Links to a host not in `approved` (hosts in previews
+  the operator approved before) are listed, and so are characters that can
+  pass for others."
+  [{:keys [content is-error labels] :as p} approved]
+  (if-not p
+    []
+    (let [new-hosts (remove (set approved) (text/link-hosts content))
+          odd (text/lookalikes (str content))]
+      (concat
+       [(if is-error
+          "    preview: the preview command could not say what this call would do:"
+          "    what it would do (from the tool's preview, not from the role):")]
+       (text/block labels content)
+       (when (seq new-hosts)
+         (cons "    links to places you have not approved before:"
+               (map #(str "      " (text/defang %)) new-hosts)))
+       (when (seq odd)
+         (cons "    look closely, the preview has characters that can pass for others:"
+               (map #(str "      " %) odd)))))))
 
 (def ^:private destination-key
   #"(?i)url|uri|link|to|cc|bcc|recipient|host|address|email|endpoint|dest|channel|repo|webhook|server|domain|phone|number")
@@ -337,7 +362,8 @@
   has seen and from where, anything in the input that could pass for
   something else, and the whole input."
   ([h] (hold h nil))
-  ([{:keys [id role tool input session call labels label-sources]} config]
+  ([h config] (hold h config #{}))
+  ([{:keys [id role tool input session call labels label-sources] :as h} config approved]
    (let [inner (when (= core/reader-tool tool) (core/held-tool tool input))
          t (get-in config [:tools (or inner tool)])
          class (or (:class t) (when-not t :builtin))
@@ -362,16 +388,18 @@
       (when (seq odd)
         (cons "    look closely, the input has characters that can pass for others:"
               (map #(str "      " %) odd)))
+      (preview (:preview h) approved)
       [(str "    session " session ", call " call)
        "    input:"]
       (text/block [] input-text)))))
 
 (defn holds
   ([hs] (holds hs nil))
-  ([hs config]
+  ([hs config] (holds hs config #{}))
+  ([hs config approved]
    (if (empty? hs)
      ["No tool calls are waiting for you."]
-     (concat (mapcat #(concat (hold % config) [""]) hs)
+     (concat (mapcat #(concat (hold % config approved) [""]) hs)
              ["relay approve <hold> lets one run; relay deny <hold> [why] refuses it,"
               "and with --end also starts the role's next wake afresh."]))))
 

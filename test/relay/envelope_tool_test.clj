@@ -83,3 +83,20 @@
     (is (str/includes? (problem (assoc (tool "echo") :parameters "x")) ":parameters"))
     (is (str/includes? (problem (assoc (tool "echo") :protocol nil)) ":parameters")
         "a plain tool's arguments are fixed")))
+
+(deftest an-external-tool-runs-on-the-input-agentloop-decided
+  ;; Regression: relay took a quoted number as a number for every tool, so
+  ;; a call the operator's consent covered as {"entry" "001"} ran as
+  ;; {"entry" 1}, which neither the consent nor the preview saw.
+  (with-tools {"mail" (tool "echo" :parameters {:type "object"})}
+    (fn [sys]
+      (is (str/starts-with? (:ok (tools/call! sys "clerk" "mail" {:question "001" :entry "001"} [] "c"))
+                            "asked 001"))))
+  (let [seen (atom nil)]
+    (with-redefs [tools/run-tool (fn [_ _ _ args _] (reset! seen args) "ok")]
+      (with-tools {"mail" (tool "echo" :parameters {:type "object"})}
+        (fn [sys]
+          (tools/call! sys "clerk" "mail" {:entry "001" :memo "7"} [] "c")
+          (is (= {:entry "001" :memo "7"} @seen) "an external tool's input is not coerced")
+          (tools/call! sys "clerk" "memo_close" {:memo "7" :outcome "x"} [] "c")
+          (is (= 7 (:memo @seen)) "relay's own tools still take a quoted number"))))))

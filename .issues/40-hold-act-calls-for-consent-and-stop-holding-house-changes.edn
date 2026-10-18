@@ -1,6 +1,6 @@
 {:id 40
- :title "Hold act calls for consent and stop holding house changes"
- :status :inbox
+ :title "Hold act calls for consent and edits only after untrusted text"
+ :status :review
  :type :feature
  :priority :p1
  :created "2026-10-18"

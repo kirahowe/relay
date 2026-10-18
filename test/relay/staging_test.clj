@@ -78,7 +78,8 @@
                    (get-in c [:harnesses :agentloop :api-key-command])))
             (is (str/ends-with? (get-in c [:harnesses :agentloop :bin]) "/agentloop/bin/agentloop"))
             (is (fs/absolute? (get-in c [:harnesses :agentloop :bin])))
-            (is (core/quarantines? c "clerk") "the clerk holds an act tool, so contaminated memos to it wait")
+            (is (= :edit (get-in c [:tools "remind-demo" :class])) "the clerk's reminders are its operator's own")
+            (is (core/quarantines? c "clerk") "the clerk holds an edit tool, so contaminated memos to it wait")
             (is (not (core/quarantines? c "hub")))))
         (testing "artificial roles and facts"
           (is (= #{"hub" "clerk" "scout"} (set (core/active-role-ids state))))

@@ -7,7 +7,6 @@
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
-| [40](40-hold-act-calls-for-consent-and-stop-holding-house-changes.md) | Hold act calls for consent and stop holding house changes | feature | P1 |
 | [42](42-give-roles-a-sandboxed-workbench-with-no-way-out.md) | Give roles a sandboxed workbench with no way out | feature | P1 |
 | [46](46-codify-verification-in-bb-verify-with-new-evals-and-pentests.md) | Codify verification in bb verify, with new evals and pentests | chore | P1 |
 | [48](48-judge-remote-tool-definitions-with-a-decision-model.md) | Judge remote tool definitions with a decision model | feature | P2 |
@@ -36,6 +35,7 @@
 | [12](12-verify-every-report-with-code-not-a-model.md) | Verify every report with code, not a model | feature | P1 |
 | [13](13-review-reports-finding-by-finding.md) | Review reports finding by finding | feature | P1 |
 | [16](16-build-a-red-team-corpus-for-research-roles.md) | Build a red-team corpus for research roles | feature | P1 |
+| [40](40-hold-act-calls-for-consent-and-stop-holding-house-changes.md) | Hold act calls for consent and edits only after untrusted text | feature | P1 |
 | [41](41-speak-in-the-operator-s-terms-cite-sources-and-keep-skills.md) | Speak in the operator's terms, cite sources and keep skills | feature | P1 |
 | [43](43-connect-remote-mcp-servers-behind-relay-s-layer.md) | Connect remote MCP servers behind relay's layer | feature | P1 |
 | [44](44-let-the-hub-read-the-web-through-closed-answers.md) | Let the hub read the web through closed answers | feature | P1 |

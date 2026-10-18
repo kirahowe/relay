@@ -298,7 +298,7 @@
                       "\n\n" (or public accept_contamination)))))}
 
    "routine_write"
-   {:class :act
+   {:class :write
     :description "Create or replace one of your routines: a memo you send yourself on a schedule. Schedules: `every 30m` (or 2h, 1d), `daily 07:30`, `weekly mon 09:00`, `once 2026-10-08 09:00`. Writing a routine again restarts its clock. Every wake costs money, so keep routines few."
     :parameters (obj {:name {:type "string" :description "Lower case letters, digits and hyphens."}
                       :schedule text :instructions text}
@@ -308,7 +308,7 @@
            (str "Routine " (:name args) " is set."))}
 
    "routine_remove"
-   {:class :act :acp-kind "delete"
+   {:class :write :acp-kind "delete"
     :description "Remove one of your routines."
     :parameters (obj {:name text} "name")
     :run (fn [sys actor labels args]
@@ -558,7 +558,7 @@
            (str "Removed " (:path args) "."))}
 
    "role_add"
-   {:class :act
+   {:class :write
     :grant :may-add
     :description "Add a role. Its instructions say what it is for, what it may decide alone, and when to ask. What it may use is granted by the operator, not written here."
     :parameters (obj {:id text :title text :instructions text} "id" "title" "instructions")
@@ -567,7 +567,7 @@
            (str "Added " (:id args) "."))}
 
    "role_update"
-   {:class :act
+   {:class :write
     :grant :may-add
     :description "Change another role's title or instructions."
     :parameters (obj {:id text :title text :instructions text} "id")
@@ -576,7 +576,7 @@
            (str "Updated " (:id args) "."))}
 
    "role_remove"
-   {:class :act :acp-kind "delete"
+   {:class :write :acp-kind "delete"
     :grant :may-add
     :description "Remove a role. Its open memos are dead-lettered and its routines stop."
     :parameters (obj {:id text} "id")
@@ -657,7 +657,7 @@
              (str "Report " id " submitted; it will be checked.")))}
 
    "dead_letters_retry"
-   {:class :act
+   {:class :write
     :grant :dead-letter-handler
     :description "Put a role's dead-lettered memos back in its inbox with a clean slate, once whatever stopped it is fixed."
     :parameters (obj {:role text} "role")
@@ -862,6 +862,36 @@
                   (:display parsed) (assoc :display (update (:display parsed) :labels core/union
                                                             static (:labels parsed)))))))))
 
+(def preview-timeout-ms
+  "How long a tool's :preview command may run. A preview reads a service;
+  past this the hold opens without one."
+  30000)
+
+(defn run-preview!
+  "Runs a tool's :preview command on a held call, on the envelope protocol:
+  the call's input, the session's labels and the call id on stdin, one
+  result envelope on stdout, whose content is markdown saying what the call
+  would do. Returns {:content :is-error :labels}. When the command fails,
+  the content says so and :is-error is true: the hold opens all the same,
+  and what the command printed goes to the operator's log."
+  [tool-name command input labels call-id]
+  (let [failed (fn [why out err]
+                 (binding [*out* *err*] (println (str tool-name " preview: " why)) (print err out) (flush))
+                 {:content (str "relay could not get a preview: the preview command " why ".")
+                  :is-error true :labels []})
+        result (try (run-limited (vec command) (json/generate-string {:input input :labels (vec labels)
+                                                                      :call_id (str call-id)})
+                                 preview-timeout-ms)
+                    (catch Exception e (ex-message e)))]
+    (if-not (map? result)
+      (failed (if (= ::timeout result) "timed out" (str "could not start: " result)) "" "")
+      (let [{:keys [exit out err]} result
+            parsed (when (zero? exit) (parse-result out))]
+        (cond
+          (not (zero? exit)) (failed (str "exited " exit) out err)
+          (nil? parsed) (failed "did not print exactly one result envelope" out err)
+          :else parsed)))))
+
 (def verifier-output-limit
   "The most a verifier may print, in bytes. Twenty pages' worth of check
   output is far less; past this the run is stopped and counts as failed,
@@ -914,7 +944,7 @@
   :mcp-stdio or :mcp-http it is a tool of an MCP server, which agentloop
   runs or reaches: relay only names it to the harness (:mcp) and polices
   it like any other."
-  [[tool-name {:keys [class description command labels always-hold protocol parameters timeout-seconds] :as spec}]]
+  [[tool-name {:keys [class description command labels always-hold protocol parameters timeout-seconds consent] :as spec}]]
   (case protocol
     ;; agentloop runs an MCP tool itself, against its server; relay's tool
     ;; command never does. Its server gives the description and schema.
@@ -923,13 +953,14 @@
      {:class class
       :labels (vec labels)
       :always-hold (boolean always-hold)
-      :mcp (select-keys spec [:protocol :server :tool :digest :pin :allow-content :fixed-args :hidden-args])
-}]
+      :consent consent
+      :mcp (select-keys spec [:protocol :server :tool :digest :pin :allow-content :fixed-args :hidden-args])}]
     :envelope
     [tool-name
      {:class class
       :labels (vec labels)
       :always-hold (boolean always-hold)
+      :consent consent
       :description description
       :parameters (or parameters {:type "object"})
       :run (fn [_ _ session-labels args]
@@ -940,6 +971,7 @@
    {:class class
     :labels (vec labels)
     :always-hold (boolean always-hold)
+    :consent consent
     :description description
     :parameters (obj {:args {:type "array" :items {:type "string"}
                              :description "Command line arguments."}})
@@ -1028,14 +1060,16 @@
   "What a harness needs to present the tools: names, descriptions and
   parameter schemas (for an MCP tool, its :mcp server and name instead),
   each tool's class and static labels (none for relay's own), whether
-  every call needs the operator, and for some of relay's own tools an
-  :acp-kind more exact than the class gives (relay.acp/tool-kinds)."
+  every call needs the operator, the operator's standing :consent for an
+  act tool, and for some of relay's own tools an :acp-kind more exact than
+  the class gives (relay.acp/tool-kinds)."
   [config role-id & [opts]]
-  (vec (for [[n {:keys [class description parameters acp-kind labels always-hold mcp]}]
+  (vec (for [[n {:keys [class description parameters acp-kind labels always-hold mcp consent]}]
              (sort-by key (offered config role-id opts))]
          (cond-> {:name n :class (name class) :description description :parameters parameters
                   :labels (vec labels)}
            always-hold (assoc :always-hold true)
+           (seq consent) (assoc :consent consent)
            acp-kind (assoc :acp-kind acp-kind)
            ;; An MCP tool: its server and the server's name for it. The
            ;; server gives the description and parameters.
@@ -1043,17 +1077,19 @@
 
 (defn policy
   "agentloop's policy for a role's tools and a session seeded with
-  `labels`: each tool's class and static labels, by name. A public role's
+  `labels`: each tool's class, static labels and the operator's standing
+  consent, by name. agentloop matches a call against the consent. A public role's
   session may never hold private, which agentloop enforces too:
   forbid_labels."
   ([manifest labels] (policy manifest labels {}))
   ([manifest labels {:keys [public?]}]
    (cond-> {:labels (core/union labels)
             :tools (into (sorted-map)
-                         (for [{:keys [name class labels always-hold]} manifest]
+                         (for [{:keys [name class labels always-hold consent]} manifest]
                            [name (cond-> {:class class}
                                    (seq labels) (assoc :labels (vec labels))
-                                   always-hold (assoc :always_hold true))]))}
+                                   always-hold (assoc :always_hold true)
+                                   (seq consent) (assoc :consent (vec consent)))]))}
      public? (assoc :forbid_labels [core/private-label]))))
 
 (defn- result
@@ -1148,7 +1184,10 @@
       (:mcp tool)
       {:error (str "The tool " tool-name " comes from an MCP server, which agentloop runs.") :labels []}
       :else
-      (let [args (coerce-input (or args {}))]
+      ;; Only relay's own tools take a quoted number as a number. An
+      ;; external tool gets the input as agentloop decided it, so the
+      ;; operator's consent and the preview see what the tool runs on.
+      (let [args (cond-> (or args {}) (not (contains? (:tools config) tool-name)) coerce-input)]
         (if-let [problem (input-problem (:parameters tool) args)]
           {:error problem :labels []}
           (binding [*call-id* call-id *wake* wake]

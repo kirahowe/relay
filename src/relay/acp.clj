@@ -8,7 +8,8 @@
 
   A direction is :client (client to agent) or :agent (agent to client)."
   (:require [cheshire.core :as json]
-            [clojure.string :as str])
+            [clojure.string :as str]
+            [relay.text :as text])
   (:import (java.util Arrays)))
 
 ;; --- lines out of chunks
@@ -203,7 +204,7 @@
 
 (def class-kinds
   "The ACP tool kind for each of relay's tool classes."
-  {"read" "read" "write" "edit" "egress" "fetch" "act" "execute"})
+  {"read" "read" "write" "edit" "edit" "edit" "egress" "fetch" "act" "execute"})
 
 (defn tool-kinds
   "The ACP kind of each tool in a manifest (relay.tools/manifest), by name:
@@ -298,3 +299,62 @@
           chosen {:outcome (get chosen "kind") :valid true}
           (and (map? outcome) (= "cancelled" (get outcome "outcome"))) {:outcome "cancelled" :valid true}
           :else {:outcome "reject_once" :valid false})))))
+
+;; --- previews
+
+(def preview-meta
+  "The _meta that marks the preview in a permission request's
+  toolCall.content, on the content item and on its text block, so a
+  client can tell it from anything else there and show it as relay's."
+  {"relay/preview" true})
+
+(defn- fence
+  "A code fence longer than any run of backticks in s, so s cannot end it."
+  [s]
+  (apply str (repeat (max 3 (inc (reduce max 0 (map count (re-seq #"`+" (str s)))))) "`")))
+
+(defn preview-markdown
+  "The markdown a client is shown for a held call's preview (relay.core
+  preview-of): what the tool's preview command read from the service, a
+  note when the command failed, and the hosts of links to places the
+  operator has not approved before (relay.core/approved-hosts).
+
+  The preview's own text goes inside a code fence, and so do the notes
+  after it, which quote it. It can hold text an outsider wrote (a
+  campaign's body, say), and as live markdown it could show a remote
+  image, which a client fetches before anyone approves anything, or a link
+  whose text names another place than it goes."
+  [{:keys [content is-error]} approved]
+  (let [new-hosts (remove (set approved) (text/link-hosts content))
+        odd (text/lookalikes (str content))
+        ;; Characters that draw as nothing are shown as \u{XXXX}, so the
+        ;; preview cannot hide text from the operator. Line breaks and
+        ;; tabs stay, since the preview is markdown.
+        shown (apply str (map (fn [cp] (if (text/hidden? cp) (format "\\u{%04x}" cp) (String. (Character/toChars cp))))
+                              (iterator-seq (.iterator (.codePoints (str content))))))
+        notes (str/join "\n" (concat (when (seq new-hosts)
+                                       [(str "Links to places you have not approved before: "
+                                             (str/join ", " new-hosts))])
+                                     (when (seq odd)
+                                       [(str "Characters that can pass for others: " (str/join "; " odd))])))
+        notes (text/visible notes)
+        fenced (fn [s] (str (fence s) "text\n" s "\n" (fence s)))]
+    (str (when is-error "The preview command could not say what this call would do.\n\n")
+         (fenced shown)
+         (when-not (str/blank? notes) (str "\n\n---\n" (fenced notes))))))
+
+(defn with-preview
+  "A session/request_permission line with `markdown` added to the end of
+  its toolCall.content as a text content block marked with preview-meta.
+  Everything else in the request is kept. Nil when the line is not such a
+  request."
+  [line markdown]
+  (let [msg (when (string? line) (parse line))
+        call (get-in msg ["params" "toolCall"])]
+    (when (and (map? msg) (= "session/request_permission" (get msg "method")) (map? call))
+      (let [content (get call "content")
+            item {"type" "content" "_meta" preview-meta
+                  "content" {"type" "text" "text" (str markdown) "_meta" preview-meta}}]
+        (json/generate-string
+         (assoc-in msg ["params" "toolCall" "content"]
+                   (conj (if (sequential? content) (vec content) []) item)))))))

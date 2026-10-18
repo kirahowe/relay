@@ -802,9 +802,11 @@
     (testing "a search never looks inside withheld text"
       (is (str/includes? (:content (read {:search "Ignore"})) "No facts match.")))))
 
-(deftest registry-and-routine-tools-act-in-the-operator-s-name
+(deftest registry-and-routine-tools-are-write
+  ;; They change only relay's own log, which keeps every version and the
+  ;; labels of whoever wrote it, so they run whatever the session has seen.
   (doseq [t ["role_add" "role_update" "role_remove" "routine_write" "routine_remove" "dead_letters_retry"]]
-    (is (= :act (get-in tools/builtin [t :class])) t))
+    (is (= :write (get-in tools/builtin [t :class])) t))
   (is (= {:class "write"} (get-in (tools/policy (tools/manifest cfg "clerk") []) [:tools "memo_send"])))
   (is (= {:class "egress" :labels ["contaminated"]}
          (get-in (tools/policy (tools/manifest cfg "hub") []) [:tools "fetch"]))))

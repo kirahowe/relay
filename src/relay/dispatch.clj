@@ -311,6 +311,23 @@
   (when (and transcript (fs/exists? transcript))
     (slurp (str transcript))))
 
+(defn with-previews
+  "A harness report with a preview on each held call whose tool has a
+  :preview command and that relay has not recorded yet: the command's
+  answer for the call's input, under the session's labels. The preview is
+  run now, at hold time, so the operator sees what the service says the
+  call would do."
+  [{:keys [config]} state report]
+  (let [known (set (map (juxt :session :call) (vals (:holds state))))]
+    (update report :held
+            (fn [held]
+              (when held
+                (mapv (fn [{:keys [id name input] :as c}]
+                        (let [command (get-in config [:tools name :preview])]
+                          (if (and command (map? c) (not (known [(:session report) id])))
+                            (assoc c :preview (tools/run-preview! name command input (:labels report) id))
+                            c)))
+                      held))))))
 (defn wake!
   "Starts a wake of a role, runs it and ends it. Returns {:result ...}:
   :idle when there was nothing to do, :busy, :paused or :runaway when it was
@@ -338,6 +355,7 @@
             state (inbound/current-state sys)
             report (run-harness! sys (wake-request sys state (get-in state [:wakes wake-id])
                                                    (wake-inputs sys)))
+            report (with-previews sys (inbound/current-state sys) report)
             ;; Kept while the wake still runs, so they are written as the
             ;; role's session, and the end of the wake can mention them.
             shown (mapv :path (store-displays! sys role-id wake-id (transcript-text report)))
@@ -614,11 +632,17 @@
   the client's lines first: a string it returns is written to the client
   as the answer and the line goes no further; :none drops the line; nil
   passes it on. (on-display session) is called for an agent line that
-  carries a display, before the line is passed on."
+  carries a display, before the line is passed on.
+
+  (preview req) gives a request the client will see its tool's preview,
+  {:markdown ...} and the preview relay records, or nil. The request is
+  passed on with the markdown added (relay.acp/with-preview), and
+  on-permission gets the request as read from that line, so its :preview
+  is the text the client was shown, and the record as :preview-record."
   [{:keys [argv dir env]} {:keys [in out trace stop grace-ms approvals on-permission on-oversized line-limit
-                                  extension on-display]
+                                  extension on-display preview]
                            :or {grace-ms stop-grace-ms on-permission (fn [& _]) on-oversized (fn [_])
-                                line-limit line-limit extension (fn [_]) on-display (fn [_])}}]
+                                line-limit line-limit extension (fn [_]) on-display (fn [_]) preview (fn [_] nil)}}]
   (let [proc (p/process (vec argv) (cond-> {:err :inherit} dir (assoc :dir (str dir)) env (assoc :env env)))
         ^Process jp (:proc proc)
         ^java.io.OutputStream agent-in (:in proc)
@@ -655,14 +679,23 @@
                      (if-let [req (or (acp/permission-request line)
                                       ;; One relay cannot read is never passed on.
                                       (acp/unreadable-permission-request line))]
-                       (do (on-permission :asked req)
-                           (if (and approvals (not @client-gone) (not (:unreadable req)))
+                       (let [passing (and approvals (not @client-gone) (not (:unreadable req)))
+                             ;; Only a request the client will see gets a
+                             ;; preview, which goes with it.
+                             {:keys [markdown] :as p} (when passing (preview req))
+                             line' (when markdown (acp/with-preview line markdown))
+                             ;; Read again from the line the client gets, so
+                             ;; what is recorded and listed is what it shows.
+                             req (cond-> (or (some-> line' acp/permission-request) req)
+                                   p (assoc :preview-record (dissoc p :markdown)))]
+                         (on-permission :asked req)
+                         (if passing
                              (do (swap! outstanding assoc (:id req) req)
                                  ;; The client may have gone in the meantime.
                                  (when (and @client-gone (get @outstanding (:id req)))
                                    (swap! outstanding dissoc (:id req))
                                    (refuse! req "client-gone"))
-                                 :pass)
+                                 (or line' :pass))
                              (do (refuse! req (cond (:unreadable req) "unreadable"
                                                     (not approvals) "no-approvals"
                                                     :else "client-gone"))
@@ -741,15 +774,27 @@
   "Records a conversation's permission requests and their answers in the
   log. A record that fails is dropped: the conversation goes on."
   [sys wake-id]
-  (fn [kind {:keys [session call tool input labels]} & [{:keys [outcome by why]}]]
+  (fn [kind {:keys [session call tool input labels preview-record]} & [{:keys [outcome by why]}]]
     (try
       (inbound/submit! sys {:type (if (= :asked kind) :permission/asked :permission/answered)
                             :actor core/dispatcher
-                            :args {:wake wake-id :session session :call call :tool tool
-                                   :input-sha256 (core/sha256 (json/generate-string input))
-                                   :labels labels :outcome outcome :by by :why why}})
+                            :args (cond-> {:wake wake-id :session session :call call :tool tool
+                                           :input-sha256 (core/sha256 (json/generate-string input))
+                                           :labels labels :outcome outcome :by by :why why}
+                                    (and preview-record (= :asked kind)) (assoc :preview preview-record))})
       (catch Exception e
         (binding [*out* *err*] (println "relay could not record a permission request:" (ex-message e)))))))
+
+(defn- permission-previewer
+  "Runs the :preview command of the tool a conversation's permission
+  request is for, and gives the preview with the markdown the client is
+  shown, or nil when the tool has none. A preview that cannot be had is
+  shown as such: the request goes to the client all the same."
+  [{:keys [config] :as sys}]
+  (fn [{:keys [tool input labels call]}]
+    (when-let [command (and (string? tool) (get-in config [:tools tool :preview]))]
+      (let [p (tools/run-preview! tool command input labels call)]
+        (assoc p :markdown (acp/preview-markdown p (core/approved-hosts (inbound/current-state sys))))))))
 
 (defn- oversize-recorder
   "Records an agent line relay dropped for being too long to read, and
@@ -835,6 +880,7 @@
                                                                  (swap! conv workspace/asked req ((:clock sys)))
                                                                  (swap! conv workspace/answered req (:outcome answer)))
                                                                (apply record kind req (when answer [answer])))
+                                              :preview (permission-previewer sys)
                                               :on-oversized (oversize-recorder sys (:wake-id request))
                                               :extension (extension-handler sys conv approvals)
                                               :on-display (fn [session] (keep-session-displays! sys request conv session))})]

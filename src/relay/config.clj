@@ -9,21 +9,33 @@
             [relay.connections :as connections])
   (:import (java.time ZoneId)))
 
+(def edit-class
+  "The class of a tool that changes the operator's own things outside
+  relay: nobody else sees the change, and the earlier state survives, so
+  it can be undone (their own reminders, a draft in their mail). A tool
+  that overwrites or deletes with no history kept is :act. relay cannot
+  follow labels outside itself: injected text a contaminated session wrote
+  into the operator's reminders would be read back labelled only private.
+  So a call is held once the session is contaminated."
+  :edit)
+
 (def tool-classes
   "Every tool a role can be granted is named in config and given one of
   these classes, which agentloop's policy decides on:
 
     :read    returns content, changes nothing, sends nothing out that an
              outsider could see
-    :write   changes relay data only
+    :write   changes relay data only, which keeps its labels
+    :edit    changes the operator's own things outside relay (edit-class)
     :egress  can send data the model chose where an outsider could see it
-    :act     does something in the operator's name outside relay, such as
-             a reminder
+    :act     others see it, it spends money, or it cannot be undone, such
+             as sending a campaign or a payment
 
-  A session that has seen both private data and something contaminated
-  needs the operator's approval for an egress call, and one that has seen
-  anything contaminated needs it for an act."
-  #{:read :write :egress :act})
+  A session that has seen something contaminated needs the operator's
+  approval for an edit call, and one that has also seen private data for
+  an egress call. Every act call needs it, whatever the session has seen,
+  unless the tool's :consent covers the call. Read and write calls run."
+  #{:read :write edit-class :egress :act})
 
 (def label-names
   "The labels a tool's output can carry (relay.core/label-names). An
@@ -355,7 +367,7 @@
   "What an MCP tool may give. :pin and :connection come only from a
   connection file (relay.connections)."
   #{:class :labels :always-hold :protocol :server :tool :digest :allow-content
-    :fixed-args :hidden-args :pin :connection})
+    :fixed-args :hidden-args :pin :connection :consent :preview})
 
 (defn- check-mcp-tool
   "A tool with :protocol :mcp-stdio or :mcp-http. Its server gives its description and
@@ -415,6 +427,55 @@
       (problem! (str "The MCP server " n " in relay.edn gives none of :tools. Name a tool from it, or"
                      " remove it.")))))
 
+;; --- standing consent and previews
+
+(defn- json-value?
+  "Whether x is a value that has exactly one JSON form: a string, a whole
+  number, a finite decimal, true, false, nil, or a vector or a map with
+  string keys of such values."
+  [x]
+  (cond
+    (or (string? x) (boolean? x) (nil? x) (int? x)) true
+    (double? x) (Double/isFinite x)
+    (vector? x) (every? json-value? x)
+    (map? x) (every? (fn [[k v]] (and (string? k) (json-value? v))) x)
+    :else false))
+
+(defn- check-consent
+  "A tool's :consent: the operator's standing consent for an :act tool, a
+  vector of rules. A rule is a map from the call's argument names, as
+  strings, to the exact values the call must give them. A call whose input
+  has every pair of some rule runs without asking. An empty rule would
+  cover every call, so it is refused, and so is :consent on any other
+  class or beside :always-hold."
+  [tool-name {:keys [class always-hold] :as tool}]
+  (when (contains? tool :consent)
+    (let [consent (:consent tool)
+          where (str "Tool " tool-name " in relay.edn")]
+      (when-not (= :act class)
+        (problem! (str where " has :consent, which only an :act tool takes. Its class is "
+                       (pr-str class) ", and calls to it are not held for consent.")))
+      (when (true? always-hold)
+        (problem! (str where " has both :consent and :always-hold, and :always-hold asks every time"
+                       " whatever the consent. Keep one.")))
+      (when-not (and (vector? consent)
+                     (every? #(and (map? %) (seq %) (every? string? (keys %)) (json-value? %)) consent))
+        (problem! (str where " has :consent " (pr-str consent) "; it must be a vector of rules, each"
+                       " a map from argument names (strings) to the exact values a call must give them,"
+                       " such as [{\"group\" \"Kira only\"}]. A rule names at least one argument."))))))
+
+(defn- check-preview
+  "A tool's :preview: an envelope command relay runs on a held call's input
+  to show the operator what the call would do."
+  [tool-name tool]
+  (when (contains? tool :preview)
+    (let [preview (:preview tool)]
+      (when-not (and (vector? preview) (seq preview)
+                     (every? #(and (string? %) (not (str/blank? %)) (not (str/includes? % "\u0000"))) preview))
+        (problem! (str "Tool " tool-name " in relay.edn has :preview " (pr-str preview) "; it must be a"
+                       " command, a vector of strings such as [\"mail-preview\"], run on the envelope"
+                       " protocol."))))))
+
 (defn validate
   "Returns the config, or throws describing the first problem found."
   [{:keys [tools grants max-attempts chat-client] :as config}]
@@ -454,7 +515,9 @@
     (when-not (or (nil? always-hold) (boolean? always-hold))
       (throw (ex-info (str "Tool " tool-name " has :always-hold " (pr-str always-hold)
                            "; it must be true or false.")
-                      {:tool tool-name :relay/usage true}))))
+                      {:tool tool-name :relay/usage true})))
+    (check-consent tool-name tool)
+    (check-preview tool-name tool))
   ;; A :script harness runs a program that no policy watches, so its
   ;; roles may not be granted tools that reach outside relay.
   (when (and (= :script (get-in config [:harnesses (:default-harness config) :kind]))
