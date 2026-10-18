@@ -664,11 +664,20 @@ entity Wake {
     -- harness that does not say, a wake from before relay kept it);
     -- never taken as 0.
     cost_usd: Decimal?
+    -- What the operator said of it with relay flag, oldest first.
+    flags: List<WakeFlag>
 
     transitions status {
         running -> ended
         terminal: ended
     }
+}
+
+value WakeFlag {
+    value: good | bad
+    -- The operator's own words, if any. Never exported in a trace.
+    note: String?
+    at: Timestamp
 }
 
 value ToolsError {
@@ -2577,6 +2586,34 @@ rule WarnOfSpend {
         -- checked. A new week starts with nothing told.
 }
 
+-- Reviewing a week
+
+-- relay week reports a window of the log: each interruption (a held
+-- call, a permission request in a conversation, a quarantined memo, a
+-- memo waiting to be declassified, a tool waiting for relay fresh, a
+-- finding waiting for review, a harness that needs the operator, work
+-- given up to the operator) from the event that asked to the event that
+-- answered, the notifications sent, each role's wakes and what they
+-- cost, health checks on each wake, and the operator's flags. relay
+-- traces exports the same wakes as OpenTelemetry spans, holding no
+-- content. Both are worked out from the log and the run files when
+-- asked, and record nothing.
+
+rule FlagWake {
+    when: WakeFlagRequested(caller, wake, value, note?)
+
+    requires: caller.is_operator
+    requires: wake != null
+
+    ensures: wake.flags = wake.flags + WakeFlag(value: value, note: note, at: now)
+
+    @guidance
+        -- relay flag <wake> good|bad [note] marks a wake or a
+        -- conversation to find it later. It grants nothing and no role
+        -- sees it, so it asks for no code. An id that names no wake is
+        -- refused.
+}
+
 -- The morning brief
 
 rule SendMorningBrief {
@@ -3430,6 +3467,8 @@ surface Inbound {
         FactRevertRequested(caller, fact, version)
             when caller.is_operator
         DocRevertRequested(caller, doc, version)
+            when caller.is_operator
+        WakeFlagRequested(caller, wake, value, note?)
             when caller.is_operator
 
     @guarantee EveryWriteGoesThroughOneInboundPath

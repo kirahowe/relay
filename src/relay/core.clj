@@ -2142,6 +2142,25 @@
     (emit tx "labels/enabled" {})
     tx))
 
+;; flags: the operator marks a wake or a conversation to find it later
+
+(def flag-values #{"good" "bad"})
+
+(defmethod evolve* "wake/flagged" [state {:keys [seq at data]}]
+  (update-in state [:wakes (:wake data) :flags] (fnil conj [])
+             {:id seq :value (:value data) :note (:note data) :at (inst at)}))
+
+(defmethod decide* :wake/flag [{:keys [state] :as tx} {{:keys [wake value note]} :args}]
+  ;; A flag grants nothing and changes nothing a role sees, so it needs
+  ;; no code; it is still the operator's alone.
+  (operator-only! tx "flags a wake or a conversation")
+  (when-not (and (integer? wake) (get-in state [:wakes wake]))
+    (reject! :not-found (str "There is no wake or conversation " wake ".")))
+  (when-not (flag-values value)
+    (reject! :invalid (str "A flag is good or bad, not " (pr-str value) ".")))
+  (emit tx "wake/flagged" (cond-> {:wake wake :value value}
+                            (not (blank? note)) (assoc :note (str/trim note)))))
+
 ;; holds
 
 (def denials-per-session
