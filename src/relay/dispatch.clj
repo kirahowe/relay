@@ -17,6 +17,7 @@
             [relay.harness.agentloop :as agentloop]
             [relay.inbound :as inbound]
             [relay.prompt :as prompt]
+            [relay.refs :as refs]
             [relay.render :as render]
             [relay.reports :as reports]
             [relay.tools :as tools]
@@ -773,11 +774,6 @@
       (when (fs/exists? file)
         (swap! conv workspace/shown session (store-displays! sys (:id role) wake-id (slurp (str file))))))))
 
-(def ^:dynamic *resolve-ref*
-  "How _relay/resolve looks a ref up: (resolve state ref-string), the
-  contract of relay.refs/resolve."
-  workspace/stand-in-resolve)
-
 (defn- extension-handler
   "Answers the workspace pane's extension methods (relay.workspace) for
   one conversation."
@@ -792,7 +788,7 @@
             (workspace/result-line id (workspace/items (inbound/current-state sys) @conv
                                                        (get params "sessionId") (boolean approvals)))
             "_relay/resolve"
-            (let [{:keys [result error]} (workspace/resolve-answer *resolve-ref* (inbound/current-state sys) params)]
+            (let [{:keys [result error]} (workspace/resolve-answer refs/resolve (inbound/current-state sys) params)]
               (if error (workspace/error-line id -32602 error) (workspace/result-line id result)))
             "_relay/trust"
             (let [{:keys [command error]} (workspace/trust-command @conv (boolean approvals) params)]

@@ -124,31 +124,10 @@
 
 ;; --- resolve
 
-(defn stand-in-resolve
-  "Looks a ref up: a stand-in for relay.refs/resolve, which another change
-  brings, with the same contract. It knows docs, shown docs and facts;
-  anything else relay keeps is :missing, and rem, file and web refs are
-  :external."
-  [state ref-string]
-  (let [s (str/trim (str ref-string))
-        [_ kind id] (or (re-matches #"(?s)\[\[([a-z]+):(.+)\]\]" s) (re-matches #"(?s)([a-z]+):(.+)" s))
-        doc (fn [path title]
-              (if-let [t (core/trusted-version state "doc" path)]
-                {:status :ok :title title :text (:text t) :labels (vec (core/union (:labels t)))}
-                {:status :missing}))]
-    (merge {:ref ref-string :kind (some-> kind keyword)}
-           (case kind
-             "doc" (doc id id)
-             "shown" (doc (str "shown/" id ".md") (str "Shown: " id))
-             "fact" (if-let [v (some-> (parse-long (str/trim id)) (#(core/fact state %)) (core/fact-as-known nil))]
-                      {:status :ok :title (str "Fact " (str/trim id)) :text (:text v) :labels (vec (core/union (:labels v)))}
-                      {:status :missing})
-             ("rem" "file" "web") {:status :external :target id}
-             {:status :missing :kind nil}))))
-
 (defn resolve-answer
-  "The _relay/resolve answer: what `resolve` (relay.refs/resolve's
-  contract) says of the ref, with keywords as strings."
+  "The _relay/resolve answer: what `resolve` (relay.refs/resolve) says of
+  the ref, with keywords as strings. relay.refs does no public-role
+  filtering, which is right here: relay acp's client is the operator's."
   [resolve state {:strs [ref]}]
   (if-not (string? ref)
     {:error "_relay/resolve needs a ref."}

@@ -103,8 +103,10 @@
     (is (= :ok (:status (refs/resolve (:state w) "[[doc:hear-here/style.md@3]]"))))))
 
 (deftest a-shown-item-is-the-doc-under-shown
-  (let [w (-> (seeded) (run "operator" :doc/put {:path "shown/2026-10-18/call-9.md" :content "Venue page."}))]
-    (is (= "Venue page." (:text (refs/resolve (:state w) "[[shown:2026-10-18/call-9]]"))))))
+  ;; Only a kept display goes under shown/ (relay#45).
+  (let [w (-> (seeded) (run "hub" :display/show {:ref "shown:2026-10-18/call-9" :title "Venues" :body "Venue page."
+                                                 :sources [] :call "call-9"}))]
+    (is (= "# Venues\n\nVenue page.\n" (:text (refs/resolve (:state w) "[[shown:2026-10-18/call-9]]"))))))
 
 (deftest read-tools-print-each-items-ref
   (let [s (:state (seeded))

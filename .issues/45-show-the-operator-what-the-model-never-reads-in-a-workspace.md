@@ -64,9 +64,9 @@ relay's internals.
   checked for repeated keys before `operator` is taken out. The display's
   title is the caller's question and its sources are the inner result's
   display sources, if any.
-- `_relay/resolve` runs against a stand-in (`relay.workspace/stand-in-resolve`,
-  docs, shown docs and facts) behind `relay.dispatch/*resolve-ref*`, to be
-  replaced by `relay.refs/resolve` when that lands.
+- `_relay/resolve` calls `relay.refs/resolve` as it is. It does no
+  public-role filtering, which suits relay acp, whose client is the
+  operator's. acp-tui's ref grammar is the same as `relay.refs/parse`'s.
 - `_relay/items` takes held proposals from the permission requests relay
   acp passed on, with the preview parsed from the request's tool call
   content (`_meta relay/preview`), so it works with the consent change
