@@ -781,6 +781,7 @@ find, drops it either way, records that, and tells the operator.
 ## Development
 
 ```sh
+bb verify        # every check in every repo, one summary (VERIFY.md)
 bb test          # every test, in parallel, with volley (tests.edn); pass namespaces to run only those
 bb soak 5000     # the model-based property, many more times
 bb tck           # the ACP conformance kit against relay acp (needs Go, uv and ../agentloop)

@@ -33,6 +33,10 @@
   rollback {:doc "For the operator: put the live checkouts back where the last deploy found them."
             :requires ([relay.deploy-run :as deploy-run])
             :task (apply deploy-run/rollback-main *command-line-args*)}
+  verify {:doc "Run every check in one go, with one summary: bb verify --help. See VERIFY.md."
+         :extra-paths ["test"]
+         :requires ([relay.verify :as verify])
+         :task (verify/run! *command-line-args*)}
   soak {:doc "Run the model-based property many more times: bb soak [trials]"
         :extra-paths ["test"]
         :requires ([relay.core-test :as core-test]
