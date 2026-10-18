@@ -183,6 +183,22 @@
       (some? msg) (assoc :message msg)
       (nil? msg) (assoc :text line))))
 
+;; --- displays
+
+(defn display-session
+  "The session of an agent's session/update that carries a display (a
+  tool call content block with _meta relay/display), or nil for any other
+  line."
+  [line]
+  (when (and (string? line) (str/includes? line "relay/display"))
+    (let [msg (parse line)
+          params (when (map? msg) (get msg "params"))
+          u (when (map? params) (get params "update"))
+          content (when (map? u) (get u "content"))]
+      (when (and (= "session/update" (get msg "method")) (sequential? content)
+                 (some #(and (map? %) (map? (get-in % ["content" "_meta" "relay/display"]))) content))
+        (session-id (get params "sessionId"))))))
+
 ;; --- tool kinds
 
 (def class-kinds
@@ -202,11 +218,23 @@
 
 ;; --- permission requests
 
+(defn preview
+  "The text of the preview in a tool call's content, if it has one: a text
+  block whose _meta has relay/preview true."
+  [content]
+  (when (sequential? content)
+    (some (fn [c]
+            (let [b (when (map? c) (get c "content"))]
+              (when (and (map? b) (= "text" (get b "type")) (string? (get b "text"))
+                         (true? (get-in b ["_meta" "relay/preview"])))
+                (get b "text"))))
+          content)))
+
 (defn permission-request
   "An agent's session/request_permission, as relay keeps track of it, or
   nil for any other line: its id, session, tool call, the tool's name and
-  input, the options offered, and the session's labels if the agent sent
-  them."
+  input, the options offered, the session's labels if the agent sent
+  them, and the preview, if the call's content has one."
   [line]
   (let [msg (when (string? line) (parse line))]
     (when (and (map? msg) (= "session/request_permission" (get msg "method")) (contains? msg "id"))
@@ -220,6 +248,7 @@
          :input (when (map? call) (get call "rawInput"))
          :labels (let [ls (when (map? call) (get-in call ["_meta" "agentloop/labels"]))]
                    (when (sequential? ls) (vec ls)))
+         :preview (when (map? call) (preview (get call "content")))
          :options (vec (filter map? (when (sequential? options) options)))}))))
 
 (defn unreadable-permission-request

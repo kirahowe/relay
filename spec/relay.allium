@@ -335,7 +335,7 @@ enum NotificationKind {
     | harness_needs_attention | harness_unreachable
     | hold_opened | memo_quarantined | permission_refused | session_ended
     | report_verified | report_verify_failed | trust_level_lowered
-    | budget_reached | brief | tools_unavailable
+    | budget_reached | brief | tools_unavailable | shown
 }
 enum ToolClass { read | write | egress | act }
 enum Label { private | contaminated }
@@ -884,6 +884,19 @@ entity DocVersion {
     actor: Caller
     content: String when not removed
     removed: Boolean
+    -- Set on a version that keeps a display: its call, title and sources.
+    shown: ShownDisplay?
+}
+
+value ShownDisplay {
+    call: String
+    title: String
+    sources: List<Source>
+}
+
+value Source {
+    title: String
+    ref: String
 }
 
 
@@ -1419,6 +1432,60 @@ rule RevertDoc {
         content: version.content,
         removed: version.removed
     )
+}
+
+-- What the operator was shown
+
+rule KeepADisplay {
+    when: DisplayShown(caller, ref, title, body, sources, call)
+
+    requires: caller.kind = role
+    requires: is_shown_ref(ref)   -- black box: shown:<yyyy-mm-dd>/<id>, the id lower case letters, digits, _ and -, at most 100
+    let path = shown_path(ref)    -- black box: shown/<yyyy-mm-dd>/<id>.md
+    requires: not exists Doc{path: path}
+
+    ensures:
+        let doc = Doc.created(path: path)
+        DocVersion.created(
+            doc: doc,
+            at: now,
+            actor: caller,
+            content: shown_doc_text(title, body, sources),   -- black box: the title as a heading, the body, the sources as refs
+            removed: false,
+            shown: ShownDisplay(call: call, title: title, sources: sources)
+        )
+
+    @guidance
+        -- A tool result may carry a display, which agentloop keeps apart
+        -- from the model: the model is told only its ref. After a wake,
+        -- and as a conversation goes, the dispatcher reads each display
+        -- from the session's entries and keeps it here, as the role whose
+        -- session made it, with the display's labels (its own, the
+        -- result's and the session's as the call ran). The same display
+        -- again records nothing; another at its path is refused. Nobody
+        -- puts a doc under shown/ any other way, so a doc there is always
+        -- what the operator was shown. A wake that kept displays tells
+        -- the operator their paths, never their text; a conversation's
+        -- operator saw them as they came.
+}
+
+rule TrustFromThePane {
+    when: PaneTrustRequested(conversation, path, version, sha256)
+
+    requires: conversation.approvals
+    requires: path in conversation.shown_paths   -- black box: displays this conversation kept
+
+    ensures: TrustRequested(caller: operator, kind: doc_text, ref: path)
+
+    @guidance
+        -- The workspace pane in relay chat trusts a shown doc through
+        -- relay acp's _relay/trust, with the version and digest of the
+        -- text it listed, so a doc changed since is not trusted. It is
+        -- taken only when relay acp was started with --approvals, as
+        -- relay chat starts it for the operator's terminal: the same
+        -- presence an answer to a permission request needs. Without it
+        -- the pane shows the relay trust doc command instead. The log
+        -- records that the trust came from the chat.
 }
 
 rule TrustText {
@@ -2959,7 +3026,8 @@ rule WriteJournal {
 rule PutNewDoc {
     when: DocPutRequested(caller, path, content)
 
-    requires: is_usable_doc_path(path)   -- black box: lower case names of letters, digits, dots, hyphens and underscores joined by /, at most 200 characters
+    requires: is_usable_doc_path(path)
+    requires: not is_shown_path(path)   -- black box: path starts with shown/   -- black box: lower case names of letters, digits, dots, hyphens and underscores joined by /, at most 200 characters
     requires: content != ""
     requires: content.length <= config.max_doc_length
     requires: not exists Doc{path: path}
@@ -2984,6 +3052,7 @@ rule PutDoc {
     let doc = Doc{path: path}
 
     requires: exists doc
+    requires: not is_shown_path(path)
     requires: content != ""
     requires: content.length <= config.max_doc_length
     requires: not doc_clash(path)
@@ -3485,6 +3554,8 @@ surface Inbound {
         JournalWriteRequested(caller, owner, text)
         DocPutRequested(caller, path, content)
         DocRemoveRequested(caller, doc)
+        DisplayShown(caller, ref, title, body, sources, call)
+            when caller.kind = role
         ToolCallRequested(caller, tool, arguments)
             when caller.kind = role
         HoldResolveRequested(caller, hold, verdict: HoldVerdict, reason?, end?)
@@ -3568,6 +3639,7 @@ surface HarnessBoundary {
 surface ConversationBoundary {
     provides:
         PermissionRequested(wake, call, tool, input_sha256, approvals)
+        PaneTrustRequested(conversation, path, version, sha256)
 
     @guidance
         -- relay acp sees the agent's session/request_permission go by.

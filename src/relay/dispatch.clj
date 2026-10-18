@@ -14,12 +14,13 @@
             [relay.config :as config]
             [relay.core :as core]
             [relay.harness :as harness]
-            [relay.harness.agentloop]
+            [relay.harness.agentloop :as agentloop]
             [relay.inbound :as inbound]
             [relay.prompt :as prompt]
             [relay.render :as render]
             [relay.reports :as reports]
-            [relay.tools :as tools])
+            [relay.tools :as tools]
+            [relay.workspace :as workspace])
   (:import (java.time Duration Instant)))
 
 ;; --- whether a wake's process is still there
@@ -203,6 +204,8 @@
      :quarantine (when-not (:script? script) (config/quarantine-tools config role))
      ;; The MCP servers the role's granted tools come from, and no others.
      :mcp-servers (config/mcp-servers-for config (map :name manifest))
+     ;; Where the role's displays are kept, by the day the wake started.
+     :display-ref-prefix (core/shown-ref-prefix (not-before (:now inputs) (:last-at state)) (config/zone config))
      :resolve (vec (for [{:keys [call status reason input-sha256]} holds]
                      (cond-> {:call_id call :verdict (if (= :allowed status) "allow" "deny")}
                        (not (str/blank? reason)) (assoc :reason reason)
@@ -274,11 +277,37 @@
   "The :wake/end args for a harness's report on a wake."
   [wake-id report]
   (-> (select-keys report [:outcome :exit :crashed :cut-short :session :said :resets-at :held :labels
-                           :refused :forbidden :usage :cost-usd :tools-error :pins])
+                           :refused :forbidden :usage :cost-usd :tools-error :pins :shown])
       (update :exit exit-field)
       (update :resets-at #(some-> % str))
       (assoc :wake wake-id
              :transcript (some-> (:transcript report) str))))
+
+(defn store-displays!
+  "Keeps each display in `text`, a session's entries one JSON line each,
+  as a doc under shown/, written as the role for its wake with the
+  display's labels (core :display/show). A display already kept changes
+  nothing. Returns the displays that are kept, each {:call :ref :path}.
+  One relay cannot keep is reported on stderr and passed over: the wake
+  goes on."
+  [sys role-id wake-id text]
+  (vec (for [d (agentloop/parse-displays text)
+             :let [path (core/shown-ref-path (:ref d))
+                   kept (when path
+                          (try (inbound/submit! sys {:type :display/show :actor role-id :session-wake wake-id
+                                                     :labels (:labels d)
+                                                     :args (select-keys d [:ref :title :body :sources :call])})
+                               true
+                               (catch Exception e
+                                 (binding [*out* *err*]
+                                   (println (str "relay could not keep the display " (:ref d) ": " (ex-message e))))
+                                 false)))]
+             :when kept]
+         {:call (:call d) :ref (:ref d) :path path})))
+
+(defn- transcript-text [{:keys [transcript]}]
+  (when (and transcript (fs/exists? transcript))
+    (slurp (str transcript))))
 
 (defn wake!
   "Starts a wake of a role, runs it and ends it. Returns {:result ...}:
@@ -306,7 +335,11 @@
       (let [wake-id (:seq (first (filter #(= "wake/started" (:type %)) started)))
             state (inbound/current-state sys)
             report (run-harness! sys (wake-request sys state (get-in state [:wakes wake-id])
-                                                   (wake-inputs sys)))]
+                                                   (wake-inputs sys)))
+            ;; Kept while the wake still runs, so they are written as the
+            ;; role's session, and the end of the wake can mention them.
+            shown (mapv :path (store-displays! sys role-id wake-id (transcript-text report)))
+            report (cond-> report (seq shown) (assoc :shown shown))]
         (inbound/submit! sys {:type :wake/end :actor core/dispatcher
                               :args (wake-end-args wake-id report)})
         (let [state (inbound/current-state sys)]
@@ -573,10 +606,17 @@
   relay. An agent line longer than `line-limit` is never passed on, since
   it cannot be read whole: relay refuses it if it is a permission request
   whose id it can find, and calls (on-oversized {:size :permission?
-  :refused}). A client line that long is passed on unread."
-  [{:keys [argv dir env]} {:keys [in out trace stop grace-ms approvals on-permission on-oversized line-limit]
+  :refused}). A client line that long is passed on unread.
+
+  Two more hooks serve the workspace pane. (extension line) sees each of
+  the client's lines first: a string it returns is written to the client
+  as the answer and the line goes no further; :none drops the line; nil
+  passes it on. (on-display session) is called for an agent line that
+  carries a display, before the line is passed on."
+  [{:keys [argv dir env]} {:keys [in out trace stop grace-ms approvals on-permission on-oversized line-limit
+                                  extension on-display]
                            :or {grace-ms stop-grace-ms on-permission (fn [& _]) on-oversized (fn [_])
-                                line-limit line-limit}}]
+                                line-limit line-limit extension (fn [_]) on-display (fn [_])}}]
   (let [proc (p/process (vec argv) (cond-> {:err :inherit} dir (assoc :dir (str dir)) env (assoc :env env)))
         ^Process jp (:proc proc)
         ^java.io.OutputStream agent-in (:in proc)
@@ -625,8 +665,22 @@
                                                     (not approvals) "no-approvals"
                                                     :else "client-gone"))
                                  nil)))
-                       :pass))
+                       ;; A display is kept before the client sees it, so
+                       ;; the pane can ask about it at once.
+                       (do (when-let [session (acp/display-session line)]
+                             (try (on-display session)
+                                  (catch Exception e
+                                    (binding [*out* *err*] (println "relay could not keep a display:" (ex-message e))))))
+                           :pass)))
+        to-client! (fn [^String text]
+                     (let [bs (.getBytes (str text "\n") java.nio.charset.StandardCharsets/UTF_8)]
+                       (try (locking out (write-chunk! out bs (alength bs)))
+                            (catch java.io.IOException _ nil))))
         from-client (fn [line]
+                      (if-let [answer (extension line)]
+                        ;; relay's own methods are answered here and never
+                        ;; reach the agent.
+                        (do (when (string? answer) (to-client! answer)) nil)
                       (if-let [[req answer] (some (fn [req] (when-let [a (acp/answer-of req line)] [req a]))
                                                   (vals @outstanding))]
                         (do (swap! outstanding dissoc (:id req))
@@ -640,7 +694,7 @@
                                 (swap! outstanding dissoc (:id req))
                                 (refuse! req "client-error"))
                               nil)
-                          :pass)))
+                          :pass))))
         to-agent (spawn (fn []
                           ;; Line by line, so a refusal relay writes to the agent
                           ;; never lands inside one of the client's messages.
@@ -706,6 +760,52 @@
       (catch Exception e
         (binding [*out* *err*] (println "relay could not record a dropped line:" (ex-message e)))))))
 
+(def ^:private session-id-pattern
+  #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+(defn- keep-session-displays!
+  "Keeps the displays in one of the conversation's session files, and
+  records them in `conv`. The id comes from agentloop's own traffic, and
+  only an id agentloop could have made names a file."
+  [sys {:keys [role session-dir wake-id]} conv session]
+  (when (and (string? session) (re-matches session-id-pattern session))
+    (let [file (fs/path session-dir (str session ".jsonl"))]
+      (when (fs/exists? file)
+        (swap! conv workspace/shown session (store-displays! sys (:id role) wake-id (slurp (str file))))))))
+
+(def ^:dynamic *resolve-ref*
+  "How _relay/resolve looks a ref up: (resolve state ref-string), the
+  contract of relay.refs/resolve."
+  workspace/stand-in-resolve)
+
+(defn- extension-handler
+  "Answers the workspace pane's extension methods (relay.workspace) for
+  one conversation."
+  [sys conv approvals]
+  (fn [line]
+    (when-let [{:keys [id method params]} (workspace/extension-request line)]
+      (if (nil? id)
+        :none
+        (try
+          (case method
+            "_relay/items"
+            (workspace/result-line id (workspace/items (inbound/current-state sys) @conv
+                                                       (get params "sessionId") (boolean approvals)))
+            "_relay/resolve"
+            (let [{:keys [result error]} (workspace/resolve-answer *resolve-ref* (inbound/current-state sys) params)]
+              (if error (workspace/error-line id -32602 error) (workspace/result-line id result)))
+            "_relay/trust"
+            (let [{:keys [command error]} (workspace/trust-command @conv (boolean approvals) params)]
+              (if error
+                (workspace/error-line id -32000 error)
+                (do (inbound/submit! sys command)
+                    (workspace/result-line id {"trusted" true
+                                               "labels" (vec (:labels (core/trusted-version (inbound/current-state sys)
+                                                                                            "doc" (get params "path"))))}))))
+            (workspace/error-line id -32601 (str "relay has no method " method ".")))
+          (catch Exception e
+            (workspace/error-line id -32000 (or (ex-message e) (str (class e))))))))))
+
 (defn acp!
   "Opens a conversation with a role for an ACP client on stdin and stdout,
   running the role's ACP agent behind a pass-through proxy (proxy!). relay
@@ -727,12 +827,26 @@
               (with-signals (assoc terminal-signals "TERM" #(deliver stop :terminated))
                 #(with-conversation! sys role-id
                    (fn [request]
-                     (let [{:keys [problem] :as command} (harness/acp-command request)]
+                     (let [{:keys [problem] :as command} (harness/acp-command request)
+                           conv (atom workspace/conversation)
+                           record (permission-recorder sys (:wake-id request))]
                        (when problem (throw (ex-info problem {})))
                        (let [{:keys [exit observed]}
                              (proxy! command {:in in :out out :trace trace :stop stop :approvals approvals
-                                              :on-permission (permission-recorder sys (:wake-id request))
-                                              :on-oversized (oversize-recorder sys (:wake-id request))})]
+                                              :on-permission (fn [kind req & [answer]]
+                                                               (if (= :asked kind)
+                                                                 (swap! conv workspace/asked req ((:clock sys)))
+                                                                 (swap! conv workspace/answered req (:outcome answer)))
+                                                               (apply record kind req (when answer [answer])))
+                                              :on-oversized (oversize-recorder sys (:wake-id request))
+                                              :extension (extension-handler sys conv approvals)
+                                              :on-display (fn [session] (keep-session-displays! sys request conv session))})]
+                         ;; Whatever a display line missed is kept now,
+                         ;; while the conversation still holds the role.
+                         (doseq [session (:sessions observed)]
+                           (try (keep-session-displays! sys request conv session)
+                                (catch Exception e
+                                  (binding [*out* *err*] (println "relay could not keep a display:" (ex-message e))))))
                          (acp/report observed exit))))))]
           (if (integer? exit) exit 1))
         (catch Exception e

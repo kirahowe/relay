@@ -688,19 +688,43 @@
         (if (= 1 (count vs)) (first vs) ::bad)))
     (catch Exception _ ::bad)))
 
+(defn parse-display
+  "A display as an envelope tool gives it: exactly {title, body, labels}
+  and optionally sources, a list of exactly {title, ref}, with labels
+  relay knows and refs of one line. Returns {:title :body :labels
+  :sources}, or ::bad. agentloop checks it again, with its bounds."
+  [d]
+  (let [source? (fn [x] (and (map? x) (= #{"title" "ref"} (set (keys x)))
+                             (string? (get x "title")) (not (str/blank? (get x "title")))
+                             (string? (get x "ref")) (not (str/blank? (get x "ref")))
+                             (not (re-find #"[\n\r]" (get x "ref")))))]
+    (if (and (map? d)
+             (every? #{"title" "body" "labels" "sources"} (keys d))
+             (string? (get d "title")) (not (str/blank? (get d "title")))
+             (string? (get d "body"))
+             (sequential? (get d "labels")) (every? core/label-names (get d "labels"))
+             (or (not (contains? d "sources")) (and (sequential? (get d "sources")) (every? source? (get d "sources")))))
+      {:title (get d "title") :body (get d "body") :labels (core/union (get d "labels"))
+       :sources (mapv (fn [x] {:title (get x "title") :ref (get x "ref")}) (get d "sources"))}
+      ::bad)))
+
 (defn parse-result
   "An envelope tool's stdout: exactly {content, labels} and optionally
-  is_error, keys in exactly that case, labels relay knows. Returns {:content
-  :is-error :labels} or nil."
+  is_error and display (parse-display), keys in exactly that case, labels
+  relay knows. Returns {:content :is-error :labels} with :display when it
+  gave one, or nil."
   [out]
-  (let [v (strict-json-value out)]
+  (let [v (strict-json-value out)
+        display (when (and (map? v) (contains? v "display")) (parse-display (get v "display")))]
     (when (and (map? v)
-               (every? #{"content" "is_error" "labels"} (keys v))
+               (every? #{"content" "is_error" "labels" "display"} (keys v))
                (string? (get v "content"))
                (or (not (contains? v "is_error")) (boolean? (get v "is_error")))
                (sequential? (get v "labels"))
-               (every? core/label-names (get v "labels")))
-      {:content (get v "content") :is-error (true? (get v "is_error")) :labels (core/union (get v "labels"))})))
+               (every? core/label-names (get v "labels"))
+               (not= ::bad display))
+      (cond-> {:content (get v "content") :is-error (true? (get v "is_error")) :labels (core/union (get v "labels"))}
+        display (assoc :display display)))))
 
 (def default-timeout-seconds
   "How long an external tool may run when relay.edn gives it no
@@ -832,7 +856,11 @@
           (not (zero? exit)) (failed (str "exited " exit) out err)
           (nil? parsed) (failed "did not print exactly one result envelope" out err)
           (:is-error parsed) (throw (ex-info (:content parsed) {:relay/labels (core/union static (:labels parsed))}))
-          :else (labelled (:content parsed) static (:labels parsed)))))))
+          ;; A display carries at least the tool's own labels and the
+          ;; result's, as anything from the tool does.
+          :else (cond-> (labelled (:content parsed) static (:labels parsed))
+                  (:display parsed) (assoc :display (update (:display parsed) :labels core/union
+                                                            static (:labels parsed)))))))))
 
 (def verifier-output-limit
   "The most a verifier may print, in bytes. Twenty pages' worth of check
@@ -1031,7 +1059,8 @@
   "A tool's text and labels from what its function returned."
   [r]
   (if (map? r)
-    {:ok (:content r) :labels (core/union (:labels r))}
+    (cond-> {:ok (:content r) :labels (core/union (:labels r))}
+      (:display r) (assoc :display (:display r)))
     {:ok r :labels []}))
 
 (defn read-ctx
@@ -1083,7 +1112,12 @@
              (catch Exception e
                (binding [*out* *err*] (println "relay could not record a refused result:" (ex-message e)))))
         {:error refused-result :labels []})
-    result))
+    ;; agentloop drops a display a public role's session may not hold;
+    ;; relay does not pass one on either.
+    (if (and (:display result) (core/private? (get-in result [:display :labels]))
+             (core/public-caller? (inbound/current-state sys) (:config sys) role-id *wake*))
+      (dissoc result :display)
+      result)))
 
 (defn call!
   "Runs one tool call for a role, made by a session holding `labels`, and
@@ -1187,6 +1221,11 @@
              :call-id (get env "call_id")})))
 
 (defn envelope
-  "The result as a harness reads it."
-  [{:keys [ok error labels]}]
-  (json/generate-string {:content (or ok error) :is_error (some? error) :labels (core/union labels)}))
+  "The result as a harness reads it, with the tool's display, if it gave
+  one, for agentloop to keep apart from the model."
+  [{:keys [ok error labels display]}]
+  (json/generate-string (cond-> {:content (or ok error) :is_error (some? error) :labels (core/union labels)}
+                          (and display (nil? error))
+                          (assoc :display {:title (:title display) :body (:body display)
+                                           :labels (core/union (:labels display))
+                                           :sources (vec (:sources display))}))))

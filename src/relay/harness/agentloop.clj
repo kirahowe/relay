@@ -268,6 +268,33 @@
           (report "ran" :crashed true))
         (report "ran" :crashed true)))))
 
+;; --- displays
+
+(defn parse-displays
+  "The displays in a session's entries, one JSON line each (a run's
+  transcript or a session file), in order: {:call :ref :title :body
+  :labels :sources} from every tool_result entry with a display that has
+  a ref. Lines that are not such an entry, and displays without the shape
+  agentloop gives them, are passed over."
+  [text]
+  (vec (for [line (str/split-lines (str text))
+             :when (and (str/includes? line "\"display\"") (str/includes? line "\"tool_result\""))
+             :let [e (try (json/parse-string line) (catch Exception _ nil))
+                   r (when (and (map? e) (= "tool_result" (get e "type"))) (get e "tool_result"))
+                   d (when (map? r) (get r "display"))
+                   call (when (map? r) (get-in r ["result" "call_id"]))
+                   labels (when (map? d) (get d "labels"))
+                   sources (when (map? d) (get d "sources"))]
+             :when (and (map? d) (string? call)
+                        (string? (get d "ref")) (string? (get d "title")) (string? (get d "body"))
+                        (sequential? labels) (every? #{"private" "contaminated"} labels)
+                        (or (nil? sources)
+                            (and (sequential? sources)
+                                 (every? #(and (map? %) (string? (get % "title")) (string? (get % "ref"))) sources))))]
+         {:call call :ref (get d "ref") :title (get d "title") :body (get d "body")
+          :labels (vec (sort (distinct labels)))
+          :sources (mapv (fn [x] {:title (get x "title") :ref (get x "ref")}) sources)})))
+
 ;; --- running
 
 (def ^:private no-key
@@ -302,7 +329,7 @@
 
 (defn- base-request
   "What every agentloop request holds, whatever the mode."
-  [{:keys [harness model system-prompt tools tool-command policy quarantine mcp-servers]} work]
+  [{:keys [harness model system-prompt tools tool-command policy quarantine mcp-servers display-ref-prefix]} work]
   (let [{:keys [provider effort base-url retry limits tool-timeout-seconds api-key-command]} harness
         limit-keys {:max-turns :max_turns :max-tool-calls :max_tool_calls :max-tokens :max_tokens}
         retry-keys {:retries :retries :backoff-seconds :backoff_seconds
@@ -326,6 +353,9 @@
              ;; MCP one included, gets the harness's timeout.
              :tool_timeout_seconds (or tool-timeout-seconds default-tool-timeout-seconds)}
       (seq mcp-servers) (assoc :mcp_servers (request-mcp-servers mcp-servers))
+      ;; Where agentloop says a display is kept: relay stores each one
+      ;; under that ref (parse-displays), and the model is told it.
+      display-ref-prefix (assoc :display_ref_prefix display-ref-prefix)
       base-url (assoc :base_url base-url)
       (seq limits) (assoc :limits (into {} (keep (fn [[k v]] (when-let [k2 (limit-keys k)] [k2 v])) limits)))
       (seq retry) (assoc :retry (into {} (keep (fn [[k v]] (when-let [k2 (retry-keys k)] [k2 v])) retry)))

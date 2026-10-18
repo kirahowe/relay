@@ -1146,7 +1146,8 @@
                                         more))))))
 
 (defmethod evolve* "doc/put" [state {:keys [data] :as event}]
-  (add-doc-version state event (:path data) {:content (:content data)}))
+  (add-doc-version state event (:path data) (cond-> {:content (:content data)}
+                                              (:shown data) (assoc :shown (:shown data)))))
 
 (defmethod evolve* "doc/removed" [state {:keys [data] :as event}]
   (add-doc-version state event (:path data) {:removed true}))
@@ -1275,7 +1276,7 @@
                  copied)]
     (escalate tx (last-id tx))))
 
-(declare public-actor?)
+(declare public-actor? shown-path?)
 
 (defn- authorize-registry!
   "Refuses a registry change from anyone but the operator or a role granted
@@ -1944,9 +1945,24 @@
                           " doubles each time; `relay wake " role "` tries at once.")))
               :role role :labels (:said-labels tx)))))
 
+(defn- tell-shown
+  "Tells the operator what a wake showed them, by path only: a display's
+  title and body are its tool's text. A conversation's operator saw them
+  as they came, so they are not told again."
+  [tx wake shown]
+  (let [paths (when (sequential? shown) (vec (distinct (filter #(and (string? %) (shown-path? %)) shown))))]
+    (if (or (empty? paths) (:chat wake))
+      tx
+      (notify tx "shown" (str (:role wake) " showed you " (count paths) (if (= 1 (count paths)) " thing" " things"))
+              (str "While it worked, " (:role wake) " showed you what it found. Read "
+                   (if (= 1 (count paths)) "it" "them") " with relay doc:\n\n"
+                   (str/join "\n" (map #(str "relay doc " %) paths))
+                   "\n\nOr trust one you have read with relay trust doc <path>.")
+              :role (:role wake)))))
+
 (defn- end-wake [{:keys [state config] :as tx} wake-id {:keys [outcome exit crashed cut-short session sessions said
                                                               transcript resets-at held labels usage cost-usd
-                                                              tools-error pins]
+                                                              tools-error pins shown]
                                                        :as report}]
   (let [wake (get-in state [:wakes wake-id])
         tools-error (when (and (= "needs-attention" outcome) (not (:chat wake)))
@@ -1994,6 +2010,7 @@
       ;; resumed once they decide.
       (if (and (= "ran" outcome) (empty? held)) (settle-memos tx wake said) tx)
       (tell-refusals tx wake report)
+      (tell-shown tx wake shown)
       ;; Only a cost can move the week's total.
       (if (wake-cost cost-usd) (warn-of-spend tx) tx)
       (dissoc tx :said-labels)))))
@@ -2111,7 +2128,7 @@
                    (.getBytes (str s) java.nio.charset.StandardCharsets/UTF_8))]
     (apply str (map #(format "%02x" (bit-and % 0xff)) d))))
 
-(defmethod decide* :label/trust [{:keys [state] :as tx} {{:keys [kind ref version] digest :sha256} :args}]
+(defmethod decide* :label/trust [{:keys [state] :as tx} {{:keys [kind ref version via] digest :sha256} :args}]
   ;; The operator has read it and vouches for it. That clears
   ;; contaminated from what it says now, and never private.
   (operator-only! tx "vouches for contaminated text")
@@ -2125,7 +2142,9 @@
     ;; if it changed since, nothing is trusted.
     (when-not (and (= version (:version v)) (= digest (sha256 (:text v))))
       (reject! :conflict (str "The " kind " " ref " changed since you read it. Nothing was trusted; look again.")))
-    (emit tx "label/trusted" {:kind kind :ref (str ref) :version version})))
+    (emit tx "label/trusted" (cond-> {:kind kind :ref (str ref) :version version}
+                               ;; Trusted from the workspace pane in relay chat.
+                               (= "chat" via) (assoc :via "chat")))))
 
 ;; permission requests in a conversation
 ;;
@@ -2719,6 +2738,12 @@
 (defmethod decide* :doc/put [{:keys [state] :as tx} {{:keys [path content]} :args}]
   (let [path (doc-path path)
         _ (own-skills-only! tx path)]
+    ;; Only what the operator was shown goes under shown/, so a doc there
+    ;; is always what relay stored, never a role's own text passed off as
+    ;; something the operator saw.
+    (when (shown-path? path)
+      (reject! :invalid (str "Docs under shown/ are what you were shown. Nobody writes there; choose"
+                             " another path.")))
     (when (blank? content) (reject! "A doc's content must not be empty. To remove a doc, remove it."))
     (when (> (count content) 500000) (reject! "A doc is at most 500000 characters."))
     (when-let [clash (first (filter #(or (str/starts-with? (:path %) (str path "/"))
@@ -2754,13 +2779,100 @@
         tx
         (emit tx "doc/put" {:path path :content content})))))
 
-(defmethod decide* :doc/remove [{:keys [state] :as tx} {{:keys [path]} :args}]
+(defmethod decide* :doc/remove [{:keys [state actor] :as tx} {{:keys [path]} :args}]
   (let [path (doc-path path)
         _ (own-skills-only! tx path)
         v (doc-version state path {})]
+    ;; What the operator was shown stays where the workspace pane and the
+    ;; notification said it is.
+    (when (and (shown-path? path) (not= operator actor))
+      (reject! :invalid "Docs under shown/ are what the operator was shown, and stay there."))
     (when (or (nil? v) (:removed v) (and (public-actor? tx) (not (doc-shown-to-public? state path v))))
       (reject! :not-found (str "There is no doc at " path ".")))
     (emit tx "doc/removed" {:path path})))
+
+;; what the operator was shown
+;;
+;; A tool result may carry a display: a title, a body and sources that the
+;; operator is shown and the model never reads (agentloop keeps it apart).
+;; relay keeps each one as a doc at shown/<date>/<call>.md, written as the
+;; role whose session made it, with the display's labels, after a wake or
+;; as a conversation goes. The model is told the ref, [[shown:<date>/<call>]],
+;; and nothing else.
+
+(def ^:private shown-ref-pattern #"shown:(\d{4}-\d{2}-\d{2})/([a-z0-9][a-z0-9_-]{0,99})")
+
+(defn shown-path?
+  "Whether a doc path is under shown/."
+  [path]
+  (str/starts-with? (str path) "shown/"))
+
+(defn shown-ref-path
+  "The doc path for a display's ref, shown:<yyyy-mm-dd>/<id>, or nil when
+  the ref is not one."
+  [ref]
+  (when-let [[_ date id] (and (string? ref) (re-matches shown-ref-pattern ref))]
+    (str "shown/" date "/" id ".md")))
+
+(defn shown-ref-prefix
+  "The display_ref_prefix for a wake that starts at `now`: shown: and the
+  date in the operator's zone, so a wake's displays sit under its day."
+  [^Instant now ^java.time.ZoneId zone]
+  (str "shown:" (java.time.LocalDate/ofInstant now zone) "/"))
+
+(defn- ref-id
+  "A ref's id written so it can sit between [[kind: and ]]: [, ] and a
+  line break become %5B, %5D and %0A, and a % that would read as one of
+  those escapes becomes %25, as relay.refs writes them."
+  [s]
+  (-> (str s)
+      (str/replace #"%(?=25|5B|5D|0A)" "%25")
+      (str/replace "[" "%5B")
+      (str/replace "]" "%5D")
+      (str/replace "\n" "%0A")))
+
+(defn- source-ref
+  "A display source's ref, kind:id, as [[kind:id]] with its id escaped."
+  [r]
+  (let [[_ kind id] (re-matches #"(?s)([a-z]+):(.*)" (str r))]
+    (if kind (str "[[" kind ":" (ref-id id) "]]") (str "[[" (ref-id r) "]]"))))
+
+(defn shown-doc-text
+  "The text of a shown doc: the title as a heading, the body, and the
+  sources as a list of refs. This is what trusting it vouches for."
+  [{:keys [title body sources]}]
+  (str "# " (str/replace (str/trim (str title)) #"\s+" " ") "\n\n"
+       (str/trim (str body))
+       (when (seq sources)
+         (str "\n\n## Sources\n\n"
+              (str/join "\n" (for [{t :title r :ref} sources]
+                               (str "- " (str/replace (str/trim (str t)) #"\s+" " ") " " (source-ref r))))))
+       "\n"))
+
+(defn- display-source? [x]
+  (and (map? x) (string? (:title x)) (not (blank? (:title x)))
+       (string? (:ref x)) (not (blank? (:ref x))) (not (re-find #"[\n\r]" (:ref x)))))
+
+(defmethod decide* :display/show [{:keys [state] :as tx} {{:keys [ref title body sources call]} :args}]
+  ;; Written as the role whose session made it, carrying the display's
+  ;; labels, like anything the role writes.
+  (caller-role! tx)
+  (let [path (or (shown-ref-path ref) (reject! :invalid (str "A display's ref is shown:<date>/<id>, not " (pr-str ref) ".")))]
+    (when (or (blank? title) (not (string? body)))
+      (reject! :invalid "A display has a title and a body."))
+    (when-not (and (sequential? sources) (every? display-source? sources))
+      (reject! :invalid "A display's sources are a list of titles and refs."))
+    (let [content (shown-doc-text {:title title :body body :sources sources})
+          latest (doc-version state path {})]
+      (cond
+        ;; The same display stored again changes nothing.
+        (and latest (not (:removed latest)) (= content (:content latest))) tx
+        ;; Another display at its path is never overwritten.
+        latest (reject! :conflict (str path " holds another display."))
+        (> (count content) 500000) (reject! :invalid "A display is at most 500000 characters.")
+        :else (emit tx "doc/put" {:path path :content content
+                                  :shown {:call (str call) :title (str/trim title)
+                                          :sources (mapv #(select-keys % [:title :ref]) sources)}})))))
 
 ;; research reports
 ;;

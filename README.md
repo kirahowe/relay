@@ -325,7 +325,24 @@ passes the request through.
 `relay approve`, `deny`, `fresh`, `release`, `declassify` and `trust` print what
 they are about on the terminal (`/dev/tty`, never stdin) and ask for a
 four-character code to be typed back there, so no harness or pipe can
-answer for the operator.
+answer for the operator. Trusting from the workspace pane in `relay chat`
+is the one other way to trust (see relay chat).
+
+#### What you are shown
+
+A tool's result can carry a display: a title, a Markdown body and
+sources, for you alone. agentloop keeps it out of the model's context,
+and the role is told only its ref, such as
+`[[shown:2026-10-18/toolu_01abc]]`. relay keeps each display as a doc at
+`shown/<date>/<call>.md`, written as the role, with the display's labels
+and its session's, so a display drawn from a web page is contaminated.
+Nobody writes under `shown/` any other way. A wake that showed you
+something tells you the paths in a notification, never the text. Read
+one with `relay doc <path>`, and once you have read it, `relay trust doc
+<path>` lets roles read it without becoming contaminated. An envelope
+tool gives a display as a `display` field beside `content`, with
+`title`, `body`, `labels` and optional `sources`, each a `title` and a
+`ref`.
 
 #### Public roles
 
@@ -451,6 +468,12 @@ the hub looks things up with closed answers and stays clean. A closed
 answer cites its pages by number. The tool is in the hub's `:tools`
 too, so the hub could call it directly; its instructions say not to,
 since the pages would contaminate it.
+
+A call may also set `show_operator: true`. The reader then also writes a
+fuller answer in its own words, with links, that only you are shown (see
+What you are shown). The role still gets only the answer in its schema,
+and a note that you were shown more, so a closed answer leaves it clean.
+What you are shown keeps every label of what the reader read.
 
 ### Research roles and reports
 
@@ -790,6 +813,16 @@ before `--`:
 The client gets `--` and then the agent command as its last arguments. If
 relay cannot find the client, it says so on stderr and exits 1.
 
+acp-tui has a workspace pane. It lists, newest first, what the role
+showed you, the calls it wants to make with relay's preview of each, and
+the sources the latest answer cites, each checked with relay and marked
+when it does not exist. Everything in the pane comes from relay, never
+from the model's text, and anything contaminated is marked untrusted.
+You approve or deny a call as before. Trusting a shown item from the
+pane does what `relay trust doc <path>` does, for the text the pane
+showed you; it needs `relay chat`, as approvals do. acp-tui's README has
+the keys.
+
 Give `:chat-client` an absolute path, and likewise `:bin` in the harness
 settings for agentloop. A bare name is looked up on PATH, so whatever
 comes first on PATH would run as your chat client, see your
@@ -835,7 +868,22 @@ back only if it picks an option the agent offered, or cancels; anything
 else, and a request still open when the client goes away, is a refusal.
 Without `--approvals` (an editor, say), relay refuses the call itself and
 notifies the operator. Each request and its answer are recorded in the
-log with the role, session, tool and a digest of the input. A message from
+log with the role, session, tool and a digest of the input.
+
+relay acp also answers three ACP extension methods of its own, which
+never reach agentloop. `_relay/items` lists a session's shown docs and
+the permission requests relay passed on, with their previews.
+`_relay/resolve` looks up a `[[kind:id]]` ref. `_relay/trust` trusts a
+shown doc. relay takes `_relay/trust` only with `--approvals`, for the
+reason it passes permission requests on only then: the client is your
+terminal. It takes it only for a doc this conversation showed, and only
+for the version and digest it listed, so a doc that changed since is
+not trusted. Without `--approvals` the client is given the `relay trust
+doc` command to run instead. The log records that a trust came from the
+chat. relay keeps each display as the conversation goes, before the
+client sees it.
+
+A message from
 the agent too long for relay to read whole (over 8 MB) never reaches the
 client: relay refuses it if it is a permission request whose id it can
 find, drops it either way, records that, and tells the operator.
