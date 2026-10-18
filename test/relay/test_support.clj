@@ -24,6 +24,13 @@
       (throw (ex-info (str "No agentloop binary at " p ".") {})))
     (alter-var-root #'agentloop-bin (constantly (str (fs/normalize p))))))
 
+(defn use-agentloop-from-env!
+  "use-agentloop! for the path in RELAY_TEST_AGENTLOOP, when it is set. This is
+  how `bb test --agentloop <path>` reaches each volley worker."
+  []
+  (when-let [path (System/getenv "RELAY_TEST_AGENTLOOP")]
+    (use-agentloop! path)))
+
 (defn isolate!
   "Points relay away from anything real for the rest of the run: the
   per-user config file and the pause file at paths that do not exist, and the relay command
