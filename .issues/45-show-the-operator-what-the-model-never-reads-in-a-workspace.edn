@@ -1,0 +1,11 @@
+{:id 45
+ :title "Show the operator what the model never reads, in a workspace pane"
+ :status :inbox
+ :type :feature
+ :priority :p1
+ :created "2026-10-18"
+ :updated "2026-10-18"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "45-show-the-operator-what-the-model-never-reads-in-a-workspace.md"}

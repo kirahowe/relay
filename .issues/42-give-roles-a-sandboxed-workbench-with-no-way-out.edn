@@ -1,0 +1,11 @@
+{:id 42
+ :title "Give roles a sandboxed workbench with no way out"
+ :status :inbox
+ :type :feature
+ :priority :p1
+ :created "2026-10-18"
+ :updated "2026-10-18"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "42-give-roles-a-sandboxed-workbench-with-no-way-out.md"}

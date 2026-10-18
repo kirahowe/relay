@@ -3,6 +3,18 @@
 
 ## Open
 
+### Inbox
+
+| ID | Title | Type | Priority |
+| --- | --- | --- | --- |
+| [40](40-hold-act-calls-for-consent-and-stop-holding-house-changes.md) | Hold act calls for consent and stop holding house changes | feature | P1 |
+| [41](41-speak-in-the-operator-s-terms-cite-sources-and-keep-skills.md) | Speak in the operator's terms, cite sources and keep skills | feature | P1 |
+| [42](42-give-roles-a-sandboxed-workbench-with-no-way-out.md) | Give roles a sandboxed workbench with no way out | feature | P1 |
+| [43](43-connect-remote-mcp-servers-behind-relay-s-layer.md) | Connect remote MCP servers behind relay's layer | feature | P1 |
+| [44](44-let-the-hub-read-the-web-through-closed-answers.md) | Let the hub read the web through closed answers | feature | P1 |
+| [45](45-show-the-operator-what-the-model-never-reads-in-a-workspace.md) | Show the operator what the model never reads, in a workspace pane | feature | P1 |
+| [46](46-codify-verification-in-bb-verify-with-new-evals-and-pentests.md) | Codify verification in bb verify, with new evals and pentests | chore | P1 |
+
 ### Ready
 
 | ID | Title | Type | Priority |
