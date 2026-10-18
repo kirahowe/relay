@@ -1,0 +1,11 @@
+{:id 37
+ :title "Let the hub see which role owns what"
+ :status :ready
+ :type :bug
+ :priority :p2
+ :created "2026-10-18"
+ :updated "2026-10-18"
+ :tags #{"evals" "prompt"}
+ :blocked-by #{}
+ :related #{}
+ :details "37-let-the-hub-see-which-role-owns-what.md"}

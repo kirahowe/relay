@@ -10,7 +10,10 @@
 | [2](2-trust-the-legacy-contaminated-items.md) | Trust the legacy contaminated items | chore | P2 |
 | [34](34-give-the-quarantined-reader-a-read-only-fetch-that-takes-no.md) | Give the quarantined reader a read-only fetch that takes no free URLs | feature | P2 |
 | [35](35-make-the-test-suites-fast-enough-to-deploy-without-waiting.md) | Make the test suites fast enough to deploy without waiting | chore | P2 |
+| [37](37-let-the-hub-see-which-role-owns-what.md) | Let the hub see which role owns what | bug | P2 |
+| [38](38-stop-the-hub-notifying-twice-for-one-stuck-memo.md) | Stop the hub notifying twice for one stuck memo | bug | P2 |
 | [36](36-clean-up-after-an-interrupted-deploy-and-leave-no-check.md) | Clean up after an interrupted deploy, and leave no check dirs in TMPDIR | bug | P3 |
+| [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
 
 ### Review
 

@@ -1,0 +1,11 @@
+{:id 38
+ :title "Stop the hub notifying twice for one stuck memo"
+ :status :ready
+ :type :bug
+ :priority :p2
+ :created "2026-10-18"
+ :updated "2026-10-18"
+ :tags #{"evals" "notifications"}
+ :blocked-by #{}
+ :related #{}
+ :details "38-stop-the-hub-notifying-twice-for-one-stuck-memo.md"}

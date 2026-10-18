@@ -1,0 +1,11 @@
+{:id 39
+ :title "Block a memo a role could not do instead of closing it"
+ :status :ready
+ :type :bug
+ :priority :p3
+ :created "2026-10-18"
+ :updated "2026-10-18"
+ :tags #{"evals" "prompt"}
+ :blocked-by #{}
+ :related #{}
+ :details "39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md"}
