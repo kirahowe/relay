@@ -781,10 +781,19 @@ find, drops it either way, records that, and tells the operator.
 ## Development
 
 ```sh
-bb test          # every test; pass namespaces to run only those
+bb test          # every test, in parallel, with volley (tests.edn); pass namespaces to run only those
 bb soak 5000     # the model-based property, many more times
 bb tck           # the ACP conformance kit against relay acp (needs Go, uv and ../agentloop)
 ```
+
+`bb test` runs [volley](https://clojars.org/com.kirahowe/volley), which reads
+`tests.edn` and Kaocha's flags. A bare namespace name runs only that namespace
+(`bb test relay.deploy-test`), `--skip` and `--workers N` work as in volley,
+and `--agentloop <path>` runs the tests against that agentloop build. Each
+volley worker is its own process, so `tests.edn` lists
+`relay.test-support/isolate!` as worker setup; that keeps every worker away
+from the operator's real relay config. `.volley/` holds volley's timings and
+is not committed.
 
 The tests never call the real API. The agentloop tests run the real binary against a
 mock Anthropic server in `test/relay/mock_anthropic.clj`.

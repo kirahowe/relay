@@ -3,8 +3,9 @@
  :tasks
  {tck {:doc "Run the ACP conformance kit against relay acp (needs Go, uv and ../agentloop)."
        :task (shell "scripts/tck.sh")}
-  test {:doc "Run the tests. Pass namespace names to run only those, and --agentloop <path> to use that agentloop build."
+  test {:doc "Run the tests with volley (tests.edn). Pass namespace names to run only those, other volley flags (--workers, --skip, ...), and --agentloop <path> to use that agentloop build."
         :extra-paths ["test"]
+        :extra-deps {com.kirahowe/volley {:mvn/version "0.1.0-alpha.1"}}
         :requires ([relay.test-runner :as runner])
         :task (runner/run! *command-line-args*)}
   pentest {:doc "Attack relay, agentloop, acp-tui and cleanroom together on artificial data: bb pentest --help"
