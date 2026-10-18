@@ -119,6 +119,16 @@
             w (-> w (run "clerk" :journal/write {:text "Started on it."})
                   (run "dispatcher" :wake/end {:wake wake-id :outcome "ran" :cut-short true}))]
         (is (= ["Started on it."] (map :text (core/journal (:state w) "clerk" nil))))))
+    (testing "even when the operator wrote in the role's journal during that wake"
+      (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "s" :body "b"})
+                  (run "dispatcher" :wake/start {:role "clerk"}))
+            wake-id (:id (core/running-wake (:state w) "clerk"))
+            w (-> w (run "operator" :journal/write {:owner "clerk" :text "Note from Kira."})
+                  (run "dispatcher" :wake/end {:wake wake-id :outcome "ran" :cut-short true}))
+            texts (map :text (core/journal (:state w) "clerk" nil))]
+        (is (= 2 (count texts)))
+        (is (= "Note from Kira." (first texts)))
+        (is (str/includes? (second texts) "cut short at its deadline"))))
     (testing "nor when the wake was not cut short"
       (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "s" :body "b"}))
             w (wake w "clerk" {:outcome "ran" :dispatched true})]

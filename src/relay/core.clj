@@ -1104,9 +1104,9 @@
 (defmethod evolve* "note/removed" [state {:keys [data]}]
   (update-in state [:notes (:owner data)] dissoc (:name data)))
 
-(defmethod evolve* "journal/written" [state {:keys [seq at data labels public]}]
+(defmethod evolve* "journal/written" [state {:keys [seq at actor data labels public]}]
   (update-in state [:journals (:owner data)] (fnil conj [])
-             {:id seq :owner (:owner data) :text (:text data) :at (inst at) :labels (union labels)
+             {:id seq :owner (:owner data) :actor actor :text (:text data) :at (inst at) :labels (union labels)
               :public (true? public)}))
 
 (defn- add-doc-version [state {:keys [seq at actor labels public]} path more]
@@ -1795,6 +1795,12 @@
                 :week (str week) :percent percent)))
     tx))
 
+(defn role-wrote-in-wake?
+  "True when `role` itself wrote one of `entries` after `wake` started. An
+  entry the operator or relay wrote in the role's journal does not count."
+  [entries wake role]
+  (boolean (some #(and (> (:id %) (:id wake)) (= role (:actor %))) entries)))
+
 (defn- journal-cut-short
   "Writes a journal entry for a role whose wake was cut short at its
   deadline before it wrote one, so its next wake knows: when, and which
@@ -1804,7 +1810,7 @@
   [{:keys [state config now] :as tx} wake]
   (let [role (:role wake)
         ms (keep #(memo state %) (:memos wake))
-        wrote? (some #(> (:id %) (:id wake)) (journal state role nil))]
+        wrote? (role-wrote-in-wake? (journal state role nil) wake role)]
     (if (or (:chat wake) wrote?)
       tx
       (let [copied (apply union (map #(carried-memo-labels state %) ms))

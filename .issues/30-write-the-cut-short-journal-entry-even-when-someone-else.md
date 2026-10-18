@@ -22,3 +22,5 @@ Count only entries the role itself wrote in that wake. That needs the
 writer (event actor) kept on journal entries, or a check of the log.
 
 ## Log
+- Judgment call: kept the event actor on journal entries (`:actor` in the evolved entry) rather than checking the log, so the decision stays a pure function of state (`role-wrote-in-wake?`). The role's own id is the actor when it writes through the journal tool. Reason: the log check would put IO in the core.
+- Test: an operator journal write during the wake no longer suppresses relay's entry; confirmed it fails with the old rule.
