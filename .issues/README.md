@@ -10,7 +10,6 @@
 | [40](40-hold-act-calls-for-consent-and-stop-holding-house-changes.md) | Hold act calls for consent and stop holding house changes | feature | P1 |
 | [42](42-give-roles-a-sandboxed-workbench-with-no-way-out.md) | Give roles a sandboxed workbench with no way out | feature | P1 |
 | [43](43-connect-remote-mcp-servers-behind-relay-s-layer.md) | Connect remote MCP servers behind relay's layer | feature | P1 |
-| [44](44-let-the-hub-read-the-web-through-closed-answers.md) | Let the hub read the web through closed answers | feature | P1 |
 | [45](45-show-the-operator-what-the-model-never-reads-in-a-workspace.md) | Show the operator what the model never reads, in a workspace pane | feature | P1 |
 | [46](46-codify-verification-in-bb-verify-with-new-evals-and-pentests.md) | Codify verification in bb verify, with new evals and pentests | chore | P1 |
 
@@ -18,7 +17,6 @@
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
-| [34](34-give-the-quarantined-reader-a-read-only-fetch-that-takes-no.md) | Give the quarantined reader a read-only fetch that takes no free URLs | feature | P2 |
 | [35](35-make-the-test-suites-fast-enough-to-deploy-without-waiting.md) | Make the test suites fast enough to deploy without waiting | chore | P2 |
 | [37](37-let-the-hub-see-which-role-owns-what.md) | Let the hub see which role owns what | bug | P2 |
 | [38](38-stop-the-hub-notifying-twice-for-one-stuck-memo.md) | Stop the hub notifying twice for one stuck memo | bug | P2 |
@@ -39,6 +37,7 @@
 | [13](13-review-reports-finding-by-finding.md) | Review reports finding by finding | feature | P1 |
 | [16](16-build-a-red-team-corpus-for-research-roles.md) | Build a red-team corpus for research roles | feature | P1 |
 | [41](41-speak-in-the-operator-s-terms-cite-sources-and-keep-skills.md) | Speak in the operator's terms, cite sources and keep skills | feature | P1 |
+| [44](44-let-the-hub-read-the-web-through-closed-answers.md) | Let the hub read the web through closed answers | feature | P1 |
 | [3](3-run-agentloop-s-live-smoke-tests-from-a-flag-not-an-env-var.md) | Run agentloop's live smoke tests from a flag, not an env var | chore | P2 |
 | [5](5-support-reminder-sections-in-rem.md) | Support reminder sections in rem | feature | P2 |
 | [7](7-add-bb-deploy-and-bb-rollback-for-kira-to-run.md) | Add bb deploy and bb rollback for Kira to run | feature | P2 |
@@ -78,3 +77,4 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [2](2-trust-the-legacy-contaminated-items.md) | Trust the legacy contaminated items | chore | P2 |
+| [34](34-give-the-quarantined-reader-a-read-only-fetch-that-takes-no.md) | Give the quarantined reader a read-only fetch that takes no free URLs | feature | P2 |

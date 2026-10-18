@@ -305,8 +305,8 @@
                                         {:grants {"hub" {:tools ["web-demo"] :quarantine ["web-demo"]}}})]
     (is (= {:may-add true :tools ["web-demo"] :quarantine ["web-demo"]} (get-in merged [:grants "hub"])))
     (is (config/resolve-config merged) "relay accepts what it makes"))
-  (testing "relay itself refuses the reader over a tool the role lacks or that is not :read"
-    (doseq [grant [{:quarantine ["web-demo"]} {:tools ["mail-demo"] :quarantine ["mail-demo"]}]]
+  (testing "relay itself refuses the reader over a tool the role lacks or that changes things"
+    (doseq [grant [{:quarantine ["web-demo"]} {:tools ["fail-demo"] :quarantine ["fail-demo"]}]]
       (is (thrown? clojure.lang.ExceptionInfo
                    (config/resolve-config (scenario/merge-settings (staging/settings {:data-dir "/s"})
                                                                    {:grants {"hub" grant}})))
@@ -363,6 +363,24 @@
         (is (:is_error env) bad)
         (is (nil? effect) bad)))
     (is (= ["contaminated"] (:labels (first (staging-tools/answer "web-demo" "/d" {:page "x.html"}))))))
+  (testing "web-ask-demo records the query and reads the best pages, as ask would"
+    (let [[env effect] (staging-tools/answer "web-ask-demo" "/d" {:query "Lantern agent support" :n 2})]
+      (is (= ["contaminated"] (:labels env)))
+      (is (= "/d/searches.log" (:append effect)))
+      (is (= {:query "Lantern agent support" :n 2} (:ask effect))))
+    (is (= 3 (:n (:ask (second (staging-tools/answer "web-ask-demo" "/d" {:query "q"}))))))
+    (doseq [bad [{} {:query " "} {:query "q" :n 0} {:query "q" :n 6} {:query "q" :n "2"}]]
+      (let [[env effect] (staging-tools/answer "web-ask-demo" "/d" bad)]
+        (is (:is_error env) (pr-str bad))
+        (is (nil? effect) (pr-str bad))))
+    (let [pages {"a.html" "lantern agents" "b.html" "lantern" "c.html" "nothing here" "d.html" "agent lantern support"}]
+      (is (= ["d.html" "a.html"] (map first (staging-tools/ask-pages pages "Lantern agent support" 2))))
+      (is (= ["d.html" "a.html" "b.html"] (map first (staging-tools/ask-pages pages "lantern agent support" 5))))
+      (is (empty? (staging-tools/ask-pages pages "zebra" 3))))
+    (let [out (staging-tools/render-ask "q" [["a.html" "text a"] ["b.html" "text b"]] "0123456789abcdef")]
+      (is (str/includes? out "\n=== page 2 0123456789abcdef ===\nresult_title: b.html\nresult_url: https://pages.example.org/b.html\n"))
+      (is (str/starts-with? out "2 pages for \"q\"")))
+    (is (= "No results for \"q\"." (staging-tools/render-ask "q" [] "t"))))
   (testing "mail-demo appends inside the data directory"
     (is (= "/d/outbox.log" (:append (second (staging-tools/answer "mail-demo" "/d" {:to "a@example.com" :subject "s" :body "b"}))))))
   (testing "verify-demo finds a quote only on the page the URL names, and reads nothing else"

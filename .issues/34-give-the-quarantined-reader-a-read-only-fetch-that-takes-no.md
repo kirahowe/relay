@@ -26,3 +26,13 @@ turned down.
 ## Plan
 
 ## Log
+
+- 2026-10-18: dropped as covered by relay#44. Kira's design for the
+  personal-agent epic (D8, 2026-10-18) replaces the read-classed fetch
+  with webtool's `ask`, which takes a query and no URL and fetches only
+  the top search results, under the fetch guards. It is `:egress`, and
+  the quarantined reader may now read through an egress tool, decided
+  under the caller's labels. So the intent here, a reader that reads
+  live pages without a free URL, is met, by the option this issue had
+  turned down on 2026-10-17. The pentest s15-web-ask shows a reader on a
+  hostile result page giving only a clean, closed answer.

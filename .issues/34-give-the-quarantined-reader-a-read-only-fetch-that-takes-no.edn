@@ -1,10 +1,10 @@
 {:id 34
  :title "Give the quarantined reader a read-only fetch that takes no free URLs"
- :status :ready
+ :status :dropped
  :type :feature
  :priority :p2
  :created "2026-10-17"
- :updated "2026-10-17"
+ :updated "2026-10-18"
  :tags #{}
  :blocked-by #{}
  :related #{}

@@ -1,6 +1,6 @@
 {:id 44
  :title "Let the hub read the web through closed answers"
- :status :inbox
+ :status :review
  :type :feature
  :priority :p1
  :created "2026-10-18"

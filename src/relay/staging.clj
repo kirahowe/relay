@@ -50,6 +50,16 @@
                :parameters {:type "object"
                             :properties {:page {:type "string" :description "The page's name."}}
                             :required ["page"]}}
+   "web-ask-demo" {:class :egress
+                   :labels ["contaminated"]
+                   :description (str "Search the web and read the top results, as webtool's ask does. The query goes out;"
+                                     " the pages are written by outsiders. Read it through read_quarantined with a closed schema.")
+                   :parameters {:type "object"
+                                :properties {:query {:type "string" :description "What to search for."}
+                                             :n {:type "integer" :minimum 1 :maximum 5
+                                                 :description "How many result pages to read; 3 by default."}}
+                                :required ["query"]
+                                :additionalProperties false}}
    "mail-demo" {:class :egress
                 :labels []
                 :description "Send an email."

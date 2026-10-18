@@ -9,6 +9,10 @@
                        HH:MM time in it
     web-demo <data>    read, contaminated: prints <data>/web/<page>, a page
                        copied from test/scenarios/fixtures by staging init
+    web-ask-demo <data> egress, contaminated: standing in for webtool ask,
+                       appends the query to <data>/searches.log and
+                       returns the pages in <data>/web that hold most of
+                       its words, at most n, numbered as ask numbers them
     mail-demo <data>   egress: appends the message to <data>/outbox.log
     verify-demo <data> the :verifier, standing in for webtool check: a URL
                        whose last part names a page in <data>/web is
@@ -65,6 +69,39 @@
            :quotes (vec (for [q quotes]
                           {:quote q :found (boolean (and fetched (str/includes? text (str q)))) :hidden_chars false}))}))})
 
+(defn- query-words [q]
+  (distinct (filter #(> (count %) 2) (str/split (str/lower-case (str q)) #"[^\p{L}\p{N}]+"))))
+
+(defn ask-pages
+  "The pages web-ask-demo returns for a query: of `pages`, a map of page
+  name to text, those holding at least one of the query's words of three
+  letters or more, most words first, then by name, at most n. Pure."
+  [pages query n]
+  (let [words (query-words query)
+        score (fn [text] (count (filter #(str/includes? (str/lower-case text) %) words)))]
+    (->> pages
+         (map (fn [[page text]] [page text (score text)]))
+         (filter #(pos? (nth % 2)))
+         (sort-by (fn [[page _ s]] [(- s) page]))
+         (take n)
+         (mapv (fn [[page text]] [page text])))))
+
+(defn render-ask
+  "web-ask-demo's content, in webtool ask's shape: each page starts with a
+  line holding `token`, then the result's title and URL, then the page.
+  Pure."
+  [query pages token]
+  (if (empty? pages)
+    (str "No results for \"" query "\".")
+    (str (count pages) (if (= 1 (count pages)) " page" " pages") " for \"" query "\". Each page starts with a line \"=== page N "
+         token " ===\".\n"
+         (str/join (map-indexed (fn [i [page text]]
+                                  (let [url (str "https://pages.example.org/" page)]
+                                    (str "\n=== page " (inc i) " " token " ===\n"
+                                         "result_title: " page "\nresult_url: " url "\nurl: " url "\nstatus: 200\n\n"
+                                         text "\n")))
+                                pages)))))
+
 (defn answer
   "The envelope for one call. `input` is the call's input; `dir` the data
   directory. Returns [envelope side-effect], the side effect being nil or
@@ -84,6 +121,15 @@
         [(envelope (str "No page " (pr-str page) ". Pages are named like office-page.html.")
                    :error true :labels ["contaminated"])]))
 
+    "web-ask-demo"
+    (let [{:keys [query n]} input
+          n (or n 3)]
+      (if (or (str/blank? (str query)) (not (integer? n)) (not (<= 1 n 5)))
+        [(envelope "A search needs a query, and n from 1 to 5." :error true)]
+        [(envelope nil :labels ["contaminated"])
+         {:append (str (fs/path dir "searches.log")) :line (json/generate-string {:query (str query)})
+          :ask {:query (str query) :n n}}]))
+
     "mail-demo"
     (let [{:keys [to subject body]} input]
       (if (str/blank? (str to))
@@ -101,6 +147,16 @@
   (let [call (json/parse-string (slurp *in*) true)
         [env effect] (answer tool dir (:input call))
         env (cond
+              (:ask effect) (let [_ (spit (:append effect) (str (:line effect) "\n") :append true)
+                                  web (fs/path dir "web")
+                                  pages (when (fs/directory? web)
+                                          (into {} (for [f (fs/list-dir web)
+                                                         :let [page (str (fs/file-name f))]
+                                                         :when (re-matches page-name page)]
+                                                     [page (slurp (str f))])))
+                                  {:keys [query n]} (:ask effect)
+                                  token (format "%016x" (.nextLong (java.security.SecureRandom.)))]
+                              (assoc env :content (render-ask query (ask-pages pages query n) token)))
               (:append effect) (do (spit (:append effect) (str (:line effect) "\n") :append true) env)
               (:check effect) (let [page-text (fn [page]
                                                 (let [f (fs/path dir "web" page)]
