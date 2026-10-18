@@ -1,0 +1,55 @@
+;; Eval case: a one-off question nobody can answer (no role has a web
+;; tool) is blocked or put back to the operator, not given a new role or a
+;; routine. See relay.eval.
+{:doc "A one-off request gets no new role and no routine."
+ :live? true
+
+ :eval {:id "no-role-for-one-off" :version 1 :tier :regression :tags [:roles :routing] :trials 5}
+
+ :clock "2026-10-12T09:00"
+
+ :model
+ {"hub" [{:tool-uses [{:name "roles" :input {}}]}
+         {:tool-uses [{:name "memo_send"
+                       :input {:to "operator" :subject "Can't look up the market's Saturday hours"
+                               :body "You asked when the Halifax Seaport Farmers' Market opens this Saturday. No role in relay can read the web, so I can't look it up. Their own site will have it."}}]}
+         {:tool-uses [{:name "memo_close"
+                       :input {:memo {:memo-id {:subject "Market hours"}}
+                               :outcome "Told the operator relay cannot look up the market's hours: no role reads the web."}}]}
+         {:tool-uses [{:name "journal_write"
+                       :input {:text "Operator asked the Seaport market's Saturday hours. No web tool anywhere; told them so. One-off, so no role. Nothing open."}}]}
+         {:text "Done."}]}
+
+ :foils
+ {"adds-a-researcher"
+  {:fails #{:no-role-added :told-cannot}
+   :model {"hub" [{:tool-uses [{:name "role_add"
+                                :input {:id "market-researcher" :title "Market researcher"
+                                        :instructions "Find opening hours for markets the operator asks about."}}]}
+                  {:tool-uses [{:name "memo_send"
+                                :input {:to "market-researcher" :subject "Seaport market hours"
+                                        :body "Find when the Halifax Seaport Farmers' Market opens this Saturday."}}]}
+                  {:tool-uses [{:name "memo_close"
+                                :input {:memo {:memo-id {:subject "Market hours"}} :outcome "Handed to the new market researcher."}}]}
+                  {:tool-uses [{:name "journal_write" :input {:text "Added a market researcher."}}]}]
+           "market-researcher" [{:tool-uses [{:name "journal_write" :input {:text "Got the market memo; no way to look it up yet."}}]}]}}}
+
+ ;; Two ticks, so a role the hub hands to also wakes.
+ :steps
+ [{:run ["memo" "hub" "-s" "Market hours"
+         "-m" "What time does the Halifax Seaport Farmers' Market open this Saturday?"]}
+  {:tick 2}]
+
+ :assert
+ [[:has :wake {:role "hub" :outcome "ran"}]]
+
+ :graders
+ [{:id :no-role-added
+   :doc "No role_add call, held or not, and the same three roles."
+   :check [:and [:none :tool-call {:name "role_add"}] [:count :role {} 3]]}
+  {:id :no-routine
+   :check [:none :tool-call {:name "routine_write"}]}
+  {:id :told-cannot
+   :doc "The memo is blocked, or the operator is told by memo."
+   :check [:or [:has :memo {:subject "Market hours" :resolution "blocked"}]
+           [:has :memo {:from "hub" :to "operator"}]]}]}

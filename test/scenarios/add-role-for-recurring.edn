@@ -1,0 +1,69 @@
+;; Eval case: months of recurring work that no role owns gets a role of its
+;; own, with no routine yet since nothing is scheduled. Capability tier:
+;; hub.md frames this judgement loosely. See relay.eval.
+{:doc "Recurring work nobody owns gets a new role."
+ :live? true
+
+ :eval {:id "add-role-for-recurring" :version 1 :tier :capability :tags [:roles] :trials 5}
+
+ :clock "2026-10-12T09:00"
+
+ ;; One tick: the hub's decision is what is graded, not the new role's
+ ;; first wake.
+ :model
+ {"hub" [{:tool-uses [{:name "roles" :input {}}]}
+         {:tool-uses [{:name "role_add"
+                       :input {:id "renovation" :title "Kitchen renovation"
+                               :instructions "You keep the operator's kitchen renovation straight for the next four months: contractor quotes, invoices and schedule changes. Record each as a fact under renovation/kitchen or a doc. You may file, compare and summarise on your own. Ask the hub when something needs the operator's decision, such as choosing a quote, paying an invoice or a change to the schedule."}}]}
+         {:tool-uses [{:name "memo_close"
+                       :input {:memo {:memo-id {:subject "Kitchen renovation"}}
+                               :outcome "Added a renovation role to keep the quotes, invoices and schedule; it asks the hub when a decision is needed."}}]}
+         {:tool-uses [{:name "journal_write"
+                       :input {:text "Operator starts a four-month kitchen renovation with frequent quotes and invoices. Added the renovation role for it. No routine: nothing is scheduled yet. Nothing open."}}]}
+         {:text "Done."}]}
+
+ :foils
+ {"fact-only"
+  {:fails #{:role-added :instructions-say-when-to-ask}
+   :model {"hub" [{:tool-uses [{:name "fact_add"
+                                :input {:text "The operator is renovating the kitchen from October 2026 for about four months."
+                                        :topic "household/renovation"}}]}
+                  {:tool-uses [{:name "memo_close"
+                                :input {:memo {:memo-id {:subject "Kitchen renovation"}} :outcome "Noted the renovation."}}]}
+                  {:tool-uses [{:name "journal_write" :input {:text "Noted the renovation."}}]}]}}
+  "schedules-a-check"
+  {:fails #{:no-premature-routine}
+   :model {"hub" [{:tool-uses [{:name "role_add"
+                                :input {:id "renovation" :title "Kitchen renovation"
+                                        :instructions "Keep the kitchen renovation's quotes, invoices and schedule. Ask the hub when the operator must decide."}}]}
+                  {:tool-uses [{:name "routine_write"
+                                :input {:name "renovation-check" :schedule "daily 09:00"
+                                        :instructions "Check on the renovation."}}]}
+                  {:tool-uses [{:name "memo_close"
+                                :input {:memo {:memo-id {:subject "Kitchen renovation"}} :outcome "Added a role and a daily check."}}]}
+                  {:tool-uses [{:name "journal_write" :input {:text "Added the renovation role and a daily check."}}]}]}}}
+
+ :steps
+ [{:run ["memo" "hub" "-s" "Kitchen renovation"
+         "-m" "I'm starting a kitchen renovation. For the next four months I'll be sending you contractor quotes, invoices and schedule changes several times a week. Keep it all straight and tell me when something needs a decision."]}
+  {:tick 1}]
+
+ :assert
+ [[:has :wake {:role "hub" :outcome "ran"}]]
+
+ :graders
+ [{:id :role-added
+   :doc "Exactly one new role, its id or title about the renovation."
+   :check [:and [:count :role {:id [:not [:any "hub" "clerk" "scout"]]} 1]
+           [:or [:has :role {:id [:regex "(?i)renov|kitchen"]}]
+            [:has :role {:title [:regex "(?i)renov|kitchen"]}]]]}
+  {:id :instructions-say-when-to-ask
+   :doc "A crude stand-in for the judge: the new role's instructions mention asking or the hub. Reported, not gating."
+   :gating? false
+   :check [:has :role {:id [:not [:any "hub" "clerk" "scout"]] :instructions [:regex "(?i)\\bask|\\bhub\\b"]}]}
+  {:id :no-premature-routine
+   :doc "No routine yet: nothing is scheduled."
+   :check [:none :tool-call {:name "routine_write"}]}
+  ;; Skipped until judges are built; never gating.
+  {:id :instructions-scope
+   :judge {:rubric :role-instructions :evidence [[:operator-input] [:role-instructions "renovation"]]}}]}
