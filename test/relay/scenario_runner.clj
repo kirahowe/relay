@@ -207,6 +207,8 @@
   [dir ^Instant at]
   (spit (str (fs/path dir "staging-clock.edn")) (pr-str {:at (str at)})))
 
+(declare with-step-script!)
+
 (defn- step!
   "Runs one step. Returns {:log [lines] :failures [lines]}."
   [{:keys [dir offset] :as ctx} step]
@@ -228,6 +230,9 @@
                                   (map #(str "  " %) lines))]
                    line))
        :failures (vec (mapcat :failures ticks))})
+
+    (:script step)
+    (with-step-script! dir (:script step) #(step! ctx (dissoc step :script)))
 
     (:tick step)
     {:log (vec (for [i (range (:tick step))
@@ -279,6 +284,24 @@
                       (catch clojure.lang.ExceptionInfo e
                         (swap! problems conj (str role "'s reply: " (ex-message e)))
                         {:status 400 :type "invalid_request_error" :message (ex-message e)}))))}))
+
+(defn- with-step-script!
+  "Calls `f`, which runs a tick, with the harness pointed at a mock model
+  playing `script` (a step's :script), whatever model the run uses, and
+  then puts relay.edn back as it was. Returns what `f` did, with the
+  script's problems among its failures."
+  [dir script f]
+  (let [file (str (fs/path dir "relay.edn"))
+        before (slurp file)
+        model (scripted-model script dir)
+        server (mock/start! (:responder model))]
+    (try
+      (use-mock! dir (:url server))
+      (let [r (f)]
+        (update r :failures (fnil into []) @(:problems model)))
+      (finally
+        ((:stop server))
+        (spit file before)))))
 
 (defn run-scenario!
   "Plays a scenario. Options: :live?, :data (a directory to make the staging

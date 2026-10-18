@@ -22,6 +22,11 @@
     {:tick 3}                  ; relay's dispatcher pass, three times; wakes run to the end
     {:tick 1 :spawn :process}  ; the same, but each wake is started the way relay tick
                                ; starts it, as a `relay wake` subprocess, and waited for
+    {:tick 1 :script {\"clerk\" [reply ...]}}
+                               ; the same, but this tick's wakes get the step's
+                               ; replies from a mock model, even in a live run:
+                               ; a fixed first attempt that later live wakes
+                               ; carry on from
     {:advance-minutes 2}       ; move relay's clock forward
     {:assert [assertion ...]}  ; check the state so far
 
@@ -72,7 +77,8 @@
   that served it), :end-reason (agentloop's), :tool-calls, :tool-errors and
   :journal-at-end (its last journal_write came after its last memo_close
   or memo_block). A :memo also has :resolution (closed, blocked,
-  dead-lettered, retry or open) and :recipient-woke.
+  dead-lettered, retry or open) and :recipient-woke (a wake of its
+  recipient was given it).
 
   A pattern is a map that must be contained in the item, recursively. Its
   values are compared with =, or are one of
@@ -225,7 +231,10 @@
                          :read "closed"
                          :dead (if blocked? "blocked" "dead-lettered")
                          (if (:retry-at m) "retry" "open"))
-           :recipient-woke (boolean (some #(= (:to m) (:role %)) (vals (:wakes state)))))))
+           ;; Woken for it: a wake of its recipient carried it. A memo that
+           ;; arrived after the recipient's last wake started is not counted.
+           :recipient-woke (boolean (some #(and (= (:to m) (:role %)) (some #{(:id m)} (:memos %)))
+                                          (vals (:wakes state)))))))
 
 (defn journal-items [{:keys [state]}]
   (let [ws (wakes state)]
@@ -450,6 +459,10 @@
                            (str "Step " (brief step) " must start with one of the commands "
                                 (str/join ", " (sort allowed-commands)) ".")
                            (and (:tick step) (not (pos-int? (:tick step)))) (str "Step " (brief step) " needs a positive :tick.")
+                           (and (contains? step :script)
+                                (not (and (:tick step) (not (:spawn step)) (map? (:script step)) (seq (:script step))
+                                          (every? string? (keys (:script step))) (every? vector? (vals (:script step))))))
+                           (str "Step " (brief step) " may give :script, a map of role id to replies, only with :tick and without :spawn.")
                            (and (:spawn step) (not (and (:tick step) (= :process (:spawn step)))))
                            (str "Step " (brief step) " may give :spawn :process only with :tick.")
                            (and (:advance-minutes step) (not (pos-int? (:advance-minutes step))))

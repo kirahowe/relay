@@ -77,6 +77,24 @@
       (is (not (scenario/match? [:min-length 4] " abc ")))
       (is (not (scenario/match? [:min-length 0] nil))))))
 
+(deftest a-memo-counts-as-woken-for-only-when-a-wake-carried-it
+  ;; Memo 2 reached the hub after its wake started (a dead letter from a
+  ;; role that woke later in the same tick), so the hub was never given it
+  ;; and :every-memo-resolved must not ask it to be closed.
+  (let [world {:state {:memos {1 {:id 1 :to "hub" :status :read}
+                               2 {:id 2 :to "hub" :status :unread}}
+                       :wakes {3 {:id 3 :role "hub" :memos [1]}}}
+               :transcripts {}}]
+    (is (= [true false] (map :recipient-woke (scenario/items world :memo))))))
+
+(deftest a-step-script-goes-only-on-a-plain-tick
+  (let [base {:steps [{:tick 1}] :assert [[:has :wake {}]]}
+        with (fn [step] (scenario/problems (assoc base :steps [step])))]
+    (is (empty? (with {:tick 1 :script {"clerk" [{:text "Done."}]}})))
+    (doseq [bad [{:tick 1 :script {}} {:tick 1 :script {"clerk" {:text "x"}}} {:tick 1 :script {:clerk []}}
+                 {:tick 1 :spawn :process :script {"clerk" []}} {:advance-minutes 1 :script {"clerk" []}}]]
+      (is (seq (with bad)) (pr-str bad)))))
+
 ;; --- checks and their combinators
 
 (def memo-world {:state {:memos {1 {:id 1 :to "hub" :status :read}}}})
