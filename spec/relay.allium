@@ -213,8 +213,28 @@ contract Tools {
         -- call, an MCP one included, is bounded by the harness's tool
         -- timeout, which relay always sends. Each request names, for each
         -- MCP tool, the settings' digest for it, else the one relay
-        -- accepted (accepted_tool_digest), so agentloop refuses any other
-        -- definition in any session.
+        -- accepted (accepted_tool_digest), else the one the operator's
+        -- connection file pinned at connect, so agentloop refuses any
+        -- other definition in any session.
+
+    @invariant RemoteServersComeFromConnections
+        -- A remote MCP server (one reached over streamable HTTP) is
+        -- named by the settings' connections, each a file relay connect
+        -- wrote and only the operator edits: the server's URL, which is
+        -- https or this machine, the command that prints its access
+        -- token, and the tools the operator turned on, each with its
+        -- class, labels and the digest of the definition the operator
+        -- was shown. No role can read the settings or a connection file.
+        -- The access token and the refresh token are kept in the login
+        -- keychain and reach agentloop only through the credentials
+        -- command's output, never relay's log, request or files.
+
+    @invariant NarrowedArgumentsAreTheOperators
+        -- An MCP tool's fixed arguments and hidden arguments are left out
+        -- of the schema the model is shown. A call that names one is
+        -- refused before the policy decides and before the server sees
+        -- anything; every other call reaches the server with the fixed
+        -- values as the operator wrote them.
 
     @invariant AnUnofferedToolIsRefused
         -- A call to a tool the role was not offered is refused,
@@ -2452,6 +2472,27 @@ rule StartAfresh {
         -- on. Recording a digest never lifts a block by itself. The confirmation lists the held
         -- calls the ended session drops: those open, which are denied,
         -- and those approved that never ran.
+}
+
+rule ConnectRemoteServer {
+    when: ConnectRequested(caller, name, chosen)
+
+    requires: caller.is_operator
+    -- The operator signed in at the server's own sign-in page, saw what
+    -- each tool may do, and typed the code shown on the terminal.
+    requires: code_typed_back(caller)   -- black box: relay's typed code
+
+    for tool in chosen where on:
+        ensures: tool.accepted_tool_digest = tool.digest_listed
+
+    @guidance
+        -- relay connect <name> <url>. Each tool is proposed read when the
+        -- server says it only reads, act (always asking) otherwise, with
+        -- labels private and contaminated, and off when its name says it
+        -- deletes. The operator may change any of it before the code.
+        -- Pinning at connect means no definition is taken on trust, and
+        -- connecting again replaces what was pinned before. A tool that
+        -- is off is not pinned and no role can have it.
 }
 
 invariant AChangedToolIsTakenOnlyByTheOperator {

@@ -9,7 +9,6 @@
 | --- | --- | --- | --- |
 | [40](40-hold-act-calls-for-consent-and-stop-holding-house-changes.md) | Hold act calls for consent and stop holding house changes | feature | P1 |
 | [42](42-give-roles-a-sandboxed-workbench-with-no-way-out.md) | Give roles a sandboxed workbench with no way out | feature | P1 |
-| [43](43-connect-remote-mcp-servers-behind-relay-s-layer.md) | Connect remote MCP servers behind relay's layer | feature | P1 |
 | [46](46-codify-verification-in-bb-verify-with-new-evals-and-pentests.md) | Codify verification in bb verify, with new evals and pentests | chore | P1 |
 
 ### Ready
@@ -21,6 +20,12 @@
 | [38](38-stop-the-hub-notifying-twice-for-one-stuck-memo.md) | Stop the hub notifying twice for one stuck memo | bug | P2 |
 | [36](36-clean-up-after-an-interrupted-deploy-and-leave-no-check.md) | Clean up after an interrupted deploy, and leave no check dirs in TMPDIR | bug | P3 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
+
+### In progress
+
+| ID | Title | Type | Priority |
+| --- | --- | --- | --- |
+| [43](43-connect-remote-mcp-servers-behind-relay-s-layer.md) | Connect remote MCP servers behind relay's layer | feature | P1 |
 
 ### Review
 

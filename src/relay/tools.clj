@@ -911,18 +911,19 @@
   "A tool the operator defined in relay.edn: an external command, given the
   call's `args` after its own, or with :protocol :envelope, given the call
   as an envelope on stdin and answering with one on stdout. With :protocol
-  :mcp-stdio it is a tool of an MCP server, which agentloop runs: relay
-  only names it to the harness (:mcp) and polices it like any other."
+  :mcp-stdio or :mcp-http it is a tool of an MCP server, which agentloop
+  runs or reaches: relay only names it to the harness (:mcp) and polices
+  it like any other."
   [[tool-name {:keys [class description command labels always-hold protocol parameters timeout-seconds] :as spec}]]
   (case protocol
     ;; agentloop runs an MCP tool itself, against its server; relay's tool
     ;; command never does. Its server gives the description and schema.
-    :mcp-stdio
+    (:mcp-stdio :mcp-http)
     [tool-name
      {:class class
       :labels (vec labels)
       :always-hold (boolean always-hold)
-      :mcp (select-keys spec [:server :tool :digest :allow-content])
+      :mcp (select-keys spec [:protocol :server :tool :digest :pin :allow-content :fixed-args :hidden-args])
 }]
     :envelope
     [tool-name

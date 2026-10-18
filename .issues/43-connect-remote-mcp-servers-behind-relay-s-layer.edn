@@ -1,6 +1,6 @@
 {:id 43
  :title "Connect remote MCP servers behind relay's layer"
- :status :inbox
+ :status :in-progress
  :type :feature
  :priority :p1
  :created "2026-10-18"

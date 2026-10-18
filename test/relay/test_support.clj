@@ -4,7 +4,8 @@
   the live data directory, not the relay command on PATH, and not the
   agentloop on PATH, which may be the live install."
   (:require [babashka.fs :as fs]
-            [relay.cli :as cli]))
+            [relay.cli :as cli]
+            [relay.connect :as connect]))
 
 (def relay-bin (str (fs/absolutize "bin/relay")))
 
@@ -41,5 +42,11 @@
                                             "no-config.edn"))))
   (alter-var-root #'cli/*pause-file*
                   (constantly (str (fs/path (fs/create-temp-dir {:prefix "relay-test-pause"}) "paused"))))
+  ;; No test may touch the login keychain or open a browser: one that
+  ;; needs them binds connect/*edges* with its own.
+  (alter-var-root #'connect/*edges*
+                  (constantly {:keychain-read (fn [& _] (throw (ex-info "tests never read the keychain" {})))
+                               :keychain-write! (fn [& _] (throw (ex-info "tests never write the keychain" {})))
+                               :open-browser (fn [_] (throw (ex-info "tests never open a browser" {})))}))
   (when-not (System/getProperty "relay.bin")
     (System/setProperty "relay.bin" relay-bin)))

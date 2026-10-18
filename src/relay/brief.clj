@@ -93,7 +93,7 @@
       (nil? spec) {:missing n}
       (not= :read (:class spec)) {:unusable n :why (str "is not a :read tool, and the brief runs only those")}
       (= :envelope (:protocol spec)) {:unusable n :why "speaks the envelope protocol, and the brief gives a tool its arguments on the command line"}
-      (= :mcp-stdio (:protocol spec)) {:unusable n :why "comes from an MCP server, which only agentloop runs"}
+      (contains? #{:mcp-stdio :mcp-http} (:protocol spec)) {:unusable n :why "comes from an MCP server, which only agentloop runs"}
       :else {:tool n :spec spec})))
 
 (defn- clip

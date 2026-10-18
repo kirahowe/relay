@@ -236,6 +236,48 @@ is held to the one it changed from, so a first use elsewhere cannot
 take the new one. When relay.edn's `:digest` is what refuses it, set
 the new digest there and then run `relay fresh`.
 
+A server can also be remote: a service on the internet that speaks MCP
+over HTTP, such as MailerLite's at `https://mcp.mailerlite.com/mcp`. You
+do not write one into relay.edn by hand. `relay connect <name> <url>`
+signs relay in, shows you the server's tools and writes
+`<data>/connections/<name>.edn`, and `:connections ["<name>"]` in
+relay.edn loads it. Each tool you turned on becomes a tool called
+`<name>_<tool>` with `:protocol :mcp-http`, granted by that name like any
+other. No role can read the connection file. Setup step 9 walks through
+it.
+
+The sign-in is OAuth 2.1 with PKCE. relay finds the server's
+authorization server from the server's metadata, registers itself there
+when the server allows that (otherwise it asks you for a client id), and
+opens your browser. The browser comes back to relay on 127.0.0.1, at a
+port chosen for this sign-in, and relay checks that the answer is to its
+own request. Every token is good only for that server. The refresh
+token and the current access token go in your login keychain as
+`relay-mcp-<name>`, never in a file. The connection's
+`:credentials-command` is `relay mcp-token <name>`, which prints an
+access token and renews it first when it has less than ten minutes left.
+agentloop runs it at the start of each wake, and again if the server
+refuses the token. Two runs never renew at once.
+
+relay proposes each tool's class from what the server says about it:
+`:read` when the server says the tool only reads, `:act` otherwise, and an
+`:act` tool always asks you (`:always-hold true`). Every tool's labels are
+`["contaminated" "private"]`: your data, which other people may have
+written. A tool whose name says it deletes something starts off. You can
+change any of this before you type the code, and edit the file later.
+relay pins each tool's definition as you saw it when you connect, so
+nothing is taken on trust. A changed definition waits for `relay fresh`,
+as for any MCP tool, and connecting again pins what you see then and
+keeps the choices you made before.
+
+Any MCP tool, in relay.edn or a connection file, can narrow what the
+model may send. `:fixed-args {"send_now" false}` sets arguments to the
+given values on every call, and `:hidden-args ["reply_to"]` names
+arguments the model may not give. The model does not see either in the
+tool's schema, and agentloop refuses a call that names one before the
+call can be held or sent. A fixed value is yours, so no role can change
+it.
+
 A typed answer from cleanroom (a date, a number, a record) holds no text
 an outsider chose, which is why it can come back clean, but it is still
 a value an outsider can influence: the mail decides what date or number
@@ -674,6 +716,35 @@ is written in Go.
    prompt, define the `cal` tool in `relay.edn` with class `:read` and labels
    `["private" "contaminated"]`, and grant it. Invites carry other people's
    text, which is why it is contaminated.
+9. To let roles use a service that offers an MCP server, such as
+   MailerLite or Ticket Tailor, find the server's address in the
+   service's help pages. MailerLite's is `https://mcp.mailerlite.com/mcp`.
+   Pick a short name for the service, in lower case, and run this in a
+   terminal:
+
+   ```sh
+   bin/relay connect mailerlite https://mcp.mailerlite.com/mcp
+   ```
+
+   Your browser opens on the service's own sign-in page. Sign in there
+   and allow relay. Back in the terminal, relay lists the service's tools
+   and says what each one could do, such as "Reads only" or "Acts for
+   you, and asks you first every time". To change one, type its number,
+   then the letter for what it should do, or `off`. Press Enter when the
+   list is right. relay shows the list once more with a four-letter code.
+   Type the code to finish.
+
+   Then open `relay.edn`, add the name to `:connections`, and add the
+   tools you want the hub to have to its grant, by the names relay
+   printed. Keep the tools it has already:
+
+   ```clojure
+   :connections ["mailerlite"]
+   :grants {"hub" {:tools ["mailerlite_list_subscribers" "mailerlite_send_campaign"]}}
+   ```
+
+   If the sign-in ever runs out, relay tells you. Run the same `relay
+   connect` command again. It keeps the choices you made before.
 
 The harness settings in `relay.edn` are `:kind :agentloop`, `:model`,
 `:effort`, `:provider` (`"anthropic"` by default, or `"openai"`),
@@ -1078,6 +1149,10 @@ checks that:
 - an MCP tool gets its credentials without relay seeing them, and one
   whose definition changes under a session runs nothing until the
   operator runs `relay fresh`
+- a remote MCP tool reached over HTTP never shows the model its fixed or
+  hidden arguments, refuses a call that names one before it can be held,
+  and, when its definition changes after you connected it, runs nothing
+  until you run `relay fresh`
 - clean, everyday use is not held
 - a research role sent to an attack page from the red-team corpus ends
   flagged, refused or harmless, as the corpus says it must

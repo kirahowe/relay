@@ -158,6 +158,20 @@
  ;; "file_read" {:protocol :mcp-stdio :server "files" :tool "read"
  ;;              :class :read :labels ["private"]}
 
+ ;; An MCP tool can narrow what the model may send: :fixed-args sets
+ ;; arguments on every call, and :hidden-args names arguments the model
+ ;; may not give. Neither shows in the schema the model sees, and a call
+ ;; that names one is refused before it reaches the server.
+ ;;   :fixed-args {"send_now" false} :hidden-args ["reply_to"]
+
+ ;; Services on the internet that speak MCP, such as MailerLite, come in
+ ;; through relay connect, which signs relay in and writes
+ ;; connections/<name>.edn with the tools you chose:
+ ;;   relay connect mailerlite https://mcp.mailerlite.com/mcp
+ ;; Then name the connection here and grant its tools by the names relay
+ ;; printed, such as "mailerlite_list_subscribers".
+ ;; :connections ["mailerlite"]
+
  ;; How relay checks a research role's reports: webtool's check, run on
  ;; the envelope protocol (see webtool's README). relay runs it itself, in
  ;; a process of its own for each report; no role is granted it. Each call

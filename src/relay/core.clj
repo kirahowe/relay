@@ -2354,6 +2354,21 @@
                              {:fresh true}))
               tx (if accept? (roles-released-by-fresh state role-id) [])))))
 
+;; relay connect: the operator looked at a remote server's tools and
+;; pinned the definition of each one they turned on. Every later session,
+;; of any role, is held to it, as after relay fresh, so connecting again
+;; replaces what an earlier connect or first use pinned.
+(defmethod decide* :tools/pin [{:keys [state] :as tx} {{:keys [pins]} :args}]
+  (operator-only! tx "pins tool definitions")
+  (when-not (and (map? pins) (seq pins)
+                 (every? (fn [[t d]] (and (string? t) (re-matches #"[A-Za-z0-9_-]{1,64}" t)
+                                          (string? d) (re-matches #"[0-9a-f]{64}" d)))
+                         pins))
+    (reject! :invalid "Pins are tool names and SHA-256 digests in lowercase hex."))
+  (reduce (fn [tx [tool digest]]
+            (if (= digest (tool-pin state tool)) tx (emit tx "tool/pinned" {:tool tool :digest digest})))
+          tx (sort-by key pins)))
+
 (defmethod decide* :wake/end [{:keys [state] :as tx} {{:keys [wake] :as args} :args}]
   (dispatcher-only! tx)
   (when-not (= :running (get-in state [:wakes wake :status]))

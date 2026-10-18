@@ -310,20 +310,25 @@
   gives the rest."
   [{:keys [mcp] :as tool}]
   (if mcp
-    (let [{:keys [server digest allow-content]} mcp]
-      (cond-> {:name (:name tool) :protocol "mcp-stdio" :server server :tool (:tool mcp)}
+    (let [{:keys [server digest allow-content fixed-args hidden-args]} mcp]
+      (cond-> {:name (:name tool) :protocol (if (= :mcp-http (:protocol mcp)) "mcp-http" "mcp-stdio")
+               :server server :tool (:tool mcp)}
         digest (assoc :digest digest)
-        (seq allow-content) (assoc :allow_content (vec allow-content))))
+        (seq allow-content) (assoc :allow_content (vec allow-content))
+        ;; Enforced by agentloop before the server sees the call.
+        (seq fixed-args) (assoc :fixed_args fixed-args)
+        (seq hidden-args) (assoc :hidden_args (vec hidden-args))))
     (select-keys tool [:name :description :parameters])))
 
 (defn request-mcp-servers
   "The MCP servers as the request gives them. agentloop runs a
-  :credentials-command and puts what it prints in a private file for the
-  server; relay passes only the command, never a secret."
+  :credentials-command and puts what it prints in a private file for a
+  stdio server, or sends it as the bearer token to a remote one (:url);
+  relay passes only the command, never a secret."
   [servers]
   (into (sorted-map)
-        (for [[n {:keys [command credentials-command send-labels]}] servers]
-          [n (cond-> {:command (vec command)}
+        (for [[n {:keys [command url credentials-command send-labels]}] servers]
+          [n (cond-> (if url {:url url} {:command (vec command)})
                credentials-command (assoc :credentials_command (vec credentials-command))
                send-labels (assoc :send_labels true))])))
 

@@ -6,6 +6,7 @@
             [babashka.fs :as fs]
             [clojure.string :as str]
             [relay.config :as config]
+            [relay.connect :as connect]
             [relay.core :as core]
             [cheshire.core :as json]
             [relay.dispatch :as dispatch]
@@ -108,11 +109,19 @@ Every command needs the data directory, from --data <dir> or from the file
                                       write the wakes and conversations as OpenTelemetry
                                       traces to <dir>/traces.otlp.jsonl, offline; they
                                       hold no content
+  relay connect <name> <url> [--client-id <id>] [--agentloop <bin>]
+                                      sign relay in to a remote MCP server, choose
+                                      what each of its tools may do, and write
+                                      connections/<name>.edn; list <name> in
+                                      relay.edn's :connections to load it
+  relay mcp-token <name> --url <url>  print an access token for a connection to
+                                      that server, renewing it when needed
+                                      (agentloop runs this)
   relay tool --data <dir> --role <r> [--wake <w>] <name>
                                       run a role's tool call (harnesses use this)
 
-approve, deny, fresh, release, declassify, trust, trust-level, review and
-revert show you what they are about on the terminal and ask you to type a code
+approve, deny, fresh, release, declassify, trust, trust-level, review,
+connect and revert show you what they are about on the terminal and ask you to type a code
 back there, so only a person at the terminal can make those decisions.
 
 --untrusted on memo, put, add, update and routine marks what you write as
@@ -405,7 +414,8 @@ and --instructions marks the id public too.")
             :tail :long :data :string :search :string :as-of :string :known-at :string
             :version :long :wake :long :role :string :trace :string :untrusted :boolean :public :boolean :approvals :boolean
             :topic :string :from :string :to :string :why :string :text :string :end :boolean
-            :pause-file :string :since :string :until :string :out :string :agentloop :string}})
+            :pause-file :string :since :string :until :string :out :string :agentloop :string
+            :client-id :string :url :string}})
 
 (defn- command
   "Runs one command with the data directory's system. Returns {:exit :out},
@@ -665,6 +675,23 @@ and --instructions marks the id public too.")
                                       " conversations to " file ".")
                         problems))
       "tool" (run-tool sys (:role opts) (first more) (:wake opts))
+      "connect" (let [[n url] more
+                      config (:config sys)]
+                  (when-not (and n url)
+                    (fail! "usage: relay connect <name> <url> [--client-id <id>] [--agentloop <bin>]"))
+                  (let [{:keys [say ask] :as tty} (tty! "connect")
+                        ;; The server writes the tool names and descriptions shown.
+                        say (fn [text] (say (str/join "\n" (map text/visible-line (str/split text #"\n" -1)))))]
+                    (apply result 0
+                           (connect/connect!
+                            {:name n :url url :data-dir (str (fs/absolutize dir)) :relay-bin (dispatch/relay-bin)
+                             :agentloop (or (:agentloop opts)
+                                            (agentloop/agentloop-bin (get-in config [:harnesses (:default-harness config)])))
+                             :classes config/tool-classes :client-id (:client-id opts)
+                             :taken (set (keep (fn [[t spec]] (when-not (= n (:connection spec)) t)) (:tools config)))
+                             :say say :ask ask
+                             :confirm! (fn [lines] (confirm! "connect" lines tty))
+                             :pin! (fn [pins] (submit! sys :tools/pin {:pins pins}))}))))
       (apply result 1 (str/split-lines usage)))))
 
 (defn- report-broken-settings!
@@ -717,8 +744,11 @@ and --instructions marks the id public too.")
   (do (when (and (= "tool" cmd) (or (str/blank? (:role opts)) (str/blank? (:data opts))))
         (fail! "usage: relay tool --data <dir> --role <role> <tool name>"))
       (let [dir (data-dir opts)
-            result (if (= "init" cmd)
-                     (init! dir)
+            result (case cmd
+                     "init" (init! dir)
+                     ;; Needs only the connection file and the keychain, so a
+                     ;; relay.edn broken elsewhere does not stop a server's token.
+                     "mcp-token" (result 0 (connect/token! dir (first more) (:url opts)))
                      (let [sys (try (inbound/system dir (cond-> {} *clock* (assoc :clock *clock*)))
                                     (catch clojure.lang.ExceptionInfo e
                                       (when (= "tick" cmd) (report-broken-settings! dir (ex-message e)))

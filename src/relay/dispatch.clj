@@ -158,9 +158,10 @@
         script {:script? (tools/script-role? state config role)}
         ;; Each MCP tool is held to the definition relay.edn's :digest
         ;; gives it, else the one relay accepted first or with relay
-        ;; fresh, so a changed one stops any session, not only its own.
+        ;; fresh, else the one pinned when the operator connected its
+        ;; server, so a changed one stops any session, not only its own.
         manifest (mapv (fn [{tool-name :name :keys [mcp] :as t}]
-                         (if-let [d (and mcp (or (:digest mcp) (core/tool-pin state tool-name)))]
+                         (if-let [d (and mcp (or (:digest mcp) (core/tool-pin state tool-name) (:pin mcp)))]
                            (assoc-in t [:mcp :digest] d)
                            t))
                        (tools/manifest config role script))
