@@ -1,10 +1,10 @@
 {:id 2
  :title "Trust the legacy contaminated items"
- :status :ready
+ :status :dropped
  :type :chore
  :priority :p2
  :created "2026-10-16"
- :updated "2026-10-16"
+ :updated "2026-10-18"
  :tags #{"needs-kira" "stop-0"}
  :blocked-by #{}
  :related #{}

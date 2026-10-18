@@ -12,3 +12,8 @@ Some items predate the trifecta rollout and are marked contaminated. `relay trus
 ## Plan
 
 ## Log
+
+2026-10-18: Dropped. Kira chose a fresh start over trusting the items: the
+old data dir is archived at ~/Sync/relay-archive-2026-10-18, and the new
+~/Sync/relay began empty with only the hub, re-added from setup/hub.md
+with --public. None of the legacy items exist there.
