@@ -54,6 +54,15 @@ Security-relevant changes get an adversarial review loop with Codex until it con
 
 Give the reviewer the threat model above. Triage each finding against it. A finding is in scope when a plausible mistake or an untargeted attack could trigger it. Fix an in-scope defect that breaks a guarantee. File other in-scope findings as issues with the reviewer's text. Reject out-of-scope findings with a one-line reason that names the part of the threat model. Stop when a round has no in-scope defect. After three rounds that still find one, stop and ask Kira, since the design may be wrong. The goal is a sound implementation for relay's use, not a reviewer with nothing left to say.
 
+## From real use to an eval case
+
+When a role does something wrong in real use, Kira flags the wake with `relay flag` and describes the problem in an issue. Turn it into an eval case:
+
+1. Write a case in `test/scenarios/` that reproduces the problem on artificial data: the staging seed, made-up names and the stand-in tools. Never copy anything from Kira's live data into the repo, not a memo, a fact or a transcript line. The repo is public.
+2. Give it an oracle that passes every grader and at least one foil that fails the grader for the problem, so `bb test` shows the grader can tell them apart.
+3. Run it live on Haiku (`bb eval <case> --live --trials 3`) and once on Opus (`--model claude-opus-5-5 --effort medium --trials 1`). Read the transcripts. If it does not fail the way real use did, the case does not reproduce the problem yet.
+4. Record the run ids in the issue and add the case to `test/scenarios/BASELINES.md`.
+
 ## What needs Kira
 
 Ask; do not decide, on these:
