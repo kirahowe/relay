@@ -338,17 +338,18 @@
   something else, and the whole input."
   ([h] (hold h nil))
   ([{:keys [id role tool input session call labels label-sources]} config]
-   (let [t (get-in config [:tools tool])
+   (let [inner (when (= core/reader-tool tool) (core/held-tool tool input))
+         t (get-in config [:tools (or inner tool)])
          class (or (:class t) (when-not t :builtin))
          input-text (json/generate-string input {:pretty true})
          odd (text/lookalikes (str/join " " (filter string? (tree-seq coll? seq input))))]
      (concat
-      [(str "Hold " id ": " role " wants to use " tool)
+      [(str "Hold " id ": " role " wants to use " (if inner (str inner ", through the reader") tool))
        (str "    held because " (why-held t labels))
        (str "    the tool: " (if (= :builtin class) "one of relay's own" (name (or class :unknown)))
             (when (:description t) (str ", " (:description t))))]
       (when (#{:egress :act} class)
-        (let [ds (destinations input)]
+        (let [ds (destinations (if inner (or (:input input) (get input "input")) input))]
           [(str "    where it would go: " (if (seq ds) (str/join "; " ds) "nothing in the input names a place"))]))
       [(str "    the session has seen: " (if (seq labels) (str/join ", " labels) "nothing labelled"))]
       (for [[label src] (sort-by key label-sources)]

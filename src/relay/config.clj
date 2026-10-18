@@ -162,10 +162,13 @@
 (defn- check-quarantine-grant
   "A :quarantine grant names tools the role may read through agentloop's
   quarantined reader, read_quarantined. Each must be one of the role's
-  :tools, of class :read and not :always-hold: the reader runs it and
-  shows the role only a checked answer about its output, and a hold on it
-  would be a hold on read_quarantined, which relay cannot show as one on
-  the tool."
+  :tools, of class :read or :egress, and not :always-hold: the reader runs
+  it and shows the role only a checked answer about its output. An
+  :egress tool, such as webtool's ask, is decided as the role's own call
+  would be, since the role writes its input: a session that has seen both
+  private data and an outsider's text is held. :write and :act tools
+  change things, which a reader must never do. An :always-hold tool is
+  refused because every call would wait on the operator for a read."
   [role {:keys [quarantine] granted :tools} tools]
   (when-not (and (vector? quarantine) (seq quarantine) (apply distinct? quarantine)
                  (every? string? quarantine))
@@ -175,12 +178,12 @@
     (when-not (some #{t} granted)
       (problem! (str "Role " role " has " t " in :quarantine, which it is not granted in :tools."
                      " It may read only through its own tools.")))
-    (when-not (= :read (get-in tools [t :class]))
-      (problem! (str "Role " role " has " t " in :quarantine, which is not a :read tool in :tools."
-                     " The reader reads only through :read tools.")))
+    (when-not (#{:read :egress} (get-in tools [t :class]))
+      (problem! (str "Role " role " has " t " in :quarantine, which is not a :read or :egress tool in :tools."
+                     " The reader reads only through tools that change nothing.")))
     (when (true? (get-in tools [t :always-hold]))
-      (problem! (str "Role " role " has " t " in :quarantine, which has :always-hold. A call held"
-                     " through the reader could not be shown or decided as a call to " t ".")))))
+      (problem! (str "Role " role " has " t " in :quarantine, which has :always-hold. Every read"
+                     " through it would wait for you.")))))
 
 (defn- check-verifier
   "The :verifier relay checks reports with: webtool's check, on the

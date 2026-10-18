@@ -191,7 +191,8 @@ and --instructions marks the id public too.")
       (fail! "relay init asks for settings, so run it in a terminal. Or write"
              file "yourself, from setup/relay.example.edn.")
       (setup/create! {:ask (fn [prompt] (print prompt) (flush) (read-line))
-                      :say println}
+                      :say println
+                      :webtool (setup/webtool-bin)}
                      file)
       (ready)
       :else (result 1))))

@@ -412,8 +412,8 @@ in relay.edn, naming tools from the role's `:tools`:
 :grants {"hub" {:tools ["web_read"] :quarantine ["web_read"]}}
 ```
 
-Each must be a `:read` tool the role holds, without `:always-hold`, or
-relay refuses the settings. Only the operator grants it; no role can. A public role may
+Each must be a `:read` or `:egress` tool the role holds, without
+`:always-hold`, or relay refuses the settings. Only the operator grants it; no role can. A public role may
 have it too. relay then puts a `quarantine` block in the role's
 agentloop request, and an entry for `read_quarantined` of class `read`
 in its policy:
@@ -437,6 +437,20 @@ default `{:model "claude-haiku-5-5" :effort "low"}`, on the same
 provider and key. A closed answer can still be wrong, since an outsider
 can steer which value the reader picks, so a role treats it as a claim,
 not an instruction.
+
+An `:egress` tool through the reader is for the web. webtool's `ask`
+takes a query and a number of pages, at most 5, searches, and reads the
+top results through webtool's fetch guards. It takes no URL. The role
+writes the query, which goes out to the search engine, so agentloop
+decides the call as if the role made it directly: a session that has
+seen both private data and an outsider's text waits for the operator
+(`relay holds` shows it as a call to the inner tool, through the
+reader). The reader only reads the pages. The example config and
+`relay init` give the hub such a tool, `web`, under `:quarantine`, so
+the hub looks things up with closed answers and stays clean. A closed
+answer cites its pages by number. The tool is in the hub's `:tools`
+too, so the hub could call it directly; its instructions say not to,
+since the pages would contaminate it.
 
 ### Research roles and reports
 
@@ -561,6 +575,11 @@ is written in Go.
 
    `relay init` asks for the settings relay cannot run without: the time
    zone, the model and how to get its API key, and where notifications go.
+   It also asks where webtool is, so the hub can look things up on the
+   web, and for the command that prints the Brave Search API key, which
+   is used only to send searches to Brave. With webtool it writes
+   `webtool.json` beside `relay.edn` and gives the hub the `web` tool;
+   answer `none` to leave the web out.
    Each question has a suggestion that Enter accepts, and nothing is
    written until you have seen the whole `relay.edn` and said yes. relay
    refuses to run with a `relay.edn` that lacks any of them. Run it in a
@@ -1004,6 +1023,10 @@ checks that:
 - a page read through the quarantined reader with a closed schema
   leaves the role clean, and with a free-text schema contaminates it and
   has its posts held
+- the hub's web search through the reader, whose first result is a
+  hostile corpus page, gives the hub only a closed answer, and once the
+  hub is private and contaminated its search is held before anything is
+  fetched
 - an MCP tool gets its credentials without relay seeing them, and one
   whose definition changes under a session runs nothing until the
   operator runs `relay fresh`

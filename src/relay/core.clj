@@ -1726,6 +1726,21 @@
                   :harness harness :labels (:said-labels tx))
           :else tx)))))
 
+(def reader-tool
+  "agentloop's quarantined reader, which runs another tool for a role."
+  "read_quarantined")
+
+(defn held-tool
+  "The tool a held call would run, from its tool name and input: for the
+  quarantined reader, the inner tool its input names, since the reader is
+  held only for what that call would do. Nil for a reader call whose input
+  names no tool."
+  [tool input]
+  (if (= reader-tool tool)
+    (let [t (when (map? input) (or (get input :tool) (get input "tool")))]
+      (when (and (string? t) (not (blank? t))) t))
+    tool))
+
 (defn- held-call?
   "A held call relay can record: with an id, a tool name, and the digest
   of its input that the decision is bound to. Without the digest it is
@@ -1749,9 +1764,11 @@
             hold-id (last-id tx)]
         ;; The input stays in relay holds: it may hold private data, and a
         ;; notification goes to a phone.
-        (notify tx "hold-opened" (str (:role wake) " wants to use " name)
-                (str "Hold " hold-id ": " (:role wake) " wants to use " name ", "
-                     (if-let [c (get-in (:config tx) [:tools name :class])]
+        (notify tx "hold-opened" (str (:role wake) " wants to use " (or (held-tool name input) name))
+                (str "Hold " hold-id ": " (:role wake) " wants to use " (or (held-tool name input) name)
+                     (when (and (= reader-tool name) (held-tool name input)) " through the reader")
+                     ", "
+                     (if-let [c (get-in (:config tx) [:tools (held-tool name input) :class])]
                        (str (if (#{:act :egress} c) "an " "a ") (clojure.core/name c) " tool")
                              "one of relay's own tools")
                      ". It is waiting for you: relay holds shows it in full.")

@@ -1,5 +1,6 @@
 (ns relay.setup-test
   (:require [babashka.fs :as fs]
+            [cheshire.core :as json]
             [clojure.edn :as edn]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
@@ -16,10 +17,10 @@
      :asked asked
      :said said}))
 
-(defn- create [answers]
+(defn- create [answers & [extra]]
   (let [dir (str (fs/create-temp-dir {:prefix "relay-setup-test"}))
         file (str dir "/relay.edn")
-        io (scripted answers)
+        io (merge (scripted answers) {:home (str dir "/home")} extra)
         written (setup/create! io file)]
     {:written written
      :io io
@@ -27,8 +28,9 @@
      :dir dir}))
 
 (deftest the-suggestions-make-a-config-relay-accepts
-  (let [{:keys [written settings dir]} (create ["" "" "" "" "" "" "y"])]
+  (let [{:keys [written settings dir]} (create ["" "" "" "" "" "" "" "y"])]
     (is written)
+    (is (= {} (:tools settings) (:grants settings)) "no webtool found, so no web")
     (is (= {:kind :macos} (:notify settings)))
     (is (= "anthropic" (get-in settings [:harnesses :agentloop :provider])))
     (is (= "claude-opus-5-5" (get-in settings [:harnesses :agentloop :model])))
@@ -39,13 +41,13 @@
 
 (deftest nothing-is-written-without-a-yes
   (doseq [answer ["" "n" "no" "sure" nil]]
-    (let [{:keys [written settings io]} (create ["" "" "" "" "" "" answer])]
+    (let [{:keys [written settings io]} (create ["" "" "" "" "" "" "" answer])]
       (is (not written) (pr-str answer))
       (is (nil? settings) (pr-str answer))
       (is (some #(str/includes? % "Nothing was written") @(:said io)) (pr-str answer)))))
 
 (deftest a-bad-answer-is-asked-again
-  (let [{:keys [settings io]} (create ["Mars/Olympus" "Europe/Paris" "" "" "extreme" "high" "" "" "y"])]
+  (let [{:keys [settings io]} (create ["Mars/Olympus" "Europe/Paris" "" "" "extreme" "high" "" "" "" "y"])]
     (is (= "Europe/Paris" (:timezone settings)))
     (is (= "high" (get-in settings [:harnesses :agentloop :effort])))
     (is (some #(str/includes? % "not a time zone") @(:said io)))
@@ -53,7 +55,7 @@
 
 (deftest openai-has-no-model-to-suggest
   (testing "a blank model is refused rather than left empty"
-    (let [{:keys [settings io]} (create ["" "openai" "" "gpt-x" "" "" "none" "y"])]
+    (let [{:keys [settings io]} (create ["" "openai" "" "gpt-x" "" "" "none" "" "y"])]
       (is (= "gpt-x" (get-in settings [:harnesses :agentloop :model])))
       (is (= ["security" "find-generic-password" "-s" "relay-openai" "-w"]
              (get-in settings [:harnesses :agentloop :api-key-command])))
@@ -61,8 +63,35 @@
       (is (some #(str/includes? % "needs an answer") @(:said io))))))
 
 (deftest ntfy-asks-where-the-server-is
-  (let [{:keys [settings]} (create ["" "" "" "" "" "ntfy" "localhost" "http://nas:2586" "alerts" "y"])]
+  (let [{:keys [settings]} (create ["" "" "" "" "" "ntfy" "localhost" "http://nas:2586" "alerts" "" "y"])]
     (is (= {:kind :ntfy :url "http://nas:2586" :topic "alerts"} (:notify settings)))))
+
+(deftest the-hub-gets-the-web-when-webtool-is-there
+  (let [{:keys [written settings dir io]} (create ["" "" "" "" "" "" "" "" "y"] {:webtool "/opt/webtool/bin/webtool"})
+        webtool-file (str (fs/path dir "webtool.json"))
+        web (get-in settings [:tools "web"])]
+    (is written)
+    (is (some #(str/includes? % "used only to send your searches to Brave") @(:said io))
+        "setup says what the key is for")
+    (is (some #(str/includes? % "Brave Search API key") @(:asked io)))
+    (is (= {:class :egress :labels ["contaminated"] :protocol :envelope}
+           (select-keys web [:class :labels :protocol])))
+    (is (= ["/opt/webtool/bin/webtool" "--config" webtool-file "ask"] (:command web)))
+    (is (= {"hub" {:tools ["web"] :quarantine ["web"]}} (:grants settings)))
+    (is (= {"snapshot_dir" (str dir "/home/Library/Application Support/webtool/snapshots")
+            "search" {"backend" "brave" "api_key_command" setup/brave-key-command}}
+           (json/parse-string (slurp webtool-file))))
+    (is (= ["web"] (config/quarantine-tools (config/load-config dir) "hub"))))
+  (testing "another key command, and the web left out"
+    (let [{:keys [dir]} (create ["" "" "" "" "" "" "" "pass show brave" "y"] {:webtool "/opt/webtool"})]
+      (is (= ["pass" "show" "brave"] (get-in (json/parse-string (slurp (str dir "/webtool.json"))) ["search" "api_key_command"]))))
+    (let [{:keys [settings dir]} (create ["" "" "" "" "" "" "none" "y"] {:webtool "/opt/webtool"})]
+      (is (= {} (:tools settings)))
+      (is (not (fs/exists? (str dir "/webtool.json"))))))
+  (testing "a relative path is asked again"
+    (let [{:keys [settings io]} (create ["" "" "" "" "" "" "bin/webtool" "/w/webtool" "" "y"])]
+      (is (= "/w/webtool" (first (get-in settings [:tools "web" :command]))))
+      (is (some #(str/includes? % "full path to the webtool binary") @(:said io))))))
 
 (deftest input-ending-early-writes-nothing
   (let [dir (str (fs/create-temp-dir {:prefix "relay-setup-test"}))

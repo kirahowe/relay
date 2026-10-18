@@ -39,15 +39,21 @@
   (is (nil? (config/quarantine-tools (config/resolve-config settings) "clerk")))
   (testing "a tool the role is not granted"
     (is (str/includes? (problem #(assoc-in % [:grants "hub" :tools] ["web_fetch"])) "not granted in :tools")))
-  (testing "a tool that is not :read"
-    (is (str/includes? (problem #(assoc-in % [:grants "hub" :quarantine] ["web_post"])) "not a :read tool")))
+  (testing "an :egress tool, such as a web search that reads its results"
+    (is (nil? (problem #(assoc-in % [:grants "hub" :quarantine] ["web_post"])))))
+  (testing "a tool that changes things"
+    (doseq [class [:act :write]]
+      (is (str/includes? (str (problem #(-> % (assoc-in [:tools "web_post" :class] class)
+                                            (assoc-in [:grants "hub" :quarantine] ["web_post"]))))
+                         "not a :read or :egress tool")
+          (pr-str class))))
   (testing "a tool that always holds"
     (is (str/includes? (str (problem #(assoc-in % [:tools "web_fetch" :always-hold] true))) ":always-hold"))
     (is (nil? (problem #(assoc-in % [:tools "web_fetch" :always-hold] false)))))
   (testing "a tool :tools does not define"
     (is (str/includes? (problem #(-> % (assoc-in [:grants "hub" :tools] ["nope"])
                                      (assoc-in [:grants "hub" :quarantine] ["nope"])))
-                       "not a :read tool")))
+                       "not a :read or :egress tool")))
   (testing "a grant that is not a non-empty vector of distinct names"
     (doseq [q [[] "web_fetch" ["web_fetch" "web_fetch"] [:web_fetch] nil]]
       (is (str/includes? (str (problem #(assoc-in % [:grants "hub" :quarantine] q))) "vector of distinct tool names")

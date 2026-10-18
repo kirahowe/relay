@@ -75,7 +75,30 @@
   "rem" {:class :act
          :labels ["private"]
          :description "Change Apple Reminders. Run with [\"help\"] for the commands."
-         :command ["/path/to/relay/tools/rem/rem" "--mode" "write"]}}
+         :command ["/path/to/relay/tools/rem/rem" "--mode" "write"]}
+
+  ;; The web, for the hub: webtool's ask (see webtool's README) searches
+  ;; with Brave Search and reads the top results, at most 5. The hub holds
+  ;; your private data, so it reads the web only through read_quarantined
+  ;; (its :quarantine grant below) and gets back typed answers, which keep
+  ;; it clean. It is :egress because the query goes out to Brave; once a
+  ;; session has seen both your private data and an outsider's text, each
+  ;; search waits for you. webtool.json names the Brave key's command:
+  ;;   "search": {"backend": "brave",
+  ;;              "api_key_command": ["security" "find-generic-password" "-s" "relay-brave" "-w"]}
+  ;; Store the key with
+  ;;   security add-generic-password -a "$USER" -s relay-brave -w
+  "web" {:class :egress
+         :labels ["contaminated"]
+         :protocol :envelope
+         :timeout-seconds 150
+         :description "Search the web and read the top results. Read it through read_quarantined with a closed schema."
+         :parameters {:type "object"
+                      :properties {:query {:type "string" :description "What to search for, up to 400 characters."}
+                                   :n {:type "integer" :minimum 1 :maximum 5 :description "How many result pages to read; 3 by default."}}
+                      :required ["query"]
+                      :additionalProperties false}
+         :command ["/path/to/webtool/bin/webtool" "--config" "/path/to/webtool.json" "ask"]}}
 
  ;; Calendar is one read-only tool; cal cannot create, change or delete
  ;; anything and takes no operator-pinned option, so the command is just the
@@ -103,9 +126,9 @@
  ;;         :parameters {:type "object" ...}   ; from cleanroom relay-tool --schema
  ;;         :command ["/path/to/bin/cleanroom" "relay-tool" "--policy" "/path/to/policy.jsonc"]}
 
- ;; Tools for a public role that searches the web. No web tool comes with
- ;; relay yet; these show the shape. Their output is contaminated, never
- ;; private.
+ ;; Tools for a public role that searches the web. These show the shape;
+ ;; webtool's search and fetch fit them. Their output is contaminated,
+ ;; never private.
  ;; "web-search" {:class :egress
  ;;               :labels ["contaminated"]
  ;;               :protocol :envelope
@@ -151,11 +174,11 @@
  ;; include "private", or the dead letter handler's job. :reports lets a
  ;; public role write research reports of the kinds named, which relay
  ;; checks and you review with relay review.
- ;; :quarantine names :read tools from the role's :tools that it may also
- ;; read through read_quarantined, which shows it only a checked answer
- ;; about the output (see the README).
+ ;; :quarantine names :read or :egress tools from the role's :tools that
+ ;; it may also read through read_quarantined, which shows it only a
+ ;; checked answer about the output (see the README).
  :grants
- {"hub" {:may-add true :tools ["rem-read" "rem"]}
+ {"hub" {:may-add true :tools ["rem-read" "rem" "web"] :quarantine ["web"]}
   ;; Add it with relay add grant-search --public, so its own text is public.
   ;; "grant-search" {:public true :tools ["web-search" "web-fetch"]
   ;;                 :reports {:kinds ["grant"]}}

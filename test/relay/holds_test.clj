@@ -454,6 +454,20 @@
           report (agentloop/classify {:outcome (agentloop/parse-outcome line) :exit 0 :session "s" :now t0})]
       (is (= {:private {:kind "seed" :seq 2}} (:label-sources (first (:held report))))))))
 
+(deftest a-held-reader-call-is-shown-as-the-call-it-reads-through
+  (let [h {:id 9 :role "clerk" :tool "read_quarantined" :session "s" :call "c"
+           :input {:tool "post" :input {:to "someone@example.org"} :question "q" :schema {}}
+           :labels ["contaminated" "private"]}
+        out (str/join "\n" (render/hold h cfg))]
+    (is (str/includes? out "Hold 9: clerk wants to use post, through the reader"))
+    (is (str/includes? out "held because it can send data out"))
+    (is (str/includes? out "the tool: egress, Post."))
+    (is (str/includes? out "where it would go: to: someone@example.org")))
+  (is (= "post" (core/held-tool "read_quarantined" {"tool" "post"})))
+  (is (= "post" (core/held-tool "post" {"tool" "other"})))
+  (doseq [input [nil {} {:tool 7} {:tool " "} ["post"]]]
+    (is (nil? (core/held-tool "read_quarantined" input)) (pr-str input))))
+
 (deftest a-denial-can-end-the-session-and-three-always-do
   (let [w (held-world)
         hold-id (:id (first (core/open-holds (:state w))))

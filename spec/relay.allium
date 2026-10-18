@@ -181,9 +181,12 @@ contract Tools {
 
     @invariant AQuarantinedReaderIsGrantedByTheOperator
         -- The settings may grant a role the quarantined reader over
-        -- some of its own read tools (quarantine_tools). Each must be a
-        -- tool it is granted, of class read and not always held, or the
-        -- settings are an error. A role granted one gets agentloop's read_quarantined,
+        -- some of its own read or egress tools (quarantine_tools). Each
+        -- must be a tool it is granted, of class read or egress and not
+        -- always held, or the settings are an error. An egress tool, such
+        -- as webtool's ask, is for the web: the role writes its input, so
+        -- agentloop decides the call as the role's own call to that tool
+        -- would be, held when the session is private and contaminated. A role granted one gets agentloop's read_quarantined,
         -- which runs such a tool and shows the session only another
         -- model's answer to its question, checked against its schema.
         -- agentloop gives the answer the inner tool's labels, less
@@ -450,8 +453,8 @@ entity Role {
     -- may be.
     report_kinds: Set<String>?
     is_research_role: report_kinds != null
-    -- Granted :quarantine [...] in the settings: read tools it holds
-    -- that it may also read through the quarantined reader.
+    -- Granted :quarantine [...] in the settings: read or egress tools it
+    -- holds that it may also read through the quarantined reader.
     quarantine_tools: Set<Tool>
     -- How far relay trusts its reports: 0, where the operator reads
     -- every finding, or 1, where a finding nothing flags may go into the
@@ -2033,7 +2036,8 @@ rule NotifyOperatorOfHold {
     ensures: Notification.created(
         kind: hold_opened,
         title: hold_title(hold),   -- black box: who wants to use what
-        body: hold_note(hold),     -- black box: the hold, role, tool and its class, never the input
+        body: hold_note(hold),     -- black box: the hold, role, tool and its class, never the input;
+                                   -- for the quarantined reader, the inner tool its input names
         about: hold.role,
         created_at: now,
         delivery: pending
