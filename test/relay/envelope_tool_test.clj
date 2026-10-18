@@ -60,6 +60,18 @@
       (fn [sys]
         (is (= "The tool mail failed." (:error (tools/call! sys "clerk" "mail" {:question "q"} [] "c"))))))))
 
+(deftest an-envelope-tool-that-cannot-start-fails-like-a-plain-one
+  ;; Regression (relay#33): the model saw "Cannot run program X" and the
+  ;; operator's log saw nothing.
+  (with-tools {"mail" (tool "echo" :command [(str (fs/path (fs/parent fixture) "no-such-tool"))])}
+    (fn [sys]
+      (let [err (java.io.StringWriter.)
+            {:keys [error labels]} (binding [*err* err]
+                                     (tools/call! sys "clerk" "mail" {:question "q"} [] "c"))]
+        (is (= "The tool mail failed." error))
+        (is (= ["private"] labels))
+        (is (str/includes? (str err) "mail: could not start: Cannot run program"))))))
+
 (deftest envelope-settings-are-checked
   (let [base {:timezone "UTC" :default-harness :a :harnesses {:a {:kind :agentloop :api-key-command ["true"]}}
               :notify {:kind :none}}

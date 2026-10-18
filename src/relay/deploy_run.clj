@@ -225,18 +225,23 @@
                  (let [res (sh dir cmd)]
                    (when-not (ok? res) (reset! problem (failure what res))))))
         ;; Forgets by name every repo's workspace, so one made but not yet
-        ;; noted is forgotten too: one never made just fails to be
-        ;; forgotten. Only a failure for one known to be made is news, and
-        ;; comes back as the commands to run by hand.
+        ;; noted is forgotten too: jj exits 0 with a warning for a name it
+        ;; does not know. Only a failure for one known to be made is news,
+        ;; and comes back as the commands to run by hand. A temp directory
+        ;; that will not delete is reported too, and never hides those.
         forget-all! (fn []
                       (let [stuck (vec (for [r deploy/repo-keys
                                              :let [res (jj sh (get paths r) "workspace" "forget" (names r))]
                                              :when (and (not (ok? res)) (some #{r} @made))]
-                                         (str "  in " (get paths r) ": jj workspace forget " (names r))))]
-                        (fs/delete-tree tmp)
-                        (when (seq stuck)
-                          (str "The check workspaces could not all be forgotten. Run these by hand:\n"
-                               (str/join "\n" stuck)))))]
+                                         (str "  in " (get paths r) ": jj workspace forget " (names r))))
+                            undeleted (try (fs/delete-tree tmp) nil
+                                           (catch Exception e
+                                             (str "The check directory " tmp " could not be deleted: " (ex-message e))))
+                            lines (cond-> []
+                                    (seq stuck) (conj (str "The check workspaces could not all be forgotten. Run these by hand:\n"
+                                                           (str/join "\n" stuck)))
+                                    undeleted (conj undeleted))]
+                        (when (seq lines) (str/join "\n" lines))))]
     ;; Registered before any is made; the interrupt hook reports what it returns.
     (swap! on-exit assoc :workspaces forget-all!)
     (try

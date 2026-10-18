@@ -17,3 +17,6 @@ From the review of relay#31 and relay#32 (zwtlzxwt, otvwwqny, 2026-10-17). None 
 ## Plan
 
 ## Log
+- (a) forget-all! now wraps the temp-dir delete in try and returns both the stuck-workspace commands and a line naming the directory it could not delete. The comment now says jj exits 0 with a warning for an unknown workspace.
+- (b) run-envelope-tool catches a start failure from run-limited and sends it through `failed`, the same path as an exit or timeout: the model sees "The tool X failed.", stderr gets "X: could not start: ...".
+- (c) Chose PERL_BADLANG=0 in the wrapper's own env (tools/group-env), deleted by the perl script before exec. Reason: dropping LANG from base-env would change the locale every tool and harness sees (UTF-8 handling), and LC_ALL=C in the wrapper env would leak to the tool unless also removed; this changes nothing the tool sees. Test runs the wrapper with LANG=xx_YY.UTF-8 and checks stderr is empty, the command still has that LANG and does not see PERL_BADLANG.

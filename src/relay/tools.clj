@@ -698,8 +698,18 @@
 (def ^:private in-own-group
   ;; perl starts the command in a process group of its own, so a child
   ;; it leaves behind can be found and ended once the command has exited.
-  ;; The block form of exec never goes through a shell.
-  ["/usr/bin/perl" "-e" "setpgrp(0, 0) or die \"setpgrp: $!\\n\"; exec { $ARGV[0] } @ARGV or die \"$!\\n\"" "--"])
+  ;; The block form of exec never goes through a shell. A LANG naming a
+  ;; locale that is not installed makes perl warn on stderr as it starts;
+  ;; the wrapper's own PERL_BADLANG=0 (group-env) silences that, and the
+  ;; script drops it again so the command never sees it. The command keeps
+  ;; the LANG it was given.
+  ["/usr/bin/perl" "-e" "delete $ENV{PERL_BADLANG}; setpgrp(0, 0) or die \"setpgrp: $!\\n\"; exec { $ARGV[0] } @ARGV or die \"$!\\n\"" "--"])
+
+(defn group-env
+  "The environment for in-own-group: `env` plus the wrapper's own switch
+  against locale warnings, which the wrapper removes before it runs the command."
+  [env]
+  (assoc env "PERL_BADLANG" "0"))
 
 (def ^:private kill-grace-ms 2000)
 
@@ -739,7 +749,7 @@
                    (fs/which program {:paths (str/split (get (harness/base-env {}) "PATH") #":")}))
                  (throw (ex-info (str "Cannot run program " program) {})))
         proc (p/process (into in-own-group (cons (str prog) (rest command)))
-                        {:in in :out :stream :err :stream :env (harness/base-env {})})
+                        {:in in :out :stream :err :stream :env (group-env (harness/base-env {}))})
         out (future (slurp (:out proc)))
         err (future (slurp (:err proc)))
         deadline (+ (System/currentTimeMillis) ms)
@@ -790,8 +800,9 @@
   (let [failed (fn [why out err]
                  (binding [*out* *err*] (println (str tool-name ": " why)) (print err out) (flush))
                  (throw (ex-info (str "The tool " tool-name " failed.") {:relay/labels static})))
-        result (run-limited (vec command) (json/generate-string {:input args :labels labels :call_id (str *call-id*)})
-                            timeout-ms)]
+        result (try (run-limited (vec command) (json/generate-string {:input args :labels labels :call_id (str *call-id*)})
+                                 timeout-ms)
+                    (catch Exception e (failed (str "could not start: " (ex-message e)) "" "")))]
     (if (= ::timeout result)
       (failed "timed out" "" "")
       (let [{:keys [exit out err]} result

@@ -6,6 +6,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [relay.config :as config]
+            [relay.harness :as harness]
             [relay.inbound :as inbound]
             [relay.log :as log]
             [relay.tools :as tools]))
@@ -88,6 +89,18 @@
     (is (str/starts-with? (:error (binding [*err* (java.io.StringWriter.)]
                                     (tools/run-external! "t" {:command [(str *dir* "/missing")] :labels []} [])))
                           "could not start"))))
+
+(deftest the-wrapper-is-quiet-about-a-locale-that-is-not-installed
+  ;; Regression (relay#33): perl warned on stderr about LANG, which only
+  ;; showed in failure logs. The command still gets the LANG it was given
+  ;; and never sees the wrapper's own switch.
+  (let [env (tools/group-env (assoc (harness/base-env {}) "LANG" "xx_YY.UTF-8"))
+        proc @(p/process (conj (vec @#'tools/in-own-group) "/usr/bin/env")
+                         {:out :string :err :string :env env})]
+    (is (zero? (:exit proc)))
+    (is (= "" (:err proc)))
+    (is (str/includes? (:out proc) "LANG=xx_YY.UTF-8"))
+    (is (not (str/includes? (:out proc) "PERL_BADLANG")))))
 
 (defn- with-tool [spec f]
   (let [data (str (fs/create-temp-dir {:dir *dir*}) "/data")]

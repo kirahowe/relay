@@ -522,6 +522,20 @@
           (is (str/includes? msg (:relay repos))))
         (is (on-previous? w))))))
 
+(deftest a-check-directory-that-will-not-delete-does-not-hide-stuck-workspaces
+  ;; Regression (relay#33): the delete threw before the message was built.
+  (when jj?
+    (with-world
+      (fn [{:keys [repos] :as w}]
+        (let [no-forget (fn [dir cmd]
+                          (if (some #{"forget"} cmd) {:exit 1 :out "" :err "locked"} (run/sh dir cmd)))
+              msg (with-redefs [fs/delete-tree (fn [_] (throw (ex-info "disk says no" {})))]
+                    (threw #(run/deploy! (opts w :sh no-forget))))]
+          (is (str/includes? msg "could not all be forgotten"))
+          (is (str/includes? msg (:relay repos)))
+          (is (str/includes? msg "could not be deleted: disk says no")))
+        (is (on-previous? w))))))
+
 (deftest an-interrupt-reports-check-workspaces-it-could-not-forget
   ;; Regression (relay#31): the hook ignored jj's answer and said nothing
   ;; was changed, though a workspace was left in a checkout's list.
