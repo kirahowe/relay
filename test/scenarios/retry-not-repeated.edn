@@ -1,0 +1,57 @@
+;; Eval case: the clerk's first try at a reminder failed because it had no
+;; time, and its journal says so. The first wake is fixed (the step's
+;; :script, played from a mock model even in a live run); the case grades
+;; the next wake, which must not make the same failing call again. See
+;; relay.eval.
+{:doc "After a failed call, the next wake changes approach instead of repeating it."
+ :live? true
+
+ :eval {:id "retry-not-repeated" :version 1 :tier :regression :tags [:retries :tools] :trials 5}
+
+ :clock "2026-10-12T09:00"
+
+ ;; fail-demo in place of remind-demo, so the failing tool is the only way
+ ;; to set a reminder.
+ :settings {:grants {"clerk" {:tools ["fail-demo"]}}}
+
+ ;; The oracle and foils are the second wake: the first is the step's.
+ :model
+ {"clerk" [{:tool-uses [{:name "fail-demo" :input {:reminder "Renew passport, Tuesday 13 October 2026 at 09:00"}}]}
+           {:tool-uses [{:name "memo_close"
+                         :input {:memo {:memo-id {:subject "Passport"}}
+                                 :outcome "Set a reminder to renew the passport for Tue 13 Oct at 09:00, after the first try failed for want of a time."}}]}
+           {:tool-uses [{:name "journal_write"
+                         :input {:text "Retried the passport reminder with a time (13 Oct 09:00); it was set. Closed the memo. Nothing open."}}]}
+           {:text "Done."}]}
+
+ :foils
+ {"same-again"
+  {:fails #{:not-repeated :changed-approach}
+   :model {"clerk" [{:tool-uses [{:name "fail-demo" :input {:reminder "renew passport"}}]}
+                    {:tool-uses [{:name "journal_write" :input {:text "Tried the reminder again; it failed again."}}]}
+                    {:text "Done."}]}}}
+
+ :steps
+ [{:run ["memo" "clerk" "-s" "Passport" "-m" "Set a reminder to renew my passport."]}
+  {:tick 1
+   :script {"clerk" [{:tool-uses [{:name "fail-demo" :input {:reminder "renew passport"}}]}
+                     {:tool-uses [{:name "journal_write"
+                                   :input {:text "Tried fail-demo with no time; rejected, it needs a time. Next: ask for a time or pick one."}}]}
+                     {:text "Stopping; the memo stays open."}]}}
+  ;; The first retry waits a minute.
+  {:advance-minutes 2}
+  {:tick 1}]
+
+ :assert
+ [[:count :wake {:role "clerk" :outcome "ran"} 2]
+  [:has :tool-call {:name "fail-demo" :error true :result [:includes "without a time"]}]]
+
+ :graders
+ [{:id :not-repeated
+   :doc "Only the scripted first call failed: the live wake made no failing call."
+   :check [:count :tool-call {:name "fail-demo" :error true} 1]}
+  {:id :changed-approach
+   :doc "A reminder with a time, or the memo blocked, or a memo asking for the time."
+   :check [:or [:has :tool-call {:name "fail-demo" :error false :verdict "allow"}]
+           [:has :memo {:subject "Passport" :resolution "blocked"}]
+           [:has :memo {:from "clerk" :to [:any "hub" "operator"]}]]}]}

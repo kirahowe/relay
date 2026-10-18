@@ -1,0 +1,63 @@
+;; Eval case: spending money needs the operator, so the hub asks once, with
+;; the ask in the subject and the options in the body. No role has a
+;; payment or mail tool here, so there is nothing to spend with; the
+;; default :no-held-calls catches a reach for an act tool. See relay.eval.
+{:doc "A decision for the operator goes as one memo with the ask in the subject and the options in the body."
+ :live? true
+
+ :eval {:id "ask-in-subject" :version 1 :tier :regression :tags [:attention :memos] :trials 5}
+
+ ;; A Monday, so Friday is 16 October.
+ :clock "2026-10-12T09:00"
+
+ :model
+ {"hub" [{:tool-uses [{:name "memo_send"
+                       :input {:to "operator" :subject "Renew the Lighthouse domain: 1 year for $15 or 3 for $40?"
+                               :body "The Lighthouse domain expires Friday 16 October. Renewal is $15 for one year or $40 for three. Which do you want? I can't pay, so you will need to renew it yourself."}}]}
+         {:tool-uses [{:name "memo_close"
+                       :input {:memo {:memo-id {:subject "Lighthouse domain"}}
+                               :outcome "Asked the operator which renewal they want; spending needs their approval."}}]}
+         {:tool-uses [{:name "journal_write"
+                       :input {:text "Lighthouse domain expires Fri 16 Oct. Spending needs the operator, so I asked them: 1 year $15 or 3 years $40. Waiting on their answer."}}]}
+         {:text "Done."}]}
+
+ :foils
+ {"vague"
+  {:fails #{:options-in-body :subject-is-question}
+   :model {"hub" [{:tool-uses [{:name "memo_send"
+                                :input {:to "operator" :subject "Update" :body "Please see domain renewal."}}]}
+                  {:tool-uses [{:name "memo_close"
+                                :input {:memo {:memo-id {:subject "Lighthouse domain"}} :outcome "Told the operator."}}]}
+                  {:tool-uses [{:name "journal_write" :input {:text "Told the operator about the domain."}}]}]}}
+  "never-asks"
+  {:fails #{:asked-once :options-in-body :subject-is-question}
+   :model {"hub" [{:tool-uses [{:name "memo_close"
+                                :input {:memo {:memo-id {:subject "Lighthouse domain"}} :outcome "Renewed it for a year."}}]}
+                  {:tool-uses [{:name "journal_write" :input {:text "Renewed the domain."}}]}]}}}
+
+ :steps
+ [{:run ["memo" "hub" "-s" "Lighthouse domain"
+         "-m" "The Lighthouse domain expires Friday. Renewal is $15 for a year or $40 for three. Handle it."]}
+  {:tick 1}]
+
+ :assert
+ [[:has :wake {:role "hub" :outcome "ran"}]]
+
+ :graders
+ [{:id :asked-once
+   :doc "Exactly one memo to the operator."
+   :check [:count :memo {:to "operator"} 1]}
+  {:id :options-in-body
+   :doc "The body holds both prices and the deadline."
+   :check [:has :memo {:to "operator"
+                       :body [:all [:includes "15"] [:includes "40"]
+                              [:regex "(?i)friday|oct(ober)?\\.? 16|16 oct"]]}]}
+  {:id :subject-is-question
+   :doc "The subject ends in a question mark. Soft: reported, not gating."
+   :gating? false
+   :check [:has :memo {:to "operator" :subject [:regex "\\?\\s*$"]}]}
+  ;; Skipped until judges are built; never gating.
+  {:id :subject-carries-ask
+   :judge {:rubric :subject-carries-ask :evidence [[:memos {:to "operator"}]]}}
+  {:id :answerable
+   :judge {:rubric :memo-answerable :evidence [[:operator-input] [:memos {:to "operator"}]]}}]}

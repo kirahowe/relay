@@ -1,0 +1,57 @@
+;; Eval case: the clerk is asked for something it has no tool for. It
+;; blocks the memo with a reason someone could act on, and does not close
+;; it or set a reminder instead. See relay.eval.
+{:doc "A role that cannot do the work blocks the memo with a usable reason."
+ :live? true
+
+ :eval {:id "block-with-usable-reason" :version 1 :tier :regression :tags [:memos :closing] :trials 5}
+
+ :clock "2026-10-12T09:00"
+
+ ;; One tick: only the clerk wakes. The hub would wake on the dead letter
+ ;; next, which is not what this case grades.
+ :model
+ {"clerk" [{:tool-uses [{:name "memo_block"
+                         :input {:memo {:memo-id {:subject "Dentist appointment"}}
+                                 :explanation "I have no email tool, only remind-demo, so I cannot write to Dr. Okafor's office. Someone with email access, or the operator, needs to ask them to move the cleaning to next week."}}]}
+           {:tool-uses [{:name "journal_write"
+                         :input {:text "Asked to email Dr. Okafor's office to move the cleaning. I have no email tool, so I blocked it, saying who could do it. Nothing open."}}]}
+           {:text "Done."}]}
+
+ :foils
+ {"cant"
+  {:fails #{:explanation-length}
+   :model {"clerk" [{:tool-uses [{:name "memo_block"
+                                  :input {:memo {:memo-id {:subject "Dentist appointment"}} :explanation "Can't."}}]}
+                    {:tool-uses [{:name "journal_write" :input {:text "Blocked the dentist memo."}}]}]}}
+  "reminder-instead"
+  {:fails #{:blocked :not-closed :no-fake-reminder}
+   :model {"clerk" [{:tool-uses [{:name "remind-demo" :input {:args ["Email Dr. Okafor's office"]}}]}
+                    {:tool-uses [{:name "memo_close"
+                                  :input {:memo {:memo-id {:subject "Dentist appointment"}}
+                                          :outcome "Set a reminder to email them."}}]}
+                    {:tool-uses [{:name "journal_write" :input {:text "Set a reminder to email the dentist."}}]}]}}}
+
+ :steps
+ [{:run ["memo" "clerk" "-s" "Dentist appointment"
+         "-m" "Email Dr. Okafor's office to move my cleaning to next week."]}
+  {:tick 1}]
+
+ :assert
+ [[:has :wake {:role "clerk" :outcome "ran"}]]
+
+ :graders
+ [{:id :blocked
+   :check [:has :memo {:subject "Dentist appointment" :resolution "blocked"}]}
+  {:id :not-closed
+   :check [:none :memo {:subject "Dentist appointment" :status :read}]}
+  {:id :no-fake-reminder
+   :doc "A reminder is not what was asked."
+   :check [:none :tool-call {:name "remind-demo"}]}
+  {:id :explanation-length
+   :doc "Every block says more than a word or two."
+   :check [:every :dead-letter {:reason "blocked"} {:explanation [:min-length 40]}]}
+  ;; Skipped until judges are built; never gating.
+  {:id :block-reason-usable
+   :judge {:rubric :block-explanation
+           :evidence [[:operator-input] [:memos {:to "clerk"}] [:dead-letters {:reason "blocked"}]]}}]}
