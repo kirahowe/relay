@@ -66,6 +66,10 @@
       (str/blank? (.getHost u)) "it has no host"
       (.getRawUserInfo u) "it holds a user name or password"
       (or (.getRawFragment u) (str/includes? url "#")) "it has a fragment"
+      ;; A path that a server would read as another one, such as
+      ;; /tenant/../other, could pass a check of where it is.
+      (some #{"." ".."} (str/split (str/replace (str/lower-case (str (.getRawPath u))) "%2e" ".") #"/"))
+      "its path has . or .. segments"
       (= "https" (.getScheme u)) nil
       (and (= "http" (.getScheme u)) (loopback? (.getHost u))) nil
       (= "http" (.getScheme u)) "it is http to a host that is not this machine; it must be https"

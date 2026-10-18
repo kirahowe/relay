@@ -441,26 +441,59 @@
   [url]
   (p/process ["open" url] {:out :discard :err :discard}))
 
+(def chunk-chars
+  "The most secret characters in one keychain item. security -i reads a
+  line of at most 4095 characters and runs whatever is past that as a
+  command of its own, so each item's line stays well under it."
+  3000)
+
+(defn chunk-item [service i] (if (zero? i) service (str service "-" i)))
+
+(defn keychain-lines
+  "The security -i lines that keep a base64 secret under `service`: the
+  secret in items of at most chunk-chars, the first (`service` itself)
+  saying how many there are, as c<n>.<chunk>. Base64 has no dot, so the
+  count reads back unambiguously. The first item is written last."
+  [service account secret]
+  (let [chunks (mapv #(apply str %) (partition-all chunk-chars secret))
+        n (count chunks)]
+    (vec (for [i (reverse (range n))]
+           (str "add-generic-password -U -a " account " -s " (chunk-item service i) " -w "
+                (if (zero? i) (str "c" n "." (chunks 0)) (chunks i)))))))
+
+(defn assemble
+  "The secret from its items, read by `read-item` (a function of the
+  item's service), or nil when any is missing."
+  [service read-item]
+  (when-let [[_ n first-chunk] (some->> (read-item service) (re-matches #"c([0-9]{1,3})\.([A-Za-z0-9+/=]*)"))]
+    (let [rest-chunks (for [i (range 1 (parse-long n))] (read-item (chunk-item service i)))]
+      (when (every? some? rest-chunks)
+        (apply str first-chunk rest-chunks)))))
+
 (defn keychain-read
   "The secret kept under `service` and `account` in the login keychain,
   or nil."
   [service account]
-  (let [r @(p/process ["security" "find-generic-password" "-a" account "-s" service "-w"]
-                      {:out :string :err :string :in ""})]
-    (when (zero? (:exit r)) (str/trim (:out r)))))
+  (assemble service
+            (fn [item]
+              (let [r @(p/process ["security" "find-generic-password" "-a" account "-s" item "-w"]
+                                  {:out :string :err :string :in ""})]
+                (when (zero? (:exit r)) (str/trim (:out r)))))))
 
 (defn keychain-write!
   "Keeps `secret` (base64, so it needs no quoting) under `service` in the
   login keychain, replacing what was there. The secret goes to security
-  on stdin, never in an argument list."
+  on stdin, never in an argument list, and what security prints is never
+  repeated, since it can echo what it was given."
   [service account secret]
   (when-not (and (re-matches #"[A-Za-z0-9+/=]+" secret) (re-matches #"[A-Za-z0-9_-]+" (str service account)))
     (throw (ex-info "A keychain secret must be base64, and its service and account plain names." {})))
   (let [r @(p/process ["security" "-i"]
-                      {:in (str "add-generic-password -U -a " account " -s " service " -w " secret "\n")
+                      {:in (str (str/join "\n" (keychain-lines service account secret)) "\n")
                        :out :string :err :string})]
     (when-not (and (zero? (:exit r)) (str/blank? (:err r)))
-      (problem! (str "relay could not keep the sign-in in the login keychain: " (str/trim (str (:err r))))))))
+      (problem! (str "relay could not keep the sign-in in the login keychain (security exited " (:exit r)
+                     "). Nothing else was changed.")))))
 
 (defn list-tools
   "Every tool of the remote server, as agentloop mcp-tools lists them,

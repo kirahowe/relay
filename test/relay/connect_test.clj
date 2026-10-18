@@ -451,3 +451,20 @@
 (deftest a-new-name-never-takes-one-relay-edn-has
   (is (= "mail_send_campaign_2"
          (:name (last (connect/propose "mail" [(first listed)] nil #{"mail_send_campaign"}))))))
+
+(deftest a-secret-of-any-length-is-kept-in-lines-security-reads-whole
+  (is (:pass? (tc/quick-check 100
+                              (prop/for-all [n (gen/choose 1 20000)]
+                                (let [secret (apply str (take n (cycle "QUJDREVGR0hJSktMTU5PUA==")))
+                                      lines (connect/keychain-lines "relay-mcp-x" "relay-0123" secret)
+                                      items (into {} (for [l lines :let [[_ svc v] (re-matches #".* -s (\S+) -w (\S+)" l)]] [svc v]))]
+                                  (and (every? #(< (count %) 4000) lines)
+                                       (= secret (connect/assemble "relay-mcp-x" items))
+                                       (str/includes? (last lines) "-s relay-mcp-x -w c"))))))
+      "the item that names the count is written last")
+  (is (nil? (connect/assemble "s" {"s" "c2.QUJD"})) "a missing item reads as no sign-in"))
+
+(deftest a-url-with-dot-segments-is-refused
+  (doseq [u ["https://h/tenant/../evil/mcp" "https://h/./mcp" "https://h/a/%2E%2E/mcp" "https://h/a/.."]]
+    (is (connections/url-problem u) u))
+  (is (nil? (connections/url-problem "https://h/a.b/..c/mcp"))))
