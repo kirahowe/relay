@@ -283,7 +283,8 @@ text in its arguments (their names, descriptions, titles, allowed values
 and defaults). It also reads the text for what an honest description has
 no reason to hold: sentences that tell the model what to do (before or
 after a call, ignore, always or never, you must, send or include your
-private things), chat role words such as "system:", names of tools from
+private things, keep something from you), chat role words such as
+"system:", secret files or keys such as ~/.ssh, names of tools from
 elsewhere, characters that show as nothing or could pass for others,
 links and email addresses, and text far longer than a description needs.
 A tool with any of these starts off. connect lists why, then shows its

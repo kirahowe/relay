@@ -61,8 +61,8 @@
                    (when-not (keywords kn) [[(str (here k) " (key)") kn]])
                    (cond
                      (and (= "type" kn) (or (json-types v) (and (sequential? v) (every? json-types v)))) nil
-                     (#{"properties" "patternProperties" "$defs" "definitions" "dependentSchemas"} kn)
-                     (when (map? v)
+                     (and (#{"properties" "patternProperties" "$defs" "definitions" "dependentSchemas"} kn) (map? v))
+                     (do
                        (mapcat (fn [[pk pv]]
                                  (let [where (str (here k) " " (kw-name pk))]
                                    (cons [(str where " (name)") (kw-name pk)] (schema-texts pv where))))
@@ -73,6 +73,30 @@
       (sequential? schema) (mapcat #(schema-texts %1 (str path "[" %2 "]")) schema (range))
       (string? schema) [[path schema]]
       :else nil)))
+
+(defn- every-text
+  "Every key and every string in a JSON value, whatever it means: the
+  net under schema-texts, so nothing the model is shown can be missed by
+  a walk that reads the schema wrongly."
+  [v path]
+  (cond
+    (map? v) (mapcat (fn [[k x]] (cons [(str path " (key)") (kw-name k)] (every-text x (str path " " (kw-name k)))))
+                     (sort-by (comp kw-name key) v))
+    (sequential? v) (mapcat #(every-text % path) v)
+    (string? v) [[path v]]
+    :else nil))
+
+(defn- with-the-rest
+  "The structured texts, then every text the exhaustive walk found that
+  they lack (other than JSON Schema's keywords and type names)."
+  [structured schema path]
+  (let [have (set (map second structured))
+        rest (for [[w t] (every-text schema path)
+                   :when (not (have t))
+                   :when (not (and (str/ends-with? w "(key)") (keywords t)))
+                   :when (not (and (json-types t) (re-find #" type$" w)))]
+               [w t])]
+    (concat structured (distinct rest))))
 
 (defn texts
   "Every piece of text in a listed tool's definition, as [where text], in
@@ -85,8 +109,8 @@
         (when (and (string? (:title annotations)) (not= title (:title annotations)))
           [["annotations title" (:title annotations)]])
         (when (string? description) [["description" description]])
-        (schema-texts input_schema "input")
-        (schema-texts output_schema "output")
+        (with-the-rest (schema-texts input_schema "input") input_schema "input")
+        (with-the-rest (schema-texts output_schema "output") output_schema "output")
         (for [[k v] (sort-by (comp kw-name key) annotations) :when (and (string? v) (not= :title k))]
           [(str "annotations " (kw-name k)) v]))))
 
@@ -110,6 +134,10 @@
     "gives the model orders"]
    [#"(?i)\b(send|forward|include|share|post|upload|e-?mail|attach|reveal|leak|exfiltrate|copy|paste|transmit)\b(\W+\w+){0,3}?\W+(private|secret|confidential|credentials?|passwords?|api[ -]?keys?|system\s+prompt|conversation|memor(y|ies)|chat\s+history|everything|every\s+(fact|note|detail)|all\s+(facts|notes|data|files|messages|details))\b"
     "asks for private things to be sent or included"]
+   [#"(?i)\b(do\s+not|don'?t|never|without)\s+(tell|telling|inform|informing|mention|mentioning|show|showing|let|letting|notify|notifying|ask|asking|alert|alerting)\s+(the\s+)?(user|operator|human|owner|anyone|them)\b|\b(keep\s+(this|it)\s+(secret|hidden|between\s+us)|secretly|silently|quietly)\b"
+    "tells the model to keep something from the person"]
+   [#"(?i)(~/|\$HOME\b|/etc/(passwd|shadow)|\.ssh\b|\bid_(rsa|ed25519|ecdsa)\b|\.aws/|\.env\b|\bprivate\s+keys?\b|\bkeychain\b|\bbrowser\s+(cookies|passwords)\b)"
+    "mentions secret files or keys"]
    [#"(?i)(\b(system|assistant|developer)\s+(prompt|message|instructions?)\b|<\|?\s*(system|im_start|im_end|assistant)\b|\[/?(system|inst)\]|</?\s*(system|instructions?|important)\s*>|(^|\n|[.!?]\s)\s*(system|assistant|user)\s*:)"
     "uses chat role words, as a prompt would"]
    [#"(?i)\b(other|another|any|all|every)\s+(other\s+)?tools?\b|\btools?\s+(like|such\s+as|named|called)\b"

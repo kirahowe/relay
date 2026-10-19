@@ -105,3 +105,12 @@ trusts what the operator was shown. A model-based check is a follow-up
   names and objects inside default were skipped, keys that are not
   JSON Schema keywords were not checked as text, and the prompt for
   changing a tool printed its raw name.
+  Round 3 found two more, fixed: an argument-name list under a key the
+  walk took for a schema container (dependentRequired) was dropped, so
+  texts now also runs an exhaustive walk of every key and string as a
+  net, with a property test that nothing is missed; and concealment
+  ("do not tell the user") and secret-file instructions (~/.ssh/id_rsa)
+  passed, now two patterns. Stopped after three rounds as AGENTS.md
+  says. Each round found narrower gaps in a heuristic Kira accepted as a
+  heuristic; the model-based check in relay#48 is the answer to wording
+  no pattern list will cover.

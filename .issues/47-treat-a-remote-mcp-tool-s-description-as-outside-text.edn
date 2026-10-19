@@ -1,6 +1,6 @@
 {:id 47
  :title "Treat a remote MCP tool's description as outside text"
- :status :in-progress
+ :status :review
  :type :feature
  :priority :p1
  :created "2026-10-18"
