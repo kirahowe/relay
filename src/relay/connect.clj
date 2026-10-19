@@ -639,7 +639,7 @@
           (nil? a) (problem! "The terminal closed. Nothing was changed.")
           (str/blank? a) proposal
           (not (and i (< -1 i (count proposal)))) (recur proposal)
-          :else (do (say (str (:tool (proposal i)) ": "
+          :else (do (say (str (shown-line (:tool (proposal i))) ": "
                               (str/join ", " (for [[k {:keys [label]}] opts] (str k " " label))) ": "))
                     (if-let [c (get opts (some-> (ask) str/trim str/lower-case))]
                       (recur (apply-choice proposal i c))

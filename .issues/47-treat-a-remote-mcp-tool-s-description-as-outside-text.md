@@ -101,4 +101,7 @@ trusts what the operator was shown. A model-based check is a follow-up
   clickable and a newline in a property name made unguttered lines; a
   changed title kept an earlier "on" since the digest leaves titles out;
   "disregard" and "forget" overrides passed; fullwidth letters passed.
-  Round 2 checks the fixes.
+  Round 2 confirmed those fixes and found three more, fixed: required
+  names and objects inside default were skipped, keys that are not
+  JSON Schema keywords were not checked as text, and the prompt for
+  changing a tool printed its raw name.

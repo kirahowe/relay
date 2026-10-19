@@ -21,34 +21,54 @@
 
 (def ^:private json-types #{"string" "number" "integer" "boolean" "object" "array" "null"})
 
+(def ^:private keywords
+  "JSON Schema's own keywords: a key that is one of these is not text the
+  server chose. Any other key is, and is listed and checked."
+  #{"$schema" "$id" "$ref" "$anchor" "$dynamicRef" "$dynamicAnchor" "$defs" "$comment" "$vocabulary" "definitions"
+    "type" "enum" "const" "default" "examples" "title" "description" "format" "pattern"
+    "properties" "patternProperties" "additionalProperties" "unevaluatedProperties" "propertyNames"
+    "required" "dependentRequired" "dependentSchemas" "items" "prefixItems" "additionalItems" "unevaluatedItems"
+    "contains" "minContains" "maxContains" "minItems" "maxItems" "uniqueItems" "minProperties" "maxProperties"
+    "minLength" "maxLength" "minimum" "maximum" "exclusiveMinimum" "exclusiveMaximum" "multipleOf"
+    "allOf" "anyOf" "oneOf" "not" "if" "then" "else" "readOnly" "writeOnly" "deprecated"
+    "contentEncoding" "contentMediaType" "contentSchema"})
+
+(defn- data-texts
+  "Every string, key and scalar in a JSON value given as data (an enum,
+  a default), with its path."
+  [v path]
+  (cond
+    (map? v) (mapcat (fn [[k x]] (cons [(str path " (key)") (kw-name k)] (data-texts x (str path " " (kw-name k)))))
+                     (sort-by (comp kw-name key) v))
+    (sequential? v) (mapcat #(data-texts % path) v)
+    (string? v) [[path v]]
+    (nil? v) nil
+    :else [[path (pr-str v)]]))
+
 (defn- schema-texts
   "Every piece of text anywhere in a JSON Schema, with its path: every
-  key and every string, at any depth and under any keyword ($defs,
-  patternProperties, pattern and format included), since the model is
-  shown the schema whole. The values of type are left out when they are
-  JSON's own type names, and so are the names in required, which are
-  property names already listed. Numbers and booleans count where they
-  are values for the model to read (enum, const, default, examples)."
+  key that is not one of JSON Schema's keywords, every string, and all of
+  any value given as data (enum, const, default, examples), at any depth
+  and under any keyword, since the model is shown the schema whole. Only
+  the values of type that are JSON's own type names are left out."
   [schema path]
   (let [here (fn [k] (str path (when-not (str/blank? path) " ") (kw-name k)))]
     (cond
       (map? schema)
       (mapcat (fn [[k v]]
                 (let [kn (kw-name k)]
-                  (cond
-                    (and (= "type" kn) (or (json-types v) (and (sequential? v) (every? json-types v)))) nil
-                    (and (= "required" kn) (sequential? v) (every? string? v)) nil
-                    (#{"properties" "patternProperties" "$defs" "definitions" "dependentSchemas"} kn)
-                    (when (map? v)
-                      (mapcat (fn [[pk pv]]
-                                (let [where (str (here k) " " (kw-name pk))]
-                                  (cons [(str where " (name)") (kw-name pk)] (schema-texts pv where))))
-                              (sort-by (comp kw-name key) v)))
-                    (and (#{"enum" "examples" "const" "default"} kn) (not (coll? v)) (some? v))
-                    [[(here k) (if (string? v) v (pr-str v))]]
-                    (and (#{"enum" "examples"} kn) (sequential? v))
-                    (for [x v :when (some? x)] [(here k) (if (string? x) x (pr-str x))])
-                    :else (schema-texts v (here k)))))
+                  (concat
+                   (when-not (keywords kn) [[(str (here k) " (key)") kn]])
+                   (cond
+                     (and (= "type" kn) (or (json-types v) (and (sequential? v) (every? json-types v)))) nil
+                     (#{"properties" "patternProperties" "$defs" "definitions" "dependentSchemas"} kn)
+                     (when (map? v)
+                       (mapcat (fn [[pk pv]]
+                                 (let [where (str (here k) " " (kw-name pk))]
+                                   (cons [(str where " (name)") (kw-name pk)] (schema-texts pv where))))
+                               (sort-by (comp kw-name key) v)))
+                     (#{"enum" "examples" "const" "default"} kn) (data-texts v (here k))
+                     :else (schema-texts v (here k))))))
               (sort-by (comp kw-name key) schema))
       (sequential? schema) (mapcat #(schema-texts %1 (str path "[" %2 "]")) schema (range))
       (string? schema) [[path schema]]
