@@ -67,6 +67,20 @@ High defects.
 - `relay holds` defangs a clean preview itself and leaves a contaminated
   one to text/block, since defang is not idempotent.
 
+## Codex review, round 1
+
+- High, lookalike notes in relay holds quoted a preview's link live:
+  fixed, the notes are defanged, with a property test over the whole
+  rendered preview.
+- High, fixed arguments through read_quarantined were outside the
+  binding: fixed. The reader is Narrowed over its inner tool, and relay
+  approve checks the inner tool's fixed args.
+- Medium, a hold shown again after a settings change got a digest no
+  resolution could name: fixed, it keeps its hold's digest.
+- Medium, acp-tui rounds numbers above 2^53 in rawInput: in scope but
+  older than this change and not specific to fixed args; filed as
+  relay#52.
+
 ## Log
 
 - 2026-10-18: fixed in agentloop, acp-tui and relay; pentest checks in

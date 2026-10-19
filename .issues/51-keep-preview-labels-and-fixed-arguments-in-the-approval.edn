@@ -1,6 +1,6 @@
 {:id 51
  :title "Keep preview labels and fixed arguments in the approval"
- :status :in-progress
+ :status :review
  :type :bug
  :priority :p1
  :created "2026-10-18"

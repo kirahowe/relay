@@ -18,14 +18,9 @@
 | [35](35-make-the-test-suites-fast-enough-to-deploy-without-waiting.md) | Make the test suites fast enough to deploy without waiting | chore | P2 |
 | [37](37-let-the-hub-see-which-role-owns-what.md) | Let the hub see which role owns what | bug | P2 |
 | [38](38-stop-the-hub-notifying-twice-for-one-stuck-memo.md) | Stop the hub notifying twice for one stuck memo | bug | P2 |
+| [52](52-show-large-numbers-in-a-permission-request-exactly-in-acp.md) | Show large numbers in a permission request exactly in acp-tui | bug | P2 |
 | [36](36-clean-up-after-an-interrupted-deploy-and-leave-no-check.md) | Clean up after an interrupted deploy, and leave no check dirs in TMPDIR | bug | P3 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
-
-### In progress
-
-| ID | Title | Type | Priority |
-| --- | --- | --- | --- |
-| [51](51-keep-preview-labels-and-fixed-arguments-in-the-approval.md) | Keep preview labels and fixed arguments in the approval | bug | P1 |
 
 ### Review
 
@@ -48,6 +43,7 @@
 | [45](45-show-the-operator-what-the-model-never-reads-in-a-workspace.md) | Show the operator what the model never reads, in a workspace pane | feature | P1 |
 | [46](46-codify-verification-in-bb-verify-with-new-evals-and-pentests.md) | Codify verification in bb verify, with new evals and pentests | chore | P1 |
 | [47](47-treat-a-remote-mcp-tool-s-description-as-outside-text.md) | Treat a remote MCP tool's description as outside text | feature | P1 |
+| [51](51-keep-preview-labels-and-fixed-arguments-in-the-approval.md) | Keep preview labels and fixed arguments in the approval | bug | P1 |
 | [3](3-run-agentloop-s-live-smoke-tests-from-a-flag-not-an-env-var.md) | Run agentloop's live smoke tests from a flag, not an env var | chore | P2 |
 | [5](5-support-reminder-sections-in-rem.md) | Support reminder sections in rem | feature | P2 |
 | [7](7-add-bb-deploy-and-bb-rollback-for-kira-to-run.md) | Add bb deploy and bb rollback for Kira to run | feature | P2 |

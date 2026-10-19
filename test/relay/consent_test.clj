@@ -396,3 +396,21 @@
   (is (= [{:id "c1" :name "send" :input {} :input-sha256 "d"}]
          (harness-agentloop/held-calls [{:id "c1" :name "send" :input {} :input_sha256 "d" :fixed_args {}}]))
       "nothing fixed, nothing kept"))
+
+(defspec a-rendered-preview-has-no-live-link 100
+  ;; Regression (Codex review): the lookalike note quoted a preview's link
+  ;; whole, so relay holds showed it live.
+  (prop/for-all [labels (gen/elements [[] ["private"] ["contaminated"] ["contaminated" "private"]])
+                 host (gen/elements ["evil.example" "p\u0430ypal.example" "lists.service.example"])
+                 word (gen/elements ["" " p\u0430ypal" " \u041aira"])]
+    (let [content (str "Send." word " https://" host "/receipt?token=t&name=p\u0430ypal")
+          shown (str/join "\n" (render/preview {:content content :is-error false :labels labels} #{}))]
+      (not (re-find #"https?://" shown)))))
+
+(deftest a-hold-through-the-reader-is-bound-to-the-inner-tool-s-fixed-args
+  ;; Regression (Codex review): relay looked up the reader's own fixed
+  ;; arguments, which it never has, not the inner tool's.
+  (let [h {:tool core/reader-tool :input {:tool "send" :input {:subject "Hi"}}
+           :fixed-args {:group "Kira only"}}]
+    (is (core/fixed-args-changed? (assoc-in cfg [:tools "send" :fixed-args] {"group" "Public list"}) h))
+    (is (not (core/fixed-args-changed? (assoc-in cfg [:tools "send" :fixed-args] {"group" "Kira only"}) h)))))

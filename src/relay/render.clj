@@ -339,8 +339,9 @@
          (cons "    links to places you have not approved before:"
                (map #(str "      " (text/defang %)) new-hosts)))
        (when (seq odd)
+         ;; Each note quotes the word it is in, which can be a link.
          (cons "    look closely, the preview has characters that can pass for others:"
-               (map #(str "      " %) odd)))))))
+               (map #(str "      " (text/defang %)) odd)))))))
 
 (def ^:private destination-key
   #"(?i)url|uri|link|to|cc|bcc|recipient|host|address|email|endpoint|dest|channel|repo|webhook|server|domain|phone|number")

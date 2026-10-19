@@ -2293,8 +2293,10 @@
   input with them, so such a call would not run: it is refused here,
   where the operator can see why, and agentloop refuses it again."
   [config h]
-  (not= (json-keys (not-empty (:fixed-args h)))
-        (json-keys (not-empty (get-in config [:tools (:tool h) :fixed-args])))))
+  ;; Through the reader, the inner tool's.
+  (let [tool (or (held-tool (:tool h) (:input h)) (:tool h))]
+    (not= (json-keys (not-empty (:fixed-args h)))
+          (json-keys (not-empty (get-in config [:tools tool :fixed-args]))))))
 
 (defmethod decide* :hold/resolve [{:keys [state actor] :as tx} {{hold-id :hold :keys [verdict reason end]} :args}]
   ;; A person decides, never a model or a tool: only the operator, at the

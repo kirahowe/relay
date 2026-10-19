@@ -1,0 +1,11 @@
+{:id 52
+ :title "Show large numbers in a permission request exactly in acp-tui"
+ :status :ready
+ :type :bug
+ :priority :p2
+ :created "2026-10-18"
+ :updated "2026-10-18"
+ :tags #{"security"}
+ :blocked-by #{}
+ :related #{}
+ :details "52-show-large-numbers-in-a-permission-request-exactly-in-acp.md"}
