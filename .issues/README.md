@@ -10,12 +10,13 @@
 | [40](40-hold-act-calls-for-consent-and-stop-holding-house-changes.md) | Hold act calls for consent and stop holding house changes | feature | P1 |
 | [42](42-give-roles-a-sandboxed-workbench-with-no-way-out.md) | Give roles a sandboxed workbench with no way out | feature | P1 |
 | [46](46-codify-verification-in-bb-verify-with-new-evals-and-pentests.md) | Codify verification in bb verify, with new evals and pentests | chore | P1 |
-| [47](47-treat-a-remote-mcp-tool-s-description-as-outside-text.md) | Treat a remote MCP tool's description as outside text | feature | P1 |
+| [48](48-judge-remote-tool-definitions-with-a-decision-model.md) | Judge remote tool definitions with a decision model | feature | P2 |
 
 ### Ready
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
+| [47](47-treat-a-remote-mcp-tool-s-description-as-outside-text.md) | Treat a remote MCP tool's description as outside text | feature | P1 |
 | [35](35-make-the-test-suites-fast-enough-to-deploy-without-waiting.md) | Make the test suites fast enough to deploy without waiting | chore | P2 |
 | [37](37-let-the-hub-see-which-role-owns-what.md) | Let the hub see which role owns what | bug | P2 |
 | [38](38-stop-the-hub-notifying-twice-for-one-stuck-memo.md) | Stop the hub notifying twice for one stuck memo | bug | P2 |
