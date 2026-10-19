@@ -251,7 +251,12 @@ authorization server from the server's metadata, registers itself there
 when the server allows that (otherwise it asks you for a client id), and
 opens your browser. The browser comes back to relay on 127.0.0.1, at a
 port chosen for this sign-in, and relay checks that the answer is to its
-own request. Every token is good only for that server. The refresh
+own request. Each sign-in has a redirect of its own, and relay talks to
+one authorization server only: one that says it names itself in its
+answers (RFC 9207) must do so every time, and one that does not must
+keep its sign-in and token addresses on its own origin, or relay
+refuses it before opening the browser. Every token is good only for
+that server. The refresh
 token and the current access token go in your login keychain as
 `relay-mcp-<name>`, never in a file. The connection's
 `:credentials-command` is `relay mcp-token <name>`, which prints an

@@ -69,6 +69,18 @@ relay's internals.
 - With no protected-resource metadata, connect falls back to the MCP
   server's origin as issuer (the 2025-03-26 rule). A resource named in
   the metadata must be on the server's origin, at or above its path.
+- Against an OAuth mix-up (a finding from another workstream's Codex
+  review, sent by the orchestrator): each flow talks to the one
+  authorization server it discovered, whose metadata must name that
+  issuer; `iss` in the answer is checked whenever present and required
+  when the metadata advertises it. When it is not advertised, the
+  authorization, token and registration endpoints must be on the
+  issuer's own origin, so a server cannot send the operator to another
+  server's sign-in and collect that server's code and relay's verifier.
+  With dynamic registration, each flow's redirect has a random path as
+  well as its own port; a client id the operator gives keeps /callback,
+  since it was registered for a fixed path. Tested against a fake second
+  authorization server in relay.connect-test.
 - relay.edn is not edited by connect; it prints the lines to add. Writing
   relay.edn would reformat the operator's file.
 - Tests never touch the keychain or a browser: test-support's isolate!

@@ -242,7 +242,15 @@
 (defn check-as-metadata
   "An authorization server's metadata, checked: it names the issuer it
   was fetched for, its endpoints are https (or this machine), and it
-  takes PKCE with S256 if it says what it takes."
+  takes PKCE with S256 if it says what it takes.
+
+  Against a mix-up of authorization servers (RFC 9207, OAuth 2.1): a
+  server that does not say it names itself in its answers must keep its
+  endpoints on the issuer's own origin. Otherwise one that sends the
+  operator to another server's sign-in page, and so gets the code that
+  server issues and relay's PKCE verifier at its own token endpoint,
+  could not be told apart. A server that names itself is held to that
+  in every answer (callback-result)."
   [m issuer]
   (when-not (= issuer (get m "issuer"))
     (problem! (str "The authorization server's metadata is for " (pr-str (get m "issuer")) ", not " issuer
@@ -252,6 +260,13 @@
       (problem! (str "The authorization server gives no " k ". Nothing was changed.")))
     (usable-url! k (get m k)))
   (when-let [r (get m "registration_endpoint")] (usable-url! "registration_endpoint" r))
+  (when-not (true? (get m "authorization_response_iss_parameter_supported"))
+    (doseq [k ["authorization_endpoint" "token_endpoint" "registration_endpoint"]
+            :let [u (get m k)]
+            :when (and u (not= (origin u) (origin issuer)))]
+      (problem! (str "The authorization server's " k " is on " (origin u) ", not its own " (origin issuer)
+                     ", and the server does not name itself in its answers, so relay cannot be sure an"
+                     " answer is its own. Nothing was changed."))))
   (when-let [methods (get m "code_challenge_methods_supported")]
     (when-not (and (sequential? methods) (some #{"S256"} methods))
       (problem! "The authorization server does not take PKCE with S256, which relay needs. Nothing was changed.")))
@@ -417,12 +432,12 @@
 
 (defn listen
   "Listens on 127.0.0.1 at a free port for the browser's return to
-  /callback. Returns {:redirect :result (a promise) :stop}. Only the
-  first answer counts."
-  [state issuer iss-required]
+  `path`. Returns {:redirect :result (a promise) :stop}. Only the first
+  answer counts."
+  [path state issuer iss-required]
   (let [result (promise)
         handler (fn [{:keys [uri query-string request-method]}]
-                  (if-let [r (and (= :get request-method) (= "/callback" uri)
+                  (if-let [r (and (= :get request-method) (= path uri)
                                   (callback-result (parse-query query-string) state issuer iss-required))]
                     (do (deliver result r)
                         {:status 200 :headers {"Content-Type" "text/html; charset=utf-8"}
@@ -431,7 +446,7 @@
                                  "<p>The sign-in was refused. Go back to the terminal.</p>")})
                     {:status 404 :body ""}))
         srv (httpkit/run-server handler {:ip "127.0.0.1" :port 0 :legacy-return-value? false})]
-    {:redirect (str "http://127.0.0.1:" (httpkit/server-port srv) "/callback")
+    {:redirect (str "http://127.0.0.1:" (httpkit/server-port srv) path)
      :result result
      :stop #(httpkit/server-stop! srv)}))
 
@@ -529,7 +544,13 @@
         {:keys [resource scope as]} (discover env url)
         verifier (random-token rng)
         state (random-token rng)
-        {:keys [redirect result stop]} (listen state (get as "issuer")
+        ;; Each flow has a redirect of its own: a port, and with a
+        ;; registration made for this flow, a random path too. A client
+        ;; id the operator gives was registered for a fixed path.
+        path (if (and (nil? client-id) (get as "registration_endpoint"))
+               (str "/callback/" (subs (random-token rng) 0 16))
+               "/callback")
+        {:keys [redirect result stop]} (listen path state (get as "issuer")
                                                 (true? (get as "authorization_response_iss_parameter_supported")))]
     (try
       (let [client (cond
