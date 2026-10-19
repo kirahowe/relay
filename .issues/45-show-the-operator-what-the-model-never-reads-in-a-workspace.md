@@ -12,12 +12,12 @@ relay's internals.
 
 ## Acceptance criteria
 
-- [ ] Envelope results may carry display. agentloop never gives it to the model, and sends it to ACP clients.
-- [ ] relay stores displays as docs under shown/, with their labels. Wake notifications mention them.
-- [ ] The quarantined reader supports show_operator.
-- [ ] acp-tui has a workspace pane that shows displays, held proposals with their previews, and citations. The operator can approve, deny and trust from it, and it renders from relay's data.
-- [ ] Trust from the pane has the same operator-presence guarantee as ACP approvals.
-- [ ] A pentest shows display content never reaching the model.
+- [x] Envelope results may carry display. agentloop never gives it to the model, and sends it to ACP clients.
+- [x] relay stores displays as docs under shown/, with their labels. Wake notifications mention them.
+- [x] The quarantined reader supports show_operator.
+- [x] acp-tui has a workspace pane that shows displays, held proposals with their previews, and citations. The operator can approve, deny and trust from it, and it renders from relay's data.
+- [x] Trust from the pane has the same operator-presence guarantee as ACP approvals.
+- [x] A pentest shows display content never reaching the model.
 
 ## Decisions
 
@@ -77,3 +77,27 @@ relay's internals.
   domains yet.
 
 ## Log
+
+## Review
+
+Codex, read-only, three rounds over agentloop, relay and acp-tui.
+
+- Round 1. Fixed: acp-tui's defang broke only a URL's host, so a second
+  host in the query (`?next=www.evil.test/?d=1`) stayed live; every dot
+  in a match now breaks. Fixed: a role could remove a shown doc; removal
+  under `shown/` is now the operator's only. Fixed: a source ref with
+  brackets made relay refuse the whole display; refs are escaped as
+  relay.refs writes them.
+- Round 2. Fixed: acp-tui's escaping let variation selectors and other
+  invisible code points through, so trust could vouch for text nobody
+  saw; it now escapes relay.text's default-ignorable and blank-glyph code
+  points. Fixed: the permission box and `v` showed a held call's input
+  with live links in a contaminated session; they defang now.
+- Round 3. Fixed: the request's title, which quotes the input, kept live
+  links. Out of this issue's code: relay connect accepts an OAuth
+  callback without `iss` when the server's metadata omits the flag (mix-up
+  attack), in the mcp workspace's src/relay/connect.clj; reported to the
+  orchestrator for that work.
+
+Round 3 still found an in-scope defect, so per the review rule the loop
+stopped there, with that defect fixed and no fourth round run.
