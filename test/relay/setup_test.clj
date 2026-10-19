@@ -77,7 +77,7 @@
     (is (= {:class :egress :labels ["contaminated"] :protocol :envelope}
            (select-keys web [:class :labels :protocol])))
     (is (= ["/opt/webtool/bin/webtool" "--config" webtool-file "ask"] (:command web)))
-    (is (= {"hub" {:tools ["web"] :quarantine ["web"]}} (:grants settings)))
+    (is (= {"hub" {:quarantine ["web"]}} (:grants settings)) "the web is reader-only for the hub")
     (is (= {"snapshot_dir" (str dir "/home/Library/Application Support/webtool/snapshots")
             "search" {"backend" "brave" "api_key_command" setup/brave-key-command}}
            (json/parse-string (slurp webtool-file))))

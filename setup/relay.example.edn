@@ -198,11 +198,12 @@
  ;; include "private", or the dead letter handler's job. :reports lets a
  ;; public role write research reports of the kinds named, which relay
  ;; checks and you review with relay review.
- ;; :quarantine names :read or :egress tools from the role's :tools that
- ;; it may also read through read_quarantined, which shows it only a
- ;; checked answer about the output (see the README).
+ ;; :quarantine names :read or :egress tools the role may read through
+ ;; read_quarantined, which shows it only a checked answer about the
+ ;; output (see the README). One that is not also in :tools is
+ ;; reader-only: the model is never offered it, as for the hub's web.
  :grants
- {"hub" {:may-add true :tools ["rem-read" "rem" "web"] :quarantine ["web"]}
+ {"hub" {:may-add true :tools ["rem-read" "rem"] :quarantine ["web"]}
   ;; Add it with relay add grant-search --public, so its own text is public.
   ;; "grant-search" {:public true :tools ["web-search" "web-fetch"]
   ;;                 :reports {:kinds ["grant"]}}

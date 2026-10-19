@@ -204,6 +204,8 @@
      ;; The tools the role may read through agentloop's quarantined
      ;; reader, if the operator granted any.
      :quarantine (when-not (:script? script) (config/quarantine-tools config role))
+     ;; Of those, the ones the model is never offered.
+     :reader-only (when-not (:script? script) (config/reader-only-tools config role))
      ;; The MCP servers the role's granted tools come from, and no others.
      :mcp-servers (config/mcp-servers-for config (map :name manifest))
      ;; Where the role's displays are kept, by the day the wake started.

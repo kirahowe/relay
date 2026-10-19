@@ -122,7 +122,7 @@
        "                :description \"Search the web and read the top results. Read it through read_quarantined with a closed schema.\"\n"
        "                :parameters " (pr-str web-tool-parameters) "\n"
        "                :command " (pr-str [bin "--config" webtool-file "ask"]) "}}\n"
-       " :grants {\"hub\" {:tools [\"web\"] :quarantine [\"web\"]}}}\n"))
+       " :grants {\"hub\" {:quarantine [\"web\"]}}}\n"))
 
 (defn render
   "relay.edn's text for the settings `interview` returns. `webtool-file`

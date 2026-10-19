@@ -177,22 +177,23 @@
 (defn- check-quarantine-grant
   "A :quarantine grant names tools the role may read through agentloop's
   quarantined reader, read_quarantined. Each must be one of the role's
-  :tools, of class :read or :egress, and not :always-hold: the reader runs
+  tools in relay.edn, of class :read or :egress, and not :always-hold. One
+  that is not also in its :tools is reader-only: the model is never offered
+  it, and reaches it only through the reader. The reader runs
   it and shows the role only a checked answer about its output. An
   :egress tool, such as webtool's ask, is decided as the role's own call
   would be, since the role writes its input: a session that has seen both
   private data and an outsider's text is held. :write and :act tools
   change things, which a reader must never do. An :always-hold tool is
   refused because every call would wait on the operator for a read."
-  [role {:keys [quarantine] granted :tools} tools]
+  [role {:keys [quarantine]} tools]
   (when-not (and (vector? quarantine) (seq quarantine) (apply distinct? quarantine)
                  (every? string? quarantine))
     (problem! (str "The :quarantine grant for " role " in relay.edn is a vector of distinct tool names,"
                    " such as [\"web_fetch\"].")))
   (doseq [t quarantine]
-    (when-not (some #{t} granted)
-      (problem! (str "Role " role " has " t " in :quarantine, which it is not granted in :tools."
-                     " It may read only through its own tools.")))
+    (when-not (contains? tools t)
+      (problem! (str "Role " role " has " t " in :quarantine, which is not a tool in relay.edn's :tools.")))
     (when-not (#{:read :egress} (get-in tools [t :class]))
       (problem! (str "Role " role " has " t " in :quarantine, which is not a :read or :egress tool in :tools."
                      " The reader reads only through tools that change nothing.")))
@@ -243,7 +244,7 @@
       (when (:may-add g)
         (problem! (str "Role " role " is :public, so it may not have :may-add: it could write"
                        " roles' instructions and read what other roles wrote.")))
-      (doseq [t (:tools g)
+      (doseq [t (distinct (concat (:tools g) (:quarantine g)))
               :when (some #{"private"} (get-in tools [t :labels]))]
         (problem! (str "Role " role " is :public, so it may not be granted " t
                        ", whose output is private.")))
@@ -521,7 +522,7 @@
   ;; A :script harness runs a program that no policy watches, so its
   ;; roles may not be granted tools that reach outside relay.
   (when (and (= :script (get-in config [:harnesses (:default-harness config) :kind]))
-             (some (fn [[_ g]] (or (seq (:tools g)) (:may-add g))) grants))
+             (some (fn [[_ g]] (or (seq (:tools g)) (seq (:quarantine g)) (:may-add g))) grants))
     (problem! (str "The default harness in relay.edn is a :script harness, which gets no tools,"
                    " so no role may be granted :tools or :may-add.")))
   (check-mcp config)
@@ -580,6 +581,21 @@
   :quarantine grant), or nil."
   [config role]
   (not-empty (:quarantine (grants config role))))
+
+(defn reader-only-tools
+  "The tools a role reaches only through the quarantined reader: those in
+  its :quarantine grant and not in its :tools. The model is never offered
+  them, so their raw output cannot reach the role."
+  [config role]
+  (let [{:keys [tools quarantine]} (grants config role)]
+    (not-empty (vec (remove (set tools) quarantine)))))
+
+(defn role-tools
+  "Every external tool a role's sessions can run, directly or through the
+  reader: its :tools, then its reader-only tools."
+  [config role]
+  (let [{:keys [tools quarantine]} (grants config role)]
+    (vec (distinct (concat tools quarantine)))))
 
 (defn research-roles
   "The roles granted :reports, sorted."

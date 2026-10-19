@@ -82,14 +82,16 @@
 
 (defn- with-reader
   "A request with the quarantined reader turned on over `inner`, the tools
-  the role may read through, when there are any. The reader's own policy
-  entry is class read with no labels: agentloop gives each answer its
-  labels from the inner tool's."
-  [req harness inner]
+  the role may read through, when there are any. `reader-only` are those
+  the model is not offered at all. The reader's own policy entry is class
+  read with no labels: agentloop gives each answer its labels from the
+  inner tool's."
+  [req harness inner reader-only]
   (if (seq inner)
     (let [{:keys [model effort]} (merge default-reader (:reader harness))]
       (-> req
-          (assoc :quarantine {:model model :effort effort :tools (vec inner)})
+          (assoc :quarantine (cond-> {:model model :effort effort :tools (vec inner)}
+                               (seq reader-only) (assoc :reader_only (vec reader-only))))
           (assoc-in [:policy :tools reader-tool] {:class "read"})))
     req))
 
@@ -334,7 +336,7 @@
 
 (defn- base-request
   "What every agentloop request holds, whatever the mode."
-  [{:keys [harness model system-prompt tools tool-command policy quarantine mcp-servers display-ref-prefix]} work]
+  [{:keys [harness model system-prompt tools tool-command policy quarantine reader-only mcp-servers display-ref-prefix]} work]
   (let [{:keys [provider effort base-url retry limits tool-timeout-seconds api-key-command]} harness
         limit-keys {:max-turns :max_turns :max-tool-calls :max_tool_calls :max-tokens :max_tokens}
         retry-keys {:retries :retries :backoff-seconds :backoff_seconds
@@ -365,7 +367,7 @@
       (seq limits) (assoc :limits (into {} (keep (fn [[k v]] (when-let [k2 (limit-keys k)] [k2 v])) limits)))
       (seq retry) (assoc :retry (into {} (keep (fn [[k v]] (when-let [k2 (retry-keys k)] [k2 v])) retry)))
       ;; A role granted :quarantine gets read_quarantined.
-      :always (with-reader harness quarantine))))
+      :always (with-reader harness quarantine reader-only))))
 
 (defn request-json
   "The request `agentloop run` reads: the wake's prompt, and one session,

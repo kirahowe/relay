@@ -305,8 +305,11 @@
                                         {:grants {"hub" {:tools ["web-demo"] :quarantine ["web-demo"]}}})]
     (is (= {:may-add true :tools ["web-demo"] :quarantine ["web-demo"]} (get-in merged [:grants "hub"])))
     (is (config/resolve-config merged) "relay accepts what it makes"))
-  (testing "relay itself refuses the reader over a tool the role lacks or that changes things"
-    (doseq [grant [{:quarantine ["web-demo"]} {:tools ["fail-demo"] :quarantine ["fail-demo"]}]]
+  (testing "a tool the role lacks in :tools is reader-only, and relay accepts it"
+    (is (config/resolve-config (scenario/merge-settings (staging/settings {:data-dir "/s"})
+                                                        {:grants {"hub" {:quarantine ["web-demo"]}}}))))
+  (testing "relay itself refuses the reader over a tool that changes things"
+    (doseq [grant [{:quarantine ["fail-demo"]} {:tools ["fail-demo"] :quarantine ["fail-demo"]}]]
       (is (thrown? clojure.lang.ExceptionInfo
                    (config/resolve-config (scenario/merge-settings (staging/settings {:data-dir "/s"})
                                                                    {:grants {"hub" grant}})))

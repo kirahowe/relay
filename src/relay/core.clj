@@ -508,7 +508,7 @@
   contaminated memo like any other and becomes contaminated."
   [config role-id]
   (boolean (some #(#{config/edit-class :act :egress} (get-in config [:tools % :class]))
-                 (:tools (config/grants config role-id)))))
+                 (config/role-tools config role-id))))
 
 (defn public-role?
   "Whether a role is public (relay.config/public?). Its sessions never hold
@@ -604,7 +604,7 @@
   harness gave no labels) carries this."
   [state config role-id]
   (content-labels (:seen-labels state)
-                  (mapcat #(tool-labels config %) (:tools (config/grants config role-id)))))
+                  (mapcat #(tool-labels config %) (config/role-tools config role-id))))
 
 (defn prompt-notes
   "A role's notes as its system prompt shows them: the clean ones, and how
@@ -1372,7 +1372,7 @@
   [config id harness]
   (let [g (config/grants config id)]
     (when (and (= :script (get-in config [:harnesses (keyword harness) :kind]))
-               (or (seq (:tools g)) (:may-add g) (:public g)))
+               (or (seq (:tools g)) (seq (:quarantine g)) (:may-add g) (:public g)))
       (reject! (str id " is granted tools or made public in relay.edn, and a :script harness gets no"
                     " tools and can claim any labels. Choose another harness or take the grants away.")))))
 

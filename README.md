@@ -588,9 +588,10 @@ seen both private data and an outsider's text waits for the operator
 reader). The reader only reads the pages. The example config and
 `relay init` give the hub such a tool, `web`, under `:quarantine`, so
 the hub looks things up with closed answers and stays clean. A closed
-answer cites its pages by number. The tool is in the hub's `:tools`
-too, so the hub could call it directly; its instructions say not to,
-since the pages would contaminate it.
+answer cites its pages by number. A tool named in `:quarantine` and not
+in `:tools` is reader-only: the model is never offered it, so the hub
+cannot read the pages itself even by mistake. Name a tool in both to let
+the role also call it directly.
 
 A call may also set `show_operator: true`. The reader then also writes a
 fuller answer in its own words, with links, that only you are shown (see

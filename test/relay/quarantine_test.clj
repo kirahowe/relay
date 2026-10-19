@@ -37,8 +37,12 @@
   (is (nil? (problem identity)) "a private and a public role may both have it")
   (is (= ["web_fetch" "mail_read"] (config/quarantine-tools (config/resolve-config settings) "hub")))
   (is (nil? (config/quarantine-tools (config/resolve-config settings) "clerk")))
-  (testing "a tool the role is not granted"
-    (is (str/includes? (problem #(assoc-in % [:grants "hub" :tools] ["web_fetch"])) "not granted in :tools")))
+  (testing "a tool only in :quarantine is reader-only"
+    (let [edit #(assoc-in % [:grants "hub" :tools] ["web_fetch"])]
+      (is (nil? (problem edit)))
+      (is (= ["mail_read"] (config/reader-only-tools (config/resolve-config (edit settings)) "hub")))
+      (is (= ["web_fetch" "mail_read"] (config/role-tools (config/resolve-config (edit settings)) "hub")))
+      (is (nil? (config/reader-only-tools (config/resolve-config settings) "hub")))))
   (testing "an :egress tool, such as a web search that reads its results"
     (is (nil? (problem #(assoc-in % [:grants "hub" :quarantine] ["web_post"])))))
   (testing "a tool that changes things"
@@ -53,14 +57,17 @@
   (testing "a tool :tools does not define"
     (is (str/includes? (problem #(-> % (assoc-in [:grants "hub" :tools] ["nope"])
                                      (assoc-in [:grants "hub" :quarantine] ["nope"])))
-                       "not a :read or :egress tool")))
+                       "not a tool in relay.edn's :tools")))
   (testing "a grant that is not a non-empty vector of distinct names"
     (doseq [q [[] "web_fetch" ["web_fetch" "web_fetch"] [:web_fetch] nil]]
       (is (str/includes? (str (problem #(assoc-in % [:grants "hub" :quarantine] q))) "vector of distinct tool names")
           (pr-str q))))
   (testing "a public role still may not read private output through it"
     (is (str/includes? (problem #(assoc-in % [:grants "scout"] {:public true :tools ["mail_read"] :quarantine ["mail_read"]}))
-                       "whose output is private"))))
+                       "whose output is private"))
+    (is (str/includes? (problem #(assoc-in % [:grants "scout"] {:public true :quarantine ["mail_read"]}))
+                       "whose output is private")
+        "reader-only does not hide a private tool from the check")))
 
 (deftest the-reader-model-is-a-harness-setting
   (is (nil? (problem #(assoc-in % [:harnesses :agentloop :reader] {:model "claude-haiku-5-5" :effort "low"}))))
@@ -138,3 +145,25 @@
     (is (str/includes? (:system-prompt (request "hub")) "`web_fetch`, `mail_read` through `read_quarantined`"))
     (is (nil? (:quarantine (request "clerk"))))
     (is (not (str/includes? (:system-prompt (request "clerk")) "read_quarantined")))))
+
+(deftest a-reader-only-tool-reaches-agentloop-but-is-marked-so
+  (let [cfg (config/resolve-config (assoc-in settings [:grants "hub" :tools] ["web_post"]))
+        t0 (Instant/parse "2026-10-15T12:00:00Z")
+        cmd (fn [state actor type args]
+              (first (core/run-command state {:type type :actor actor :args args} {:now t0 :config cfg})))
+        state (-> core/empty-state
+                  (cmd "operator" :role/add {:id "hub" :title "Hub" :instructions "Route."})
+                  (cmd "operator" :memo/send {:to "hub" :subject "Look" :body "Look."})
+                  (cmd "operator" :wake/start {:role "hub"}))
+        sys {:data-dir (str (fs/path (fs/temp-dir) (str "relay-never-made-" (random-uuid)))) :config cfg}
+        request (dispatch/wake-request sys state (core/running-wake state "hub")
+                                       {:shared "" :now t0 :relay-bin "relay" :data-path "/d"})
+        run (agentloop/request-json request "id" "/w")]
+    (is (= ["web_fetch" "mail_read"] (:reader-only request)))
+    (is (= ["web_fetch" "mail_read"] (get-in run [:quarantine :reader_only])))
+    (is (every? (set (map :name (:tools run))) ["web_fetch" "mail_read" "web_post"])
+        "agentloop needs the tool to run it for the reader")
+    (is (contains? (get-in run [:policy :tools]) "web_fetch"))
+    (testing "the role is told it reads them through the reader, not that it holds them"
+      (is (str/includes? (:system-prompt request) "`web_post`."))
+      (is (not (str/includes? (:system-prompt request) "granted you: `mail_read`"))))))

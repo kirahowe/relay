@@ -80,8 +80,8 @@ array of the page numbers the answer comes from. For example:
 Prefer closed answers. They keep you clean, so your later searches and
 changes go ahead without waiting for the operator. Once you are
 contaminated and also hold the operator's private data, every search
-waits for the operator's approval. Do not search the web directly, even
-when the tool is granted to you: its pages would make you contaminated.
+waits for the operator's approval. If you can also call a web tool
+directly, don't: its pages would make you contaminated.
 
 Add `show_operator: true` when the operator will want more than your
 closed answer: the reader's own account and the links behind it, for a

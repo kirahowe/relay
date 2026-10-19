@@ -999,7 +999,7 @@
   [config role-id & [{:keys [script?]}]]
   (if script?
     {}
-  (let [{:keys [tools]} (config/grants config role-id)
+  (let [tools (config/role-tools config role-id)
         holds? (fn [grant]
                  (case grant
                    nil true

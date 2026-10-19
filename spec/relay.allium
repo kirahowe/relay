@@ -206,9 +206,11 @@ contract Tools {
 
     @invariant AQuarantinedReaderIsGrantedByTheOperator
         -- The settings may grant a role the quarantined reader over
-        -- some of its own read or egress tools (quarantine_tools). Each
-        -- must be a tool it is granted, of class read or egress and not
-        -- always held, or the settings are an error. An egress tool, such
+        -- read or egress tools (quarantine_tools). Each must be a tool
+        -- the settings define, of class read or egress and not always
+        -- held, or the settings are an error. One the role is not also
+        -- granted directly is reader-only: the model is never offered it,
+        -- so its raw output cannot reach the session. An egress tool, such
         -- as webtool's ask, is for the web: the role writes its input, so
         -- agentloop decides the call as the role's own call to that tool
         -- would be, held when the session is private and contaminated. A role granted one gets agentloop's read_quarantined,
@@ -499,8 +501,10 @@ entity Role {
     report_kinds: Set<String>?
     is_research_role: report_kinds != null
     -- Granted :quarantine [...] in the settings: read or egress tools it
-    -- holds that it may also read through the quarantined reader.
+    -- may read through the quarantined reader. Those not in its :tools
+    -- are reader_only_tools, which the model is never offered.
     quarantine_tools: Set<Tool>
+    reader_only_tools: Set<Tool>
     -- How far relay trusts its reports: 0, where the operator reads
     -- every finding, or 1, where a finding nothing flags may go into the
     -- ledger unread. Every role starts at 0.
