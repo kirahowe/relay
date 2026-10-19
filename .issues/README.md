@@ -14,10 +14,18 @@
 | [36](36-clean-up-after-an-interrupted-deploy-and-leave-no-check.md) | Clean up after an interrupted deploy, and leave no check dirs in TMPDIR | bug | P3 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
 
-### Review
+### Blocked
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
+| [17](17-set-up-the-job-search-role.md) | Set up the job search role | feature | P2 |
+| [18](18-set-up-the-grant-search-role.md) | Set up the grant search role | feature | P3 |
+
+## Done
+
+| ID | Title | Type | Priority |
+| --- | --- | --- | --- |
+| [1](1-lock-down-the-ntfy-server.md) | Lock down the ntfy server | feature | P1 |
 | [4](4-give-conversations-the-time-and-add-a-clock-tool.md) | Give conversations the time, and add a clock tool | feature | P1 |
 | [6](6-add-a-staging-relay-and-scenario-runner.md) | Add a staging relay and scenario runner | feature | P1 |
 | [8](8-write-the-escalation-rules-for-development-agents.md) | Write the escalation rules for development agents | feature | P1 |
@@ -37,6 +45,7 @@
 | [27](27-show-findings-again-when-their-hidden-match-is-rejected-as.md) | Show findings again when their hidden match is rejected as fake | bug | P2 |
 | [21](21-make-agentloop-cleanroom-s-reader.md) | Make agentloop cleanroom's reader | feature | P3 |
 | [22](22-show-spend-per-role-per-week-in-relay-status.md) | Show spend per role per week in relay status | feature | P3 |
+| [23](23-decide-who-syncs.md) | Decide who syncs ~/Sync/relay | chore | P3 |
 | [24](24-fix-the-small-deploy-and-pause-gaps-from-review.md) | Fix the small deploy and pause gaps from review | bug | P3 |
 | [25](25-label-the-clock-error-echoes-consistently.md) | Label the clock error echoes consistently | bug | P3 |
 | [26](26-tidy-small-webtool-findings.md) | Tidy small webtool findings | feature | P3 |
@@ -46,20 +55,6 @@
 | [31](31-report-check-workspaces-a-ctrl-c-could-not-forget.md) | Report check workspaces a Ctrl-C could not forget | bug | P3 |
 | [32](32-close-the-last-gaps-in-echo-labels-push-cuts-and-tool.md) | Close the last gaps in echo labels, push cuts and tool timeouts | bug | P3 |
 | [33](33-tidy-the-deploy-cleanup-message-and-tool-start-failures.md) | Tidy the deploy cleanup message and tool start failures | chore | P3 |
-
-### Blocked
-
-| ID | Title | Type | Priority |
-| --- | --- | --- | --- |
-| [17](17-set-up-the-job-search-role.md) | Set up the job search role | feature | P2 |
-| [18](18-set-up-the-grant-search-role.md) | Set up the grant search role | feature | P3 |
-
-## Done
-
-| ID | Title | Type | Priority |
-| --- | --- | --- | --- |
-| [1](1-lock-down-the-ntfy-server.md) | Lock down the ntfy server | feature | P1 |
-| [23](23-decide-who-syncs.md) | Decide who syncs ~/Sync/relay | chore | P3 |
 
 ## Dropped
 

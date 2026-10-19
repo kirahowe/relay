@@ -1,10 +1,10 @@
 {:id 28
  :title "Tighten the hidden-finding invariant and header text"
- :status :review
+ :status :done
  :type :chore
  :priority :p3
  :created "2026-10-17"
- :updated "2026-10-17"
+ :updated "2026-10-18"
  :tags #{}
  :blocked-by #{}
  :related #{"relay#27"}

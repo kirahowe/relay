@@ -1,10 +1,10 @@
 {:id 10
  :title "Create a web tool for search and guarded fetch"
- :status :review
+ :status :done
  :type :feature
  :priority :p1
  :created "2026-10-16"
- :updated "2026-10-17"
+ :updated "2026-10-18"
  :tags #{"stop-4"}
  :blocked-by #{}
  :related #{}

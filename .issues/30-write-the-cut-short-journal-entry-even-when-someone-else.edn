@@ -1,6 +1,6 @@
 {:id 30
  :title "Write the cut-short journal entry even when someone else wrote in the role's journal during the wake"
- :status :review
+ :status :done
  :type :bug
  :priority :p3
  :created "2026-10-17"

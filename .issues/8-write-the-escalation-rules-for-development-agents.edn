@@ -1,10 +1,10 @@
 {:id 8
  :title "Write the escalation rules for development agents"
- :status :review
+ :status :done
  :type :feature
  :priority :p1
  :created "2026-10-16"
- :updated "2026-10-16"
+ :updated "2026-10-18"
  :tags #{"stop-3"}
  :blocked-by #{}
  :related #{}

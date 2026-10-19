@@ -1,10 +1,10 @@
 {:id 15
  :title "Keep a ledger of findings"
- :status :review
+ :status :done
  :type :feature
  :priority :p2
  :created "2026-10-16"
- :updated "2026-10-17"
+ :updated "2026-10-18"
  :tags #{"stop-4"}
  :blocked-by #{13}
  :related #{}

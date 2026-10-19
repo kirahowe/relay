@@ -1,10 +1,10 @@
 {:id 5
  :title "Support reminder sections in rem"
- :status :review
+ :status :done
  :type :feature
  :priority :p2
  :created "2026-10-16"
- :updated "2026-10-17"
+ :updated "2026-10-18"
  :tags #{"stop-2"}
  :blocked-by #{}
  :related #{}
