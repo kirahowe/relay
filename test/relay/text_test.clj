@@ -318,3 +318,8 @@
                       a (cut (structure lines t)) b (cut (structure (get plain view) "<zz>"))]
                   (or (= a b) (do (prn view a b) false))))
               forged))))
+
+(deftest defang-keeps-amounts-and-breaks-addresses
+  (is (= "$12.50 for 1.5 hours" (text/defang "$12.50 for 1.5 hours")))
+  (is (= "10[.]0[.]0[.]1 and evil[.]example" (text/defang "10.0.0.1 and evil.example")))
+  (is (= "hxxps://pay[.]example/1[.]5" (text/defang "https://pay.example/1.5"))))

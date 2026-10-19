@@ -80,7 +80,10 @@
 (defn defang
   "Text with every URL broken so it cannot be followed: http becomes
   hxxp, https hxxps and ftp fxp, any other scheme's :// becomes [:]//, and
-  every dot inside a word becomes [.], which breaks bare domains too."
+  every dot inside a word becomes [.], which breaks bare domains too. A
+  plain number keeps its dots (12.50, 1.5.2), so amounts in an approval
+  read as written; a dotted quad such as 10.0.0.1 is an address and does
+  not."
   [s]
   (-> (str s)
       (str/replace #"(?i)([a-z][a-z0-9+.\-]*)://"
@@ -89,8 +92,14 @@
                        "http" "hxxp://" "https" "hxxps://" "ftp" "fxp://"
                        ("hxxp" "hxxps" "fxp") (str scheme "://")
                        (str scheme "[:]//"))))
-      ;; Fullwidth and ideographic full stops work as dots in a host too.
-      (str/replace #"(?<=\S)[.\u3002\uFF0E\uFF61](?=\S)" "[.]")))
+      (str/replace #"\S+"
+                   (fn [word]
+                     (if (and (re-matches #"[$€£¥(+\-]?\d+(\.\d+){1,2}[),.;:%]*" word)
+                              (not (re-find #"\d+\.\d+\.\d+\.\d+" word)))
+                       word
+                       ;; Fullwidth and ideographic full stops work as dots
+                       ;; in a host too.
+                       (str/replace word #"(?<=\S)[.\u3002\uFF0E\uFF61](?=\S)" "[.]"))))))
 
 (defn contaminated? [labels] (boolean (some #{"contaminated"} labels)))
 
