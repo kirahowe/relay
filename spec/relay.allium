@@ -223,6 +223,25 @@ contract Tools {
         -- decides nothing about them itself. A role with no such grant
         -- is not offered read_quarantined.
 
+    @invariant TheWorkbenchIsGrantedByTheOperator
+        -- The settings may grant a role the sandboxed workbench
+        -- (has_workbench), as true or with more paths its commands may
+        -- not read (workbench_deny_read). A public role may not have it,
+        -- since it reads the operator's private files, and nor may a
+        -- role whose harness is a script, whose program could claim any
+        -- labels; either is an error in the settings. A role granted it
+        -- gets agentloop's workbench tool, of class read, which runs a
+        -- child model session whose only tool runs shell commands under
+        -- macOS sandbox-exec: no network of any kind, no system service,
+        -- reads everywhere but a deny list, and writes only a scratch
+        -- directory of its own. The session sees only the child's answer
+        -- to the task it set, checked against its JSON Schema, with
+        -- private always and contaminated unless the schema admits no
+        -- free text, as for the reader. relay denies its own data
+        -- directory to the commands and takes the labels from the result
+        -- as for any tool. A role with no such grant is not offered the
+        -- workbench.
+
     @invariant MCPToolsRunInAgentloop
         -- The settings may name MCP servers, and tools taken from them
         -- by the server's name for each, under a name of the operator's.
@@ -236,7 +255,8 @@ contract Tools {
         -- refuses settings agentloop would refuse: an unknown server, a
         -- server no tool uses, one server tool under two names, and a
         -- credentials command and {credentials_file} placeholder that do
-        -- not come together, and any tool named read_quarantined. Every
+        -- not come together, and any tool named read_quarantined or
+        -- workbench. Every
         -- call, an MCP one included, is bounded by the harness's tool
         -- timeout, which relay always sends. Each request names, for each
         -- MCP tool, the settings' digest for it, else the one relay
@@ -505,6 +525,11 @@ entity Role {
     -- are reader_only_tools, which the model is never offered.
     quarantine_tools: Set<Tool>
     reader_only_tools: Set<Tool>
+    -- Granted :workbench in the settings: it may hand a task and a
+    -- schema to the sandboxed workbench. The paths are the ones the
+    -- grant adds to the ones the workbench always denies.
+    has_workbench: Boolean
+    workbench_deny_read: Set<String>
     -- How far relay trusts its reports: 0, where the operator reads
     -- every finding, or 1, where a finding nothing flags may go into the
     -- ledger unread. Every role starts at 0.

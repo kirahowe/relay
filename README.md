@@ -615,6 +615,60 @@ What you are shown). The role still gets only the answer in its schema,
 and a note that you were shown more, so a closed answer leaves it clean.
 What you are shown keeps every label of what the reader read.
 
+#### The sandboxed workbench
+
+A role can be given a workbench: a separate assistant that searches and
+reads the Mac and computes, in a sandbox with no way to send anything
+out. It is for questions about files ("which invoice did I send in
+March?") and calculations over data on the disk. The operator grants it
+in relay.edn:
+
+```clojure
+:grants {"hub" {:tools [...] :workbench true}}
+;; or, to keep it away from more of the disk:
+:grants {"hub" {:tools [...] :workbench {:deny-read ["/Users/you/private"]}}}
+```
+
+A public role may not have it, since it reads private files, and nor may
+a role on a script harness. relay then puts a `workbench` block in the
+role's agentloop request, with the paths to deny, and an entry for
+`workbench` of class `read` in its policy.
+
+A call gives a task and a JSON Schema. agentloop runs a child session on
+the harness's `:reader` model whose only tool runs shell commands under
+macOS `sandbox-exec`, and the role sees only the child's answer, checked
+against the schema. The labels are the reader's rule: `private` always,
+and `contaminated` unless the schema admits no free text. The child is
+told the task and nothing else of the role's conversation, so what it
+reads cannot come back as instructions.
+
+The sandbox profile denies everything and then allows reading the disk,
+except a deny list, and writing one scratch directory that is removed
+afterwards. It has no network rule at all, so IP and unix sockets are
+both refused, and no `mach-lookup` rule, so no system service can be
+reached: `open`, `osascript`, `pbcopy`, DNS and Spotlight all fail.
+Going out is impossible, not forbidden. The deny list covers relay's own
+data directory, the keychain, `~/.ssh`, `~/.gnupg`, password and token
+files, browser profiles, `~/.codex*` and `~/.claude*`, and whatever the
+grant adds. Each command has a timeout, a CPU limit, a process limit, an
+output cap and a file size limit, and everything it leaves running is
+killed.
+
+Found on macOS 26 (Darwin 25), with a deny-default profile and no
+`mach-lookup` allowlist at all: `sh`, the coreutils, `find`, `grep`,
+`rg`, `awk`, `sed`, `sort`, `python3`, `sqlite3`, `jq`, `pdftotext`,
+`file`, `stat`, `shasum`, `tar` and `zip` all work. `mdfind` starts but
+finds nothing, since Spotlight needs its service, so the workbench uses
+`find` and `grep` instead. `osascript` runs and can compute, but cannot
+reach any application. The shell needs `TMPDIR` inside the scratch
+directory, or a here-string and `mktemp` fail. `/dev/stdout` and
+`/dev/fd/N` need their own write rules; `>&2` does not. Every path in
+the profile must be the one the kernel sees, with symlinks resolved
+(`/tmp` is `/private/tmp`), and a `subpath` deny covers the path by any
+case, since the file system is case-insensitive. A sandbox cannot be
+loosened from inside: `sandbox-exec` run again within it is still bound
+by the first profile.
+
 ### Research roles and reports
 
 A research role is a public role that searches the web for something
@@ -742,7 +796,8 @@ is written in Go.
    web, and for the command that prints the Brave Search API key, which
    is used only to send searches to Brave. With webtool it writes
    `webtool.json` beside `relay.edn` and gives the hub the `web` tool;
-   answer `none` to leave the web out.
+   answer `none` to leave the web out. Either way the hub gets the
+   workbench, so it can search and read your Mac in a sandbox.
    Each question has a suggestion that Enter accepts, and nothing is
    written until you have seen the whole `relay.edn` and said yes. relay
    refuses to run with a `relay.edn` that lacks any of them. Run it in a
@@ -1275,6 +1330,10 @@ checks that:
   hostile corpus page, gives the hub only a closed answer, and once the
   hub is private and contaminated its search is held before anything is
   fetched
+- every way out of the workbench sandbox fails: an IP, a DNS name, a
+  unix socket, `open`, `osascript`, `pbcopy`, a write outside the
+  scratch directory, a denied path and relay's own data, with a runaway
+  contained and the role's answer still clean
 - an MCP tool gets its credentials without relay seeing them, and one
   whose definition changes under a session runs nothing until the
   operator runs `relay fresh`

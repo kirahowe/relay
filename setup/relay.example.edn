@@ -13,8 +13,13 @@
               ;; Stops one hung tool call from eating the whole wake.
               ;; :tool-timeout-seconds 300
               ;; The model that answers read_quarantined for roles granted
-              ;; :quarantine. These are the defaults.
+              ;; :quarantine, and runs the workbench for roles granted
+              ;; :workbench. These are the defaults.
               ;; :reader {:model "claude-haiku-5-5" :effort "low"}
+              ;; The workbench's own settings. :deny-read adds to the paths
+              ;; it always refuses (the keychain, ~/.ssh, ~/.gnupg, browser
+              ;; data, ~/.codex*, ~/.claude*, relay's data directory).
+              ;; :workbench {:command-timeout-seconds 120 :deny-read []}
               ;; The Anthropic API key, from the login keychain. Store it with
               ;;   security add-generic-password -a "$USER" -s relay-anthropic -w
               :api-key-command ["security" "find-generic-password" "-s" "relay-anthropic" "-w"]}}
@@ -191,7 +196,7 @@
  ;;            :timeout-seconds 600}
 
  ;; What each role is granted beyond relay's own tools: :tools, :may-add,
- ;; :public, :reports and :quarantine, and nothing else. A public role never holds your
+ ;; :public, :reports, :quarantine and :workbench, and nothing else. A public role never holds your
  ;; private data, so it may search and browse without asking you. It is
  ;; shown only what is public (written with --public, by a public role, or
  ;; declassified), and it may not have :may-add, a tool whose :labels
@@ -202,8 +207,12 @@
  ;; read_quarantined, which shows it only a checked answer about the
  ;; output (see the README). One that is not also in :tools is
  ;; reader-only: the model is never offered it, as for the hub's web.
+ ;; :workbench gives the role a separate assistant that searches and reads
+ ;; your Mac and computes, in a sandbox with no way to send anything out.
+ ;; It is true, or {:deny-read ["/Users/you/private"]} to keep it away from
+ ;; more of the disk. A public role may not have it.
  :grants
- {"hub" {:may-add true :tools ["rem-read" "rem"] :quarantine ["web"]}
+ {"hub" {:may-add true :tools ["rem-read" "rem"] :quarantine ["web"] :workbench true}
   ;; Add it with relay add grant-search --public, so its own text is public.
   ;; "grant-search" {:public true :tools ["web-search" "web-fetch"]
   ;;                 :reports {:kinds ["grant"]}}
