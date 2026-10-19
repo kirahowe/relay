@@ -650,12 +650,14 @@ reached: `open`, `osascript`, `pbcopy`, DNS and Spotlight all fail.
 Going out is impossible, not forbidden. The deny list covers relay's own
 data directory, the keychain, `~/.ssh`, `~/.gnupg`, password, cloud and
 token files, browser profiles, `~/.codex*` and `~/.claude*`, and
-whatever the grant adds, with what each entry resolves to, since these
-are often symlinks into a dotfiles directory. Reading sysctl is an
+whatever the grant adds, with what each entry resolves to and what the
+symlinks inside it point at, since a dotfiles setup links such paths
+elsewhere. Reading sysctl is an
 allowlist too, since sysctl at large hands over every other process's
 command line. Each command has a timeout, a CPU limit, a process limit,
-an output cap and a file size limit, the scratch directory's size is
-watched while it runs, and everything it leaves running is killed.
+an output cap and a file size limit; it is stopped if the scratch
+directory grows too large or the disk runs low; and everything it leaves
+running is killed.
 
 Found on macOS 26 (Darwin 25), with a deny-default profile and no
 `mach-lookup` allowlist at all: `sh`, the coreutils, `find`, `grep`,
