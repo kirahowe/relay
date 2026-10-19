@@ -1,0 +1,11 @@
+{:id 47
+ :title "Treat a remote MCP tool's description as outside text"
+ :status :inbox
+ :type :feature
+ :priority :p1
+ :created "2026-10-18"
+ :updated "2026-10-18"
+ :tags #{"mcp" "security"}
+ :blocked-by #{}
+ :related #{}
+ :details "47-treat-a-remote-mcp-tool-s-description-as-outside-text.md"}

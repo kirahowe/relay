@@ -10,6 +10,7 @@
 | [40](40-hold-act-calls-for-consent-and-stop-holding-house-changes.md) | Hold act calls for consent and stop holding house changes | feature | P1 |
 | [42](42-give-roles-a-sandboxed-workbench-with-no-way-out.md) | Give roles a sandboxed workbench with no way out | feature | P1 |
 | [46](46-codify-verification-in-bb-verify-with-new-evals-and-pentests.md) | Codify verification in bb verify, with new evals and pentests | chore | P1 |
+| [47](47-treat-a-remote-mcp-tool-s-description-as-outside-text.md) | Treat a remote MCP tool's description as outside text | feature | P1 |
 
 ### Ready
 
@@ -20,12 +21,6 @@
 | [38](38-stop-the-hub-notifying-twice-for-one-stuck-memo.md) | Stop the hub notifying twice for one stuck memo | bug | P2 |
 | [36](36-clean-up-after-an-interrupted-deploy-and-leave-no-check.md) | Clean up after an interrupted deploy, and leave no check dirs in TMPDIR | bug | P3 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
-
-### In progress
-
-| ID | Title | Type | Priority |
-| --- | --- | --- | --- |
-| [43](43-connect-remote-mcp-servers-behind-relay-s-layer.md) | Connect remote MCP servers behind relay's layer | feature | P1 |
 
 ### Review
 
@@ -41,6 +36,7 @@
 | [13](13-review-reports-finding-by-finding.md) | Review reports finding by finding | feature | P1 |
 | [16](16-build-a-red-team-corpus-for-research-roles.md) | Build a red-team corpus for research roles | feature | P1 |
 | [41](41-speak-in-the-operator-s-terms-cite-sources-and-keep-skills.md) | Speak in the operator's terms, cite sources and keep skills | feature | P1 |
+| [43](43-connect-remote-mcp-servers-behind-relay-s-layer.md) | Connect remote MCP servers behind relay's layer | feature | P1 |
 | [44](44-let-the-hub-read-the-web-through-closed-answers.md) | Let the hub read the web through closed answers | feature | P1 |
 | [45](45-show-the-operator-what-the-model-never-reads-in-a-workspace.md) | Show the operator what the model never reads, in a workspace pane | feature | P1 |
 | [3](3-run-agentloop-s-live-smoke-tests-from-a-flag-not-an-env-var.md) | Run agentloop's live smoke tests from a flag, not an env var | chore | P2 |

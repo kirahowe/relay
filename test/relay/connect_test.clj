@@ -80,8 +80,8 @@
     (let [text (str/join "\n" (connect/summary p))]
       (is (str/includes? text "List subscribers (list_subscribers)\n    Reads only. It runs without asking."))
       (is (str/includes? text "send_campaign\n    Acts for you, and asks you first every time."))
-      (is (str/ends-with? text "The server says: Send a campaign to a group."))
-      (is (not (str/includes? text "at once")) "only the first sentence of what the server says")
+      (is (str/ends-with? text "The server says: Send a campaign to a group. It goes out at once.")
+          "the operator reads all the model will")
       (is (str/includes? text "delete_subscriber\n    Off: nothing can use it."))
       (is (not-any? #(re-find #"(?i)\b(role|grant|label|contaminated|hold)\b" %) (connect/summary p))
           "the summary speaks in the operator's terms"))
@@ -462,7 +462,12 @@
                                        (= secret (connect/assemble "relay-mcp-x" items))
                                        (str/includes? (last lines) "-s relay-mcp-x -w c"))))))
       "the item that names the count is written last")
-  (is (nil? (connect/assemble "s" {"s" "c2.QUJD"})) "a missing item reads as no sign-in"))
+  (is (nil? (connect/assemble "s" {"s" "c2.QUJD"})) "a missing item reads as no sign-in")
+  (testing "no chunk is another connection's item"
+    (let [secret (apply str (repeat 7000 "A"))
+          services (set (for [l (connect/keychain-lines "relay-mcp-mail" "a" secret)] (second (re-find #" -s (\S+) " l))))]
+      (is (= 3 (count services)))
+      (is (not-any? #(re-matches (re-pattern (str "relay-mcp-" connections/name-pattern)) %) (disj services "relay-mcp-mail"))))))
 
 (deftest a-url-with-dot-segments-is-refused
   (doseq [u ["https://h/tenant/../evil/mcp" "https://h/./mcp" "https://h/a/%2E%2E/mcp" "https://h/a/.."]]

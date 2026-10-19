@@ -104,10 +104,7 @@
                   {:taken (into (set taken) (keep :name (vals before))) :out []}
                   (sort-by :name listed)))))
 
-(defn- first-sentence [s]
-  (let [s (str/trim (str/replace (str s) #"\s+" " "))
-        s (or (second (re-find #"^(.*?[.!?])(\s|$)" s)) s)]
-    (if (> (count s) 140) (str (subs s 0 137) "...") s)))
+(defn- one-line [s] (str/trim (str/replace (str s) #"\s+" " ")))
 
 (defn does
   "What a tool may do, in the operator's words."
@@ -127,7 +124,9 @@
 (defn summary-line [i {:keys [title tool description] :as t}]
   (str (format "%2d. " (inc i)) (if (str/blank? title) tool (str title " (" tool ")")) "\n"
        "    " (does t)
-       (when-not (str/blank? description) (str "\n    The server says: " (first-sentence description)))))
+       ;; All of it: the model is shown all of it, and pinning it means
+       ;; the operator accepted what they read.
+       (when-not (str/blank? description) (str "\n    The server says: " (one-line description)))))
 
 (defn summary
   "The lines that show the operator what connecting would allow."
@@ -447,7 +446,11 @@
   command of its own, so each item's line stays well under it."
   3000)
 
-(defn chunk-item [service i] (if (zero? i) service (str service "-" i)))
+(defn chunk-item
+  "The keychain item that holds chunk i. A dot, which no connection name
+  has, so no chunk is ever another connection's item."
+  [service i]
+  (if (zero? i) service (str service "." i)))
 
 (defn keychain-lines
   "The security -i lines that keep a base64 secret under `service`: the
@@ -486,7 +489,7 @@
   on stdin, never in an argument list, and what security prints is never
   repeated, since it can echo what it was given."
   [service account secret]
-  (when-not (and (re-matches #"[A-Za-z0-9+/=]+" secret) (re-matches #"[A-Za-z0-9_-]+" (str service account)))
+  (when-not (and (re-matches #"[A-Za-z0-9+/=]+" secret) (re-matches #"[A-Za-z0-9_.-]+" (str service account)))
     (throw (ex-info "A keychain secret must be base64, and its service and account plain names." {})))
   (let [r @(p/process ["security" "-i"]
                       {:in (str (str/join "\n" (keychain-lines service account secret)) "\n")

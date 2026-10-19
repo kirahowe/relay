@@ -78,3 +78,25 @@ relay's internals.
   relay.connect-test against agentloop's fakeremote.
 
 ## Log
+
+- 2026-10-18 Codex review, read-only, three rounds.
+  - Round 1, four in-scope defects, all fixed: the keychain item was
+    shared by data directories with the same connection name, and a
+    reconnect elsewhere could hand an old session the new server's token
+    (now per data directory, bound to server, authorization server and
+    client, and mcp-token takes --url); no RFC 9207 iss check (added);
+    the resource path check had no path boundary (added); narrowed
+    argument names were compared exactly, but Go servers fold case
+    (agentloop now refuses any case-folded match).
+  - Round 2, round 1's fixes judged sound, two more fixed: dot segments
+    in a URL could pass the resource check (refused in relay and
+    agentloop); security -i splits lines at 4095 characters, truncating
+    a long sign-in and echoing its tail (secrets now split into items of
+    3000 characters, stderr never quoted).
+  - Round 3, two more: chunk items could collide with another
+    connection's item (fixed, dot separator); remote tool descriptions
+    reach the model uncontaminated while connect showed only their
+    first sentence. connect now shows the whole description; whether
+    such a session should start contaminated changes when calls are
+    held, so it is relay#47, for Kira. Stopped after three rounds, as
+    the brief says.
