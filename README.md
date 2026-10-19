@@ -265,8 +265,10 @@ agentloop runs it at the start of each wake, and again if the server
 refuses the token. Two runs never renew at once.
 
 relay proposes each tool's class from what the server says about it:
-`:read` when the server says the tool only reads, `:act` otherwise, and an
-`:act` tool always asks you (`:always-hold true`). Every tool's labels are
+`:read` when the server says the tool only reads, and `:act` otherwise,
+which asks you before every call. You can add `:consent` to an `:act`
+tool in the file, as in relay.edn, and `:preview`. relay does not
+propose `:always-hold`, since it would shut out `:consent`. Every tool's labels are
 `["contaminated" "private"]`: your data, which other people may have
 written. A tool whose name says it deletes something starts off. You can
 change any of this before you type the code, and edit the file later.

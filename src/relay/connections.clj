@@ -88,7 +88,7 @@
         (map? x) (and (every? string? (keys x)) (every? json-value? (vals x)))
         :else false))
 
-(def tool-keys #{:tool :class :labels :digest :on :fixed-args :hidden-args :always-hold :consent})
+(def tool-keys #{:tool :class :labels :digest :on :fixed-args :hidden-args :always-hold :consent :preview})
 
 (defn check-narrowing
   "A tool's :fixed-args, a map of argument names to JSON values, and
@@ -167,7 +167,8 @@
                        (seq (:fixed-args t)) (assoc :fixed-args (:fixed-args t))
                        (seq (:hidden-args t)) (assoc :hidden-args (:hidden-args t))
                        (:always-hold t) (assoc :always-hold true)
-                       (contains? t :consent) (assoc :consent (:consent t)))]))})
+                       (contains? t :consent) (assoc :consent (:consent t))
+                       (contains? t :preview) (assoc :preview (:preview t)))]))})
 
 (defn read-file
   "The connection's file, read as EDN, or nil when there is none."

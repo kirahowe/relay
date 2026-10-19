@@ -69,12 +69,29 @@
     :annotations {:readOnlyHint true}}
    {:name "delete_subscriber" :description "Delete one." :digest digest :annotations {:destructiveHint true}}])
 
+(deftest consent-survives-a-new-connect-and-reaches-relay-edn
+  (let [previous {:tools {"mail_send_campaign" {:tool "send_campaign" :class :act :always-hold true
+                                                :consent [{"group" "Kira only"}] :preview ["mail-preview"]}}}
+        p (connect/propose "mail" listed previous)
+        send (first (filter #(= "send_campaign" (:tool %)) p))]
+    (is (nil? (:always-hold send)) "an :always-hold an earlier connect proposed for an act tool is dropped")
+    (is (= [{"group" "Kira only"}] (:consent send)))
+    (is (= ["mail-preview"] (:preview send)))
+    (let [conn (connect/connection {:url "https://mcp.example/mcp" :credentials-command ["true"] :connected "x"} p)
+          tool (get-in conn [:tools "mail_send_campaign"])]
+      (is (= [{"group" "Kira only"}] (:consent tool)))
+      (is (= {:consent [{"group" "Kira only"}] :preview ["mail-preview"]}
+             (select-keys (get-in (connections/->settings "mail" (assoc-in conn [:tools "mail_send_campaign" :on] true))
+                                  [:tools "mail_send_campaign"])
+                          [:consent :preview]))))))
+
 (deftest the-proposal-and-its-summary
   (let [p (connect/propose "mail" listed nil)
         by (into {} (map (juxt :tool identity) p))]
     (is (= ["delete_subscriber" "list_subscribers" "send_campaign"] (map :tool p)))
     (is (= :read (get-in by ["list_subscribers" :class])))
-    (is (= [:act true true] ((juxt :class :always-hold :on) (by "send_campaign"))) "an act tool always asks")
+    (is (= [:act nil true] ((juxt :class :always-hold :on) (by "send_campaign")))
+        "an act tool asks every time by its class, so it gets no :always-hold, which would shut out :consent")
     (is (false? (get-in by ["delete_subscriber" :on])))
     (is (every? #(= ["contaminated" "private"] (:labels %)) p))
     (let [text (str/join "\n" (connect/summary p))]
@@ -89,7 +106,7 @@
       (let [opts (connect/choices config/tool-classes)
             p (-> p (connect/apply-choice 1 (opts "a")) (connect/apply-choice 2 (opts "r"))
                   (connect/apply-choice 0 (opts "on")))]
-        (is (= [:act true] ((juxt :class :always-hold) (p 1))))
+        (is (= [:act nil] ((juxt :class :always-hold) (p 1))))
         (is (= :read (:class (p 2))))
         (is (nil? (:always-hold (p 2))) "a tool set to read no longer asks")
         (is (:on (p 0)))
@@ -312,7 +329,7 @@
               (is (= url (:url conn)))
               (is (= ["mcp-token" "fake" "--data" data "--url" url] (rest (:credentials-command conn))))
               (is (= [:read true] ((juxt :class :on) (tools "list_subscribers"))))
-              (is (= [:act true true] ((juxt :class :on :always-hold) (tools "send_campaign"))))
+              (is (= [:act true nil] ((juxt :class :on :always-hold) (tools "send_campaign"))))
               (is (false? (:on (tools "delete_subscriber"))) "a delete tool starts off")
               (is (false? (:on (tools "add_note"))) "the operator turned it off")
               (is (every? #(re-matches #"[0-9a-f]{64}" (:digest %)) (vals tools)))

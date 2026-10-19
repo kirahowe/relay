@@ -27,6 +27,7 @@
             [cheshire.core :as json]
             [clojure.string :as str]
             [org.httpkit.server :as httpkit]
+            [relay.config :as config]
             [relay.connections :as connections])
   (:import (java.net URI URLDecoder URLEncoder)
            (java.nio.channels FileChannel)
@@ -81,12 +82,14 @@
 
 (def kept-choices
   "What an earlier connect's choice for a tool carries over to a new one."
-  [:class :labels :on :fixed-args :hidden-args :always-hold :consent])
+  [:class :labels :on :fixed-args :hidden-args :always-hold :consent :preview])
 
 (defn propose
   "Every listed tool with what it would start as: its relay name, class,
-  labels, and whether it is on. An act tool always asks the operator
-  (:always-hold). A tool the operator chose for before, in the connection
+  labels, and whether it is on. An act tool asks the operator before every
+  call by its class, so it is not given :always-hold, which would also
+  shut out :consent. An :always-hold an earlier connect proposed for an
+  act tool is dropped for the same reason. A tool the operator chose for before, in the connection
   file `previous`, keeps that choice and its name. No new name is one of
   `taken`, the names relay.edn's own tools have."
   [conn-name listed previous & [taken]]
@@ -98,8 +101,8 @@
                           t (merge {:name rn :tool name :title (:title l) :description (:description l)
                                     :digest (:digest l) :class class :labels default-labels
                                     :on (not (delete-like? l))}
-                                   (when (= :act class) {:always-hold true})
-                                   (select-keys old kept-choices))]
+                                   (select-keys old kept-choices))
+                          t (cond-> t (= :act (:class t)) (dissoc :always-hold))]
                       {:taken (conj taken rn) :out (conj out t)}))
                   {:taken (into (set taken) (keep :name (vals before))) :out []}
                   (sort-by :name listed)))))
@@ -116,9 +119,9 @@
                   "Acts for you, and asks you first every time.")
     :else (case class
             :read "Reads only. It runs without asking."
-            :act "Acts for you, and asks you first when what it works with came from outside."
+            :act "Acts for you, and asks you first every time."
             :egress "Can send what it is given out to the service, and asks you first when that mixes your private things with outside text."
-            :house "Changes your own things there, which nobody else sees. It runs without asking."
+            :edit "Changes your own things there, which nobody else sees, and asks you first when what it works with came from outside."
             (str "Class " (name class) "."))))
 
 (defn summary-line [i {:keys [title tool description] :as t}]
@@ -142,22 +145,22 @@
         (concat [["r" {:class :read :label "reads only"}]
                  ["a" {:class :act :label "acts for you, asks you every time"}]]
                 (when (contains? classes :egress) [["e" {:class :egress :label "sends things out to the service"}]])
-                (when (contains? classes :house) [["h" {:class :house :label "changes your own things, no asking"}]])
+                (when (contains? classes config/edit-class)
+                  [["c" {:class config/edit-class :label "changes your own things, asks after outside text"}]])
                 [["off" {:on false :label "off"}]
                  ["on" {:on true :label "on"}]])))
 
 (defn apply-choice
   "The proposal with one tool changed by an answer from `choices`. A tool
-  set to act asks every time; one set to anything else does not, unless
-  the operator wrote :always-hold in the file."
+  set to act asks every time by its class. A new class drops any
+  :always-hold; the operator can write it in the file."
   [proposal i {:keys [class on]}]
   (update proposal i
           (fn [t]
             (cond-> t
               (some? on) (assoc :on on)
               class (assoc :class class)
-              (= :act class) (assoc :always-hold true)
-              (and class (not= :act class)) (dissoc :always-hold)))))
+              class (dissoc :always-hold)))))
 
 (defn connection
   "The connection file's map from what the operator chose."
