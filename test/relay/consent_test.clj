@@ -6,6 +6,7 @@
             [cheshire.core :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [clojure.test.check :as tc]
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
@@ -414,3 +415,30 @@
            :fixed-args {:group "Kira only"}}]
     (is (core/fixed-args-changed? (assoc-in cfg [:tools "send" :fixed-args] {"group" "Public list"}) h))
     (is (not (core/fixed-args-changed? (assoc-in cfg [:tools "send" :fixed-args] {"group" "Kira only"}) h)))))
+
+(deftest placeholders-are-single-bracketed-phrases-and-nothing-else
+  (is (= ["[Photographer]" "[Date of the concert]"]
+         (text/placeholders "Photo: [Photographer]. On [Date of the concert], see [[fact:1]], [the site](https://x.example) and [x]. [Photographer]")))
+  (is (= [] (text/placeholders "No gaps here [[doc:a/b.md@2]] - [ ] [x]"))))
+
+(def placeholders-found-wherever-they-sit
+  (prop/for-all [before gen/string-alphanumeric
+                 word (gen/fmap #(str "Ph" (subs % 0 (min 60 (count %)))) gen/string-alphanumeric)
+                 after gen/string-alphanumeric]
+    (let [p (str "[" word "]")]
+      (and (= [p] (text/placeholders (str before " " p " " after)))
+           (empty? (text/placeholders (str before " [" p "] " after)))))))
+
+(deftest a-placeholder-is-found-wherever-it-sits-and-a-ref-never-is
+  (let [r (tc/quick-check 300 placeholders-found-wherever-they-sit)]
+    (is (:pass? r) (pr-str (select-keys r [:seed :shrunk])))))
+
+(deftest a-preview-marks-what-is-still-to-fill-in
+  (let [content "Subject: Harbour Sound, Nov 14\n\nPhoto: [Photographer]."
+        lines (str/join "\n" (render/preview {:content content :is-error false :labels ["private"]} #{}))
+        md (acp/preview-markdown {:content content :is-error false} #{})]
+    (is (str/includes? lines "still to fill in, and would go out as written:"))
+    (is (str/includes? lines "      [Photographer]"))
+    (is (str/includes? md "Still to fill in, and would go out as written: [Photographer]"))
+    (is (not (str/includes? (str/join "\n" (render/preview {:content "All filled in." :is-error false} #{}))
+                            "still to fill in")))))

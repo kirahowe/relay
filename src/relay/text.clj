@@ -186,6 +186,19 @@
       (str/replace #"&([a-zA-Z]+);" (fn [[m n]] (get named-entities (str/lower-case n) m)))
       (str/replace #"\\([!-/:-@\[-`{-~])" "$1")))
 
+(def ^:private placeholder-pattern
+  ;; A single-bracketed phrase starting with a letter: [Venue], [Date of
+  ;; the concert]. Not a ref ([[fact:1]]), a markdown link ([x](url)) or
+  ;; a checkbox ([x]).
+  #"(?<!\[)\[(\p{L}[^\[\]\n]{1,79})\](?![\](])")
+
+(defn placeholders
+  "The placeholders left in s, such as [Venue] or [Photographer], in
+  order, without repeats: text a role marked as unknown and that would go
+  out as written if the operator approved it."
+  [s]
+  (vec (distinct (map first (re-seq placeholder-pattern (str s))))))
+
 (defn link-hosts
   "The hosts of the links in s that a reader could follow (http, https and
   ftp URLs), in order, without repeats: those in s as written, and those a

@@ -334,7 +334,8 @@
   "The markdown a client is shown for a held call's preview (relay.core
   preview-of): what the tool's preview command read from the service, a
   note when the command failed, and the hosts of links to places the
-  operator has not approved before (relay.core/approved-hosts).
+  operator has not approved before (relay.core/approved-hosts), and the
+  placeholders such as [Venue] still left in it (relay.text/placeholders).
 
   The preview's own text goes inside a code fence, and so do the notes
   after it, which quote it. It can hold text an outsider wrote (a
@@ -349,7 +350,11 @@
         ;; tabs stay, since the preview is markdown.
         shown (apply str (map (fn [cp] (if (text/hidden? cp) (format "\\u{%04x}" cp) (String. (Character/toChars cp))))
                               (iterator-seq (.iterator (.codePoints (str content))))))
-        notes (str/join "\n" (concat (when (seq new-hosts)
+        gaps (text/placeholders content)
+        notes (str/join "\n" (concat (when (seq gaps)
+                                       [(str "Still to fill in, and would go out as written: "
+                                             (str/join ", " gaps))])
+                                     (when (seq new-hosts)
                                        [(str "Links to places you have not approved before: "
                                              (str/join ", " new-hosts))])
                                      (when (seq odd)

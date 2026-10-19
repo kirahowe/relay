@@ -407,6 +407,8 @@ leaves a note saying so, and the hold opens all the same.
 `relay holds`, `relay approve` and `relay deny` show the preview. So does
 the permission request in a conversation (see [ACP clients](#acp-clients)).
 A preview's links are always defanged, since it is what a service said.
+A placeholder still in it, such as `[Venue]` or `[Photographer]`, is
+listed as still to fill in, since it would go out as written.
 Links in a preview to a host that no preview the operator approved
 before had are listed as new, and characters in it that can pass for
 others are named. Approval still binds to the call's input, by its

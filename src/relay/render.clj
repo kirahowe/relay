@@ -325,7 +325,8 @@
   (if-not p
     []
     (let [new-hosts (remove (set approved) (text/link-hosts content))
-          odd (text/lookalikes (str content))]
+          odd (text/lookalikes (str content))
+          gaps (text/placeholders content)]
       (concat
        [(if is-error
           "    preview: the preview command could not say what this call would do:"
@@ -335,6 +336,9 @@
        (if (text/contaminated? labels)
          (text/block labels content)
          (text/block labels (text/defang content)))
+       (when (seq gaps)
+         (cons "    still to fill in, and would go out as written:"
+               (map #(str "      " (text/defang %)) gaps)))
        (when (seq new-hosts)
          (cons "    links to places you have not approved before:"
                (map #(str "      " (text/defang %)) new-hosts)))

@@ -13,8 +13,8 @@ placeholder in square brackets is easy to miss in a long body, though.
 
 ## Acceptance criteria
 
-- [ ] The approval screen, the ACP permission request and the workspace pane mark a `[Placeholder]` left in a preview's body
-- [ ] The mark is computed by relay from the preview content, never from the model
+- [x] The approval screen, the ACP permission request and the workspace pane mark a `[Placeholder]` left in a preview's body
+- [x] The mark is computed by relay from the preview content, never from the model
 
 ## Plan
 
@@ -23,3 +23,5 @@ placeholder mark could sit beside that, using the same pattern the
 placeholders eval grades (a single-bracketed phrase that is not a ref).
 
 ## Log
+
+Done 2026-10-19: relay.text/placeholders finds single-bracketed phrases that are not refs, links or checkboxes. render/preview and acp/preview-markdown list them as still to fill in; the pane shows the preview markdown, so it shows them too. Unit and property tests in consent_test.
