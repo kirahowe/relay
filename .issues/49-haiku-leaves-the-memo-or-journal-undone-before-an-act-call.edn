@@ -1,0 +1,11 @@
+{:id 49
+ :title "Haiku leaves the memo or journal undone before an act call"
+ :status :inbox
+ :type :bug
+ :priority :p2
+ :created "2026-10-18"
+ :updated "2026-10-18"
+ :tags #{"consent" "evals"}
+ :blocked-by #{}
+ :related #{}
+ :details "49-haiku-leaves-the-memo-or-journal-undone-before-an-act-call.md"}

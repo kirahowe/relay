@@ -108,3 +108,27 @@ Haiku run (`20261018T235122Z-1319`) failed reminder-set twice: the memo
 said "agent support", which the hub read as customer service, and it
 set the reminder as a routine of its own. The memo now says AI agents,
 and the grader takes a routine as a reminder.
+
+concert-email-drafted-for-approval (relay#46) is the end-to-end case:
+"please draft the next concert email", with the fictional Harbour Sound
+Society. Prompt digest `8df043111f4a`, agentloop `zvmsyprx`
+(`3a2a1f995d84`), the case as committed in `lysltvso`.
+
+| case | tier | Haiku 5.5, 3 trials | Opus 5.5, 3 trials |
+|---|---|---|---|
+| concert-email-drafted-for-approval | cap | 0/3 | 3/3 |
+
+Opus: run `20261019T015502Z-9090`, $0.23 for 3 trials. Each trial read
+the skill, drafted with a `[Photographer]` placeholder, cited facts 9, 10
+and 11 and the bio, closed the memo, journaled, and then proposed the
+send for 13 November at 09:00, which was held with a preview of the
+stored draft.
+
+Haiku: run `20261019T015404Z-2c31`, $0.005 for 3 trials. The draft, the
+refs, the memo and the held send were right every time. It failed on the
+closing steps before the send: no journal in any trial, and once the
+memo was left open behind the pause. That is relay#49. An earlier run,
+`20261019T015228Z-94da`, used a skill that said "propose the send". Twice
+Haiku took that to mean asking in a memo, said it would propose the send
+once approved, and never made the call. The skill now says the call is
+how the operator approves.
