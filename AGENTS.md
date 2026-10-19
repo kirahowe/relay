@@ -46,7 +46,7 @@ relay does not defend against:
 
 ## Verification
 
-`bb test` runs everything with volley (parallel workers; config in `tests.edn`). A test that uses a fixed port or a shared file must be marked `^:volley/serial`. Once the staging relay and scenario runner exist, run the scenarios too. Fix a failing test; do not skip it.
+`bb verify` runs every check across relay, agentloop, acp-tui and webtool, with one summary; `VERIFY.md` says what each step shows. `bb test` runs relay's tests with volley (parallel workers; config in `tests.edn`). A test that uses a fixed port or a shared file must be marked `^:volley/serial`. Once the staging relay and scenario runner exist, run the scenarios too. Fix a failing test; do not skip it.
 
 Security-relevant changes get an adversarial review loop with Codex until it converges: changes to labels, holds, tools, anything that touches the network, and anything that touches the operator's approvals. Run it read-only:
 

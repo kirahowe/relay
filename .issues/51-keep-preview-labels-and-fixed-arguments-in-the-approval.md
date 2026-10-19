@@ -108,3 +108,11 @@ High defects.
 
 - 2026-10-18: fixed in agentloop, acp-tui and relay; pentest checks in
   s17-remote-mcp and two new consent scenarios.
+
+## Cross-cutting review, round 3 (2026-10-19)
+
+Codex reviewed the integrated chains (relay kmtylqzp..pkppluus, agentloop
+0114f7d7..wtlvxsym, acp-tui d8a1b20a..yuzlxwmt, webtool
+6ea20162..ompzmkvz) for defects between workstreams. It confirmed the
+round 1 and 2 fixes and found nothing in scope. The loop stopped there,
+within the three-round limit.
