@@ -25,15 +25,6 @@
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
-| [4](4-give-conversations-the-time-and-add-a-clock-tool.md) | Give conversations the time, and add a clock tool | feature | P1 |
-| [6](6-add-a-staging-relay-and-scenario-runner.md) | Add a staging relay and scenario runner | feature | P1 |
-| [8](8-write-the-escalation-rules-for-development-agents.md) | Write the escalation rules for development agents | feature | P1 |
-| [9](9-add-public-roles-that-can-never-see-private-data.md) | Add public roles that can never see private data | feature | P1 |
-| [10](10-create-a-web-tool-for-search-and-guarded-fetch.md) | Create a web tool for search and guarded fetch | feature | P1 |
-| [11](11-let-research-roles-submit-structured-reports.md) | Let research roles submit structured reports | feature | P1 |
-| [12](12-verify-every-report-with-code-not-a-model.md) | Verify every report with code, not a model | feature | P1 |
-| [13](13-review-reports-finding-by-finding.md) | Review reports finding by finding | feature | P1 |
-| [16](16-build-a-red-team-corpus-for-research-roles.md) | Build a red-team corpus for research roles | feature | P1 |
 | [40](40-hold-act-calls-for-consent-and-stop-holding-house-changes.md) | Hold act calls for consent and edits only after untrusted text | feature | P1 |
 | [41](41-speak-in-the-operator-s-terms-cite-sources-and-keep-skills.md) | Speak in the operator's terms, cite sources and keep skills | feature | P1 |
 | [42](42-give-roles-a-sandboxed-workbench-with-no-way-out.md) | Give roles a sandboxed workbench with no way out | feature | P1 |
@@ -43,25 +34,6 @@
 | [46](46-codify-verification-in-bb-verify-with-new-evals-and-pentests.md) | Codify verification in bb verify, with new evals and pentests | chore | P1 |
 | [47](47-treat-a-remote-mcp-tool-s-description-as-outside-text.md) | Treat a remote MCP tool's description as outside text | feature | P1 |
 | [51](51-keep-preview-labels-and-fixed-arguments-in-the-approval.md) | Keep preview labels and fixed arguments in the approval | bug | P1 |
-| [3](3-run-agentloop-s-live-smoke-tests-from-a-flag-not-an-env-var.md) | Run agentloop's live smoke tests from a flag, not an env var | chore | P2 |
-| [5](5-support-reminder-sections-in-rem.md) | Support reminder sections in rem | feature | P2 |
-| [7](7-add-bb-deploy-and-bb-rollback-for-kira-to-run.md) | Add bb deploy and bb rollback for Kira to run | feature | P2 |
-| [14](14-add-a-per-role-trust-ladder-for-research-roles.md) | Add a per-role trust ladder for research roles | feature | P2 |
-| [15](15-keep-a-ledger-of-findings.md) | Keep a ledger of findings | feature | P2 |
-| [19](19-read-the-calendar.md) | Read the calendar | feature | P2 |
-| [20](20-send-one-morning-brief.md) | Send one morning brief | feature | P2 |
-| [27](27-show-findings-again-when-their-hidden-match-is-rejected-as.md) | Show findings again when their hidden match is rejected as fake | bug | P2 |
-| [21](21-make-agentloop-cleanroom-s-reader.md) | Make agentloop cleanroom's reader | feature | P3 |
-| [22](22-show-spend-per-role-per-week-in-relay-status.md) | Show spend per role per week in relay status | feature | P3 |
-| [24](24-fix-the-small-deploy-and-pause-gaps-from-review.md) | Fix the small deploy and pause gaps from review | bug | P3 |
-| [25](25-label-the-clock-error-echoes-consistently.md) | Label the clock error echoes consistently | bug | P3 |
-| [26](26-tidy-small-webtool-findings.md) | Tidy small webtool findings | feature | P3 |
-| [28](28-tighten-the-hidden-finding-invariant-and-header-text.md) | Tighten the hidden-finding invariant and header text | chore | P3 |
-| [29](29-polish-the-morning-brief-text-and-share-a-timed-tool-runner.md) | Polish the morning brief text and share a timed tool runner | chore | P3 |
-| [30](30-write-the-cut-short-journal-entry-even-when-someone-else.md) | Write the cut-short journal entry even when someone else wrote in the role's journal during the wake | bug | P3 |
-| [31](31-report-check-workspaces-a-ctrl-c-could-not-forget.md) | Report check workspaces a Ctrl-C could not forget | bug | P3 |
-| [32](32-close-the-last-gaps-in-echo-labels-push-cuts-and-tool.md) | Close the last gaps in echo labels, push cuts and tool timeouts | bug | P3 |
-| [33](33-tidy-the-deploy-cleanup-message-and-tool-start-failures.md) | Tidy the deploy cleanup message and tool start failures | chore | P3 |
 | [50](50-mark-placeholders-left-in-a-draft-that-a-send-preview-shows.md) | Mark placeholders left in a draft that a send preview shows | feature | P3 |
 
 ### Blocked
@@ -76,7 +48,35 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [1](1-lock-down-the-ntfy-server.md) | Lock down the ntfy server | feature | P1 |
+| [4](4-give-conversations-the-time-and-add-a-clock-tool.md) | Give conversations the time, and add a clock tool | feature | P1 |
+| [6](6-add-a-staging-relay-and-scenario-runner.md) | Add a staging relay and scenario runner | feature | P1 |
+| [8](8-write-the-escalation-rules-for-development-agents.md) | Write the escalation rules for development agents | feature | P1 |
+| [9](9-add-public-roles-that-can-never-see-private-data.md) | Add public roles that can never see private data | feature | P1 |
+| [10](10-create-a-web-tool-for-search-and-guarded-fetch.md) | Create a web tool for search and guarded fetch | feature | P1 |
+| [11](11-let-research-roles-submit-structured-reports.md) | Let research roles submit structured reports | feature | P1 |
+| [12](12-verify-every-report-with-code-not-a-model.md) | Verify every report with code, not a model | feature | P1 |
+| [13](13-review-reports-finding-by-finding.md) | Review reports finding by finding | feature | P1 |
+| [16](16-build-a-red-team-corpus-for-research-roles.md) | Build a red-team corpus for research roles | feature | P1 |
+| [3](3-run-agentloop-s-live-smoke-tests-from-a-flag-not-an-env-var.md) | Run agentloop's live smoke tests from a flag, not an env var | chore | P2 |
+| [5](5-support-reminder-sections-in-rem.md) | Support reminder sections in rem | feature | P2 |
+| [7](7-add-bb-deploy-and-bb-rollback-for-kira-to-run.md) | Add bb deploy and bb rollback for Kira to run | feature | P2 |
+| [14](14-add-a-per-role-trust-ladder-for-research-roles.md) | Add a per-role trust ladder for research roles | feature | P2 |
+| [15](15-keep-a-ledger-of-findings.md) | Keep a ledger of findings | feature | P2 |
+| [19](19-read-the-calendar.md) | Read the calendar | feature | P2 |
+| [20](20-send-one-morning-brief.md) | Send one morning brief | feature | P2 |
+| [27](27-show-findings-again-when-their-hidden-match-is-rejected-as.md) | Show findings again when their hidden match is rejected as fake | bug | P2 |
+| [21](21-make-agentloop-cleanroom-s-reader.md) | Make agentloop cleanroom's reader | feature | P3 |
+| [22](22-show-spend-per-role-per-week-in-relay-status.md) | Show spend per role per week in relay status | feature | P3 |
 | [23](23-decide-who-syncs.md) | Decide who syncs ~/Sync/relay | chore | P3 |
+| [24](24-fix-the-small-deploy-and-pause-gaps-from-review.md) | Fix the small deploy and pause gaps from review | bug | P3 |
+| [25](25-label-the-clock-error-echoes-consistently.md) | Label the clock error echoes consistently | bug | P3 |
+| [26](26-tidy-small-webtool-findings.md) | Tidy small webtool findings | feature | P3 |
+| [28](28-tighten-the-hidden-finding-invariant-and-header-text.md) | Tighten the hidden-finding invariant and header text | chore | P3 |
+| [29](29-polish-the-morning-brief-text-and-share-a-timed-tool-runner.md) | Polish the morning brief text and share a timed tool runner | chore | P3 |
+| [30](30-write-the-cut-short-journal-entry-even-when-someone-else.md) | Write the cut-short journal entry even when someone else wrote in the role's journal during the wake | bug | P3 |
+| [31](31-report-check-workspaces-a-ctrl-c-could-not-forget.md) | Report check workspaces a Ctrl-C could not forget | bug | P3 |
+| [32](32-close-the-last-gaps-in-echo-labels-push-cuts-and-tool.md) | Close the last gaps in echo labels, push cuts and tool timeouts | bug | P3 |
+| [33](33-tidy-the-deploy-cleanup-message-and-tool-start-failures.md) | Tidy the deploy cleanup message and tool start failures | chore | P3 |
 
 ## Dropped
 

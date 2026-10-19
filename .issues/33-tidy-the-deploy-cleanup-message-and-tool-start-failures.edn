@@ -1,6 +1,6 @@
 {:id 33
  :title "Tidy the deploy cleanup message and tool start failures"
- :status :review
+ :status :done
  :type :chore
  :priority :p3
  :created "2026-10-17"

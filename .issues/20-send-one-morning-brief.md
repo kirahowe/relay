@@ -33,3 +33,4 @@ Decided 2026-10-17 (Kira said to proceed as I see fit; Kira can overturn this):
 - Each section shows at most eight lines and each title, list or calendar name at most 80 characters.
 - Cal prints times in the system zone and the brief reads today's date in relay's `:timezone`. They are the same on Kira's Mac; a mismatch would only shift which day is asked for.
 - No scenario: scenarios can only merge `:grants` into the staging relay.edn and staging defines no cal or rem stand-ins, so one would need changes to scenario.clj or staging.clj, which another session owns. relay.brief-test drives the tick end to end with stand-in scripts instead.
+- 2026-10-18: Kira accepted it before the first live brief (due 2026-10-19 07:30).
