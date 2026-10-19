@@ -108,6 +108,12 @@
    :required ["query"]
    :additionalProperties false})
 
+(def ^:private workbench-note
+  (str " ;; :workbench lets the hub hand a task to a separate assistant that\n"
+       " ;; searches and reads this Mac and computes, in a sandbox with no way\n"
+       " ;; to send anything out. It never reads relay's data, your keys or\n"
+       " ;; browser data.\n"))
+
 (defn- web-tool
   "The hub's web tool, webtool's ask, as relay.edn's text."
   [{:keys [bin]} webtool-file]
@@ -122,7 +128,8 @@
        "                :description \"Search the web and read the top results. Read it through read_quarantined with a closed schema.\"\n"
        "                :parameters " (pr-str web-tool-parameters) "\n"
        "                :command " (pr-str [bin "--config" webtool-file "ask"]) "}}\n"
-       " :grants {\"hub\" {:quarantine [\"web\"]}}}\n"))
+       workbench-note
+       " :grants {\"hub\" {:quarantine [\"web\"] :workbench true}}}\n"))
 
 (defn render
   "relay.edn's text for the settings `interview` returns. `webtool-file`
@@ -158,7 +165,8 @@
          (if web
            (web-tool web webtool-file)
            (str " :tools {}\n"
-                " :grants {}}\n")))))
+                workbench-note
+                " :grants {\"hub\" {:workbench true}}}\n")))))
 
 (defn create!
   "Interviews the operator, shows the file and writes it to `file` only on

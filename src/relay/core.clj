@@ -604,7 +604,11 @@
   harness gave no labels) carries this."
   [state config role-id]
   (content-labels (:seen-labels state)
-                  (mapcat #(tool-labels config %) (config/role-tools config role-id))))
+                  (concat (mapcat #(tool-labels config %) (config/role-tools config role-id))
+                          ;; The workbench reads the operator's files, any of
+                          ;; which an outsider could have written; agentloop
+                          ;; drops contaminated only for a closed schema.
+                          (when (config/workbench config role-id) ["private" "contaminated"]))))
 
 (defn prompt-notes
   "A role's notes as its system prompt shows them: the clean ones, and how

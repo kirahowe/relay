@@ -1048,6 +1048,12 @@
                         (str "Beyond relay's own tools, the operator has granted you: "
                              (str/join ", " (map #(str "`" % "`") external)) ".")
                         "You have relay's own tools and nothing beyond them."))
+                (config/workbench config role-id)
+                (conj (str "For questions about files on this Mac, and for calculations over data, you have"
+                           " `workbench`: you give it a task and a JSON Schema for the answer, and a separate"
+                           " assistant searches and reads the disk and computes in a sandbox with no way to"
+                           " send anything out. You see only its answer. Ask for the narrowest schema that"
+                           " answers the question."))
                 (seq (config/quarantine-tools config role-id))
                 (conj (str "You can also read "
                            (str/join ", " (map #(str "`" % "`") (config/quarantine-tools config role-id)))

@@ -95,12 +95,24 @@
   (quarantine.ReaderSystem). A role's system prompt never begins so."
   "You answer one question about one document.")
 
+(def workbench-system-start
+  "How the system prompt of agentloop's workbench child begins
+  (workbench.System). A role's system prompt never begins so."
+  "You do one task on the operator's Mac")
+
+(defn- system-text [body]
+  (let [system (:system body)]
+    (str (if (string? system) system (apply str (keep :text system))))))
+
 (defn reader-request?
   "Whether a request is the quarantined reader's rather than a role's."
   [body]
-  (let [system (:system body)
-        text (if (string? system) system (apply str (keep :text system)))]
-    (str/starts-with? (str text) reader-system-start)))
+  (str/starts-with? (system-text body) reader-system-start))
+
+(defn workbench-request?
+  "Whether a request is the workbench child's rather than a role's."
+  [body]
+  (str/starts-with? (system-text body) workbench-system-start))
 
 (defn last-tool-results
   "The tool results in the request's last user message, as {:name :text}."

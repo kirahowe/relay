@@ -14,6 +14,10 @@
     :tools          the tools the role is offered (relay.tools/manifest)
     :quarantine     the tools the role may read through a quarantined
                     reader (its :quarantine grant), or nil
+    :workbench      {:deny-read [...]} when the role is granted the
+                    sandboxed workbench, or nil
+    :data-dir       relay's data directory, which the workbench may not
+                    read
     :mcp-servers    the MCP servers the role's MCP tools come from, by
                     name, as relay.edn gives them
     :tool-command   the command a harness runs for a tool call, given the

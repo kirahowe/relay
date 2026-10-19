@@ -152,7 +152,7 @@
 (def grant-keys
   "What a role can be granted. Anything else is refused, so a typo such as
   :pubic cannot leave a role able to hold private data."
-  #{:tools :may-add :public :reports :quarantine})
+  #{:tools :may-add :public :reports :quarantine :workbench})
 
 (def kind-pattern
   "A report kind's name: lower case letters, digits and hyphens."
@@ -200,6 +200,34 @@
     (when (true? (get-in tools [t :always-hold]))
       (problem! (str "Role " role " has " t " in :quarantine, which has :always-hold. Every read"
                      " through it would wait for you.")))))
+
+(defn- check-workbench-grant
+  "A :workbench grant gives the role agentloop's sandboxed workbench: a
+  child session that runs shell commands with no network and reads the
+  disk. It is `true`, or a map with :deny-read, more absolute paths the
+  commands may not read (a path may end in * to deny every path starting
+  with it). The answers are private, so a public role may not have it,
+  and only agentloop runs it: a script harness's program could claim any
+  labels. agentloop refuses the request on a system with no sandbox-exec,
+  which is not checked here."
+  [role {:keys [workbench public]} harnesses default-harness]
+  (when-not (or (true? workbench)
+                (and (map? workbench) (= #{:deny-read} (set (keys workbench)))
+                     (vector? (:deny-read workbench)) (seq (:deny-read workbench))
+                     (apply distinct? (:deny-read workbench))
+                     (every? #(and (string? %) (str/starts-with? % "/")
+                                   (not (str/includes? % "\""))
+                                   (not (str/includes? % "\\")))
+                             (:deny-read workbench))))
+    (problem! (str "The :workbench grant for " role " in relay.edn is true, or"
+                   " {:deny-read [\"/Users/you/private\"]}, absolute paths the workbench may not read,"
+                   " and nothing else.")))
+  (when (true? public)
+    (problem! (str "Role " role " is :public, so it may not have :workbench: the workbench reads"
+                   " the operator's private files.")))
+  (when (= :script (get-in harnesses [default-harness :kind]))
+    (problem! (str "Role " role " has :workbench, and the default harness is a :script harness,"
+                   " which has no workbench. A role with the workbench needs agentloop."))))
 
 (defn- check-verifier
   "The :verifier relay checks reports with: webtool's check, on the
@@ -257,7 +285,9 @@
     (when (contains? g :reports)
       (check-reports-grant role g))
     (when (contains? g :quarantine)
-      (check-quarantine-grant role g tools))))
+      (check-quarantine-grant role g tools))
+    (when (contains? g :workbench)
+      (check-workbench-grant role g harnesses default-harness))))
 
 (defn- check-budget
   "The optional :budget, a weekly amount in US dollars. relay only warns
@@ -596,6 +626,16 @@
   [config role]
   (let [{:keys [tools quarantine]} (grants config role)]
     (vec (distinct (concat tools quarantine)))))
+
+(defn workbench
+  "The role's :workbench grant as the harness takes it: {:deny-read [...]}
+  (possibly empty), or nil when the role does not have it."
+  [config role]
+  (let [g (:workbench (grants config role))]
+    (cond
+      (true? g) {:deny-read []}
+      (map? g) {:deny-read (vec (:deny-read g))}
+      :else nil)))
 
 (defn research-roles
   "The roles granted :reports, sorted."

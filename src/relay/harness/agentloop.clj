@@ -44,6 +44,12 @@
   run: `agentloop acp request.json`, whose request names the conversations
   directory instead of one session.
 
+  A role granted :workbench also gets agentloop's sandboxed workbench:
+  the request carries a workbench block with the child model (the
+  reader's), the per-command timeout and the paths its commands may not
+  read, and the policy an entry for it of class read. relay's data
+  directory is always among the denied paths.
+
   A role granted :quarantine also gets agentloop's read_quarantined: the
   request carries a quarantine block naming the tools it reads through,
   and the policy an entry for it of class read. agentloop adds the tool
@@ -76,6 +82,12 @@
 (def default-tool-timeout-seconds 300)
 (def default-reader {:model "claude-haiku-5-5" :effort "low"})
 
+(def default-workbench
+  "The workbench settings an :agentloop harness does not give. :deny-read
+  here is on top of agentloop's own list (keys, browser data, agents'
+  settings); the role's grant adds more."
+  {:deny-read [] :command-timeout-seconds 120})
+
 (def reader-tool
   "The tool agentloop adds for a quarantine block."
   "read_quarantined")
@@ -93,6 +105,30 @@
           (assoc :quarantine (cond-> {:model model :effort effort :tools (vec inner)}
                                (seq reader-only) (assoc :reader_only (vec reader-only))))
           (assoc-in [:policy :tools reader-tool] {:class "read"})))
+    req))
+
+(def workbench-tool
+  "The tool agentloop adds for a workbench block."
+  "workbench")
+
+(defn- with-workbench
+  "A request with the sandboxed workbench turned on, when the role is
+  granted it. The child model is the reader's (agentloop falls back to
+  the quarantine block's model, and relay always sends one), and the
+  grant's :deny-read adds to the paths agentloop always denies. relay's
+  own data directory is denied too: the workbench reads the operator's
+  files, not relay's log."
+  [req harness workbench data-dir]
+  (if workbench
+    (let [{:keys [model effort]} (merge default-reader (:reader harness))
+          {:keys [deny-read scratch-root command-timeout-seconds]} (merge default-workbench (:workbench harness))]
+      (-> req
+          (assoc :workbench
+                 (cond-> {:model model :effort effort
+                          :command_timeout_seconds command-timeout-seconds
+                          :deny_read (vec (distinct (concat [(str data-dir)] deny-read (:deny-read workbench))))}
+                   scratch-root (assoc :scratch_root (str scratch-root))))
+          (assoc-in [:policy :tools workbench-tool] {:class "read"})))
     req))
 
 (defn- repo-root []
@@ -336,7 +372,8 @@
 
 (defn- base-request
   "What every agentloop request holds, whatever the mode."
-  [{:keys [harness model system-prompt tools tool-command policy quarantine reader-only mcp-servers display-ref-prefix]} work]
+  [{:keys [harness model system-prompt tools tool-command policy quarantine reader-only workbench mcp-servers
+           display-ref-prefix data-dir]} work]
   (let [{:keys [provider effort base-url retry limits tool-timeout-seconds api-key-command]} harness
         limit-keys {:max-turns :max_turns :max-tool-calls :max_tool_calls :max-tokens :max_tokens}
         retry-keys {:retries :retries :backoff-seconds :backoff_seconds
@@ -367,7 +404,9 @@
       (seq limits) (assoc :limits (into {} (keep (fn [[k v]] (when-let [k2 (limit-keys k)] [k2 v])) limits)))
       (seq retry) (assoc :retry (into {} (keep (fn [[k v]] (when-let [k2 (retry-keys k)] [k2 v])) retry)))
       ;; A role granted :quarantine gets read_quarantined.
-      :always (with-reader harness quarantine reader-only))))
+      :always (with-reader harness quarantine reader-only)
+      ;; A role granted :workbench gets the sandboxed workbench.
+      :always (with-workbench harness workbench data-dir))))
 
 (defn request-json
   "The request `agentloop run` reads: the wake's prompt, and one session,
@@ -388,11 +427,12 @@
   resuming or listing an earlier one, whose history and labels it would
   carry on. It adds what only a client shows: each tool's ACP kind, and a
   title, \"relay · <role id>\", for the client to name the conversation
-  by. read_quarantined, when granted, is of kind read. agentloop asks the provider for the model's context window itself."
-  [{:keys [session-dir tools role quarantine] :as request} work]
+  by. read_quarantined and the workbench, when granted, are of kind read. agentloop asks the provider for the model's context window itself."
+  [{:keys [session-dir tools role quarantine workbench] :as request} work]
   (let [kinds (cond-> (acp/tool-kinds tools)
                 ;; agentloop adds the reader; a client shows it as a read.
-                (seq quarantine) (assoc reader-tool "read"))]
+                (seq quarantine) (assoc reader-tool "read")
+                workbench (assoc workbench-tool "read"))]
     (cond-> (assoc (base-request request work) :session_dir (str session-dir) :new_sessions_only true)
       (:id role) (assoc :title (str "relay · " (:id role)))
       (seq kinds) (assoc :tool_kinds kinds))))

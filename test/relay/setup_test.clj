@@ -30,7 +30,8 @@
 (deftest the-suggestions-make-a-config-relay-accepts
   (let [{:keys [written settings dir]} (create ["" "" "" "" "" "" "" "y"])]
     (is written)
-    (is (= {} (:tools settings) (:grants settings)) "no webtool found, so no web")
+    (is (= {} (:tools settings)) "no webtool found, so no web")
+    (is (= {"hub" {:workbench true}} (:grants settings)) "the hub has the workbench all the same")
     (is (= {:kind :macos} (:notify settings)))
     (is (= "anthropic" (get-in settings [:harnesses :agentloop :provider])))
     (is (= "claude-opus-5-5" (get-in settings [:harnesses :agentloop :model])))
@@ -77,7 +78,8 @@
     (is (= {:class :egress :labels ["contaminated"] :protocol :envelope}
            (select-keys web [:class :labels :protocol])))
     (is (= ["/opt/webtool/bin/webtool" "--config" webtool-file "ask"] (:command web)))
-    (is (= {"hub" {:quarantine ["web"]}} (:grants settings)) "the web is reader-only for the hub")
+    (is (= {"hub" {:quarantine ["web"] :workbench true}} (:grants settings))
+        "the web is reader-only for the hub, and it has the workbench")
     (is (= {"snapshot_dir" (str dir "/home/Library/Application Support/webtool/snapshots")
             "search" {"backend" "brave" "api_key_command" setup/brave-key-command}}
            (json/parse-string (slurp webtool-file))))

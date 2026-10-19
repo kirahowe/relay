@@ -206,6 +206,10 @@
      :quarantine (when-not (:script? script) (config/quarantine-tools config role))
      ;; Of those, the ones the model is never offered.
      :reader-only (when-not (:script? script) (config/reader-only-tools config role))
+     ;; The sandboxed workbench, if the operator granted it. Its
+     ;; commands may not read relay's own data.
+     :workbench (when-not (:script? script) (config/workbench config role))
+     :data-dir (str (fs/absolutize data-dir))
      ;; The MCP servers the role's granted tools come from, and no others.
      :mcp-servers (config/mcp-servers-for config (map :name manifest))
      ;; Where the role's displays are kept, by the day the wake started.

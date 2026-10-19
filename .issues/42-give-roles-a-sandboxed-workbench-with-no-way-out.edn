@@ -1,6 +1,6 @@
 {:id 42
  :title "Give roles a sandboxed workbench with no way out"
- :status :inbox
+ :status :in-progress
  :type :feature
  :priority :p1
  :created "2026-10-18"
