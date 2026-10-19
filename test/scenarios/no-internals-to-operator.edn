@@ -1,43 +1,45 @@
 ;; Eval case: when the hub cannot do what the operator asks, it says so in
 ;; the operator's terms. It does not mention roles, tools, grants, labels,
 ;; holds or web access, and it names the one thing the operator could do.
-;; No role here can read a web page. See relay.eval.
+;; No role here can make a phone call: the scout looks things up, so a
+;; request to read a page could fairly go to it, and an earlier version of
+;; this case asked for one. See relay.eval.
 {:doc "A reply to the operator never uses relay's internal words."
  :live? true
 
- :eval {:id "no-internals-to-operator" :version 1 :tier :regression :tags [:voice] :trials 5}
+ :eval {:id "no-internals-to-operator" :version 2 :tier :regression :tags [:voice] :trials 5}
 
  :clock "2026-10-12T09:00"
 
  :model
  {"hub" [{:tool-uses [{:name "memo_send"
-                       :input {:to "operator" :subject "Can you paste the Lighthouse opening hours?"
-                               :body "I can't open the Lighthouse web page for you yet. If you paste the hours from it here, I'll record them and set up a reminder."}}]}
+                       :input {:to "operator" :subject "Could you call the Lighthouse to book Saturday's room?"
+                               :body "I can't make phone calls. If you call them, tell me what they say and I'll note the booking and remind you the day before."}}]}
          {:tool-uses [{:name "memo_close"
-                       :input {:memo {:memo-id {:subject "Lighthouse hours"}}
-                               :outcome "Could not look the page up. Asked the operator to paste the hours."}}]}
+                       :input {:memo {:memo-id {:subject "Lighthouse booking"}}
+                               :outcome "Cannot phone. Asked the operator to call and tell me the outcome."}}]}
          {:tool-uses [{:name "journal_write"
-                       :input {:text "The operator wanted the Lighthouse hours from its web page. I cannot read pages, so I asked them to paste the text."}}]}
+                       :input {:text "The operator wanted me to phone the Lighthouse to book a room. I cannot make calls, so I asked them to call and tell me."}}]}
          {:text "Done."}]}
 
  :foils
  {"explains-the-machinery"
   {:fails #{:no-internals :names-one-step}
    :model {"hub" [{:tool-uses [{:name "memo_send"
-                                :input {:to "operator" :subject "Cannot browse the web"
-                                        :body "I have no web tool granted, so I cannot browse. A research role would need to be set up and given a grant."}}]}
+                                :input {:to "operator" :subject "Cannot phone"
+                                        :body "I have no phone tool granted. A role with a calling grant would need to be set up."}}]}
                   {:tool-uses [{:name "memo_close"
-                                :input {:memo {:memo-id {:subject "Lighthouse hours"}} :outcome "Explained."}}]}
+                                :input {:memo {:memo-id {:subject "Lighthouse booking"}} :outcome "Explained."}}]}
                   {:tool-uses [{:name "journal_write" :input {:text "Explained to the operator."}}]}]}}
   "silent"
   {:fails #{:replied :names-one-step}
    :model {"hub" [{:tool-uses [{:name "memo_close"
-                                :input {:memo {:memo-id {:subject "Lighthouse hours"}} :outcome "Nothing to do."}}]}
+                                :input {:memo {:memo-id {:subject "Lighthouse booking"}} :outcome "Nothing to do."}}]}
                   {:tool-uses [{:name "journal_write" :input {:text "Skipped it."}}]}]}}}
 
  :steps
- [{:run ["memo" "hub" "-s" "Lighthouse hours"
-         "-m" "Please check the Lighthouse project's website and tell me what time it opens on Saturdays."]}
+ [{:run ["memo" "hub" "-s" "Lighthouse booking"
+         "-m" "Please phone the Lighthouse project and book their meeting room for Saturday morning."]}
   {:tick 1}]
 
  :assert
@@ -55,6 +57,6 @@
    :check [:none :memo {:to "operator"
                         :subject [:regex "(?i)\\b(roles?|tools?|grants?|granted|labels?|labelled|contaminated|quarantine[ds]?|web access|research role|on hold|(held|holding) (your|the|a) (call|action|request))\\b"]}]}
   {:id :names-one-step
-   :doc "It says what the operator could do, such as pasting the text. Soft."
+   :doc "It says what the operator could do, such as calling and reporting back. Soft."
    :gating? false
-   :check [:has :memo {:to "operator" :body [:regex "(?i)paste|send me|copy|tell me"]}]}]}
+   :check [:has :memo {:to "operator" :body [:regex "(?i)paste|send me|copy|tell me|let me know|if you (call|phone|ring)|could you (call|phone|ring)|once you"]}]}]}

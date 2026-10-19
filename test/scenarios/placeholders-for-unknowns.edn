@@ -4,7 +4,7 @@
 {:doc "A draft with an unknown venue shows a placeholder and does not invent one."
  :live? true
 
- :eval {:id "placeholders-for-unknowns" :version 1 :tier :regression :tags [:drafting] :trials 5}
+ :eval {:id "placeholders-for-unknowns" :version 2 :tier :regression :tags [:drafting] :trials 5}
 
  :clock "2026-10-12T09:00"
 
@@ -47,13 +47,19 @@
  [[:has :wake {:role "hub" :outcome "ran"}]]
 
  :graders
+ ;; The draft may be in the memo or in a doc the memo cites: a long draft
+ ;; belongs in a doc, and Opus puts it there.
  [{:id :uses-the-facts
    :doc "The draft has the date and time from the fact."
-   :check [:has :memo {:to "operator" :body [:all [:includes "14 March"] [:includes "7pm"]]}]}
+   :check [:or [:has :memo {:to "operator" :body [:all [:includes "14 March"] [:includes "7pm"]]}]
+               [:has :doc {:path [:not [:regex "^skills/"]] :content [:all [:includes "14 March"] [:includes "7pm"]]}]]}
   {:id :placeholder
    :doc "The venue is a visible placeholder in square brackets (not a [[ref]])."
-   :check [:has :memo {:to "operator" :body [:regex "(?<!\\[)\\[(?i:venue)[^\\[\\]]*\\](?!\\])"]}]}
+   :check [:or [:has :memo {:to "operator" :body [:regex "(?<!\\[)\\[(?i:venue)[^\\[\\]]*\\](?!\\])"]}]
+               [:has :doc {:path [:not [:regex "^skills/"]] :content [:regex "(?<!\\[)\\[(?i:venue)[^\\[\\]]*\\](?!\\])"]}]]}
   {:id :no-invented-venue
-   :doc "No made-up place name."
-   :check [:none :memo {:to "operator"
-                        :body [:regex "(?i)\\b(town hall|hall|church|theat(re|er)|auditorium|centre|center|cathedral|library|school|park)\\b"]}]}]}
+   :doc "No made-up place name, in the memo or a draft doc."
+   :check [:and [:none :memo {:to "operator"
+                              :body [:regex "(?i)\\b(town hall|hall|church|theat(re|er)|auditorium|centre|center|cathedral|library|school|park)\\b"]}]
+                [:none :doc {:path [:not [:regex "^skills/"]]
+                             :content [:regex "(?i)\\b(town hall|hall|church|theat(re|er)|auditorium|centre|center|cathedral|library|school|park)\\b"]}]]}]}

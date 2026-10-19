@@ -132,3 +132,35 @@ memo was left open behind the pause. That is relay#49. An earlier run,
 Haiku took that to mean asking in a memo, said it would propose the send
 once approved, and never made the call. The skill now says the call is
 how the operator approves.
+
+### The epic's cases on Opus, after integration (2026-10-19)
+
+Every case the personal-agent epic added, run together on Opus 5.5 at
+medium effort against the integrated chains: run `20261019T031113Z-8b11`,
+then `20261019T032131Z-14ff` for the two cases revised in between. Prompt
+digest `51507e803c26`.
+
+| case | tier | Opus 5.5, 3 trials |
+|---|---|---|
+| citations-resolve | reg | 3/3 |
+| no-internals-to-operator (v2) | reg | 3/3 |
+| placeholders-for-unknowns (v2) | reg | 3/3 |
+| skill-followed | cap | 3/3 |
+| skill-written-after-multistep | cap | 3/3 |
+| web-closed-answer-stays-clean | cap | 3/3 |
+| concert-email-drafted-for-approval | cap | 3/3 |
+
+The first run failed two cases 0/3, and in both the case was at fault,
+not the hub:
+
+- placeholders-for-unknowns v1 graded only the memo's body. Opus wrote
+  the draft as a doc, with `[Venue]` and the other gaps marked, and sent
+  a short memo citing it. v2 accepts the draft in the memo or in a doc
+  outside `skills/`.
+- no-internals-to-operator v1 asked for a web page to be read. Opus
+  handed it to the scout, whose instructions say it looks things up, and
+  sent nothing yet. That is a fair move. v2 asks for a phone call, which
+  no role can make. One trial's reply did not match the soft
+  names-one-step grader.
+
+The two runs cost $1.89 together.
