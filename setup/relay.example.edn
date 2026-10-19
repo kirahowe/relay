@@ -16,9 +16,11 @@
               ;; :quarantine, and runs the workbench for roles granted
               ;; :workbench. These are the defaults.
               ;; :reader {:model "claude-haiku-5-5" :effort "low"}
-              ;; The workbench's own settings. :deny-read adds to the paths
-              ;; it always refuses (the keychain, ~/.ssh, ~/.gnupg, browser
-              ;; data, ~/.codex*, ~/.claude*, relay's data directory).
+              ;; The workbench's own settings: how long one sandboxed
+              ;; command may run, and paths its commands may not read, on
+              ;; top of the ones it always refuses (the keychain, ~/.ssh,
+              ;; ~/.gnupg, cloud and token files, browser data, ~/.codex*,
+              ;; ~/.claude*, relay's data directory).
               ;; :workbench {:command-timeout-seconds 120 :deny-read []}
               ;; The Anthropic API key, from the login keychain. Store it with
               ;;   security add-generic-password -a "$USER" -s relay-anthropic -w

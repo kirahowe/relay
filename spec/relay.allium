@@ -233,6 +233,7 @@ contract Tools {
         -- gets agentloop's workbench tool, of class read, which runs a
         -- child model session whose only tool runs shell commands under
         -- macOS sandbox-exec: no network of any kind, no system service,
+        -- no other process's command line,
         -- reads everywhere but a deny list, and writes only a scratch
         -- directory of its own. The session sees only the child's answer
         -- to the task it set, checked against its JSON Schema, with

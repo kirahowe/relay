@@ -116,6 +116,30 @@
                      " harness may give {:model \"claude-haiku-5-5\" :effort \"low\"}, the quarantined"
                      " reader's model and effort, with effort one of " (str/join ", " (sort efforts)) ".")))))
 
+(defn- deny-path?
+  "Whether p can be a path the workbench refuses to read: absolute, and
+  without a character that could end a rule early in the sandbox
+  profile. It may end in * to mean every path with that prefix."
+  [p]
+  (and (string? p) (str/starts-with? p "/")
+       (not (str/includes? p "\""))
+       (not (str/includes? p "\\"))))
+
+(defn- check-workbench-settings
+  "An agentloop harness's optional :workbench: {:command-timeout-seconds
+  120 :deny-read [...]}, either or both. The paths are refused here, not
+  silently dropped, because a wrong spelling would leave the workbench
+  reading what the operator meant to keep from it."
+  [h kind workbench]
+  (let [{:keys [command-timeout-seconds deny-read]} workbench]
+    (when-not (and (= :agentloop kind) (map? workbench)
+                   (every? #{:command-timeout-seconds :deny-read} (keys workbench))
+                   (or (nil? command-timeout-seconds) (pos-int? command-timeout-seconds))
+                   (or (nil? deny-read) (and (vector? deny-read) (every? deny-path? deny-read))))
+      (problem! (str "Harness " (name h) " in relay.edn has :workbench " (pr-str workbench) ". An :agentloop"
+                     " harness may give {:command-timeout-seconds 120 :deny-read [\"/Users/you/private\"]},"
+                     " how long one sandboxed command may run and absolute paths it may not read.")))))
+
 (defn- check-required
   [{:keys [timezone default-harness harnesses notify]}]
   (when-not (and (string? timezone)
@@ -129,6 +153,8 @@
       (problem! (str "Harness " (name h) " in relay.edn needs a :kind.")))
     (when (contains? harness :reader)
       (check-reader h kind (:reader harness)))
+    (when (contains? harness :workbench)
+      (check-workbench-settings h kind (:workbench harness)))
     (when (and (= :agentloop kind)
                (not (and (sequential? api-key-command) (seq api-key-command))))
       (problem! (str "Harness " (name h) " in relay.edn needs :api-key-command, "
@@ -215,10 +241,7 @@
                 (and (map? workbench) (= #{:deny-read} (set (keys workbench)))
                      (vector? (:deny-read workbench)) (seq (:deny-read workbench))
                      (apply distinct? (:deny-read workbench))
-                     (every? #(and (string? %) (str/starts-with? % "/")
-                                   (not (str/includes? % "\""))
-                                   (not (str/includes? % "\\")))
-                             (:deny-read workbench))))
+                     (every? deny-path? (:deny-read workbench))))
     (problem! (str "The :workbench grant for " role " in relay.edn is true, or"
                    " {:deny-read [\"/Users/you/private\"]}, absolute paths the workbench may not read,"
                    " and nothing else.")))

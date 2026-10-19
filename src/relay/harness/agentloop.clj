@@ -20,9 +20,14 @@
                  ;; stops one tool call that hangs, so it cannot eat the
                  ;; whole wake; the default is 300
                  :tool-timeout-seconds 300
-                 ;; the quarantined reader, for roles granted :quarantine;
-                 ;; these are the defaults
-                 :reader {:model \"claude-haiku-5-5\" :effort \"low\"}}}
+                 ;; the quarantined reader, for roles granted :quarantine,
+                 ;; and the model that runs the workbench for roles
+                 ;; granted :workbench; these are the defaults
+                 :reader {:model \"claude-haiku-5-5\" :effort \"low\"}
+                 ;; the sandboxed workbench: how long one command may run,
+                 ;; and paths its commands may not read, on top of the ones
+                 ;; agentloop always denies and relay's own data directory
+                 :workbench {:command-timeout-seconds 120 :deny-read []}}}
 
   A run stopped at the wake deadline, by agentloop (reason \"canceled\") or
   by relay killing it (exit \"timeout\"), is reported as :cut-short, so the
@@ -121,13 +126,12 @@
   [req harness workbench data-dir]
   (if workbench
     (let [{:keys [model effort]} (merge default-reader (:reader harness))
-          {:keys [deny-read scratch-root command-timeout-seconds]} (merge default-workbench (:workbench harness))]
+          {:keys [deny-read command-timeout-seconds]} (merge default-workbench (:workbench harness))]
       (-> req
           (assoc :workbench
-                 (cond-> {:model model :effort effort
-                          :command_timeout_seconds command-timeout-seconds
-                          :deny_read (vec (distinct (concat [(str data-dir)] deny-read (:deny-read workbench))))}
-                   scratch-root (assoc :scratch_root (str scratch-root))))
+                 {:model model :effort effort
+                  :command_timeout_seconds command-timeout-seconds
+                  :deny_read (vec (distinct (concat [(str data-dir)] deny-read (:deny-read workbench))))})
           (assoc-in [:policy :tools workbench-tool] {:class "read"})))
     req))
 

@@ -72,11 +72,29 @@
             (gen/tuple (gen/elements [nil {} {:model "small"} {:model "small" :effort "medium"}])
                        (gen/elements [nil {} {:command-timeout-seconds 30}
                                       {:deny-read ["/etc/secrets"]}
-                                      {:scratch-root "/var/tmp/wb"}])
+                                      {:command-timeout-seconds 30 :deny-read ["/etc/secrets"]}])
                        (gen/elements [nil "https://example.test"]))))
 
 (def tool-list
   [{:name "web_fetch" :description "d" :parameters {} :class "read" :labels ["contaminated"]}])
+
+(deftest the-harness-settings-are-checked
+  (is (nil? (problem #(assoc-in % [:harnesses :agentloop :workbench] {:command-timeout-seconds 60}))))
+  (is (nil? (problem #(assoc-in % [:harnesses :agentloop :workbench] {:deny-read ["/Users/you/private"]}))))
+  (testing "a misspelt or unusable setting is refused, never dropped"
+    (doseq [w [{:deny_read ["/Users/you/private"]} {:deny-read ["relative"]} {:deny-read "/x"}
+               {:command-timeout-seconds 0} {:command-timeout-seconds "60"} {:scratch-root "/tmp/x"}
+               {:deny-read ["/a\""]} true]]
+      (is (str/includes? (str (problem #(assoc-in % [:harnesses :agentloop :workbench] w))) ":workbench")
+          (pr-str w))))
+  (is (str/includes? (str (problem #(assoc % :harnesses {:agentloop (get-in % [:harnesses :agentloop])
+                                                         :s {:kind :script :command ["true"]
+                                                             :workbench {:deny-read ["/x"]}}})))
+                     ":workbench")
+      "only an agentloop harness has a workbench")
+  (testing "the role's grant refuses the same paths"
+    (is (str/includes? (str (problem #(assoc-in % [:grants "hub" :workbench] {:deny-read ["/a\""]})))
+                       ":workbench grant"))))
 
 (def the-workbench-is-on-exactly-when-granted
   (prop/for-all [harness gen-harness
@@ -105,7 +123,6 @@
                 (some #{"/data/relay"} (:deny_read block))
                 (every? (set (:deny_read block)) (concat (:deny-read wb) (:deny-read grant)))
                 (apply distinct? (:deny_read block))
-                (= (:scratch-root wb) (:scratch_root block))
                 (= {:class "read"} (get-in run [:policy :tools "workbench"]))
                 ;; Nothing else changes: the tools list never names it.
                 (= (dissoc without :policy) (dissoc run :policy :workbench))
