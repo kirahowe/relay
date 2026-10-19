@@ -314,6 +314,15 @@
       "it can send data out, and the session has seen both your private data and an outsider's text"
       :else "the policy held it")))
 
+(defn- defanged-block
+  "Text as text/block shows it, with its links defanged whatever its
+  labels. text/block defangs a contaminated source itself, and defang is
+  not idempotent, so a clean one is defanged here, once."
+  [labels s]
+  (if (text/contaminated? labels)
+    (text/block labels s)
+    (text/block labels (text/defang s))))
+
 (defn preview
   "A held call's preview, as screen lines: what its tool's :preview command
   read from the service about what the call would do, never what the role
@@ -331,11 +340,7 @@
        [(if is-error
           "    preview: the preview command could not say what this call would do:"
           "    what it would do (from the tool's preview, not from the role):")]
-       ;; text/block defangs a contaminated preview itself; defang is
-       ;; not idempotent, so a clean one is defanged here, once.
-       (if (text/contaminated? labels)
-         (text/block labels content)
-         (text/block labels (text/defang content)))
+       (defanged-block labels content)
        (when (seq gaps)
          (cons "    still to fill in, and would go out as written:"
                (map #(str "      " (text/defang %)) gaps)))
@@ -370,7 +375,11 @@
   "One held tool call, with what the operator needs to decide it: why it
   was held, what the tool is, where the data would go, what the session
   has seen and from where, anything in the input that could pass for
-  something else, and the whole input."
+  something else, and the whole input. Every link in what it shows of the
+  input is defanged, whatever the labels: the operator reads the input to
+  judge it, and a defanged link still shows where it goes. The input is
+  marked contaminated when the session or the preview is. The binding is
+  to the exact input, which relay keeps as it is."
   ([h] (hold h nil))
   ([h config] (hold h config #{}))
   ([{:keys [id role tool session call labels label-sources fixed-args] :as h} config approved]
@@ -381,6 +390,7 @@
          t (get-in config [:tools (or inner tool)])
          class (or (:class t) (when-not t :builtin))
          input-text (json/generate-string input {:pretty true})
+         shown-labels (core/union labels (get-in h [:preview :labels]))
          odd (text/lookalikes (str/join " " (filter string? (tree-seq coll? seq input))))]
      (concat
       [(str "Hold " id ": " role " wants to use " (if inner (str inner ", through the reader") tool))
@@ -389,7 +399,7 @@
             (when (:description t) (str ", " (:description t))))]
       (when (#{:egress :act} class)
         (let [ds (destinations (if inner (or (:input input) (get input "input")) input))]
-          [(str "    where it would go: " (if (seq ds) (str/join "; " ds) "nothing in the input names a place"))]))
+          [(str "    where it would go: " (if (seq ds) (text/defang (str/join "; " ds)) "nothing in the input names a place"))]))
       [(str "    the session has seen: " (if (seq labels) (str/join ", " labels) "nothing labelled"))]
       (for [[label src] (sort-by key label-sources)]
         (str "      " (name label) " from "
@@ -400,17 +410,17 @@
                (pr-str src))))
       (when (seq odd)
         (cons "    look closely, the input has characters that can pass for others:"
-              (map #(str "      " %) odd)))
+              (map #(str "      " (text/defang %)) odd)))
       (preview (:preview h) approved)
       (when (and config (core/fixed-args-changed? config h))
         ["    your settings for this tool changed since it was held, so it will not run as shown: deny it"])
       [(str "    session " session ", call " call)
-       "    input:"]
-      (text/block [] input-text)
+       "    input (links are defanged: hxxp is http, [.] is a dot):"]
+      (defanged-block shown-labels input-text)
       (when (seq fixed-args)
         (cons "    set by your settings, not by the role:"
               (for [[k v] (sort-by (comp str key) fixed-args)]
-                (str "      " (name k) " = " (json/generate-string v)))))))))
+                (str "      " (name k) " = " (text/defang (json/generate-string v))))))))))
 
 (defn holds
   ([hs] (holds hs nil))

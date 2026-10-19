@@ -442,3 +442,62 @@
     (is (str/includes? md "Still to fill in, and would go out as written: [Photographer]"))
     (is (not (str/includes? (str/join "\n" (render/preview {:content "All filled in." :is-error false} #{}))
                             "still to fill in")))))
+
+;; --- a held input's links (cross-cutting review, round 2)
+
+(defspec a-rendered-hold-has-no-live-link 100
+  ;; Regression: relay holds and relay approve showed a held call's input,
+  ;; its destinations and its lookalike notes with live links.
+  (prop/for-all [labels (gen/elements [[] ["private"] ["contaminated" "private"]])
+                 host (gen/elements ["attacker.example" "pаypal.example"])
+                 k (gen/elements [:url :body :to])]
+    (let [h {:id 9 :role "clerk" :tool "send" :session "s" :call "c" :labels labels
+             :input {k (str "https://" host "/?secret=private-token")}}
+          shown (str/join "\n" (render/hold h cfg #{}))]
+      (and (not (re-find #"https?://" shown))
+           (not (str/includes? shown host))
+           (str/includes? shown "links are defanged")
+           (= (boolean (some #{"contaminated"} labels)) (str/includes? shown "[contaminated]"))))))
+
+(deftest a-hold-is-marked-by-its-preview-s-labels
+  (let [h {:id 9 :role "clerk" :tool "send" :session "s" :call "c" :labels ["private"]
+           :input {:group "Everyone"} :preview (assoc contaminated-preview :labels ["contaminated" "private"])}
+        shown (render/hold h cfg #{})]
+    (is (some #{"  [contaminated]"} shown) "a contaminated preview marks the input too")))
+
+;; --- a preview through the reader (cross-cutting review, round 2)
+
+(def reader-held
+  {:id "c9" :name core/reader-tool :input-sha256 "eff"
+   :input {:tool "send" :input {:subject "Hi"} :question "q" :schema {}}
+   :effective-input {:tool "send" :input {:group "Kira only" :subject "Hi"} :question "q" :schema {}}
+   :fixed-args {:group "Kira only"}})
+
+(deftest a-call-through-the-reader-gets-its-inner-tool-s-preview
+  ;; Regression: relay looked :preview up by read_quarantined, so wrapping
+  ;; a tool in the reader dropped its preview.
+  (let [seen (atom nil)
+        config (-> cfg (assoc-in [:tools "send" :preview] ["p"]) (assoc-in [:tools "send" :labels] ["contaminated" "private"]))
+        out (with-redefs [tools/run-preview! (fn [tool _ input & _] (reset! seen [tool input]) preview)]
+              (dispatch/with-previews {:config config} core/empty-state {:session "s" :labels [] :held [reader-held]}))]
+    (is (= ["send" {:group "Kira only" :subject "Hi"}] @seen) "the inner tool, on its effective input")
+    (is (= preview (:preview (first (:held out)))))
+    (testing "the ACP path does the same, with the inner tool's labels"
+      (let [p (with-redefs [tools/run-preview! (fn [tool _ input & _] (reset! seen [tool input]) preview)
+                            relay.inbound/current-state (fn [_] core/empty-state)]
+                ((#'dispatch/permission-previewer {:config config})
+                 {:tool core/reader-tool :input (:effective-input reader-held) :labels ["private"] :call "c9"}))]
+        (is (= ["send" {:group "Kira only" :subject "Hi"}] @seen))
+        (is (= ["contaminated" "private"] (:display-labels p)))))
+    (testing "the hold keeps the preview under the inner tool's labels"
+      (let [w (run (held-world []) "operator" :memo/send {:to "clerk" :subject "Again" :body "Please."})
+            wake-start (core/run-command (:state w) {:type :wake/start :actor "dispatcher" :args {:role "clerk" :dispatched true}}
+                                         {:now t0 :config config})
+            wake (core/running-wake (first wake-start) "clerk")
+            [st] (core/run-command (first wake-start)
+                                   {:type :wake/end :actor "dispatcher"
+                                    :args {:wake (:id wake) :outcome "ran" :exit 0 :session "sess-9" :said "Waiting."
+                                           :labels ["private"] :held [(assoc reader-held :preview preview)]}}
+                                   {:now t0 :config config})
+            h (first (filter #(= "c9" (:call %)) (vals (:holds st))))]
+        (is (= ["contaminated" "private"] (get-in h [:preview :labels])))))))

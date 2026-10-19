@@ -442,7 +442,7 @@
         out (str/join "\n" (render/hold h cfg))]
     (is (str/includes? out "held because it can send data out, and the session has seen both"))
     (is (str/includes? out "the tool: egress, Post."))
-    (is (str/includes? out "where it would go: to: pаypal-support@evil.example"))
+    (is (str/includes? out "where it would go: to: pаypal-support@evil[.]example"))
     (is (str/includes? out "contaminated from the tool fetch (call toolu_1)"))
     (is (str/includes? out "private from what relay put in its prompt"))
     (is (str/includes? out "mixes Cyrillic and Latin"))
@@ -462,7 +462,7 @@
     (is (str/includes? out "Hold 9: clerk wants to use post, through the reader"))
     (is (str/includes? out "held because it can send data out"))
     (is (str/includes? out "the tool: egress, Post."))
-    (is (str/includes? out "where it would go: to: someone@example.org")))
+    (is (str/includes? out "where it would go: to: someone@example[.]org")))
   (is (= "post" (core/held-tool "read_quarantined" {"tool" "post"})))
   (is (= "post" (core/held-tool "post" {"tool" "other"})))
   (doseq [input [nil {} {:tool 7} {:tool " "} ["post"]]]

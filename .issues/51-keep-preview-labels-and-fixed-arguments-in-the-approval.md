@@ -81,6 +81,29 @@ High defects.
   older than this change and not specific to fixed args; filed as
   relay#52.
 
+## Cross-cutting review, round 2
+
+- High, a display's plain text block carried raw markdown to any ACP
+  client: agentloop now sends it inert (hidden characters escaped, links
+  defanged, unbreakable fence), and relay acp rebuilds it inert from the
+  display under _meta whatever the agent sent. The display in _meta is
+  unchanged, so acp-tui shows it as before.
+- High, relay holds and relay approve showed a held input's links live:
+  every link in the input, its destinations, its lookalike notes and the
+  fixed values is now defanged, always. Decided always rather than by
+  labels: the operator reads the input to judge it, and a defanged link
+  still says where it goes. The screen says links are defanged, and the
+  input is marked contaminated by the union of the session's and the
+  preview's labels. The binding stays on the exact input. The s6 pentest
+  no longer exempts the hold and approve views.
+- Medium, wrapping a tool in read_quarantined dropped its preview: both
+  the wake path and the ACP path now run the inner tool's preview on the
+  inner effective input (core/preview-target), and the preview's labels
+  include the inner tool's static labels. In the ACP path the logged
+  preview keeps those labels too. No pentest: a reader reads only through
+  read and egress tools, and the stand-ins have no preview on one; the
+  unit tests cover both paths.
+
 ## Log
 
 - 2026-10-18: fixed in agentloop, acp-tui and relay; pentest checks in

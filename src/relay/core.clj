@@ -1769,6 +1769,17 @@
              (sequential? (:labels p)) (every? label-names (:labels p)))
     (-> (select-keys p [:content :is-error]) (assoc :labels (union (:labels p))))))
 
+(defn preview-target
+  "The tool whose :preview a held call gets, and the input to give it:
+  for a call through the quarantined reader, the inner tool and the
+  inner input, since the reader is held for what that call would do.
+  The input is the one the call would run on, with any arguments the
+  operator fixed."
+  [tool input]
+  (if-let [inner (and (= reader-tool tool) (held-tool tool input))]
+    [inner (when (map? input) (or (get input :input) (get input "input")))]
+    [tool input]))
+
 (defn preview-labels
   "The labels a preview's text carries: what the preview command said, the
   tool's static labels, since it reads the same service, and the labels of
@@ -1807,7 +1818,8 @@
             tx (cond-> tx
                  preview (emit "hold/previewed" {:hold hold-id :content (:content preview)
                                                  :is-error (:is-error preview)}
-                               (preview-labels (:config tx) name preview (:said-labels tx))))]
+                               (preview-labels (:config tx) (first (preview-target name (or effective-input input)))
+                                               preview (:said-labels tx))))]
         ;; The input stays in relay holds: it may hold private data, and a
         ;; notification goes to a phone.
         (notify tx "hold-opened" (str (:role wake) " wants to use " (or (held-tool name input) name))

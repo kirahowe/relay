@@ -15,7 +15,7 @@ Filed from the Codex review of relay#51, with the reviewer's text:
 > identifier can differ between approval and execution. Preserve exact
 > JSON numbers and add a wire-round-trip test above 2^53.
 
-It predates #49 and applies to any number in a request's input, the
+It predates #51 and applies to any number in a request's input, the
 model's included. Fixing it needs the raw JSON of the request, below the
 SDK's decoding.
 

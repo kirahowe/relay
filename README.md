@@ -458,7 +458,12 @@ time as ever. `relay holds` lists the held calls, and `relay approve` and `relay
 show the same before asking for the code: why the call was held, what
 the tool is, where its data would go, what the session has seen and
 where each label came from, any characters in the input that could pass
-for others (a Cyrillic `а` in `pаypal`), the tool's preview, and the whole input. `relay approve
+for others (a Cyrillic `а` in `pаypal`), the tool's preview, and the whole input.
+Every link in what they show of the input is defanged (`hxxps://`, `[.]`
+for a dot), whatever the session has seen: you read the input to judge
+it, and a defanged link still says where it goes. The input is marked
+contaminated when the session or the preview is. The approval is still
+bound to the exact input. `relay approve
 <hold>` or `relay deny <hold> [why]` decides one. Once every call in a
 held session is decided, the next tick that finds the role free carries
 that session on, with its memos, and agentloop carries out the
@@ -1140,7 +1145,18 @@ hosts the way a renderer would, after character references such as
 `&#58;` and backslash escapes. A client shows it as relay's description
 of what the call would do, apart from anything the model wrote.
 Everything else in the request is as agentloop sent it. The log records
-the preview with the request.
+the preview with the request. A call through the quarantined reader gets
+the preview of the tool it reads through, on that tool's input, under
+that tool's labels as well.
+
+A display (see What you are shown) reaches the client as one more text
+block in the call's content, with the whole display under
+`_meta["relay/display"]`. The block's own text is inert, for a client
+that knows nothing of displays: characters that draw as nothing show as
+`\u{XXXX}`, links are defanged, and the whole sits in a code fence
+nothing in it can close. relay makes it so from the display, whatever
+the agent sent, so no client fetches an image in it or follows a link
+before you have read it. acp-tui shows the display from `_meta`.
 
 relay acp also answers three ACP extension methods of its own, which
 never reach agentloop. `_relay/items` lists a session's shown docs and

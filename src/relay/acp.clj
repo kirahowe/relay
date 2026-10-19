@@ -330,6 +330,47 @@
   [s]
   (apply str (repeat (max 3 (inc (reduce max 0 (map count (re-seq #"`+" (str s)))))) "`")))
 
+(defn- escape-hidden
+  "s with every character that draws as nothing shown as \\u{XXXX}."
+  [s]
+  (apply str (map (fn [cp] (if (text/hidden? cp) (format "\\u{%04x}" cp) (String. (Character/toChars cp))))
+                  (iterator-seq (.iterator (.codePoints (str s)))))))
+
+(defn inert
+  "Text an outsider may have written, made safe for a client that renders
+  markdown and knows nothing of relay's _meta: hidden characters shown as
+  \\u{XXXX}, links defanged, and the whole in a code fence nothing in it
+  can close. No remote image in it is fetched and no link is live."
+  [s]
+  (let [t (text/defang (escape-hidden s))
+        f (fence t)]
+    (str f "text\n" t "\n" f)))
+
+(defn with-inert-displays
+  "An agent's session/update line with the text of every display block
+  (_meta relay/display) made inert from the display it carries, or nil
+  when the line has none. The display under _meta stays as it is, for a
+  client that shows displays apart; any other client sees only the inert
+  text. A display that cannot be read is made inert from the block's own
+  text."
+  [line]
+  (when (and (string? line) (str/includes? line "relay/display"))
+    (let [msg (parse line)
+          content (when (map? msg) (get-in msg ["params" "update" "content"]))]
+      (when (and (= "session/update" (get msg "method")) (sequential? content)
+                 (some #(and (map? %) (contains? (get-in % ["content" "_meta"]) "relay/display")) content))
+        (json/generate-string
+         (assoc-in msg ["params" "update" "content"]
+                   (mapv (fn [c]
+                           (let [d (when (map? c) (get-in c ["content" "_meta" "relay/display"]))]
+                             (if (and (map? c) (contains? (get-in c ["content" "_meta"]) "relay/display"))
+                               (assoc-in c ["content" "text"]
+                                         (inert (if (and (map? d) (string? (get d "title")) (string? (get d "body")))
+                                                  (str (get d "title") "\n\n" (get d "body"))
+                                                  (str (get-in c ["content" "text"])))))
+                               c)))
+                         content)))))))
+
 (defn preview-markdown
   "The markdown a client is shown for a held call's preview (relay.core
   preview-of): what the tool's preview command read from the service, a
@@ -348,8 +389,7 @@
         ;; Characters that draw as nothing are shown as \u{XXXX}, so the
         ;; preview cannot hide text from the operator. Line breaks and
         ;; tabs stay, since the preview is markdown.
-        shown (apply str (map (fn [cp] (if (text/hidden? cp) (format "\\u{%04x}" cp) (String. (Character/toChars cp))))
-                              (iterator-seq (.iterator (.codePoints (str content))))))
+        shown (escape-hidden content)
         gaps (text/placeholders content)
         notes (str/join "\n" (concat (when (seq gaps)
                                        [(str "Still to fill in, and would go out as written: "

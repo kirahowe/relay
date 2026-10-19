@@ -151,7 +151,10 @@ contract Tools {
         -- still binds to the input digest. A preview's text is shown
         -- defanged whatever its labels, and a client is given its labels
         -- (the command's, the tool's and the session's) apart from the
-        -- session's own, which it does not change.
+        -- session's own, which it does not change. A call through the
+        -- quarantined reader gets its inner tool's preview. The operator's
+        -- screens defang every link in a held call's input; the approval
+        -- binds to the exact input.
 
     @invariant CallsComeInEnvelopes
         -- A call reaches relay as exactly {input, labels, call_id}, the
@@ -3770,6 +3773,9 @@ surface ConversationBoundary {
         -- When the call's tool has a preview command, relay runs it and
         -- adds its markdown to the request's toolCall.content, marked
         -- _meta relay/preview, before the client sees the request.
+        -- A display block's own text reaches the client inert (hidden
+        -- characters escaped, links defanged, fenced), made from the
+        -- display under _meta, which a capable client shows apart.
 }
 
 surface NotificationBoundary {

@@ -330,9 +330,10 @@
             (fn [held]
               (when held
                 (mapv (fn [{:keys [id name input effective-input] :as c}]
-                        (let [command (get-in config [:tools name :preview])]
+                        (let [[tool tool-input] (core/preview-target name (or effective-input input))
+                              command (get-in config [:tools tool :preview])]
                           (if (and command (map? c) (not (known [(:session report) id])))
-                            (assoc c :preview (tools/run-preview! name command (or effective-input input) (:labels report) id))
+                            (assoc c :preview (tools/run-preview! tool command tool-input (:labels report) id))
                             c)))
                       held))))))
 (defn wake!
@@ -694,7 +695,8 @@
                              ;; Read again from the line the client gets, so
                              ;; what is recorded and listed is what it shows.
                              req (cond-> (or (some-> line' acp/permission-request) req)
-                                   p (assoc :preview-record (dissoc p :markdown :display-labels)))]
+                                   p (assoc :preview-record (-> (dissoc p :markdown :display-labels)
+                                                                (assoc :labels (vec (or display-labels (:labels p)))))))]
                          (on-permission :asked req)
                          (if passing
                              (do (swap! outstanding assoc (:id req) req)
@@ -713,7 +715,10 @@
                              (try (on-display session)
                                   (catch Exception e
                                     (binding [*out* *err*] (println "relay could not keep a display:" (ex-message e))))))
-                           :pass)))
+                           ;; A client that knows nothing of displays
+                           ;; sees their text inert, whatever the agent
+                           ;; sent.
+                           (or (acp/with-inert-displays line) :pass))))
         to-client! (fn [^String text]
                      (let [bs (.getBytes (str text "\n") java.nio.charset.StandardCharsets/UTF_8)]
                        (try (locking out (write-chunk! out bs (alength bs)))
@@ -804,11 +809,12 @@
   would run on: agentloop puts the arguments the operator fixed in it."
   [{:keys [config] :as sys}]
   (fn [{:keys [tool input labels call]}]
-    (when-let [command (and (string? tool) (get-in config [:tools tool :preview]))]
-      (let [p (tools/run-preview! tool command input labels call)]
-        (assoc p
-               :markdown (acp/preview-markdown p (core/approved-hosts (inbound/current-state sys)))
-               :display-labels (core/preview-labels config tool p labels))))))
+    (let [[tool input] (when (string? tool) (core/preview-target tool input))]
+      (when-let [command (and (string? tool) (get-in config [:tools tool :preview]))]
+        (let [p (tools/run-preview! tool command input labels call)]
+          (assoc p
+                 :markdown (acp/preview-markdown p (core/approved-hosts (inbound/current-state sys)))
+                 :display-labels (core/preview-labels config tool p labels)))))))
 
 (defn- oversize-recorder
   "Records an agent line relay dropped for being too long to read, and

