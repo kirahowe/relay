@@ -28,7 +28,9 @@
             [clojure.string :as str]
             [org.httpkit.server :as httpkit]
             [relay.config :as config]
-            [relay.connections :as connections])
+            [relay.connections :as connections]
+            [relay.text :as text]
+            [relay.vet :as vet])
   (:import (java.net URI URLDecoder URLEncoder)
            (java.nio.channels FileChannel)
            (java.nio.file OpenOption StandardOpenOption)
@@ -91,8 +93,13 @@
   shut out :consent. An :always-hold an earlier connect proposed for an
   act tool is dropped for the same reason. A tool the operator chose for before, in the connection
   file `previous`, keeps that choice and its name. No new name is one of
-  `taken`, the names relay.edn's own tools have."
-  [conn-name listed previous & [taken]]
+  `taken`, the names relay.edn's own tools have.
+
+  Each tool carries its definition's text (:texts) and what relay.vet
+  found odd in it (:flags), with `others` the names of tools from
+  elsewhere. A flagged tool starts off, unless the operator turned on
+  this same definition before."
+  [conn-name listed previous & [taken others]]
   (let [before (into {} (for [[n t] (:tools previous)] [(:tool t) (assoc t :name n)]))]
     (:out (reduce (fn [{:keys [taken out]} {:keys [name] :as l}]
                     (let [old (get before name)
@@ -102,7 +109,11 @@
                                     :digest (:digest l) :class class :labels default-labels
                                     :on (not (delete-like? l))}
                                    (select-keys old kept-choices))
-                          t (cond-> t (= :act (:class t)) (dissoc :always-hold))]
+                          t (cond-> t (= :act (:class t)) (dissoc :always-hold))
+                          flags (vet/flags l (set others))
+                          t (assoc t :texts (vet/texts l) :flags flags)
+                          t (cond-> t
+                              (and (seq flags) (not (and (:on old) (= (:digest old) (:digest l))))) (assoc :on false))]
                       {:taken (conj taken rn) :out (conj out t)}))
                   {:taken (into (set taken) (keep :name (vals before))) :out []}
                   (sort-by :name listed)))))
@@ -124,12 +135,28 @@
             :edit "Changes your own things there, which nobody else sees, and asks you first when what it works with came from outside."
             (str "Class " (name class) "."))))
 
-(defn summary-line [i {:keys [title tool description] :as t}]
-  (str (format "%2d. " (inc i)) (if (str/blank? title) tool (str title " (" tool ")")) "\n"
-       "    " (does t)
-       ;; All of it: the model is shown all of it, and pinning it means
-       ;; the operator accepted what they read.
-       (when-not (str/blank? description) (str "\n    The server says: " (one-line description)))))
+(defn- schema-text? [[where]] (not (#{"name" "title" "description"} where)))
+
+(defn summary-line
+  "One tool as the operator is shown it. Every word of its definition is
+  shown, since the model reads all of it and the typed code trusts what
+  was shown. A clean tool's text is on a line or two; a flagged one's is
+  shown whole, defanged and behind the gutter, after why it was flagged."
+  [i {:keys [title tool description texts flags] :as t}]
+  (let [head (str (format "%2d. " (inc i)) (if (str/blank? title) tool (str title " (" tool ")")))]
+    (if (seq flags)
+      (str/join "\n"
+                (concat [head
+                         (str "    " (does t))
+                         "    relay found something odd in what the server wrote for this tool, so it starts off:"]
+                        (for [f flags] (str "      - " f))
+                        ["    Everything the server wrote for it:"]
+                        (mapcat (fn [[where s]] (cons (str "    " where ":") (map #(str "  " %) (text/block [] (text/defang s)))))
+                                texts)))
+      (str head "\n" "    " (does t)
+           (when-not (str/blank? description) (str "\n    The server says: " (one-line description)))
+           (when-let [schema (seq (filter schema-text? texts))]
+             (str "\n    Its arguments: " (str/join "; " (for [[w s] schema] (str (str/replace w #"^input " "") ": " (one-line s))))))))))
 
 (defn summary
   "The lines that show the operator what connecting would allow."
@@ -610,7 +637,9 @@
 
 (defn connect!
   "relay connect. `opts`: :name, :url, :data-dir (absolute), :relay-bin,
-  :agentloop, :taken (tool names relay.edn already gives), :classes (what relay.edn's tools may be), :client-id, the
+  :agentloop, :taken (tool names relay.edn already gives), :others (the
+  names of tools from elsewhere, which a definition has no reason to
+  name), :classes (what relay.edn's tools may be), :client-id, the
   terminal's :say and :ask, :confirm! (shows lines and asks for the typed
   code, throwing when it is wrong) and :pin! (records the pins in the
   log). Returns the lines to print."
@@ -628,7 +657,7 @@
         {:keys [oauth blob]} (sign-in! env opts)
         listed (list-tools agentloop url (:access-token blob))
         _ (when (empty? listed) (problem! "The server offers no tools. Nothing was changed."))
-        proposal (choose! (propose name listed previous (:taken opts)) opts)
+        proposal (choose! (propose name listed previous (:taken opts) (:others opts)) opts)
         on (filter :on proposal)
         conn (connection {:url url :oauth oauth :connected (str ((:now env)))
                           :credentials-command [relay-bin "mcp-token" name "--data" data-dir "--url" url]}

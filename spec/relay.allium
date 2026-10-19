@@ -2530,6 +2530,12 @@ rule ConnectRemoteServer {
         -- server says it only reads, act (always asking) otherwise, with
         -- labels private and contaminated, and off when its name says it
         -- deletes. The operator may change any of it before the code.
+        -- The operator is shown every word of each definition, schema
+        -- text included. A definition a pure check finds odd (orders to
+        -- the model, role words, other tools' names, hidden or lookalike
+        -- characters, links or email addresses, overlong text) starts
+        -- off, shown whole and defanged with the reasons; the code trusts
+        -- what was shown.
         -- The sign-in talks to one authorization server, which must name
         -- itself in every answer if it says it does (RFC 9207), and
         -- otherwise keep its endpoints on its own origin; each sign-in

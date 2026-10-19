@@ -45,12 +45,45 @@ trusts what the operator was shown. A model-based check is a follow-up
 
 ## Acceptance criteria
 
-- [ ] relay connect shows every tool's full definition, its input schema's
+- [x] relay connect shows every tool's full definition, its input schema's
       text included (property descriptions, titles, enum values).
-- [ ] A pure, deterministic check flags a definition with imperative
+- [x] A pure, deterministic check flags a definition with imperative
       phrasing aimed at the model, hidden or lookalike characters, URLs or
       email addresses, or text far longer than a description needs. The
       summary says why.
-- [ ] Flagged tools are off by default. Clean ones get a one-line summary.
-- [ ] Property tests for the check, and a pentest or connect test with a
+- [x] Flagged tools are off by default. Clean ones get a one-line summary.
+- [x] Property tests for the check, and a pentest or connect test with a
       hostile definition.
+
+## Decisions (2026-10-19, as built)
+
+- The check is relay.vet, pure and deterministic. relay.vet/texts lists
+  every piece of a definition's text with where it is: name, title,
+  description, and in the input and output schemas the property names,
+  titles, descriptions, enum, const, default and example values, through
+  items and anyOf/oneOf/allOf.
+- It flags imperative phrasing aimed at the model (before or after
+  calling, ignore all or previous, always or never plus a verb, you must
+  or should, send or include plus private things, chat role words and
+  prompt tags, "other tools", "new instructions"), hidden characters
+  (relay.text/hidden?), words that mix scripts (relay.text/lookalikes),
+  links (relay.text/link-hosts and bare domains), email addresses, a
+  description over 1200 characters, any other text over 400, and a whole
+  definition over 4000.
+- Mentions of other tools count only for tools from elsewhere: relay's
+  own and relay.edn's, and only names with _ or -, since plain words such
+  as notes or inbox are ordinary English. A server's own sibling tools
+  are fine to name ("Use list_groups for the ids"), as real servers do.
+- Patterns were narrowed for false positives on ordinary API text: "do
+  not include", "include order history", "pagination token", "Ignored
+  fields", a helpdesk "Agent:" field all pass. Ten benign definitions
+  written to look like mail, ticketing, code and chat services pass;
+  twelve hostile ones are flagged; properties check that any hostile
+  phrase or hidden character put anywhere in a benign definition is
+  found, and that the check is deterministic.
+- A flagged tool starts off unless the operator turned on the same
+  definition (same digest) before. Clean tools show the usual summary
+  plus one line with all their argument text, so the code still trusts
+  everything the model will read. Flagged tools show the reasons and
+  every piece of text, defanged, behind the gutter.
+- A check by a model is the follow-up, relay#48.

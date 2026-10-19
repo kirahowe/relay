@@ -277,6 +277,21 @@ nothing is taken on trust. A changed definition waits for `relay fresh`,
 as for any MCP tool, and connecting again pins what you see then and
 keeps the choices you made before.
 
+The server writes every word of a tool's definition, and the model reads
+all of it, so connect shows you all of it too: the description and the
+text in its arguments (their names, descriptions, titles, allowed values
+and defaults). It also reads the text for what an honest description has
+no reason to hold: sentences that tell the model what to do (before or
+after a call, ignore, always or never, you must, send or include your
+private things), chat role words such as "system:", names of tools from
+elsewhere, characters that show as nothing or could pass for others,
+links and email addresses, and text far longer than a description needs.
+A tool with any of these starts off. connect lists why, then shows its
+whole text with links broken so they cannot be followed. Turn it on only
+if you are happy with what it says: the code you type trusts what you
+were shown. The check is a filter for you to look closer, and it can
+miss things.
+
 Any MCP tool, in relay.edn or a connection file, can narrow what the
 model may send. `:fixed-args {"send_now" false}` sets arguments to the
 given values on every call, and `:hidden-args ["reply_to"]` names
@@ -811,7 +826,10 @@ is written in Go.
    Your browser opens on the service's own sign-in page. Sign in there
    and allow relay. Back in the terminal, relay lists the service's tools
    and says what each one could do, such as "Reads only" or "Acts for
-   you, and asks you first every time". To change one, type its number,
+   you, and asks you first every time". A tool whose text looks odd
+   starts off, and relay says why and shows you everything the service
+   wrote for it. Leave it off unless that text reads like a plain
+   description of what the tool does. To change one, type its number,
    then the letter for what it should do, or `off`. Press Enter when the
    list is right. relay shows the list once more with a four-letter code.
    Type the code to finish.

@@ -690,6 +690,8 @@ and --instructions marks the id public too.")
                                             (agentloop/agentloop-bin (get-in config [:harnesses (:default-harness config)])))
                              :classes config/tool-classes :client-id (:client-id opts)
                              :taken (set (keep (fn [[t spec]] (when-not (= n (:connection spec)) t)) (:tools config)))
+                             :others (into (set (keys tools/builtin))
+                                           (keep (fn [[t spec]] (when-not (= n (:connection spec)) t)) (:tools config)))
                              :say say :ask ask
                              :confirm! (fn [lines] (confirm! "connect" lines tty))
                              :pin! (fn [pins] (submit! sys :tools/pin {:pins pins}))}))))
