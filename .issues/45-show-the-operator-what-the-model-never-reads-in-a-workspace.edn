@@ -1,10 +1,10 @@
 {:id 45
  :title "Show the operator what the model never reads, in a workspace pane"
- :status :review
+ :status :done
  :type :feature
  :priority :p1
  :created "2026-10-18"
- :updated "2026-10-18"
+ :updated "2026-10-19"
  :tags #{}
  :blocked-by #{}
  :related #{}

@@ -1,10 +1,10 @@
 {:id 42
  :title "Give roles a sandboxed workbench with no way out"
- :status :review
+ :status :done
  :type :feature
  :priority :p1
  :created "2026-10-18"
- :updated "2026-10-18"
+ :updated "2026-10-19"
  :tags #{}
  :blocked-by #{}
  :related #{}

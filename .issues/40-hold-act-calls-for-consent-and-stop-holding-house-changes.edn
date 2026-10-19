@@ -1,10 +1,10 @@
 {:id 40
  :title "Hold act calls for consent and edits only after untrusted text"
- :status :review
+ :status :done
  :type :feature
  :priority :p1
  :created "2026-10-18"
- :updated "2026-10-18"
+ :updated "2026-10-19"
  :tags #{}
  :blocked-by #{}
  :related #{}

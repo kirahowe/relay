@@ -1,10 +1,10 @@
 {:id 50
  :title "Mark placeholders left in a draft that a send preview shows"
- :status :review
+ :status :done
  :type :feature
  :priority :p3
  :created "2026-10-18"
- :updated "2026-10-18"
+ :updated "2026-10-19"
  :tags #{"consent" "previews"}
  :blocked-by #{}
  :related #{}

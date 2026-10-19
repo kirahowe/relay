@@ -21,21 +21,6 @@
 | [36](36-clean-up-after-an-interrupted-deploy-and-leave-no-check.md) | Clean up after an interrupted deploy, and leave no check dirs in TMPDIR | bug | P3 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
 
-### Review
-
-| ID | Title | Type | Priority |
-| --- | --- | --- | --- |
-| [40](40-hold-act-calls-for-consent-and-stop-holding-house-changes.md) | Hold act calls for consent and edits only after untrusted text | feature | P1 |
-| [41](41-speak-in-the-operator-s-terms-cite-sources-and-keep-skills.md) | Speak in the operator's terms, cite sources and keep skills | feature | P1 |
-| [42](42-give-roles-a-sandboxed-workbench-with-no-way-out.md) | Give roles a sandboxed workbench with no way out | feature | P1 |
-| [43](43-connect-remote-mcp-servers-behind-relay-s-layer.md) | Connect remote MCP servers behind relay's layer | feature | P1 |
-| [44](44-let-the-hub-read-the-web-through-closed-answers.md) | Let the hub read the web through closed answers | feature | P1 |
-| [45](45-show-the-operator-what-the-model-never-reads-in-a-workspace.md) | Show the operator what the model never reads, in a workspace pane | feature | P1 |
-| [46](46-codify-verification-in-bb-verify-with-new-evals-and-pentests.md) | Codify verification in bb verify, with new evals and pentests | chore | P1 |
-| [47](47-treat-a-remote-mcp-tool-s-description-as-outside-text.md) | Treat a remote MCP tool's description as outside text | feature | P1 |
-| [51](51-keep-preview-labels-and-fixed-arguments-in-the-approval.md) | Keep preview labels and fixed arguments in the approval | bug | P1 |
-| [50](50-mark-placeholders-left-in-a-draft-that-a-send-preview-shows.md) | Mark placeholders left in a draft that a send preview shows | feature | P3 |
-
 ### Blocked
 
 | ID | Title | Type | Priority |
@@ -57,6 +42,15 @@
 | [12](12-verify-every-report-with-code-not-a-model.md) | Verify every report with code, not a model | feature | P1 |
 | [13](13-review-reports-finding-by-finding.md) | Review reports finding by finding | feature | P1 |
 | [16](16-build-a-red-team-corpus-for-research-roles.md) | Build a red-team corpus for research roles | feature | P1 |
+| [40](40-hold-act-calls-for-consent-and-stop-holding-house-changes.md) | Hold act calls for consent and edits only after untrusted text | feature | P1 |
+| [41](41-speak-in-the-operator-s-terms-cite-sources-and-keep-skills.md) | Speak in the operator's terms, cite sources and keep skills | feature | P1 |
+| [42](42-give-roles-a-sandboxed-workbench-with-no-way-out.md) | Give roles a sandboxed workbench with no way out | feature | P1 |
+| [43](43-connect-remote-mcp-servers-behind-relay-s-layer.md) | Connect remote MCP servers behind relay's layer | feature | P1 |
+| [44](44-let-the-hub-read-the-web-through-closed-answers.md) | Let the hub read the web through closed answers | feature | P1 |
+| [45](45-show-the-operator-what-the-model-never-reads-in-a-workspace.md) | Show the operator what the model never reads, in a workspace pane | feature | P1 |
+| [46](46-codify-verification-in-bb-verify-with-new-evals-and-pentests.md) | Codify verification in bb verify, with new evals and pentests | chore | P1 |
+| [47](47-treat-a-remote-mcp-tool-s-description-as-outside-text.md) | Treat a remote MCP tool's description as outside text | feature | P1 |
+| [51](51-keep-preview-labels-and-fixed-arguments-in-the-approval.md) | Keep preview labels and fixed arguments in the approval | bug | P1 |
 | [3](3-run-agentloop-s-live-smoke-tests-from-a-flag-not-an-env-var.md) | Run agentloop's live smoke tests from a flag, not an env var | chore | P2 |
 | [5](5-support-reminder-sections-in-rem.md) | Support reminder sections in rem | feature | P2 |
 | [7](7-add-bb-deploy-and-bb-rollback-for-kira-to-run.md) | Add bb deploy and bb rollback for Kira to run | feature | P2 |
@@ -77,6 +71,7 @@
 | [31](31-report-check-workspaces-a-ctrl-c-could-not-forget.md) | Report check workspaces a Ctrl-C could not forget | bug | P3 |
 | [32](32-close-the-last-gaps-in-echo-labels-push-cuts-and-tool.md) | Close the last gaps in echo labels, push cuts and tool timeouts | bug | P3 |
 | [33](33-tidy-the-deploy-cleanup-message-and-tool-start-failures.md) | Tidy the deploy cleanup message and tool start failures | chore | P3 |
+| [50](50-mark-placeholders-left-in-a-draft-that-a-send-preview-shows.md) | Mark placeholders left in a draft that a send preview shows | feature | P3 |
 
 ## Dropped
 
