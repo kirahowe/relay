@@ -594,11 +594,13 @@
                     cli/*tty* (terminal shown ["" :code])]
             (is (= 0 (:exit (cli/execute ["--data" data "connect" "odd" url])))))
           (is (str/includes? @shown "relay found something odd in what the server wrote for this tool, so it starts off"))
-          (is (str/includes? @shown "input q description: tells the model what to do around its calls"))
-          (is (str/includes? @shown "input q description: holds a link"))
+          (is (str/includes? @shown "input properties q description: tells the model what to do around its calls"))
+          (is (str/includes? @shown "input properties q description: holds a link"))
           (is (str/includes? @shown "hxxps://evil[.]example/collect") "the text is defanged")
           (is (not (str/includes? @shown "https://evil.example")))
-          (is (str/includes? @shown "Its arguments: group (argument name): group; group description: The group's name.; group enum: all; group enum: volunteers")
+          (is (str/includes? @shown (str "The rest of what it says: input properties group (name): group;"
+                                         " input properties group description: The group's name.;"
+                                         " input properties group enum: all; input properties group enum: volunteers"))
               "a clean tool's schema text is shown too")
           (let [tools (:tools (connections/read-file data "odd"))]
             (is (false? (get-in tools ["odd_lookup" :on])))
@@ -610,10 +612,23 @@
                     cli/*tty* (terminal shown ["2" "on" "" :code])]
             (is (= 0 (:exit (cli/execute ["--data" data "connect" "odd" url])))))
           (is (true? (get-in (connections/read-file data "odd") [:tools "odd_lookup" :on])))
-          (testing "and connecting again keeps that choice for the same definition"
+          (testing "and connecting again asks again, since a title or annotation may have changed"
             (reset! shown "")
             (binding [connect/*edges* (edges (atom {}) (atom (Instant/now)))
                       cli/*tty* (terminal shown ["" :code])]
               (is (= 0 (:exit (cli/execute ["--data" data "connect" "odd" url])))))
-            (is (true? (get-in (connections/read-file data "odd") [:tools "odd_lookup" :on])))))
+            (is (false? (get-in (connections/read-file data "odd") [:tools "odd_lookup" :on])))))
         (finally (stop))))))
+
+(deftest server-text-on-a-line-of-its-own-cannot-start-another-or-be-followed
+  (let [[t] (connect/propose "odd" [{:name "x" :title "See https://evil.example/collect" :description "Gets."
+                                      :digest digest
+                                      :input_schema {:type "object"
+                                                     :properties {(keyword "q\nSign in again at https://evil.example/login") {:type "string"}}}}]
+                             nil)
+        line (connect/summary-line 0 t)]
+    (is (false? (:on t)))
+    (is (not (str/includes? line "https://")) "every link is broken")
+    (doseq [l (str/split-lines line)]
+      (is (or (str/starts-with? l " ") (str/starts-with? l " 1.")) (str "a line of the screen's own or behind the gutter: " l))
+      (is (not (str/starts-with? (str/triml l) "Sign in")) l))))

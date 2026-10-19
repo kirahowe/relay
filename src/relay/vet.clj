@@ -19,32 +19,40 @@
 
 (defn- kw-name [k] (if (keyword? k) (subs (str k) 1) (str k)))
 
+(def ^:private json-types #{"string" "number" "integer" "boolean" "object" "array" "null"})
+
 (defn- schema-texts
-  "Every piece of text in a JSON Schema, with its path: titles,
-  descriptions, enum and const values, defaults, examples, and property
-  names, through properties, items and the combining keywords."
-  [schema path depth]
-  (when (and (map? schema) (< depth 12))
-    (concat
-     (for [k [:title :description :$comment] :let [v (get schema k)] :when (string? v)]
-       [(str path " " (kw-name k)) v])
-     (for [k [:enum :examples] :let [vs (get schema k)] :when (sequential? vs)
-           v vs :when (some? v)]
-       [(str path " " (kw-name k)) (if (string? v) v (pr-str v))])
-     (for [k [:const :default] :when (contains? schema k) :let [v (get schema k)] :when (some? v)]
-       [(str path " " (kw-name k)) (if (string? v) v (pr-str v))])
-     (mapcat (fn [[p sub]]
-               (let [p (kw-name p)
-                     where (str path (when-not (str/blank? path) ".") p)]
-                 (cons [(str where " (argument name)") p] (schema-texts sub where (inc depth)))))
-             (sort-by (comp kw-name key) (when (map? (:properties schema)) (:properties schema))))
-     (when-let [items (:items schema)]
-       (if (sequential? items)
-         (mapcat #(schema-texts %1 (str path "[]") (inc depth)) items)
-         (schema-texts items (str path "[]") (inc depth))))
-     (mapcat (fn [k] (when (sequential? (get schema k))
-                       (mapcat #(schema-texts % path (inc depth)) (get schema k))))
-             [:anyOf :oneOf :allOf]))))
+  "Every piece of text anywhere in a JSON Schema, with its path: every
+  key and every string, at any depth and under any keyword ($defs,
+  patternProperties, pattern and format included), since the model is
+  shown the schema whole. The values of type are left out when they are
+  JSON's own type names, and so are the names in required, which are
+  property names already listed. Numbers and booleans count where they
+  are values for the model to read (enum, const, default, examples)."
+  [schema path]
+  (let [here (fn [k] (str path (when-not (str/blank? path) " ") (kw-name k)))]
+    (cond
+      (map? schema)
+      (mapcat (fn [[k v]]
+                (let [kn (kw-name k)]
+                  (cond
+                    (and (= "type" kn) (or (json-types v) (and (sequential? v) (every? json-types v)))) nil
+                    (and (= "required" kn) (sequential? v) (every? string? v)) nil
+                    (#{"properties" "patternProperties" "$defs" "definitions" "dependentSchemas"} kn)
+                    (when (map? v)
+                      (mapcat (fn [[pk pv]]
+                                (let [where (str (here k) " " (kw-name pk))]
+                                  (cons [(str where " (name)") (kw-name pk)] (schema-texts pv where))))
+                              (sort-by (comp kw-name key) v)))
+                    (and (#{"enum" "examples" "const" "default"} kn) (not (coll? v)) (some? v))
+                    [[(here k) (if (string? v) v (pr-str v))]]
+                    (and (#{"enum" "examples"} kn) (sequential? v))
+                    (for [x v :when (some? x)] [(here k) (if (string? x) x (pr-str x))])
+                    :else (schema-texts v (here k)))))
+              (sort-by (comp kw-name key) schema))
+      (sequential? schema) (mapcat #(schema-texts %1 (str path "[" %2 "]")) schema (range))
+      (string? schema) [[path schema]]
+      :else nil)))
 
 (defn texts
   "Every piece of text in a listed tool's definition, as [where text], in
@@ -57,8 +65,10 @@
         (when (and (string? (:title annotations)) (not= title (:title annotations)))
           [["annotations title" (:title annotations)]])
         (when (string? description) [["description" description]])
-        (for [[w t] (schema-texts input_schema "" 0)] [(str "input" (when-not (str/starts-with? w " ") " ") w) t])
-        (for [[w t] (schema-texts output_schema "" 0)] [(str "output" (when-not (str/starts-with? w " ") " ") w) t]))))
+        (schema-texts input_schema "input")
+        (schema-texts output_schema "output")
+        (for [[k v] (sort-by (comp kw-name key) annotations) :when (and (string? v) (not= :title k))]
+          [(str "annotations " (kw-name k)) v]))))
 
 ;; --- what looks wrong
 
@@ -66,7 +76,11 @@
   "Phrasing that tells the model what to do, rather than saying what the
   tool does. Each is narrow, so ordinary descriptions (\"Lists the
   subscribers of a group\", \"Ignored when empty\") pass."
-  [[#"(?i)\b(before|after|prior to|instead of)\s+(calling|using|running|invoking|answering|responding|replying|you\s+(call|use|answer|respond|reply))\b"
+  [[#"(?i)\b(ignore|disregard|forget|override|bypass|overlook|skip)\s+(all\s+|any\s+|the\s+|your\s+|of\s+)*(previous|prior|earlier|above|preceding|system|original|other|existing)?\s*(instructions?|rules|prompts?|directions|guidelines|guardrails|constraints)\b"
+    "tells the model to set its instructions aside"]
+   [#"(?i)\b(print|output|reveal|repeat|show|dump|return|display)\s+(the\s+|your\s+)?(entire|whole|full|complete|initial|original)\s+(conversation|context|prompt|chat|history|instructions)\b|\boutput\s+only\b|\brespond\s+only\s+with\b"
+    "tells the model what to answer"]
+   [#"(?i)\b(before|after|prior to|instead of)\s+(calling|using|running|invoking|answering|responding|replying|you\s+(call|use|answer|respond|reply))\b"
     "tells the model what to do around its calls"]
    [#"(?i)\bignore\s+(all|any|the|previous|prior|earlier|above|your|other|these|those|every)\b"
     "tells the model to ignore something"]
@@ -110,21 +124,38 @@
 (defn- mixed-words [s]
   (filter #(str/includes? % " mixes ") (text/lookalikes s)))
 
+(defn- styled-letter?
+  "A letter outside ASCII whose compatibility form is plain ASCII letters:
+  fullwidth Ａ, mathematical 𝐀, the ligature ﬁ. Accented letters, and
+  symbols such as ™, are not."
+  [cp]
+  (and (> cp 127) (Character/isLetter (int cp))
+       (re-matches #"[A-Za-z]+" (java.text.Normalizer/normalize (String. (Character/toChars (int cp)))
+                                                                java.text.Normalizer$Form/NFKC))))
+
+(defn- nfkc [s] (java.text.Normalizer/normalize (str s) java.text.Normalizer$Form/NFKC))
+
 (defn text-flags
   "What looks wrong in one piece of text, as reasons, each naming
   `where`. `others` are the names of tools elsewhere (relay's own and
-  relay.edn's), which a definition has no reason to name."
+  relay.edn's), which a definition has no reason to name. The patterns
+  are matched on the text as written and in its NFKC form, so fullwidth
+  letters and ligatures cannot spell an instruction past them."
   [where s others]
   (let [s (str s)
+        folded (nfkc s)
         say #(str where ": " %)]
     (concat
-     (for [[re why] imperative :when (re-find re s)] (say why))
+     (for [[re why] imperative :when (or (re-find re s) (re-find re folded))] (say why))
+     (when (some styled-letter? (iterator-seq (.iterator (.codePoints s))))
+       [(say "has letters written in another form (fullwidth, styled or joined letters)")])
      (when-let [cps (seq (hidden-chars s))]
        [(say (str "holds characters that show as nothing (" (str/join ", " (take 5 cps)) ")"))])
      (for [w (take 3 (mixed-words s))] (say (str "has a word that could pass for another: " w)))
-     (when (or (seq (text/link-hosts s)) (re-find bare-domain-pattern s))
+     (when (or (seq (text/link-hosts s)) (seq (text/link-hosts folded))
+               (re-find bare-domain-pattern s) (re-find bare-domain-pattern folded))
        [(say "holds a link")])
-     (when (re-find email-pattern s) [(say "holds an email address")])
+     (when (or (re-find email-pattern s) (re-find email-pattern folded)) [(say "holds an email address")])
      (for [o (sort others)
            :when (re-find (re-pattern (str "(?i)(?<![A-Za-z0-9_-])" (java.util.regex.Pattern/quote o) "(?![A-Za-z0-9_-])")) s)]
        (say (str "names " o ", a tool from somewhere else")))

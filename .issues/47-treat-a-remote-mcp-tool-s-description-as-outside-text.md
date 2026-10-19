@@ -59,9 +59,12 @@ trusts what the operator was shown. A model-based check is a follow-up
 
 - The check is relay.vet, pure and deterministic. relay.vet/texts lists
   every piece of a definition's text with where it is: name, title,
-  description, and in the input and output schemas the property names,
-  titles, descriptions, enum, const, default and example values, through
-  items and anyOf/oneOf/allOf.
+  description, annotations, and every key and string anywhere in the
+  input and output schemas, at any depth and under any keyword, leaving
+  out only JSON's own type names and the property names in required.
+  Patterns are matched on the text and on its NFKC form, and fullwidth,
+  styled or joined letters are flagged. Every piece of server text shown
+  on one line is collapsed to one line and defanged.
 - It flags imperative phrasing aimed at the model (before or after
   calling, ignore all or previous, always or never plus a verb, you must
   or should, send or include plus private things, chat role words and
@@ -81,9 +84,21 @@ trusts what the operator was shown. A model-based check is a follow-up
   twelve hostile ones are flagged; properties check that any hostile
   phrase or hidden character put anywhere in a benign definition is
   found, and that the check is deterministic.
-- A flagged tool starts off unless the operator turned on the same
-  definition (same digest) before. Clean tools show the usual summary
+- A flagged tool starts off at every connect, whatever was chosen
+  before: agentloop's digest leaves out titles and annotations, so an
+  earlier yes may not be for the same text. Clean tools show the usual summary
   plus one line with all their argument text, so the code still trusts
   everything the model will read. Flagged tools show the reasons and
   every piece of text, defanged, behind the gutter.
 - A check by a model is the follow-up, relay#48.
+
+## Log
+
+- 2026-10-19 Codex review round 1 found five in-scope defects, all fixed:
+  schema text under keywords the walk skipped ($defs, patternProperties,
+  pattern, additionalProperties, past depth 12) was neither shown nor
+  checked; titles, names and paths were printed raw, so a link stayed
+  clickable and a newline in a property name made unguttered lines; a
+  changed title kept an earlier "on" since the digest leaves titles out;
+  "disregard" and "forget" overrides passed; fullwidth letters passed.
+  Round 2 checks the fixes.

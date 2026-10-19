@@ -97,8 +97,7 @@
 
   Each tool carries its definition's text (:texts) and what relay.vet
   found odd in it (:flags), with `others` the names of tools from
-  elsewhere. A flagged tool starts off, unless the operator turned on
-  this same definition before."
+  elsewhere. A flagged tool starts off, whatever was chosen before."
   [conn-name listed previous & [taken others]]
   (let [before (into {} (for [[n t] (:tools previous)] [(:tool t) (assoc t :name n)]))]
     (:out (reduce (fn [{:keys [taken out]} {:keys [name] :as l}]
@@ -112,8 +111,10 @@
                           t (cond-> t (= :act (:class t)) (dissoc :always-hold))
                           flags (vet/flags l (set others))
                           t (assoc t :texts (vet/texts l) :flags flags)
-                          t (cond-> t
-                              (and (seq flags) (not (and (:on old) (= (:digest old) (:digest l))))) (assoc :on false))]
+                          ;; Every time: the digest leaves out titles and
+                          ;; annotations, so an earlier yes may not be for
+                          ;; this text.
+                          t (cond-> t (seq flags) (assoc :on false))]
                       {:taken (conj taken rn) :out (conj out t)}))
                   {:taken (into (set taken) (keep :name (vals before))) :out []}
                   (sort-by :name listed)))))
@@ -137,26 +138,35 @@
 
 (defn- schema-text? [[where]] (not (#{"name" "title" "description"} where)))
 
+(defn- shown-line
+  "Server text shown on one line of the operator's screen: whitespace,
+  newlines included, made single spaces, and links broken."
+  [s]
+  (text/defang (one-line s)))
+
 (defn summary-line
   "One tool as the operator is shown it. Every word of its definition is
   shown, since the model reads all of it and the typed code trusts what
   was shown. A clean tool's text is on a line or two; a flagged one's is
   shown whole, defanged and behind the gutter, after why it was flagged."
   [i {:keys [title tool description texts flags] :as t}]
-  (let [head (str (format "%2d. " (inc i)) (if (str/blank? title) tool (str title " (" tool ")")))]
+  (let [head (str (format "%2d. " (inc i))
+                  (if (str/blank? title) (shown-line tool) (str (shown-line title) " (" (shown-line tool) ")")))]
     (if (seq flags)
       (str/join "\n"
                 (concat [head
                          (str "    " (does t))
                          "    relay found something odd in what the server wrote for this tool, so it starts off:"]
-                        (for [f flags] (str "      - " f))
+                        (for [f flags] (str "      - " (shown-line f)))
                         ["    Everything the server wrote for it:"]
-                        (mapcat (fn [[where s]] (cons (str "    " where ":") (map #(str "  " %) (text/block [] (text/defang s)))))
+                        (mapcat (fn [[where s]] (cons (str "    " (shown-line where) ":")
+                                                      (map #(str "  " %) (text/block [] (text/defang s)))))
                                 texts)))
       (str head "\n" "    " (does t)
-           (when-not (str/blank? description) (str "\n    The server says: " (one-line description)))
+           (when-not (str/blank? description) (str "\n    The server says: " (shown-line description)))
            (when-let [schema (seq (filter schema-text? texts))]
-             (str "\n    Its arguments: " (str/join "; " (for [[w s] schema] (str (str/replace w #"^input " "") ": " (one-line s))))))))))
+             (str "\n    The rest of what it says: "
+                  (str/join "; " (for [[w s] schema] (str (shown-line w) ": " (shown-line s))))))))))
 
 (defn summary
   "The lines that show the operator what connecting would allow."
