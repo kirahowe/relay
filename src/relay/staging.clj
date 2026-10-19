@@ -9,7 +9,11 @@
   this repository, the keychain key, and a :file notifier that reaches
   nobody), a hub, a clerk that holds an :edit tool, and a few facts. All of
   it is made up. It also defines the stand-in tools in `stand-in-tools`,
-  which no role holds until an eval case grants them, and a stand-in
+  which no role holds until an eval case grants them: among them a
+  campaign service for the fictional Harbour Sound Society, whose drafts
+  are an :edit and whose sends are an :act, held for the operator with a
+  preview of the stored draft. The service's groups are in
+  campaign-groups.edn. There is also a stand-in
   :verifier for research reports, which no role writes until a scenario
   grants it :reports.
 
@@ -37,7 +41,9 @@
 
 (def stand-in-tools
   "The tools staging defines beyond remind-demo, by name: what an eval case
-  may grant (see relay.staging-tools). None is granted by default."
+  may grant (see relay.staging-tools). None is granted by default. A
+  :preview here names the relay.staging-tools command that is the tool's
+  :preview."
   {"fail-demo" {:class :edit
                 :labels []
                 :description "Set a reminder. Give the reminder's text, with its time as HH:MM."
@@ -60,6 +66,31 @@
                                                  :description "How many result pages to read; 3 by default."}}
                                 :required ["query"]
                                 :additionalProperties false}}
+   "campaign-draft-demo" {:class :edit
+                          :labels []
+                          :description (str "Save a draft email campaign for the mailing service: its subject, body and"
+                                            " recipient group. Give `draft` (an id such as c1) to save a new version of"
+                                            " that draft; earlier versions are kept. Nothing is sent.")
+                          :parameters {:type "object"
+                                       :properties {:draft {:type "string" :description "The id of the draft to revise. Leave it out for a new draft."}
+                                                    :subject {:type "string"}
+                                                    :body {:type "string" :description "The email's text, in markdown."}
+                                                    :group {:type "string" :description "The group it is addressed to, such as Mailing list."}}
+                                       :required ["subject" "body" "group"]
+                                       :additionalProperties false}}
+   "campaign-send-demo" {:class :act
+                         :labels []
+                         :preview "campaign-preview-demo"
+                         :description (str "Schedule one version of a saved draft campaign to go out to its group at a"
+                                           " local time. The service sends the stored version, and refuses a group"
+                                           " other than the draft's.")
+                         :parameters {:type "object"
+                                      :properties {:draft {:type "string" :description "The draft's id, such as c1."}
+                                                   :version {:type "integer" :description "The draft version to send."}
+                                                   :group {:type "string" :description "The draft's group."}
+                                                   :send_at {:type "string" :description "When to send, local time, as YYYY-MM-DD HH:MM."}}
+                                      :required ["draft" "version" "group" "send_at"]
+                                      :additionalProperties false}}
    "mail-demo" {:class :egress
                 :labels []
                 :description "Send an email."
@@ -79,7 +110,13 @@
   {:command (staging-tools-command data-dir repo-root bb-bin "verify-demo") :timeout-seconds 60})
 
 (defn- stand-in [data-dir repo-root bb-bin [tool-name tool]]
-  [tool-name (assoc tool :protocol :envelope :command (staging-tools-command data-dir repo-root bb-bin tool-name))])
+  [tool-name (cond-> (assoc tool :protocol :envelope :command (staging-tools-command data-dir repo-root bb-bin tool-name))
+               (:preview tool) (assoc :preview (staging-tools-command data-dir repo-root bb-bin (:preview tool))))])
+
+(def campaign-groups
+  "The groups campaign-send-demo's service knows, with their sizes. Staging
+  init writes them to <data>/campaign-groups.edn."
+  {"Mailing list" 287 "Board" 6})
 
 (defn settings
   "The relay.edn settings of a staging directory. Pure. The stand-in tools
@@ -258,6 +295,7 @@
         (fs/create-dirs (fs/path dir "web"))
         (doseq [f (fs/list-dir fixtures) :when (re-matches staging-tools/page-name (str (fs/file-name f)))]
           (fs/copy f (fs/path dir "web" (fs/file-name f)) {:replace-existing true}))))
+    (spit (str (fs/path dir "campaign-groups.edn")) (pr-str campaign-groups))
     (log/init! dir)
     (let [sys (inbound/system dir (cond-> {} clock (assoc :clock clock)))]
       (doseq [command (seed hub)]

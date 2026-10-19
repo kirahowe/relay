@@ -309,7 +309,8 @@
     (is (config/resolve-config (scenario/merge-settings (staging/settings {:data-dir "/s"})
                                                         {:grants {"hub" {:quarantine ["web-demo"]}}}))))
   (testing "relay itself refuses the reader over a tool that changes things"
-    (doseq [grant [{:quarantine ["fail-demo"]} {:tools ["fail-demo"] :quarantine ["fail-demo"]}]]
+    (doseq [grant [{:quarantine ["fail-demo"]} {:tools ["fail-demo"] :quarantine ["fail-demo"]}
+                   {:quarantine ["campaign-send-demo"]}]]
       (is (thrown? clojure.lang.ExceptionInfo
                    (config/resolve-config (scenario/merge-settings (staging/settings {:data-dir "/s"})
                                                                    {:grants {"hub" grant}})))
@@ -402,9 +403,54 @@
         (is (= (count items) (count (reports/parse-check-items {:items items}
                                                                (json/parse-string (json/generate-string {:items out}))))))))))
 
+(deftest the-campaign-stand-ins-keep-versions-and-send-only-what-is-stored
+  (let [[c1 env] (staging-tools/save-draft nil {:subject "S1" :body "B1" :group "Mailing list"})
+        [c2 env2] (staging-tools/save-draft c1 {:draft "c1" :subject "S2" :body "B2" :group "Mailing list"})
+        groups {"Mailing list" 287}
+        send {:draft "c1" :version 1 :group "Mailing list" :send_at "2026-11-13 09:00"}]
+    (is (str/includes? (:content env) "draft c1, version 1"))
+    (is (str/includes? (:content env2) "draft c1, version 2"))
+    (testing "a revision keeps the earlier version"
+      (is (= ["B1" "B2"] (map :body (get-in c2 [:drafts "c1" :versions])))))
+    (testing "a bad draft changes nothing"
+      (doseq [bad [{} {:subject "s" :body " " :group "g"} {:draft "c9" :subject "s" :body "b" :group "g"}]]
+        (let [[saved e] (staging-tools/save-draft c2 bad)]
+          (is (nil? saved) (pr-str bad))
+          (is (:is_error e) (pr-str bad)))))
+    (testing "the preview shows the stored version, its group's size and the time"
+      (let [{:keys [content is_error]} (staging-tools/preview-send c2 groups send)]
+        (is (not is_error))
+        (is (every? #(str/includes? content %) ["S1" "B1" "287 people" "2026-11-13 09:00"]))
+        (is (not (str/includes? content "B2")))))
+    (testing "a send goes out as stored, or not at all"
+      (is (= {:draft "c1" :version 2 :group "Mailing list" :members 287 :send_at "2026-11-13 09:00"
+              :subject "S2" :body "B2"}
+             (json/parse-string (second (staging-tools/send-draft c2 groups (assoc send :version 2))) true)))
+      (doseq [bad [(assoc send :group "Board") (assoc send :version 3) (assoc send :version "1")
+                   (assoc send :draft "c2") (assoc send :send_at "now") (dissoc send :send_at)]]
+        (is (nil? (second (staging-tools/send-draft c2 groups bad))) (pr-str bad))
+        (is (:is_error (staging-tools/preview-send c2 groups bad)) (pr-str bad))))
+    (testing "whatever a send carries, what goes out is a stored version"
+      (let [r (tc/quick-check
+               200
+               (prop/for-all [draft (gen/elements ["c1" "c2" nil])
+                              version (gen/one-of [(gen/choose 0 3) gen/string-alphanumeric])
+                              group (gen/elements ["Mailing list" "Board" "mailing list"])
+                              body gen/string-alphanumeric]
+                 (let [line (second (staging-tools/send-draft c2 groups {:draft draft :version version :group group
+                                                                         :send_at "2026-11-13 09:00" :body body}))]
+                   (or (nil? line)
+                       (contains? #{"B1" "B2"} (:body (json/parse-string line true)))))))]
+        (is (:pass? r) (pr-str (:shrunk r)))))
+    (is (= {:campaign "campaign-send-demo" :input send} (second (staging-tools/answer "campaign-send-demo" "/d" send))))))
+
 (deftest the-stand-in-tools-are-defined-but-granted-to-nobody
   (let [s (staging/settings {:data-dir "/s" :repo-root "/r" :bb-bin "/bin/bb"})]
     (is (= :egress (get-in s [:tools "mail-demo" :class])))
+    (is (= :edit (get-in s [:tools "campaign-draft-demo" :class])))
+    (is (= :act (get-in s [:tools "campaign-send-demo" :class])))
+    (is (= ["/bin/bb" "--classpath" "/r/src" "-m" "relay.staging-tools" "campaign-preview-demo" "/s"]
+           (get-in s [:tools "campaign-send-demo" :preview])))
     (is (= ["contaminated"] (get-in s [:tools "web-demo" :labels])))
     (is (= ["/bin/bb" "--classpath" "/r/src" "-m" "relay.staging-tools" "fail-demo" "/s"]
            (get-in s [:tools "fail-demo" :command])))

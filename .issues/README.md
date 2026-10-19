@@ -7,7 +7,6 @@
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
-| [46](46-codify-verification-in-bb-verify-with-new-evals-and-pentests.md) | Codify verification in bb verify, with new evals and pentests | chore | P1 |
 | [48](48-judge-remote-tool-definitions-with-a-decision-model.md) | Judge remote tool definitions with a decision model | feature | P2 |
 
 ### Ready
@@ -19,6 +18,12 @@
 | [38](38-stop-the-hub-notifying-twice-for-one-stuck-memo.md) | Stop the hub notifying twice for one stuck memo | bug | P2 |
 | [36](36-clean-up-after-an-interrupted-deploy-and-leave-no-check.md) | Clean up after an interrupted deploy, and leave no check dirs in TMPDIR | bug | P3 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
+
+### In progress
+
+| ID | Title | Type | Priority |
+| --- | --- | --- | --- |
+| [46](46-codify-verification-in-bb-verify-with-new-evals-and-pentests.md) | Codify verification in bb verify, with new evals and pentests | chore | P1 |
 
 ### Review
 
