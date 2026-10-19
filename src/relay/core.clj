@@ -13,6 +13,7 @@
   Entity ids are the seq of the event that created them: memo 42 is the
   memo that event 42 sent."
   (:require [clojure.string :as str]
+            [clojure.walk]
             [relay.config :as config]
             [relay.reports :as reports]
             [relay.schedule :as schedule]
@@ -1013,11 +1014,12 @@
                         (fn [js] (update-vals js (fn [es] (mapv #(cond-> % (= num (:id %)) (update :labels clean)) es))))))))
 
 (defmethod evolve* "hold/opened" [state {:keys [seq at data labels]}]
-  (let [{:keys [role wake session call tool input input-sha256 label-sources]} data]
-    (assoc-in state [:holds seq] {:id seq :role role :wake wake :session session :call call
-                                  :tool tool :input input :input-sha256 input-sha256
-                                  :label-sources label-sources
-                                  :status :open :opened-at (inst at) :labels (union labels)})))
+  (let [{:keys [role wake session call tool input input-sha256 label-sources effective-input fixed-args]} data]
+    (cond-> (assoc-in state [:holds seq] {:id seq :role role :wake wake :session session :call call
+                                          :tool tool :input input :input-sha256 input-sha256
+                                          :label-sources label-sources
+                                          :status :open :opened-at (inst at) :labels (union labels)})
+      (map? fixed-args) (update-in [:holds seq] assoc :effective-input effective-input :fixed-args fixed-args))))
 
 (defmethod evolve* "hold/previewed" [state {:keys [data labels]}]
   (let [{:keys [hold content is-error]} data]
@@ -1789,13 +1791,16 @@
   hold still open stays as it is, and one decided and carried back that is
   held again was never received, so it is carried back again. A preview
   relay ran for it is kept with it, under labels of its own."
-  [{:keys [state] :as tx} wake session {:keys [id name input input-sha256 label-sources preview]}]
+  [{:keys [state] :as tx} wake session {:keys [id name input input-sha256 label-sources preview effective-input fixed-args]}]
   (let [known (first (filter #(and (= session (:session %)) (= id (:call %))) (vals (:holds state))))]
     (cond
       (nil? known)
       (let [tx (emit tx "hold/opened" (cond-> {:role (:role wake) :wake (:id wake) :session session
                                                :call id :tool name :input input :input-sha256 input-sha256}
-                                        (map? label-sources) (assoc :label-sources label-sources))
+                                        (map? label-sources) (assoc :label-sources label-sources)
+                                        ;; What the call would run on: the digest is of it.
+                                        (and (map? effective-input) (map? fixed-args) (seq fixed-args))
+                                        (assoc :effective-input effective-input :fixed-args fixed-args))
                      (:said-labels tx))
             hold-id (last-id tx)
             preview (preview-of preview)
@@ -2280,6 +2285,17 @@
   that keeps asking for what it is refused starts afresh."
   3)
 
+(defn- json-keys [x] (clojure.walk/stringify-keys x))
+
+(defn fixed-args-changed?
+  "Whether the operator's fixed arguments for a held call's tool differ
+  from the ones it was held with. agentloop binds the approval to the
+  input with them, so such a call would not run: it is refused here,
+  where the operator can see why, and agentloop refuses it again."
+  [config h]
+  (not= (json-keys (not-empty (:fixed-args h)))
+        (json-keys (not-empty (get-in config [:tools (:tool h) :fixed-args])))))
+
 (defmethod decide* :hold/resolve [{:keys [state actor] :as tx} {{hold-id :hold :keys [verdict reason end]} :args}]
   ;; A person decides, never a model or a tool: only the operator, at the
   ;; command line, can resolve a hold.
@@ -2291,6 +2307,10 @@
       (reject! :invalid (str "Hold " hold-id " was already decided: " (name (:status h)) ".")))
     (when-not (#{"allow" "deny"} verdict)
       (reject! (str "A hold is resolved with allow or deny, not " (pr-str verdict) ".")))
+    (when (and (= "allow" verdict) (fixed-args-changed? (:config tx) h))
+      (reject! :invalid (str "Hold " hold-id " cannot be allowed: your settings for " (:tool h)
+                             " changed since it was held, so it would not run as it was shown."
+                             " Deny it, and the role can ask again.")))
     (let [tx (emit tx "hold/resolved" (cond-> {:hold hold-id :verdict verdict}
                                         (not (blank? reason)) (assoc :reason (str/trim reason))
                                         ;; The operator is told, as they type it,

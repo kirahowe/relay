@@ -219,17 +219,29 @@
 
 ;; --- permission requests
 
-(defn preview
-  "The text of the preview in a tool call's content, if it has one: a text
-  block whose _meta has relay/preview true."
+(defn- preview-block
+  "The text block of the preview in a tool call's content, if it has one:
+  one whose _meta has relay/preview true."
   [content]
   (when (sequential? content)
     (some (fn [c]
             (let [b (when (map? c) (get c "content"))]
               (when (and (map? b) (= "text" (get b "type")) (string? (get b "text"))
                          (true? (get-in b ["_meta" "relay/preview"])))
-                (get b "text"))))
+                b)))
           content)))
+
+(defn preview
+  "The text of the preview in a tool call's content, if it has one."
+  [content]
+  (get (preview-block content) "text"))
+
+(defn preview-labels
+  "The labels relay gave the preview in a tool call's content: what its
+  text carries, which is not what the session holds."
+  [content]
+  (let [ls (get-in (preview-block content) ["_meta" "relay/labels"])]
+    (when (sequential? ls) (vec (filter string? ls)))))
 
 (defn permission-request
   "An agent's session/request_permission, as relay keeps track of it, or
@@ -250,6 +262,10 @@
          :labels (let [ls (when (map? call) (get-in call ["_meta" "agentloop/labels"]))]
                    (when (sequential? ls) (vec ls)))
          :preview (when (map? call) (preview (get call "content")))
+         :preview-labels (when (map? call) (preview-labels (get call "content")))
+         ;; The arguments the operator fixed, which the input has in it.
+         :fixed-args (let [f (when (map? call) (get-in call ["_meta" "agentloop/fixed_args"]))]
+                       (when (and (map? f) (seq f)) f))
          :options (vec (filter map? (when (sequential? options) options)))}))))
 
 (defn unreadable-permission-request
@@ -305,7 +321,8 @@
 (def preview-meta
   "The _meta that marks the preview in a permission request's
   toolCall.content, on the content item and on its text block, so a
-  client can tell it from anything else there and show it as relay's."
+  client can tell it from anything else there and show it as relay's.
+  with-preview adds relay/labels, the labels of the preview's text."
   {"relay/preview" true})
 
 (defn- fence
@@ -345,16 +362,20 @@
 
 (defn with-preview
   "A session/request_permission line with `markdown` added to the end of
-  its toolCall.content as a text content block marked with preview-meta.
-  Everything else in the request is kept. Nil when the line is not such a
-  request."
-  [line markdown]
+  its toolCall.content as a text content block marked with preview-meta,
+  and with `labels`, what the preview's text carries, as relay/labels.
+  They are the preview's own, kept apart from agentloop/labels, which are
+  the session's: a client renders the preview by them, and the session is
+  no more contaminated for it. Everything else in the request is kept.
+  Nil when the line is not such a request."
+  [line markdown labels]
   (let [msg (when (string? line) (parse line))
         call (get-in msg ["params" "toolCall"])]
     (when (and (map? msg) (= "session/request_permission" (get msg "method")) (map? call))
       (let [content (get call "content")
-            item {"type" "content" "_meta" preview-meta
-                  "content" {"type" "text" "text" (str markdown) "_meta" preview-meta}}]
+            meta (assoc preview-meta "relay/labels" (vec labels))
+            item {"type" "content" "_meta" meta
+                  "content" {"type" "text" "text" (str markdown) "_meta" meta}}]
         (json/generate-string
          (assoc-in msg ["params" "toolCall" "content"]
                    (conj (if (sequential? content) (vec content) []) item)))))))

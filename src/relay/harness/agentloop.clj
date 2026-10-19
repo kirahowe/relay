@@ -192,10 +192,15 @@
 (defn held-calls
   "The calls an outcome line says are held, as relay records them."
   [held]
-  (vec (for [{:keys [id name input input_sha256]} (when (sequential? held) held)
+  (vec (for [{:keys [id name input input_sha256 effective_input fixed_args]} (when (sequential? held) held)
              :when (and (string? id) (string? name))]
          (cond-> {:id id :name name :input input}
-           (string? input_sha256) (assoc :input-sha256 input_sha256)))))
+           (string? input_sha256) (assoc :input-sha256 input_sha256)
+           ;; A call to a tool whose arguments the operator fixed: the
+           ;; input it would run on, which the digest is of, and the
+           ;; values the operator set in it.
+           (and (map? effective_input) (map? fixed_args) (seq fixed_args))
+           (assoc :effective-input effective_input :fixed-args fixed_args)))))
 
 (defn usage
   "A run's token counts from its outcome line, as relay records them, or

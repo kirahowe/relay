@@ -148,7 +148,10 @@ contract Tools {
         -- what it says (relay holds, approve, deny, and the ACP
         -- permission request), never the model's account of the call.
         -- The preview is what the service said at hold time; approval
-        -- still binds to the input digest.
+        -- still binds to the input digest. A preview's text is shown
+        -- defanged whatever its labels, and a client is given its labels
+        -- (the command's, the tool's and the session's) apart from the
+        -- session's own, which it does not change.
 
     @invariant CallsComeInEnvelopes
         -- A call reaches relay as exactly {input, labels, call_id}, the
@@ -282,7 +285,11 @@ contract Tools {
         -- of the schema the model is shown. A call that names one is
         -- refused before the policy decides and before the server sees
         -- anything; every other call reaches the server with the fixed
-        -- values as the operator wrote them.
+        -- values as the operator wrote them. The policy, standing consent,
+        -- the preview and the approval all see the input with the fixed
+        -- values in, and the approval digest is of that input. A hold
+        -- whose fixed values changed since it opened cannot be allowed,
+        -- and an allow given before such a change does not run.
 
     @invariant AnUnofferedToolIsRefused
         -- A call to a tool the role was not offered is refused,

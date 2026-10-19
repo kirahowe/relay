@@ -322,16 +322,17 @@
   :preview command and that relay has not recorded yet: the command's
   answer for the call's input, under the session's labels. The preview is
   run now, at hold time, so the operator sees what the service says the
-  call would do."
+  call would do. It is given the input the call would run on, with the
+  arguments the operator fixed."
   [{:keys [config]} state report]
   (let [known (set (map (juxt :session :call) (vals (:holds state))))]
     (update report :held
             (fn [held]
               (when held
-                (mapv (fn [{:keys [id name input] :as c}]
+                (mapv (fn [{:keys [id name input effective-input] :as c}]
                         (let [command (get-in config [:tools name :preview])]
                           (if (and command (map? c) (not (known [(:session report) id])))
-                            (assoc c :preview (tools/run-preview! name command input (:labels report) id))
+                            (assoc c :preview (tools/run-preview! name command (or effective-input input) (:labels report) id))
                             c)))
                       held))))))
 (defn wake!
@@ -688,12 +689,12 @@
                        (let [passing (and approvals (not @client-gone) (not (:unreadable req)))
                              ;; Only a request the client will see gets a
                              ;; preview, which goes with it.
-                             {:keys [markdown] :as p} (when passing (preview req))
-                             line' (when markdown (acp/with-preview line markdown))
+                             {:keys [markdown display-labels] :as p} (when passing (preview req))
+                             line' (when markdown (acp/with-preview line markdown display-labels))
                              ;; Read again from the line the client gets, so
                              ;; what is recorded and listed is what it shows.
                              req (cond-> (or (some-> line' acp/permission-request) req)
-                                   p (assoc :preview-record (dissoc p :markdown)))]
+                                   p (assoc :preview-record (dissoc p :markdown :display-labels)))]
                          (on-permission :asked req)
                          (if passing
                              (do (swap! outstanding assoc (:id req) req)
@@ -795,12 +796,19 @@
   "Runs the :preview command of the tool a conversation's permission
   request is for, and gives the preview with the markdown the client is
   shown, or nil when the tool has none. A preview that cannot be had is
-  shown as such: the request goes to the client all the same."
+  shown as such: the request goes to the client all the same.
+
+  :display-labels are the labels the client renders the preview by: the
+  preview command's, the tool's static ones and the session's, as for a
+  wake's hold (relay.core/preview-labels). The input is the one the call
+  would run on: agentloop puts the arguments the operator fixed in it."
   [{:keys [config] :as sys}]
   (fn [{:keys [tool input labels call]}]
     (when-let [command (and (string? tool) (get-in config [:tools tool :preview]))]
       (let [p (tools/run-preview! tool command input labels call)]
-        (assoc p :markdown (acp/preview-markdown p (core/approved-hosts (inbound/current-state sys))))))))
+        (assoc p
+               :markdown (acp/preview-markdown p (core/approved-hosts (inbound/current-state sys)))
+               :display-labels (core/preview-labels config tool p labels))))))
 
 (defn- oversize-recorder
   "Records an agent line relay dropped for being too long to read, and

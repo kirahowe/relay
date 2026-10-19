@@ -299,7 +299,12 @@ given values on every call, and `:hidden-args ["reply_to"]` names
 arguments the model may not give. The model does not see either in the
 tool's schema, and agentloop refuses a call that names one before the
 call can be held or sent. A fixed value is yours, so no role can change
-it.
+it. A call is decided and held with the fixed values in: a `:consent`
+rule can name one, a preview is given them, and `relay holds` lists them
+as set by your settings. Approval binds to the input with them. If you
+change a fixed value while a call waits, `relay approve` refuses it, and
+a call you approved before the change does not run. The role is told
+your settings changed.
 
 A typed answer from cleanroom (a date, a number, a record) holds no text
 an outsider chose, which is why it can come back clean, but it is still
@@ -391,7 +396,7 @@ A held call is a proposal, and the operator decides it from what the
 service says it would do, not from what the role says. A tool may have
 `:preview`, a command relay runs when the call is held. It speaks the
 envelope protocol: it gets `{input, labels, call_id}`, the held call's
-input and the session's labels, on stdin and prints one `{content,
+input (with any arguments you fixed) and the session's labels, on stdin and prints one `{content,
 is_error, labels}`, whose content is markdown saying what the call would
 do. For an email: subject, body, the group and how many people are in it,
 and when it goes out, read from the mail service. relay keeps the preview
@@ -401,6 +406,7 @@ leaves a note saying so, and the hold opens all the same.
 
 `relay holds`, `relay approve` and `relay deny` show the preview. So does
 the permission request in a conversation (see [ACP clients](#acp-clients)).
+A preview's links are always defanged, since it is what a service said.
 Links in a preview to a host that no preview the operator approved
 before had are listed as new, and characters in it that can pass for
 others are named. Approval still binds to the call's input, by its
@@ -1108,9 +1114,18 @@ the request on and adds the preview to the end of the request's
 
 ```json
 {"type": "content",
- "_meta": {"relay/preview": true},
- "content": {"type": "text", "text": "<markdown>", "_meta": {"relay/preview": true}}}
+ "_meta": {"relay/preview": true, "relay/labels": ["contaminated", "private"]},
+ "content": {"type": "text", "text": "<markdown>",
+             "_meta": {"relay/preview": true, "relay/labels": ["contaminated", "private"]}}}
 ```
+
+`relay/labels` are the labels of the preview's text: what the preview
+command reported, the tool's static labels and the session's. They are
+kept apart from `agentloop/labels`, which stay the session's own, since
+the session never saw the preview. A client shows the request by both,
+and `_relay/items` labels the proposal with both. A call whose tool fixes
+arguments arrives with them in `rawInput` and named under
+`_meta["agentloop/fixed_args"]`.
 
 The markdown is the preview command's content inside a code fence, with
 characters that draw as nothing shown as `\u{XXXX}`, then after a `---`

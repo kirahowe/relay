@@ -21,6 +21,12 @@
 | [36](36-clean-up-after-an-interrupted-deploy-and-leave-no-check.md) | Clean up after an interrupted deploy, and leave no check dirs in TMPDIR | bug | P3 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
 
+### In progress
+
+| ID | Title | Type | Priority |
+| --- | --- | --- | --- |
+| [51](51-keep-preview-labels-and-fixed-arguments-in-the-approval.md) | Keep preview labels and fixed arguments in the approval | bug | P1 |
+
 ### Review
 
 | ID | Title | Type | Priority |

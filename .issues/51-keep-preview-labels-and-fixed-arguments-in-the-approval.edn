@@ -1,0 +1,11 @@
+{:id 51
+ :title "Keep preview labels and fixed arguments in the approval"
+ :status :in-progress
+ :type :bug
+ :priority :p1
+ :created "2026-10-18"
+ :updated "2026-10-18"
+ :tags #{"security"}
+ :blocked-by #{}
+ :related #{}
+ :details "51-keep-preview-labels-and-fixed-arguments-in-the-approval.md"}

@@ -319,7 +319,8 @@
   read from the service about what the call would do, never what the role
   said it would do. Links to a host not in `approved` (hosts in previews
   the operator approved before) are listed, and so are characters that can
-  pass for others."
+  pass for others. A preview is the service's text, so its links are
+  always defanged, whatever its labels."
   [{:keys [content is-error labels] :as p} approved]
   (if-not p
     []
@@ -329,7 +330,11 @@
        [(if is-error
           "    preview: the preview command could not say what this call would do:"
           "    what it would do (from the tool's preview, not from the role):")]
-       (text/block labels content)
+       ;; text/block defangs a contaminated preview itself; defang is
+       ;; not idempotent, so a clean one is defanged here, once.
+       (if (text/contaminated? labels)
+         (text/block labels content)
+         (text/block labels (text/defang content)))
        (when (seq new-hosts)
          (cons "    links to places you have not approved before:"
                (map #(str "      " (text/defang %)) new-hosts)))
@@ -363,8 +368,11 @@
   something else, and the whole input."
   ([h] (hold h nil))
   ([h config] (hold h config #{}))
-  ([{:keys [id role tool input session call labels label-sources] :as h} config approved]
-   (let [inner (when (= core/reader-tool tool) (core/held-tool tool input))
+  ([{:keys [id role tool session call labels label-sources fixed-args] :as h} config approved]
+   (let [;; What the call would run on: with the arguments the operator
+         ;; fixed, which the approval is bound to.
+         input (if (map? fixed-args) (or (:effective-input h) (:input h)) (:input h))
+         inner (when (= core/reader-tool tool) (core/held-tool tool input))
          t (get-in config [:tools (or inner tool)])
          class (or (:class t) (when-not t :builtin))
          input-text (json/generate-string input {:pretty true})
@@ -389,9 +397,15 @@
         (cons "    look closely, the input has characters that can pass for others:"
               (map #(str "      " %) odd)))
       (preview (:preview h) approved)
+      (when (and config (core/fixed-args-changed? config h))
+        ["    your settings for this tool changed since it was held, so it will not run as shown: deny it"])
       [(str "    session " session ", call " call)
        "    input:"]
-      (text/block [] input-text)))))
+      (text/block [] input-text)
+      (when (seq fixed-args)
+        (cons "    set by your settings, not by the role:"
+              (for [[k v] (sort-by (comp str key) fixed-args)]
+                (str "      " (name k) " = " (json/generate-string v)))))))))
 
 (defn holds
   ([hs] (holds hs nil))

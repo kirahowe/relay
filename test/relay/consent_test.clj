@@ -15,7 +15,10 @@
             [relay.dispatch :as dispatch]
             [relay.render :as render]
             [relay.text :as text]
-            [relay.tools :as tools])
+            [relay.harness.agentloop :as harness-agentloop]
+            [relay.inbound]
+            [relay.tools :as tools]
+            [relay.workspace])
   (:import (java.time Instant)))
 
 (def t0 (Instant/parse "2026-10-14T12:00:00Z"))
@@ -193,22 +196,22 @@
 
 (deftest the-permission-request-carries-the-preview-marked
   (let [md (acp/preview-markdown preview #{})
-        out (json/parse-string (acp/with-preview request-line md))
+        out (json/parse-string (acp/with-preview request-line md ["private"]))
         before (json/parse-string request-line)
         items (get-in out ["params" "toolCall" "content"])]
     (is (str/includes? md "Links to places you have not approved before: lists.service.example"))
     (is (= (butlast items) (get-in before ["params" "toolCall" "content"])) "what agentloop sent is kept, first")
-    (is (= {"type" "content" "_meta" {"relay/preview" true}
-            "content" {"type" "text" "text" md "_meta" {"relay/preview" true}}}
+    (is (= {"type" "content" "_meta" {"relay/preview" true "relay/labels" ["private"]}
+            "content" {"type" "text" "text" md "_meta" {"relay/preview" true "relay/labels" ["private"]}}}
            (last items)))
     (is (= (update-in before ["params" "toolCall"] dissoc "content")
            (update-in out ["params" "toolCall"] dissoc "content"))
         "nothing else in the request changes")
-    (is (= (:id (acp/permission-request request-line)) (:id (acp/permission-request (acp/with-preview request-line md)))))
-    (is (nil? (acp/with-preview "{\"method\":\"session/update\"}" md)))
+    (is (= (:id (acp/permission-request request-line)) (:id (acp/permission-request (acp/with-preview request-line md ["private"])))))
+    (is (nil? (acp/with-preview "{\"method\":\"session/update\"}" md [])))
     (testing "a request with no content gets the preview as its only item"
       (let [bare (json/generate-string (update-in (json/parse-string request-line) ["params" "toolCall"] dissoc "content"))]
-        (is (= 1 (count (get-in (json/parse-string (acp/with-preview bare md)) ["params" "toolCall" "content"]))))))))
+        (is (= 1 (count (get-in (json/parse-string (acp/with-preview bare md [])) ["params" "toolCall" "content"]))))))))
 
 (deftest the-preview-markdown-is-inert
   ;; Regression (Codex review): the preview went to the client as live
@@ -295,3 +298,101 @@
               "and the request is read from the line the client gets, so the pane lists the preview"))
         (do (is (empty? @asked-for) "a request the client never sees is not previewed")
             (is (not (str/includes? sent "request_permission"))))))))
+
+;; --- a preview's labels reach the approval UI (Codex cross-cutting review)
+
+(def contaminated-preview
+  {:content "Send to all. Details: https://evil.example/x?d=1" :is-error false :labels ["contaminated"]})
+
+(deftest a-clean-preview-is-defanged-in-relay-holds
+  ;; Regression: a preview is the service's text, but relay holds left its
+  ;; links live when its labels were clean.
+  (let [shown (str/join "\n" (render/preview {:content "Open https://lists.service.example/u/1" :is-error false
+                                              :labels ["private"]} #{}))]
+    (is (str/includes? shown "hxxps://lists[.]service[.]example/u/1"))
+    (is (not (str/includes? shown "https://")))
+    (is (not (str/includes? shown "[contaminated]")) "a clean preview is not marked contaminated")
+    (is (not (str/includes? shown "[[.]]")) "defanged once")))
+
+(deftest the-proxy-gives-the-client-the-preview-s-own-labels
+  ;; Regression: a clean, private session's act call whose preview read
+  ;; contaminated text reached the client with only the session's labels,
+  ;; so acp-tui and the pane left the preview's links live.
+  (let [request (json/generate-string {:jsonrpc "2.0" :id 7 :method "session/request_permission"
+                                       :params {:sessionId "s" :toolCall {:toolCallId "t" :name "send" :rawInput {:group "Everyone"}
+                                                                          :_meta {"agentloop/labels" ["private"]}}
+                                                :options [{:optionId "yes" :kind "allow_once"}]}})
+        previewer (#'dispatch/permission-previewer {:config (assoc-in cfg [:tools "send" :preview] ["p"]) :clock (constantly t0)
+                                                    :state (atom nil)})
+        p (with-redefs [tools/run-preview! (fn [& _] contaminated-preview)
+                        relay.inbound/current-state (fn [_] core/empty-state)]
+            (previewer (acp/permission-request request)))
+        line (acp/with-preview request (:markdown p) (:display-labels p))
+        msg (json/parse-string line)
+        req (acp/permission-request line)]
+    (is (= ["contaminated" "private"] (:display-labels p)) "the preview's, the tool's and the session's")
+    (is (= ["private"] (get-in msg ["params" "toolCall" "_meta" "agentloop/labels"]))
+        "the session's labels are not changed: the session saw nothing")
+    (is (= ["contaminated" "private"] (:preview-labels req)))
+    (testing "the pane's proposal is labelled with the preview's labels too"
+      (let [conv (relay.workspace/asked relay.workspace/conversation (assoc req :session "s" :call "t") t0)
+            item (first (get (relay.workspace/items core/empty-state conv nil true) "items"))]
+        (is (= ["contaminated" "private"] (get item "labels")))))))
+
+(defspec proposal-labels-cover-the-session-and-the-preview 100
+  (prop/for-all [session (gen/vector (gen/elements ["private" "contaminated"]))
+                 shown (gen/vector (gen/elements ["private" "contaminated"]))]
+    (let [line (acp/with-preview request-line "md" (core/union shown session))
+          req (assoc (acp/permission-request line) :labels session)
+          labels (set (:labels (get-in (relay.workspace/asked relay.workspace/conversation req t0)
+                                       [:proposals [(:session req) (:call req)]])))]
+      (and (every? labels session) (every? labels shown)
+           (= (core/union shown session) (:preview-labels req))))))
+
+;; --- fixed arguments are part of what is approved (Codex cross-cutting review)
+
+(def fixed-held
+  {:id "c1" :name "send" :input {:subject "Hi"} :input-sha256 "eff"
+   :effective-input {:group "Kira only" :subject "Hi"} :fixed-args {:group "Kira only"}})
+
+(deftest a-held-call-shows-the-input-it-would-run-on
+  (let [w (held-world [fixed-held])
+        h (first (core/open-holds (:state w)))
+        config (assoc-in cfg [:tools "send" :fixed-args] {"group" "Kira only"})
+        shown (str/join "\n" (render/hold h config #{}))]
+    (is (= {:group "Kira only"} (:fixed-args h)))
+    (is (str/includes? shown "\"group\" : \"Kira only\"") shown)
+    (is (str/includes? shown "set by your settings, not by the role:\n      group = \"Kira only\""))
+    (is (not (str/includes? shown "changed since it was held")))))
+
+(deftest a-hold-whose-fixed-args-changed-cannot-be-allowed
+  (let [w (held-world [fixed-held])
+        h (first (core/open-holds (:state w)))
+        changed (assoc-in cfg [:tools "send" :fixed-args] {"group" "Public list"})
+        same (assoc-in cfg [:tools "send" :fixed-args] {"group" "Kira only"})
+        resolve (fn [config verdict]
+                  (core/run-command (:state w) {:type :hold/resolve :actor "operator" :args {:hold (:id h) :verdict verdict}}
+                                    {:now t0 :config config}))]
+    (is (str/includes? (str/join "\n" (render/hold h changed #{})) "changed since it was held"))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"your settings for send changed since it was held"
+                          (resolve changed "allow")))
+    (is (thrown? clojure.lang.ExceptionInfo (resolve cfg "allow")) "fixed arguments removed is a change too")
+    (is (seq (second (resolve changed "deny"))) "it can still be denied")
+    (is (seq (second (resolve same "allow"))))))
+
+(deftest the-preview-is-given-the-input-the-call-would-run-on
+  (let [seen (atom nil)
+        config (assoc-in cfg [:tools "send" :preview] ["p"])
+        out (with-redefs [tools/run-preview! (fn [_ _ input & _] (reset! seen input) preview)]
+              (dispatch/with-previews {:config config} core/empty-state {:session "s" :labels [] :held [fixed-held]}))]
+    (is (= {:group "Kira only" :subject "Hi"} @seen))
+    (is (= preview (:preview (first (:held out)))))))
+
+(deftest relay-reads-the-effective-input-of-a-held-call
+  (is (= [fixed-held]
+         (harness-agentloop/held-calls [{:id "c1" :name "send" :input {:subject "Hi"} :input_sha256 "eff"
+                                         :effective_input {:group "Kira only" :subject "Hi"}
+                                         :fixed_args {:group "Kira only"}}])))
+  (is (= [{:id "c1" :name "send" :input {} :input-sha256 "d"}]
+         (harness-agentloop/held-calls [{:id "c1" :name "send" :input {} :input_sha256 "d" :fixed_args {}}]))
+      "nothing fixed, nothing kept"))

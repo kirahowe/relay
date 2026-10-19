@@ -46,11 +46,15 @@
     "cancelled"))
 
 (defn asked
-  "The conversation once a permission request went to the client."
-  [conv {:keys [session call tool input labels preview]} ^java.time.Instant at]
+  "The conversation once a permission request went to the client. A
+  proposal is labelled with what it shows: the session's labels, which
+  its input carries, and its preview's (relay.acp/preview-labels)."
+  [conv {:keys [session call tool input labels preview preview-labels fixed-args]} ^java.time.Instant at]
   (assoc-in conv [:proposals [session call]]
-            {:session session :call call :tool tool :input input :labels (vec labels)
-             :preview preview :status "waiting" :at at}))
+            (cond-> {:session session :call call :tool tool :input input
+                     :labels (vec (core/union labels (when preview preview-labels)))
+                     :preview preview :status "waiting" :at at}
+              (seq fixed-args) (assoc :fixed (vec (sort (keys fixed-args)))))))
 
 (defn answered
   "The conversation once a permission request was answered, by the client
@@ -109,9 +113,11 @@
          "canTrust" (boolean (and approvals? (core/contaminated? labels)))
          "trustCommand" (str "relay trust doc " path)}))))
 
-(defn- proposal-item [{:keys [call tool input labels preview status at]}]
-  {"kind" "proposal" "callId" call "tool" tool "input" input "preview" preview
-   "labels" labels "status" status "at" (str at)})
+(defn- proposal-item [{:keys [call tool input labels preview status at fixed]}]
+  (cond-> {"kind" "proposal" "callId" call "tool" tool "input" input "preview" preview
+           "labels" labels "status" status "at" (str at)}
+    ;; The arguments in the input that the operator set.
+    (seq fixed) (assoc "fixedArgs" fixed)))
 
 (defn items
   "The _relay/items answer for a session (all of the conversation's when
