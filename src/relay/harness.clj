@@ -79,7 +79,8 @@
   (:require [babashka.fs :as fs]
             [cheshire.core :as json]
             [clojure.string :as str]
-            [relay.core :as core])
+            [relay.core :as core]
+            [relay.json :as strict])
   (:import (java.time Instant)))
 
 (defn- kind [request] (get-in request [:harness :kind]))
@@ -173,7 +174,7 @@
 (defmethod wake-report :script [_ _ {:keys [exit out err report]}]
   ;; The program is anything at all, so its report is checked here rather
   ;; than trusted: a report core would refuse would leave the wake running.
-  (let [parsed (when report (try (json/parse-string report true) (catch Exception _ ::unreadable)))
+  (let [parsed (when report (strict/parse-or report ::unreadable {:keywords? true}))
         outcome (when (map? parsed) (:outcome parsed))
         said (or (when (map? parsed) (text (:said parsed))) (tail (str out err) 10))
         crash (fn [why] {:outcome "ran" :exit exit :crashed true :said why})]

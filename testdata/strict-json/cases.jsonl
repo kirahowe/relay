@@ -1,0 +1,36 @@
+{"name": "plain message", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiczEifX0=", "expect": {"method": "session/update"}}
+{"name": "whitespace around", "b64": "ICB7Impzb25ycGMiOiIyLjAiLCJtZXRob2QiOiJzZXNzaW9uL3VwZGF0ZSIsInBhcmFtcyI6eyJzZXNzaW9uSWQiOiJzMSJ9fQkg", "expect": {"method": "session/update"}}
+{"name": "relay method", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoiX3JlbGF5L2NhcmRzL2NoYW5nZWQiLCJwYXJhbXMiOnt9fQ==", "expect": {"method": "_relay/cards/changed"}}
+{"name": "escaped name decodes to method", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0XHUwMDY4b2QiOiJfcmVsYXkvY2FyZHMvY2hhbmdlZCIsInBhcmFtcyI6e319", "expect": {"method": "_relay/cards/changed"}}
+{"name": "escaped slash in method", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoiX3JlbGF5XC9jYXJkcy9jaGFuZ2VkIiwicGFyYW1zIjp7fX0=", "expect": {"method": "_relay/cards/changed"}}
+{"name": "capitalised name is another member", "b64": "eyJqc29ucnBjIjoiMi4wIiwiTWV0aG9kIjoiX3JlbGF5L2NhcmRzL2NoYW5nZWQiLCJwYXJhbXMiOnt9fQ==", "expect": {"method": null}}
+{"name": "upper-case name is another member", "b64": "eyJqc29ucnBjIjoiMi4wIiwiTUVUSE9EIjoiX3JlbGF5L2NhcmRzL2NoYW5nZWQiLCJwYXJhbXMiOnt9fQ==", "expect": {"method": null}}
+{"name": "long s name is another member", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbcW/Ijp7fX0=", "expect": {"method": "session/update"}}
+{"name": "duplicate top-level name", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoiX3JlbGF5L2NhcmRzL2NoYW5nZWQiLCJtZXRob2QiOiJzZXNzaW9uL3VwZGF0ZSIsInBhcmFtcyI6e319", "expect": "reject"}
+{"name": "duplicate with null", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoiX3JlbGF5L2NhcmRzL2NoYW5nZWQiLCJtZXRob2QiOm51bGx9", "expect": "reject"}
+{"name": "duplicate via escape", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoiYSIsIm1ldFx1MDA2OG9kIjoiYiJ9", "expect": "reject"}
+{"name": "duplicate nested name", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsiYSI6MSwiYSI6Mn19", "expect": "reject"}
+{"name": "duplicate deep in array", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJsIjpbeyJrIjoxLCJrIjoxfV19fQ==", "expect": "reject"}
+{"name": "second value null", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiczEifX0gbnVsbA==", "expect": "reject"}
+{"name": "second object", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiczEifX17Impzb25ycGMiOiIyLjAiLCJtZXRob2QiOiJzZXNzaW9uL3VwZGF0ZSIsInBhcmFtcyI6eyJzZXNzaW9uSWQiOiJzMSJ9fQ==", "expect": "reject"}
+{"name": "trailing garbage", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiczEifX14", "expect": "reject"}
+{"name": "trailing comma", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsfQ==", "expect": "reject"}
+{"name": "comment", "b64": "eyJqc29ucnBjIjoiMi4wIiwvKmMqLyJtZXRob2QiOiJ4In0=", "expect": "reject"}
+{"name": "single quotes", "b64": "eydqc29ucnBjJzonMi4wJywnbWV0aG9kJzoneCd9", "expect": "reject"}
+{"name": "NaN", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJuIjpOYU59fQ==", "expect": "reject"}
+{"name": "leading zero", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJuIjowMX19", "expect": "reject"}
+{"name": "raw control char in string", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieAEifQ==", "expect": "reject"}
+{"name": "lone surrogate escape", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJzIjoiXHVkODAwIn19", "expect": "reject"}
+{"name": "paired surrogate escape", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJzIjoiXHVkODNkXHVkZTAwIn19", "expect": {"method": "x"}}
+{"name": "U+2028 raw in string", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJzIjoiYeKAqGIifX0=", "expect": {"method": "x"}}
+{"name": "huge integer", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJuIjoxMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Njc4OTB9fQ==", "expect": {"method": "x"}}
+{"name": "long decimal", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJuIjowLjEwMDAwMDAwMDAwMDAwMDAwNTU1MTExNTEyMzEyNTc4Mjd9fQ==", "expect": {"method": "x"}}
+{"name": "number literal over 1000 characters", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJuIjo5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OTk5OX19", "expect": "reject"}
+{"name": "nesting 128 deep", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6W1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW11dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV19", "expect": {"method": "x"}}
+{"name": "nesting 129 deep", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6W1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tdXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXX0=", "expect": "reject"}
+{"name": "not an object", "b64": "InNlc3Npb24vdXBkYXRlIg==", "expect": "reject"}
+{"name": "array at top", "b64": "W3sianNvbnJwYyI6IjIuMCIsIm1ldGhvZCI6IngifV0=", "expect": "reject"}
+{"name": "byte order mark", "b64": "77u/eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiczEifX0=", "expect": "reject"}
+{"name": "invalid UTF-8 in string", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJzIjoiYf9iIn19", "expect": "reject"}
+{"name": "overlong UTF-8", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJzIjoiwK8ifX0=", "expect": "reject"}
+{"name": "encoded surrogate in UTF-8", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJzIjoi7aCAIn19", "expect": "reject"}

@@ -29,6 +29,7 @@
             [org.httpkit.server :as httpkit]
             [relay.config :as config]
             [relay.connections :as connections]
+            [relay.json :as strict]
             [relay.text :as text]
             [relay.vet :as vet])
   (:import (java.net URI URLDecoder URLEncoder)
@@ -387,7 +388,7 @@
 
 (defn decode-blob [s]
   (when-not (str/blank? s)
-    (try (json/parse-string (String. (.decode (Base64/getDecoder) (str/trim s)) "UTF-8") true)
+    (try (strict/parse (.decode (Base64/getDecoder) (str/trim s)) {:keywords? true})
          (catch Exception _ nil))))
 
 ;; --- the edges
@@ -402,7 +403,7 @@
     (http/request (merge {:client client :throw false :timeout http-timeout-ms} req))))
 
 (defn- json-body [resp]
-  (try (json/parse-string (:body resp)) (catch Exception _ nil)))
+  (strict/parse-or (:body resp) nil))
 
 (defn- get-json [{:keys [http]} url]
   (let [r (http {:method :get :uri url :headers {"Accept" "application/json"}})]
@@ -562,7 +563,7 @@
                       {:in (json/generate-string {:url url :token token}) :out :string :err :string})]
     (when-not (zero? (:exit r))
       (problem! (str "relay could not list the server's tools: " (str/trim (:err r)) " Nothing was changed.")))
-    (:tools (json/parse-string (:out r) true))))
+    (:tools (strict/parse (:out r) {:keywords? true}))))
 
 (def ^:dynamic *edges*
   "Overrides for the edges, bound in tests: any of :http, :open-browser,

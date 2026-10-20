@@ -813,8 +813,10 @@
   (doseq [approvals [true false]
           [line refused?] [["{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"session/request_permission\",\"params\":{\"options\":[" true]
                            ["{\"method\":\"session/request_permission\",\"params\":{}}" false]
-                           ;; Readable, but a Go client would read it as relay's own method.
-                           ["{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"session/request_permission\",\"Method\":\"_relay/items\",\"params\":{\"options\":[]}}" true]]]
+                           ;; The method twice: the strict reader refuses it.
+                           ["{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"session/request_permission\",\"method\":\"_relay/items\",\"params\":{\"options\":[]}}" true]
+                           ;; One value, then another.
+                           ["{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"session/request_permission\",\"params\":{\"options\":[]}} null" true]]]
     (let [dir (fs/create-temp-dir {:prefix "relay-unread"})
           line-file (str dir "/line") got (str dir "/got")
           _ (spit line-file (str line "\n"))
@@ -862,6 +864,37 @@
     (.close client-out)
     (deref run 10000 nil)
     (fs/delete-tree dir)))
+
+(deftest an-answer-the-strict-reader-refuses-is-a-refusal
+  ;; Regression: an answer with its id twice was read by its first value
+  ;; and passed on, though another reader could read it otherwise.
+  (let [dir (fs/create-temp-dir {:prefix "relay-dup-answer"})
+        got (str dir "/got")
+        client-out (java.io.PipedOutputStream.)
+        seen (atom [])
+        run (future (dispatch/proxy! {:argv ["sh" "-c" (str "echo '" (permission-line 7) "'; read l; echo \"$l\" > " got "; cat >/dev/null")]}
+                                     {:in (java.io.PipedInputStream. client-out) :out (ByteArrayOutputStream.)
+                                      :approvals true :on-permission (fn [& args] (swap! seen conj args))}))]
+    (loop [n 0] (when (and (< n 200) (empty? @seen)) (Thread/sleep 20) (recur (inc n))))
+    (.write client-out (.getBytes "{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"outcome\":{\"outcome\":\"selected\",\"optionId\":\"yes\"}},\"id\":7}\n"))
+    (.flush client-out)
+    (loop [n 0] (when (and (< n 200) (not (and (fs/exists? got) (str/ends-with? (slurp got) "\n")))) (Thread/sleep 20) (recur (inc n))))
+    (is (= {"jsonrpc" "2.0" "id" 7 "result" {"outcome" {"outcome" "selected" "optionId" "no"}}} (json/parse-string (slurp got)))
+        "the agent gets relay's refusal, never the client's line")
+    (is (= {:outcome "reject_once" :by "relay" :why "client-error"} (nth (second @seen) 2)))
+    (.close client-out)
+    (deref run 10000 nil)
+    (fs/delete-tree dir)))
+
+(deftest an-agent-line-that-is-not-utf-8-never-reaches-the-client
+  (let [out (ByteArrayOutputStream.)
+        fine "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{}}"]
+    ;; \300\257 is an overlong /, \355\240\200 an encoded surrogate.
+    (dispatch/proxy! {:argv ["sh" "-c" (str "printf '{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"s\":\"\\300\\257\"}}\\n"
+                                            "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"s\":\"\\355\\240\\200\"}}\\n"
+                                            fine "\\n'")]}
+                     {:in (java.io.ByteArrayInputStream. (byte-array 0)) :out out})
+    (is (= (str fine "\n") (.toString out "UTF-8")))))
 
 (deftest a-request-open-when-the-agent-stops-is-recorded-abandoned
   (let [client-out (java.io.PipedOutputStream.)

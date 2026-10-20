@@ -81,3 +81,65 @@ The boundaries between the three components:
 ## Log
 
 - 2026-10-20: re-encoding plan stopped before any code; replaced by this.
+
+## relay's half: judgment calls
+
+- The reader is `relay.json`. babashka exposes no Jackson classes, and
+  its cheshire has no switch for BigDecimal. So Jackson, through cheshire
+  with a strict factory, only checks the text (duplicate names, raw
+  control characters, depth 128, end of input). clojure.data.json, also
+  compiled into bb, then reads the value with `:bigdec true`. Both read
+  only RFC 8259 JSON, so once Jackson has passed a text they agree on it.
+  `relay.json` makes the two checks neither reader makes: unpaired
+  surrogates, and the length of a whole number literal (Jackson counts
+  digits, so `-` plus 1000 digits got past it). Each has a regex fast
+  path, so a line that cannot break the rule is never walked.
+- Strict UTF-8 works on bytes. `relay.json/text` decodes every invalid
+  byte (stray, overlong, encoded surrogate) to a lone surrogate rather
+  than U+FFFD, so the line can still be searched for an id but never
+  parses. The BOM stays U+FEFF, which Jackson refuses. relay acp lines,
+  tool envelopes (`relay tool` stdin, envelope tool and preview stdout,
+  verifier output) and the staging stand-in tools are read as bytes.
+- An ACP line must be one JSON object (`relay.acp/message`), as the
+  shared table says. A batch or a bare value is dropped, as before.
+- A blank agent line is now dropped, without the stderr note. It carries
+  nothing.
+- A valid agent line that only mentions `request_permission` in its text
+  is no longer taken for an unreadable permission request. The rule now
+  covers a line the strict reader refuses that mentions it, and a valid
+  message whose method is `session/request_permission` that has no id.
+- A client line the strict reader refuses is answered with an error when
+  relay can find its id, as before for refused lines. When that id is an
+  open permission request's, relay refuses the request to the agent
+  instead (`client-error`), so a malformed answer cannot leave the turn
+  hanging. Test: an-answer-the-strict-reader-refuses-is-a-refusal (this
+  line, the id written twice, used to pass to the agent).
+- Lines that spell a member in another case (`Method`, `paramſ`) now
+  pass both ways: every component matches names exactly, so they are
+  unknown members to all of them. The tests that expected them dropped
+  now test duplicates and trailing values instead.
+- The id regex used for lines relay cannot read (`relay.acp/line-id`) is
+  unrolled and possessive. The old alternation could overflow the regex
+  stack on a long string.
+- `parse-envelope` keywordizes the input by printing it and reading it
+  back with the strict reader, so decimals in a tool's input stay exact.
+- Exponents past an int (`1e99999999999`) are refused: BigDecimal cannot
+  hold them. Fails closed.
+- Figures relay only sums never go through BigDecimal arithmetic that
+  could throw: costs go through `double` at the edges
+  (`core/wake-cost`, `acp/usage-update`, agentloop `cost-usd`) as
+  before. The reader's `:doubles?` option exists for such reads but no
+  site needs it yet.
+
+### Reads left on cheshire, deliberately
+
+- `relay.log`: the event log is relay's own, written by relay; it is not
+  another process's JSON.
+- Test helpers, fixtures, the pentest harness and its stand-ins: they
+  stand in for clients, tools and servers, not relay.
+- Process output relay gets as a String from babashka.process
+  (agentloop's outcome line and session files, `agentloop mcp-tools`, a
+  script harness's report.json, HTTP bodies) now goes through
+  `relay.json`, but as text already decoded with U+FFFD for bad bytes.
+  Go's encoder cannot emit invalid UTF-8, and none of these is passed
+  on, so reading them as bytes was not worth the plumbing.

@@ -37,11 +37,12 @@
                        it word for word; any other URL is not fetched
 
   Kept apart from relay.staging so that each call starts quickly: this
-  namespace needs nothing of relay's."
+  namespace needs nothing of relay's but its JSON reader."
   (:require [babashka.fs :as fs]
             [cheshire.core :as json]
             [clojure.edn :as edn]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [relay.json :as strict]))
 
 (def fail-message "The reminders service rejects a reminder without a time.")
 
@@ -250,7 +251,7 @@
     [(envelope (str "No stand-in tool " tool ".") :error true)]))
 
 (defn -main [& [tool dir]]
-  (let [call (json/parse-string (slurp *in*) true)
+  (let [call (strict/parse (.readAllBytes System/in) {:keywords? true})
         [env effect] (answer tool dir (:input call))
         env (cond
               (:ask effect) (let [_ (spit (:append effect) (str (:line effect) "\n") :append true)

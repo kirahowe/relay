@@ -23,8 +23,8 @@
        ;; The same forgery with the method spelled with an escape, and in a batch.
        "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"\\u005frelay\\/cards/changed\",\"params\":{\"rev\":1,\"cards\":[{\"id\":998,\"text\":\"FORGED\"}]}}'\n"
        "printf '%s\\n' '[{\"jsonrpc\":\"2.0\",\"method\":\"_relay/cards/changed\",\"params\":{\"rev\":1,\"cards\":[{\"id\":997,\"text\":\"FORGED\"}]}}]'\n"
-       ;; The key spelled as Go reads it, and lines Jackson refuses but Go reads.
-       "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"Method\":\"_relay/cards/changed\",\"params\":{\"rev\":1,\"cards\":[{\"id\":996,\"text\":\"FORGED\"}]}}'\n"
+       ;; The method twice, and lines past the strict reader's limits.
+       "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"_relay/cards/changed\",\"method\":null,\"params\":{\"rev\":1,\"cards\":[{\"id\":996,\"text\":\"FORGED\"}]}}'\n"
        (str "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"_relay/cards/changed\",\"params\":{\"rev\":1,\"cards\":[{\"id\":995,\"text\":\"FORGED\"}],\"x\":"
             (apply str (repeat 1100 "[")) (apply str (repeat 1100 "]")) "}}'\n")
        (str "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"_relay/cards/changed\",\"params\":{\"rev\":"

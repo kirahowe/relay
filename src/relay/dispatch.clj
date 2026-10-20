@@ -713,8 +713,10 @@
                                    (acp/unreadable-permission-request line))]
                      (if (and drop? (not req))
                        ;; relay's own methods are relay's to send, and a
-                       ;; line relay cannot read might be one of them.
-                       (do (binding [*out* *err*] (println "relay dropped an agent line that was not JSON or used one of relay's methods."))
+                       ;; line the strict reader refuses is passed on to
+                       ;; no one. A blank line carries nothing to tell.
+                       (do (when-not (str/blank? line)
+                             (binding [*out* *err*] (println "relay dropped an agent line that was not strict JSON or used one of relay's methods.")))
                            nil)
                      ;; A permission request the screen drops is refused
                      ;; as unreadable, so the agent is not left waiting.
@@ -756,6 +758,14 @@
                        (try (locking out (write-chunk! out bs (alength bs)))
                             (catch java.io.IOException _ nil))))
         from-client (fn [line]
+                      (if-let [req (when (and (seq @outstanding) (nil? (acp/message line)))
+                                     (get @outstanding (acp/line-id line)))]
+                        ;; A line the strict reader refuses, with the id of
+                        ;; an open request: it goes nowhere, and the request
+                        ;; is refused rather than left to hang the turn.
+                        (do (swap! outstanding dissoc (:id req))
+                            (refuse! req "client-error")
+                            nil)
                       (if-let [answer (extension line)]
                         ;; relay's own methods are answered here and never
                         ;; reach the agent.
@@ -775,15 +785,14 @@
                                 (swap! outstanding dissoc (:id req))
                                 (refuse! req "client-error"))
                               nil)
-                          :pass))))
+                          :pass)))))
         ;; A client line too long to read whole could be one of relay's
         ;; methods, which must not reach the agent, so it goes nowhere. A
         ;; request whose id relay can find is told why.
         client-oversized (fn [{:keys [prefix]}]
                            (binding [*out* *err*]
                              (println "relay dropped a message from the client too long to read (over 8 MB)."))
-                           (when-let [id (some-> (re-find #"\"id\"\s*:\s*(-?\d+|\"(?:[^\"\\\\]|\\\\.)*\")" (str prefix))
-                                                 second json/parse-string)]
+                           (when-let [id (acp/line-id prefix)]
                              (to-client! (workspace/error-line id -32600 "relay does not pass on a message over 8 MB."))))
         watch-done (promise)
         watcher (when watch (spawn (fn [] (watch to-client! watch-done))))
@@ -804,8 +813,7 @@
         ;; can tell it is one and which, and tells the operator either way.
         oversized (fn [{:keys [prefix permission? size]}]
                     (let [id (when permission?
-                               (some-> (re-find #"\"id\"\s*:\s*(-?\d+|\"(?:[^\"\\\\]|\\\\.)*\")" (str prefix))
-                                       second json/parse-string))
+                               (acp/line-id prefix))
                           req (when (some? id) {:id id :options []})]
                       (when req
                         (let [bs (.getBytes (str (json/generate-string (acp/refusal req)) "\n")

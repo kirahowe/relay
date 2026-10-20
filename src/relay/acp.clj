@@ -9,6 +9,7 @@
   A direction is :client (client to agent) or :agent (agent to client)."
   (:require [cheshire.core :as json]
             [clojure.string :as str]
+            [relay.json :as strict]
             [relay.text :as text])
   (:import (java.util Arrays)))
 
@@ -53,10 +54,10 @@
                  (conj! lines (join-bytes (conj rest (Arrays/copyOfRange chunk start i))))))))))
 
 (defn text
-  "A line's bytes as text. Bytes that are not UTF-8 become U+FFFD, which
-  can only make a line fail to parse, never change what a valid one says."
+  "A line's bytes as text (relay.json/text): a byte that is not part of
+  valid UTF-8 becomes a lone surrogate, so the line never parses."
   [^bytes line]
-  (String. line java.nio.charset.StandardCharsets/UTF_8))
+  (strict/text line))
 
 ;; --- what the traffic says
 
@@ -69,8 +70,33 @@
   without a cost."
   {:requests {} :sessions [] :last nil :costs {} :unpriced false})
 
-(defn- parse [line]
-  (try (json/parse-string line) (catch Exception _ nil)))
+(defn message
+  "A line as a message: the JSON object it is, read by relay's strict
+  reader (relay.json), or nil when it is not one. Every reader of ACP in
+  relay, agentloop and acp-tui reads by the same rule, so a line that
+  passes means the same to all of them."
+  [line]
+  (when (or (string? line) (bytes? line)) (strict/object line)))
+
+(defn relay-method?
+  "Whether a message's method is one of relay's: its exact method member
+  starts with _relay/. Only relay sends these to the client."
+  [msg]
+  (let [m (when (map? msg) (get msg "method"))]
+    (and (string? m) (str/starts-with? m "_relay/"))))
+
+;; Unrolled and possessive, so a long string cannot overflow the regex
+;; engine's stack.
+(def ^:private id-pattern #"\"id\"\s*:\s*(-?\d+|\"[^\"\\]*+(?:\\.[^\"\\]*+)*+\")")
+
+(defn line-id
+  "The id a line that cannot be read whole seems to carry: the first
+  \"id\" member with a number or a string, or nil. Only for answering
+  or refusing such a line, never for passing it on."
+  [line]
+  (some-> (re-find id-pattern (str line)) second (strict/parse-or nil)))
+
+(defn- parse [line] (message line))
 
 (defn- session-id [x]
   (when (and (string? x) (not (str/blank? x))) x))
@@ -182,7 +208,7 @@
   (let [msg (parse line)]
     (cond-> {:from (name direction)}
       (some? msg) (assoc :message msg)
-      (nil? msg) (assoc :text line))))
+      (nil? msg) (assoc :text (strict/shown (str line))))))
 
 ;; --- displays
 
@@ -269,16 +295,20 @@
          :options (vec (filter map? (when (sequential? options) options)))}))))
 
 (defn unreadable-permission-request
-  "A line that mentions request_permission but is not a request relay can
-  read, as much of a request as can be made of it: its id if one can be
-  found, and :unreadable. Nil for a line that does not mention it. Such a
-  line is refused, never passed on: another reader might read it as a
-  request relay never saw."
+  "A line that may be a permission request but is not one relay can read,
+  as much of a request as can be made of it: its id if one can be found,
+  and :unreadable. That is a line the strict reader refuses that mentions
+  request_permission, or a message whose method is
+  session/request_permission that permission-request cannot read (it has
+  no id). Nil for any other line. Such a line is refused, never passed
+  on."
   [line]
-  (when (and (string? line) (str/includes? line "request_permission")
-             (nil? (permission-request line)))
-    (let [m (re-find #"\"id\"\s*:\s*(-?\d+|\"(?:[^\"\\]|\\.)*\")" line)]
-      {:id (some-> m second parse) :unreadable true :options []})))
+  (when (and (string? line) (nil? (permission-request line)))
+    (let [msg (message line)]
+      (when (if msg
+              (= "session/request_permission" (get msg "method"))
+              (str/includes? line "request_permission"))
+        {:id (when-not msg (line-id line)) :unreadable true :options []}))))
 
 (defn stray-answer?
   "Whether a client's line is an answer (a result or an error, with an

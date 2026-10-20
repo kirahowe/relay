@@ -22,7 +22,7 @@
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [cheshire.core :as json]
-            [cheshire.factory :as json-factory]
+            [clojure.java.io :as io]
             [clojure.set :as set]
             [clojure.string :as str]
             [relay.cards :as cards]
@@ -31,6 +31,7 @@
             [relay.core :as core]
             [relay.harness :as harness]
             [relay.inbound :as inbound]
+            [relay.json :as strict]
             [relay.refs :as refs]
             [relay.reports :as reports])
   (:import (java.time Instant LocalTime)
@@ -748,19 +749,13 @@
   when that wake is running and began public."
   nil)
 
-(def ^:private strict-json
-  (json-factory/make-json-factory {:strict-duplicate-detection true}))
-
 (defn strict-json-value
-  "The one JSON value in `s`, or ::bad when it is not exactly one value or
-  repeats a key anywhere. A repeated key is how two parsers can be made to
-  read one text differently."
+  "The one JSON value in `s`, a string or bytes, read by relay's strict
+  reader (relay.json), or ::bad when it breaks the reader's rule: more
+  than one value, a repeated key, text that is not UTF-8. Those are how
+  two readers can be made to read one text differently."
   [s]
-  (try
-    (binding [json-factory/*json-factory* strict-json]
-      (let [vs (doall (json/parsed-seq (java.io.StringReader. (str s))))]
-        (if (= 1 (count vs)) (first vs) ::bad)))
-    (catch Exception _ ::bad)))
+  (strict/parse-or s ::bad))
 
 (defn parse-display
   "A display as an envelope tool gives it: exactly {title, body, labels}
@@ -855,11 +850,13 @@
   "Runs `command` with `in` on stdin and a clean environment (nothing the
   harness or relay was started with, such as credentials). Returns {:exit
   :out :err} once it has exited and closed its output, or ::timeout when
-  that takes longer than `ms`. A child left holding its output keeps it
+  that takes longer than `ms`. With :bytes? :out is the bytes the command
+  printed, for relay's strict JSON reader to decode (relay.json/text);
+  else it is text. A child left holding its output keeps it
   open past its exit, so the output counts against the same limit. On a
   timeout every process in its group is ended. Throws when it cannot
   start."
-  [command in ms]
+  [command in ms & [{:keys [bytes?]}]]
   (let [program (first command)
         ;; A bare name is found on the clean PATH; a path with a slash is
         ;; taken as written, relative to relay's directory, as Java runs it.
@@ -869,7 +866,9 @@
                  (throw (ex-info (str "Cannot run program " program) {})))
         proc (p/process (into in-own-group (cons (str prog) (rest command)))
                         {:in in :out :stream :err :stream :env (group-env (harness/base-env {}))})
-        out (future (slurp (:out proc)))
+        out (future (if bytes?
+                      (let [b (java.io.ByteArrayOutputStream.)] (io/copy (:out proc) b) (.toByteArray b))
+                      (slurp (:out proc))))
         err (future (slurp (:err proc)))
         deadline (+ (System/currentTimeMillis) ms)
         within #(deref % (max 0 (- deadline (System/currentTimeMillis))) ::timeout)
@@ -920,12 +919,13 @@
                  (binding [*out* *err*] (println (str tool-name ": " why)) (print err out) (flush))
                  (throw (ex-info (str "The tool " tool-name " failed.") {:relay/labels static})))
         result (try (run-limited (vec command) (json/generate-string {:input args :labels labels :call_id (str *call-id*)})
-                                 timeout-ms)
+                                 timeout-ms {:bytes? true})
                     (catch Exception e (failed (str "could not start: " (ex-message e)) "" "")))]
     (if (= ::timeout result)
       (failed "timed out" "" "")
-      (let [{:keys [exit out err]} result
-            parsed (when (zero? exit) (parse-result out))]
+      (let [{:keys [exit err] raw :out} result
+            parsed (when (zero? exit) (parse-result raw))
+            out (String. ^bytes raw java.nio.charset.StandardCharsets/UTF_8)]
         (cond
           (not (zero? exit)) (failed (str "exited " exit) out err)
           (nil? parsed) (failed "did not print exactly one result envelope" out err)
@@ -955,12 +955,13 @@
                   :is-error true :labels []})
         result (try (run-limited (vec command) (json/generate-string {:input input :labels (vec labels)
                                                                       :call_id (str call-id)})
-                                 preview-timeout-ms)
+                                 preview-timeout-ms {:bytes? true})
                     (catch Exception e (ex-message e)))]
     (if-not (map? result)
       (failed (if (= ::timeout result) "timed out" (str "could not start: " result)) "" "")
-      (let [{:keys [exit out err]} result
-            parsed (when (zero? exit) (parse-result out))]
+      (let [{:keys [exit err] raw :out} result
+            parsed (when (zero? exit) (parse-result raw))
+            out (String. ^bytes raw java.nio.charset.StandardCharsets/UTF_8)]
         (cond
           (not (zero? exit)) (failed (str "exited " exit) out err)
           (nil? parsed) (failed "did not print exactly one result envelope" out err)
@@ -973,13 +974,13 @@
   (* 8 1024 1024))
 
 (defn- read-bounded
-  "Everything on `in` as UTF-8, or ::too-long once it passes `limit` bytes."
+  "Everything on `in`, as bytes, or ::too-long once it passes `limit` bytes."
   [^java.io.InputStream in limit]
   (let [out (java.io.ByteArrayOutputStream.)
         buf (byte-array 65536)]
     (loop [total 0]
       (let [n (.read in buf)]
-        (cond (neg? n) (String. (.toByteArray out) java.nio.charset.StandardCharsets/UTF_8)
+        (cond (neg? n) (.toByteArray out)
               (> (+ total n) limit) ::too-long
               :else (do (.write out buf 0 n) (recur (+ total n))))))))
 
@@ -1329,7 +1330,7 @@
   Anything else is refused, so a harness that has not sent the session's
   labels never has its calls run as a clean session's."
   [raw]
-  (let [env (if (str/blank? raw) nil (strict-json-value raw))]
+  (let [env (if (or (nil? raw) (and (string? raw) (str/blank? raw))) nil (strict-json-value raw))]
     (cond
       (or (nil? env) (= ::bad env)) {:problem "The call is not a JSON envelope."}
       (not (map? env)) {:problem "The call is not a JSON object."}
@@ -1340,7 +1341,7 @@
       (not (and (string? (get env "call_id")) (not (str/blank? (get env "call_id")))))
       {:problem "The call has no call_id."}
       (not (map? (get env "input"))) {:problem "The call's input must be a JSON object."}
-      :else {:input (json/parse-string (json/generate-string (get env "input")) true)
+      :else {:input (strict/parse (json/generate-string (get env "input")) {:keywords? true})
              :labels (core/union (get env "labels"))
              :call-id (get env "call_id")})))
 

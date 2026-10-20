@@ -235,6 +235,14 @@ and --instructions marks the id public too.")
         (System/console) ""
         :else (slurp *in*)))
 
+(defn- stdin-bytes
+  "stdin as bytes, for relay's strict JSON reader to decode
+  (relay.json/text), or *stdin* when a test bound it."
+  []
+  (cond *stdin* *stdin*
+        (System/console) ""
+        :else (.readAllBytes System/in)))
+
 (def ^:dynamic *untrusted*
   "Labels for what the operator writes: contaminated with --untrusted."
   [])
@@ -253,7 +261,7 @@ and --instructions marks the id public too.")
   can read why. A call that is not an exact envelope exits 1, with the
   reason on stderr only, and the harness tells the model the tool failed."
   [sys role tool-name wake]
-  (let [{:keys [problem input labels call-id]} (tools/parse-envelope (stdin-text))]
+  (let [{:keys [problem input labels call-id]} (tools/parse-envelope (stdin-bytes))]
     (cond
       problem
       {:exit 1 :out [] :err [problem]}

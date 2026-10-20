@@ -192,49 +192,39 @@
   (is (= {:id nil :method "_relay/x" :params {}}
          (workspace/extension-request "{\"jsonrpc\":\"2.0\",\"method\":\"_relay/x\"}")))
   (doseq [line ["{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session/prompt\",\"params\":{\"x\":\"_relay/items\"}}"
-                "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"m\":\"_relay/items\"}}" "nope" nil]]
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"m\":\"_relay/items\"}}" nil]]
     (is (nil? (workspace/extension-request line)) line))
-  ;; Not JSON, and it names relay: never passed on, as nothing to answer.
-  (is (= {:id nil :refused "relay could not read a line that may name one of its methods."}
-         (workspace/extension-request "nope _relay/"))))
+  ;; Not JSON: never passed on, and nothing to answer.
+  (doseq [line ["nope" "nope _relay/" ""]]
+    (is (= {:id nil :refused "relay does not pass on a line that is not one strictly valid JSON object."}
+           (workspace/extension-request line)) line)))
 
-(deftest an-agent-line-with-relays-method-is-caught-however-it-is-spelled
+(deftest an-agent-line-with-relays-method-or-that-the-strict-reader-refuses-is-dropped
   (doseq [line ["{\"jsonrpc\":\"2.0\",\"method\":\"_relay/cards/changed\",\"params\":{}}"
                 "{\"jsonrpc\":\"2.0\",\"method\":\"\\u005frelay/cards/changed\",\"params\":{}}"
                 "{\"jsonrpc\":\"2.0\",\"method\":\"_relay\\/items\",\"id\":1}"
+                ;; A batch is not one message.
                 "  [{\"jsonrpc\":\"2.0\",\"method\":\"session/update\"},{\"jsonrpc\":\"2.0\",\"method\":\"_relay/x\"}]"
-                ;; Go's encoding/json matches keys ignoring case.
-                "{\"jsonrpc\":\"2.0\",\"Method\":\"_relay/cards/changed\",\"params\":{}}"
-                "{\"jsonrpc\":\"2.0\",\"METHOD\":\"_Relay/items\",\"method\":\"session/update\"}"
-                ;; Any JSON-RPC field in another case: Go reads it, relay would not.
-                "{\"jsonrpc\":\"2.0\",\"Method\":\"session/request\\u005fpermission\",\"id\":1,\"params\":{}}"
-                "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"Params\":{}}"
-                ;; JSON Jackson refuses but Go reads: the screen fails closed.
-                (str "{\"jsonrpc\":\"2.0\",\"method\":\"_relay/cards/changed\",\"params\":"
+                "[1,2]"
+                ;; Past the reader's limits.
+                (str "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":"
                      (apply str (repeat 1100 "[")) (apply str (repeat 1100 "]")) "}")
-                (str "{\"jsonrpc\":\"2.0\",\"method\":\"_relay/cards/changed\",\"params\":{\"rev\":"
+                (str "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"rev\":"
                      (apply str (repeat 1100 "1")) "}}")
-                ;; Two keys for one field: Go keeps the string, since a
-                ;; null does not overwrite it; Jackson keeps the null.
+                ;; A name twice, at any depth.
                 "{\"jsonrpc\":\"2.0\",\"method\":\"_relay/cards/changed\",\"method\":null,\"params\":{}}"
-                "[{\"jsonrpc\":\"2.0\",\"id\":1,\"id\":2,\"result\":{}}]"
-                ;; Keys Go folds to a JSON-RPC field: ſ is S, ı is I.
-                "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"param\u017f\":{}}"
-                "{\"jsonrpc\":\"2.0\",\"\u0131d\":1,\"result\":{}}"
+                "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"a\":1,\"a\":2}}"
                 ;; Not one JSON value, or not JSON at all.
                 "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\"} {\"method\":\"_relay/x\"}"
-                "[0" "[{\"method\":\"_relay/x\"}" "{not json _relay/" "nope"
-                ;; A second value that is null still makes two values.
-                "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}} null"
-                "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}} null \""]]
+                "[0" "[{\"method\":\"_relay/x\"}" "{not json _relay/" "nope" "" "   "
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}} null"]]
     (is (workspace/drop-agent-line? line) (subs line 0 (min 80 (count line)))))
   (doseq [line ["{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"x\":\"_relay/items\"}}"
                 "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"method\":\"_relay/items\"}}"
                 "  {\"jsonrpc\":\"2.0\",\"method\":\"session/update\"}\r"
-                "[1,2]" "" "   " nil
-                ;; Keys deeper than the envelope are the agent's own.
-                "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"a\":1,\"a\":{\"Method\":\"_x\",\"Method\":2}}}"
-                "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"t\":\"a\\\"b:{\\\"Method\\\":1\"}}"]]
+                ;; Names match exactly: Method is another member, which
+                ;; every component reads as unknown.
+                "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"Method\":\"_relay/cards/changed\"}"]]
     (is (not (workspace/drop-agent-line? line)) line)))
 
 (deftest a-client-line-the-agent-could-read-as-relays-method-never-reaches-it
@@ -243,18 +233,18 @@
            (workspace/extension-request "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"_relay\\/cards\",\"params\":{}}")))
     (is (= {:id 1 :method "_relay/cards/op" :params {"card" 3}}
            (workspace/extension-request "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"\\u005frelay/cards/op\",\"params\":{\"card\":3}}"))))
-  (testing "another case, or two keys for one field, is refused with its id"
-    (doseq [line ["{\"jsonrpc\":\"2.0\",\"id\":4,\"Method\":\"_relay/cards\"}"
-                  "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"_RELAY/cards\"}"
-                  "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"_relay/cards\",\"method\":\"session/prompt\"}"
-                  "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"session/prompt\",\"meth\\u006fd\":\"_relay/x\"}"]]
+  (testing "a line the strict reader refuses is refused with its id"
+    (doseq [line ["{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"_relay/cards\",\"method\":\"session/prompt\"}"
+                  "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"session/prompt\",\"meth\\u006fd\":\"_relay/x\"}"
+                  "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"session/prompt\"} null"
+                  "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"session/prompt\""]]
       (let [r (workspace/extension-request line)]
         (is (= 4 (:id r)) line)
         (is (string? (:refused r)) line))))
-  (testing "a broken line that names relay is refused; ordinary prompts pass"
-    (is (:refused (workspace/extension-request "{\"method\":\"_relay/cards\"")))
-    (is (:refused (workspace/extension-request "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"_relay/cards\"} null \"")))
-    (doseq [line ["{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session/prompt\",\"params\":{\"t\":\"a\\nb _relay/cards\"}}"
+  (testing "another case is another member, so the line goes to the agent as an ordinary one"
+    (doseq [line ["{\"jsonrpc\":\"2.0\",\"id\":4,\"Method\":\"_relay/cards\"}"
+                  "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"_RELAY/cards\"}"
+                  "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session/prompt\",\"params\":{\"t\":\"a\\nb _relay/cards\"}}"
                   "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"outcome\":\"x\\ty\"}}"]]
       (is (nil? (workspace/extension-request line)) line))))
 

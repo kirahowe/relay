@@ -78,6 +78,7 @@
             [clojure.string :as str]
             [relay.acp :as acp]
             [relay.harness :as harness]
+            [relay.json :as strict]
             [relay.text :as text])
   (:import (java.time Instant)))
 
@@ -156,10 +157,10 @@
   (->> (str/split-lines (str text))
        (keep (fn [line]
                (when (str/starts-with? (str/triml line) "{")
-                 (try (let [e (json/parse-string line true)]
-                        (when (and (map? e) (= "outcome" (:type e))) e))
-                      (catch Exception _
-                        (when (str/includes? line "\"outcome\"") ::unreadable))))))
+                 (let [e (strict/parse-or line ::unreadable {:keywords? true})]
+                   (cond
+                     (and (map? e) (= "outcome" (:type e))) e
+                     (= ::unreadable e) (when (str/includes? line "\"outcome\"") ::unreadable))))))
        last))
 
 (defn parse-pins
@@ -170,7 +171,7 @@
   (into {}
         (for [line (str/split-lines (str text))
               :when (str/includes? line "\"pins\"")
-              :let [e (try (json/parse-string line) (catch Exception _ nil))]
+              :let [e (strict/object line)]
               :when (and (map? e) (= "pins" (get e "type")))
               [tool digest] (let [p (get-in e ["pins" "pins"])] (when (map? p) p))
               :when (and (string? tool) (re-matches #"[A-Za-z0-9_-]{1,64}" tool)
@@ -326,7 +327,7 @@
   [text]
   (vec (for [line (str/split-lines (str text))
              :when (and (str/includes? line "\"display\"") (str/includes? line "\"tool_result\""))
-             :let [e (try (json/parse-string line) (catch Exception _ nil))
+             :let [e (strict/object line)
                    r (when (and (map? e) (= "tool_result" (get e "type"))) (get e "tool_result"))
                    d (when (map? r) (get r "display"))
                    call (when (map? r) (get-in r ["result" "call_id"]))

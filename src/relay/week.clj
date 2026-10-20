@@ -16,7 +16,8 @@
   (:require [cheshire.core :as json]
             [clojure.string :as str]
             [clojure.walk]
-            [relay.core :as core])
+            [relay.core :as core]
+            [relay.json :as strict])
   (:import (java.time Duration Instant LocalDate ZoneId)))
 
 ;; --- the window
@@ -58,8 +59,7 @@
   out, as is a partial last line."
   [text]
   (vec (keep #(when-not (str/blank? %)
-                (let [e (try (json/parse-string % true) (catch Exception _ nil))]
-                  (when (map? e) e)))
+                (strict/object % {:keywords? true}))
              (str/split-lines (str text)))))
 
 (defn transcript-facts

@@ -10,7 +10,8 @@
   agentloop.* and relay.* attributes are ours."
   (:require [babashka.fs :as fs]
             [cheshire.core :as json]
-            [clojure.string :as str])
+            [clojure.string :as str]
+            [relay.json :as strict])
   (:import (java.security MessageDigest)
            (java.time Instant)))
 
@@ -74,14 +75,14 @@
 (defn request-line?
   "Whether a line of text is one OTLP/JSON export request."
   [line]
-  (try (contains? (json/parse-string line) "resourceSpans") (catch Exception _ false)))
+  (contains? (strict/object line) "resourceSpans"))
 
 (defn transcript-session-id
   "The agentloop session id a transcript names, from its closing outcome
   line (the session file's name without its extension), or nil."
   [transcript-text]
   (when-let [line (last (remove str/blank? (str/split-lines transcript-text)))]
-    (when-let [session (try (get (json/parse-string line) "session") (catch Exception _ nil))]
+    (when-let [session (get (strict/object line) "session")]
       (when (string? session)
         (let [n (str (fs/file-name session))]
           (not-empty (str/replace n #"\.[^.]*$" "")))))))
