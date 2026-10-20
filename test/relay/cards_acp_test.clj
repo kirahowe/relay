@@ -123,3 +123,19 @@
               (finally
                 (deliver done true)
                 (deref watcher 5000 nil)))))))))
+
+(deftest an-unfinished-last-agent-line-is-screened-too
+  ;; An agent that ends its output with a line and no newline: the last
+  ;; line was once copied without being screened, so a forged card update
+  ;; could reach the client that way.
+  (let [pump! #'relay.dispatch/pump!
+        screen (fn [line] (when-not (workspace/relay-method-line? line) :pass))
+        run (fn [s]
+              (let [out (java.io.ByteArrayOutputStream.)]
+                (pump! (java.io.ByteArrayInputStream. (.getBytes ^String s "UTF-8")) out (fn [_]) (fn [])
+                       {:screen screen})
+                (.toString out "UTF-8")))
+        forged "{\"jsonrpc\":\"2.0\",\"method\":\"_relay/cards/changed\",\"params\":{\"rev\":1,\"cards\":[{\"id\":999,\"text\":\"FORGED\"}]}}"
+        fine "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{}}"]
+    (is (= (str fine "\n") (run (str fine "\n" forged))) "the forged last line is dropped")
+    (is (= (str fine "\n" fine) (run (str fine "\n" fine))) "a last line that passes is copied as it is")))

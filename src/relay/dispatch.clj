@@ -557,8 +557,16 @@
             (cond
               over (long-done! over)
               (pos? (alength last-bytes))
-              (do (when screen (write! last-bytes (alength last-bytes)))
-                  (tap (acp/text last-bytes)))))
+              ;; A last line with no newline is screened like any other:
+              ;; a client may still read it, so it must not get past.
+              (let [text (acp/text last-bytes)
+                    decision (when screen (screen text))]
+                (tap text)
+                (cond
+                  (= :pass decision) (write! last-bytes (alength last-bytes))
+                  (string? decision) (let [bs (.getBytes (str decision) java.nio.charset.StandardCharsets/UTF_8)]
+                                       (write! bs (alength bs)))
+                  :else nil))))
           (let [chunk (java.util.Arrays/copyOf buf n)
                 [rest' lines] (acp/split pending chunk)]
             (if-not screen

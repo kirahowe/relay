@@ -118,6 +118,28 @@ approved by Kira on 2026-10-20. The acp-tui board is #55; `relay serve` is
 - Rewrapped the start-of-wake paragraph in resources/AGENTS.md. Older
   long lines elsewhere in that file are not part of this change.
 
+- Codex review loop, 2026-10-20 (read-only, given the threat model).
+  Round 1 found two things. Fixed: when the agent's output ended on a
+  line with no newline, pump! copied that line to the client without
+  screening it, so a `_relay/cards/changed` line could reach the client
+  that way. The last line now goes through the screen like any other;
+  the regression test drives pump! directly. Rejected: card text reaches
+  roles (the cards tool with accept_contamination, the prompt summary,
+  card_add's reply) and `_relay/resolve` without visible or defang. That
+  is how every kind works in relay: role reads carry raw text guarded by
+  labels and withholding, and visible and defang belong to the
+  operator's display edges (the CLI render, the wire form, the client's
+  ref renderer). Cards do the same as docs, facts and memos.
+- Round 2 found one thing, rejected: an agent line spelled
+  `"Method":"_relay/..."` or starting with a no-break space slips past
+  relay-method-line?, and Go's JSON decoder would still read it. The
+  agent is agentloop, whose JSON framing no model or outside text
+  controls; producing such a line takes a crafted agent built against
+  relay's filter and the client's parser. The threat model puts that
+  out of scope (an attacker who studies relay's code, or someone with a
+  shell on the Mac). Round 2 had no in-scope defect, so the loop
+  stopped there.
+
 ## Log
 
 - 2026-10-20: built relay.cards, core, tools, refs, prompts, CLI, relay
@@ -132,3 +154,6 @@ approved by Kira on 2026-10-20. The acp-tui board is #55; `relay serve` is
 - 2026-10-20: fixed the watcher's first-subscription race. bb test
   passes in full (736 tests) with `--agentloop` pointing at agentloop
   main built in the scratch directory.
+- 2026-10-20: Codex review, two rounds, converged. bb test passes in
+  full (737 tests) with `--agentloop` pointing at agentloop main built in
+  the scratch directory.
