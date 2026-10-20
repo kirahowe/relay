@@ -239,30 +239,53 @@
   [^String s]
   (and (<= (count s) max-number-length) (exponent-in-bounds? s)))
 
+(defn- literal
+  "The literal for the decimal with digits ds (no sign), scale `scale` and
+  sign neg?, written with exponent e: ds * 10^-scale as mantissa * 10^e,
+  with no exponent when e is 0."
+  [neg? ^String ds scale e]
+  (let [;; The value is ds * 10^shift * 10^e.
+        shift (- (- scale) e)
+        mantissa (if (>= shift 0)
+                   (str ds (str/join (repeat shift \0)))
+                   (let [k (- shift)
+                         padded (str (str/join (repeat (max 0 (- k (count ds))) \0)) ds)
+                         i (- (count padded) k)]
+                     (str (if (zero? i) "0" (subs padded 0 i)) "." (subs padded i))))]
+    (str (when neg? "-") mantissa (when-not (zero? e) (str "e" e)))))
+
 (defn number-text
   "A decimal as a number literal the rule takes. BigDecimal's own text
   writes the exponent of the first digit, so a number read as 0.1e-9999
-  would come out as 1.0E-10000, which the rule refuses; such a number is
-  written with its exponent held at the bound and its digits moved to
-  fit. Every decimal the reader returns fits within the length bound this
-  way, since its literal did."
+  comes out as 1.0E-10000, past the exponent bound, and 111...1e1 (998
+  ones) as 1.11...1E+998, past the length bound. Such a number is written
+  in the shortest of a few forms that fit: its digits as they are, or with
+  a point among them, at the exponent nearest 0 that allows it, held
+  within the exponent bound. Every decimal the reader returns has a form
+  among these no longer than the literal it was read from. A form with
+  neither point nor exponent is never used, since it would read back as
+  an integer."
   [^BigDecimal d]
   (let [s (str d)]
     (if (literal-ok? s)
       s
       (let [u (.unscaledValue d)
+            neg? (neg? (.signum u))
             ds (str (.abs u))
             scale (.scale d)
-            e (-> (- (count ds) 1 scale) (min max-exponent) (max (- max-exponent)))
-            ;; d is ds * 10^shift * 10^e.
-            shift (- (- scale) e)
-            mantissa (if (>= shift 0)
-                       (str ds (str/join (repeat shift \0)))
-                       (let [k (- shift)
-                             padded (str (str/join (repeat (max 0 (- k (count ds))) \0)) ds)
-                             i (- (count padded) k)]
-                         (str (if (zero? i) "0" (subs padded 0 i)) "." (subs padded i))))]
-        (str (when (neg? (.signum u)) "-") mantissa "e" e)))))
+            n (count ds)
+            ;; Exponents that put the point after the last digit, among
+            ;; the digits (nearest 0, or the ends of that range), or
+            ;; before the first digit.
+            lo (inc (- scale)) hi (+ (- scale) (dec n))
+            es [(- scale) lo hi (max lo (min hi 0)) (+ (- scale) n) 0]
+            clamp #(-> % (min max-exponent) (max (- max-exponent)))
+            forms (for [e (distinct (map clamp es))
+                        :let [t (literal neg? ds scale e)]
+                        :when (and (or (not (zero? e)) (str/includes? t "."))
+                                   (literal-ok? t))]
+                    t)]
+        (or (first (sort-by count forms)) s)))))
 
 (defn- odd-decimal?
   "Whether x holds a decimal whose own text the rule refuses."

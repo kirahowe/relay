@@ -94,6 +94,13 @@ The boundaries between the three components:
   pentest passes the proxy and envelope scenarios (20 of 20); bb tck is
   CONFORMANT (39 passed, 17 skipped). A second Codex loop on the fixes
   converged in three rounds.
+- 2026-10-21: a third Codex loop reviewed what came after the second:
+  the answers relay passes from the agent, the folded-name removal in
+  agentloop, acp-tui's permission numbers, the exponent bound and the
+  single read per line. It fixed two defects in relay's writer and
+  converged in three rounds (see "Post-QA Codex loop"). bb test passes
+  (764 tests); agentloop's make test and make build and acp-tui's make
+  check and make build pass.
 
 ## Codex loop
 
@@ -137,6 +144,61 @@ Round 1, five findings:
 
 Round 2: no findings. Codex checked both fixes and the four copies of the
 table.
+
+## Post-QA Codex loop
+
+Reviewed: relay from "Pass only the answers the agent owes the client"
+on, agentloop from "Remove folded names from client lines instead of
+refusing them" on, acp-tui from "Show a permission request's numbers as
+the agent wrote them" on, then the whole relay#58 change. Codex had the
+threat model, this issue and the shared README.
+
+Round 1, two findings:
+
+1. Fixed in relay. relay wrote a decimal the reader takes in a form the
+   reader refuses. BigDecimal's text gives the exponent of the first
+   digit, so `0.1e-9999` (exponent -9999 as written) came out as
+   `1.0E-10000`. parse-envelope refused `{"input":{"n":0.1e-9999},...}`,
+   and a permission request with that number in rawInput reached acp-tui,
+   once relay added the preview, as a line acp-tui drops, so the prompt
+   never showed. `relay.json/generate` writes JSON as cheshire does,
+   except that a decimal whose own text breaks the rule is written with
+   its exponent held at the bound and its digits moved to fit. The
+   rewritten lines (with-preview, with-inert-displays), tool inputs
+   (parse-envelope, the envelope tool, preview and verifier stdin),
+   refusals and answers that carry a client's id use it. Two table cases,
+   copied to all four places, pin that the bound applies to the literal,
+   not the value: `0.1e-9999` and `12345e9999` pass.
+2. In scope, not a defect of this change; to file against agentloop.
+   The MCP SDK decodes a tool result's structuredContent into `any`
+   without UseNumber, so `{"n":9007199254740993}` reaches the model as
+   `9007199254740992`, after agentloop's strict screen has passed the
+   line. It predates relay#58, and an MCP server is not one of the three
+   components the dialect covers. A tool that returns large integer ids
+   would hit it.
+
+Round 2, one finding, fixed in relay. The writer's fallback kept the
+first digit's exponent, so `111...1e1` (998 ones, 1000 characters) came
+out as `1.11...1E+998` in 1003 characters, past the length bound. Used as
+a client's id in a `_relay/` answer, it was dropped by acp-tui; in a tool
+envelope, parse-envelope refused it. `number-text` now tries the digits
+as they are, with a point among them at the exponent nearest 0, and the
+forms either side, and takes the shortest that fits both bounds. The
+literal the reader took is never shorter than that, so one always fits.
+A form with neither point nor exponent is skipped: it would read back as
+an integer. A property test writes literals near both bounds back
+through the reader.
+
+Round 3, one finding, in scope but not a defect of this change; to
+file. With approvals on, a client answering permission request `"id":1`
+with `"id":1.0` has its approval dropped as stray, and relay refuses the
+request to the agent: `acp/answer-of` compares ids with `=`, and Long 1
+is not BigDecimal 1.0. It predates relay#58 (cheshire read 1.0 as a
+double, which `=` also told apart), it fails closed, and only a client
+that writes an integer id as a decimal triggers it, which JSON-RPC
+discourages. Matching by `workspace/id-key` would fix it.
+
+The loop stopped at round 3, which had no defect in this change.
 
 ## QA round
 

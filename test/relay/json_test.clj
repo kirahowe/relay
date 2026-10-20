@@ -139,10 +139,24 @@
                            (gen/choose -40 40)])]
     (str (when neg "-") int-digits (when (seq frac-digits) (str "." frac-digits)) "e" e)))
 
-;; BigDecimal's own text writes 0.1e-9999 as 1.0E-10000, which the rule
-;; refuses, so a line relay rewrote could break the rule (relay#58).
+(def gen-long-literal
+  "A decimal literal near the length bound, with an exponent of any size."
+  (gen/let [int-len (gen/choose 1 999)
+            frac-len (gen/choose 0 999)
+            d (gen/elements "123456789")
+            e (gen/one-of [(gen/return nil) (gen/choose -9 9) (gen/choose -999 999)
+                           (gen/choose (- json/max-exponent) json/max-exponent)])]
+    (let [mantissa (str d (apply str (repeat (dec int-len) "1"))
+                        (when (pos? frac-len) (str "." (apply str (repeat frac-len "2")))))
+          exp (if (some? e) (str "e" e) (if (zero? frac-len) ".5" ""))
+          room (- json/max-number-length (count exp))]
+      (str (str/replace (subs mantissa 0 (min (count mantissa) room)) #"\.$" "") exp))))
+
+;; BigDecimal's own text writes 0.1e-9999 as 1.0E-10000, past the
+;; exponent bound, and 111...1e1 (998 ones) as 1.11...1E+998, past the
+;; length bound, so a line relay rewrote could break the rule (relay#58).
 (defspec a-decimal-the-rule-takes-is-written-so-the-rule-takes-it 300
-  (prop/for-all [lit gen-edge-literal]
+  (prop/for-all [lit (gen/one-of [gen-edge-literal gen-long-literal])]
     (let [v (json/parse (str "[" lit "]"))
           back (json/parse-or (json/generate v) ::bad)]
       (and (not= ::bad back) (same? v back)))))
@@ -150,7 +164,13 @@
 (deftest numbers-past-the-bound-by-value-are-written-within-it
   (doseq [[lit text] [["0.1e-9999" "0.1e-9999"] ["-0.00123e-9999" "-0.00123e-9999"] ["12345e9999" "12345e9999"]
                       ;; Plain, BigDecimal writes this one past 1000 characters.
-                      [(str "1." (apply str (repeat 994 "0")) "e-6") (str "1." (apply str (repeat 994 "0")) "e-6")]]]
+                      [(str "1." (apply str (repeat 994 "0")) "e-6") (str "1." (apply str (repeat 994 "0")) "e-6")]
+                      ;; With its first digit's exponent, 1003 characters.
+                      [(str (apply str (repeat 998 "1")) "e1") (str (apply str (repeat 998 "1")) "e1")]
+                      ;; Neither its digits alone (e-492) nor its first
+                      ;; digit's exponent (e504) fits; plain does.
+                      [(str (apply str (repeat 500 "1")) "." (apply str (repeat 497 "2")) "e5")
+                       (str (apply str (repeat 500 "1")) "22222." (apply str (repeat 492 "2")))]]]
     (testing lit
       (let [v (json/parse (str "{\"n\":" lit "}"))]
         (is (= (str "{\"n\":" text "}") (json/generate v)))
