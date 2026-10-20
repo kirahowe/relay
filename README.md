@@ -176,7 +176,8 @@ are `retitle`, `archive` and `restore` for any card; `add`, `tick`,
 archived card is refused, except `restore`. An op that changes nothing
 appends nothing and says so. `seen` is the card's rev when the client
 last read it, which the header of its text form shows: an edit of text that changed after `seen` is refused, so a
-stale edit cannot overwrite a newer one. Ticks and cell states go to
+stale edit cannot overwrite a newer one. A `seen` past the card's rev
+is refused too, since no client can have read it. Ticks and cell states go to
 whoever wrote last.
 
 Each piece of a card's text (the title, an item, a row or column, the
@@ -1283,7 +1284,11 @@ when its text was last written, which is what `seen` is checked against.
 
 Only relay speaks relay's methods to the client: relay acp drops any
 line from the agent whose method starts with `_relay/`, so an agent
-cannot fake a card update or a pane item.
+cannot fake a card update or a pane item. The check fails closed. relay
+also drops a line from the agent that is not one JSON value, and a line
+that spells a JSON-RPC field such as `method` in another case, since a
+Go client reads keys without regard to case. A permission request among
+them is refused, so the agent is not left waiting.
 
 A message from
 the agent too long for relay to read whole (over 8 MB) never reaches the

@@ -29,6 +29,13 @@
        (catch clojure.lang.ExceptionInfo e
          (or (:relay/rejected (ex-data e)) (throw e)))))
 
+(defn- refusal-message
+  "What a refused call said."
+  [f]
+  (try (f) nil
+       (catch clojure.lang.ExceptionInfo e
+         (if (:relay/rejected (ex-data e)) (ex-message e) (throw e)))))
+
 ;; --- a pure driver: cards folded from events made here
 
 (defn- added-event [seq data labels]
@@ -168,7 +175,7 @@
 
 (def seen-refuses-exactly-the-stale-edits
   (prop/for-all [w gen-world
-                 seen (gen/choose 0 30)]
+                 seen (gen/choose -2 40)]
     (let [c (card w)
           [op el] (case (:kind c)
                     "checklist" (let [i (first (:items c))] [(when i {:op "edit" :item (:id i)}) i])
@@ -180,12 +187,32 @@
                 (let [r (refusal #(cards/decide (:cards w) 1 (assoc op :text "a new text" :seen seen)))]
                   (cond
                     (not (cards/active? c)) (= :invalid r)
+                    ;; A rev the client cannot have read is refused, not
+                    ;; taken as newer than every edit.
+                    (or (neg? seen) (> seen (:rev c))) (= :invalid r)
                     (> (:rev el) seen) (= :conflict r)
                     :else (nil? r))))
               checks))))
 
 (deftest seen-refuses-exactly-the-stale-edits-test
   (check 300 seen-refuses-exactly-the-stale-edits))
+
+(deftest a-seen-past-the-cards-rev-is-refused
+  ;; seen=99999 once passed every stale-edit check, so it overwrote newer text.
+  (let [w (-> (new-card {:kind "checklist" :title "T" :items ["a" "b"]})
+              (op! {:op "edit" :item 1 :text "a2"}))
+        rev (:rev (card w))]
+    (is (= :invalid (refusal #(cards/decide (:cards w) 1 {:op "edit" :item 1 :text "y" :seen 99999}))))
+    (is (str/includes? (refusal-message #(cards/decide (:cards w) 1 {:op "edit" :item 1 :text "y" :seen (inc rev)}))
+                       (str "is at rev " rev)))
+    (is (some? (cards/decide (:cards w) 1 {:op "edit" :item 1 :text "y" :seen rev})))))
+
+(deftest a-missing-kind-or-op-is-named-in-plain-words
+  (is (= "A card needs a kind: checklist, tracker or note."
+         (refusal-message #(cards/added {} {:title "T"}))))
+  (let [w (new-card {:kind "note" :title "T" :text ""})]
+    (doseq [op [{} {:op nil}]]
+      (is (str/starts-with? (refusal-message #(cards/decide (:cards w) 1 op)) "A card op needs an op: ")))))
 
 (def unknown-ops-and-elements-are-refused
   (prop/for-all [w gen-world
@@ -471,3 +498,17 @@
           (let [p (prompt/wake {:role {:id "hub" :title "Hub"} :memos [] :now t0 :zone (java.time.ZoneId/of "UTC")
                                 :fact-topics {:topics [] :left-out false} :cards (for-labels ["private"])})]
             (is (< (str/index-of p "# Fact topics") (str/index-of p "# The operator's board")))))))))
+
+(deftest relay-card-add-without-a-kind-shows-its-usage
+  ;; It once printed "A card's kind is checklist, tracker or note, not nil."
+  (let [dir (str (fs/create-temp-dir {:prefix "relay-cards-cli"}))
+        data (str dir "/data")]
+    (try
+      (fs/create-dirs data)
+      (spit (str data "/relay.edn") (pr-str {:timezone "UTC" :default-harness :x
+                                             :harnesses {:x {:kind :script :command ["true"]}}
+                                             :notify {:kind :none}}))
+      (log/init! data)
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^usage: relay card add <kind> --title"
+                            ((requiring-resolve 'relay.cli/execute) ["--data" data "card" "add"])))
+      (finally (fs/delete-tree dir)))))

@@ -19,7 +19,8 @@
             [relay.log :as log]
             [relay.mock-anthropic :as mock]
             [relay.test-support :as support]
-            [relay.tools :as tools])
+            [relay.tools :as tools]
+            [relay.workspace :as workspace])
   (:import (java.io ByteArrayOutputStream)
            (java.util Arrays)))
 
@@ -85,15 +86,39 @@
              n)
            -1))))))
 
-(def bytes-pass-through-unchanged
-  (prop/for-all [chunks (gen/vector (gen/fmap byte-array (gen/vector gen-byte 0 300)) 0 15)]
-    (let [out (ByteArrayOutputStream.)
-          {:keys [exit]} (dispatch/proxy! {:argv ["cat"]} {:in (chunked-stream chunks) :out out})]
-      (and (= 0 exit)
-           (Arrays/equals (concat-bytes chunks) (.toByteArray out))))))
+(def gen-json-line
+  (gen/fmap (fn [[id text]] (json/generate-string {:jsonrpc "2.0" :method "session/update" :params {:id id :text text}}))
+            (gen/tuple gen/small-integer gen/string)))
 
-(deftest P6-2-a-proxied-agent-sees-and-sends-exactly-the-clients-bytes
-  (check 60 bytes-pass-through-unchanged))
+(def gen-junk-line
+  (gen/fmap byte-array (gen/vector (gen/fmap unchecked-byte (gen/choose -128 127)) 0 60)))
+
+(defn- cut
+  "The bytes cut into pieces at the given points."
+  [^bytes bs points]
+  (let [ps (distinct (sort (map #(mod % (inc (alength bs))) points)))]
+    (map (fn [[a b]] (Arrays/copyOfRange bs (int a) (int b)))
+         (partition 2 1 (concat [0] ps [(alength bs)])))))
+
+(def bytes-pass-through-unchanged
+  ;; The agent is cat, so it sees exactly the client's bytes if and only
+  ;; if what it sends back is them. Every line of JSON comes back as it
+  ;; was, in order, however the bytes are chunked. A line that is not JSON
+  ;; is dropped: relay's screen fails closed on what it cannot read.
+  (prop/for-all [lines (gen/vector (gen/one-of [(gen/fmap #(.getBytes ^String % "UTF-8") gen-json-line)
+                                                gen-junk-line])
+                                   0 12)
+                 points (gen/vector gen/nat 0 15)]
+    (let [lines (map (fn [^bytes l] (byte-array (remove #(= 10 %) l))) lines)
+          input (concat-bytes (mapcat (fn [l] [l (byte-array [10])]) lines))
+          kept (filter #(not (workspace/drop-agent-line? (acp/text %))) lines)
+          out (ByteArrayOutputStream.)
+          {:keys [exit]} (dispatch/proxy! {:argv ["cat"]} {:in (chunked-stream (cut input points)) :out out})]
+      (and (= 0 exit)
+           (every? (fn [^bytes l] (or (not (str/starts-with? (acp/text l) "{\"jsonrpc\""))
+                                      (some #(Arrays/equals l ^bytes %) kept)))
+                   lines)
+           (Arrays/equals (concat-bytes (mapcat (fn [l] [l (byte-array [10])]) kept)) (.toByteArray out))))))
 
 (deftest a-client-that-stops-reading-does-not-wedge-the-agent
   ;; The client's output fails; the agent can still write everything it
@@ -767,7 +792,9 @@
 (deftest a-permission-request-relay-cannot-read-is-never-passed-on
   (doseq [approvals [true false]
           [line refused?] [["{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"session/request_permission\",\"params\":{\"options\":[" true]
-                           ["{\"method\":\"session/request_permission\",\"params\":{}}" false]]]
+                           ["{\"method\":\"session/request_permission\",\"params\":{}}" false]
+                           ;; Readable, but a Go client would read it as relay's own method.
+                           ["{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"session/request_permission\",\"Method\":\"_relay/items\",\"params\":{\"options\":[]}}" true]]]
     (let [dir (fs/create-temp-dir {:prefix "relay-unread"})
           line-file (str dir "/line") got (str dir "/got")
           _ (spit line-file (str line "\n"))

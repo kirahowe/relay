@@ -705,13 +705,18 @@
                                                              "reject_once" "cancelled")
                                                   :by "relay" :why why})))
         from-agent (fn [line]
-                     (if (workspace/relay-method-line? line)
-                       ;; relay's own methods are relay's to send.
-                       (do (binding [*out* *err*] (println "relay dropped an agent line that used one of relay's methods."))
+                     (let [drop? (workspace/drop-agent-line? line)
+                           req (or (acp/permission-request line)
+                                   ;; One relay cannot read is never passed on.
+                                   (acp/unreadable-permission-request line))]
+                     (if (and drop? (not req))
+                       ;; relay's own methods are relay's to send, and a
+                       ;; line relay cannot read might be one of them.
+                       (do (binding [*out* *err*] (println "relay dropped an agent line that was not JSON or used one of relay's methods."))
                            nil)
-                     (if-let [req (or (acp/permission-request line)
-                                      ;; One relay cannot read is never passed on.
-                                      (acp/unreadable-permission-request line))]
+                     ;; A permission request the screen drops is refused
+                     ;; as unreadable, so the agent is not left waiting.
+                     (if-let [req (cond-> req drop? (assoc :unreadable true))]
                        (let [passing (and approvals (not @client-gone) (not (:unreadable req)))
                              ;; Only a request the client will see gets a
                              ;; preview, which goes with it.
@@ -743,7 +748,7 @@
                            ;; A client that knows nothing of displays
                            ;; sees their text inert, whatever the agent
                            ;; sent.
-                           (or (acp/with-inert-displays line) :pass)))))
+                           (or (acp/with-inert-displays line) :pass))))))
         to-client! (fn [^String text]
                      (let [bs (.getBytes (str text "\n") java.nio.charset.StandardCharsets/UTF_8)]
                        (try (locking out (write-chunk! out bs (alength bs)))

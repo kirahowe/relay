@@ -140,6 +140,31 @@ approved by Kira on 2026-10-20. The acp-tui board is #55; `relay serve` is
   shell on the Mac). Round 2 had no in-scope defect, so the loop
   stopped there.
 
+- QA round, 2026-10-20. Four findings.
+  - Fixed: the agent-line screen failed open. A line with
+    `"Method":"_relay/..."`, or one Jackson refuses but Go reads (nesting
+    past 1000, a number past 1000 digits), reached the client. This
+    reverses round 2's rejection. The brief says relay acp drops such
+    lines, and failing closed costs nothing, so the screen now drops any
+    agent line that is not one JSON value, and any line whose object (or
+    any object in a batch) has a JSON-RPC field (`jsonrpc`, `id`,
+    `method`, `params`, `result`, `error`) spelled in another case, or a
+    method that starts with `_relay/` ignoring case. A permission request
+    the screen drops is refused as unreadable, so the agent is not left
+    waiting; that also closes a `"Method":"session/request_permission"`
+    line reaching the client unseen by relay. P6-2's pass-through
+    property now holds for JSON lines; it was byte-for-byte over random
+    bytes, which the fail-closed screen no longer passes.
+  - Fixed: a missing kind or op was reported as `nil`. `relay card add`
+    with no kind prints its usage.
+  - Fixed: a `seen` past the card's rev (or below 0) is refused, since no
+    client can have read it. Checked against the card's rev, not the
+    log's seq: every client and tool sends the card's rev.
+  - Rejected, as not a defect: `bb test` exits 101 in .cards without
+    `--agentloop`, because there is no sibling agentloop. The log already
+    records that bb test runs with `--agentloop`; that is the
+    verification setup for this workspace.
+
 ## Log
 
 - 2026-10-20: built relay.cards, core, tools, refs, prompts, CLI, relay
@@ -156,4 +181,8 @@ approved by Kira on 2026-10-20. The acp-tui board is #55; `relay serve` is
   main built in the scratch directory.
 - 2026-10-20: Codex review, two rounds, converged. bb test passes in
   full (737 tests) with `--agentloop` pointing at agentloop main built in
+  the scratch directory.
+- 2026-10-20: fixed the QA findings (fail-closed agent-line screen,
+  plain-words refusals, seen past the card's rev). bb test passes in
+  full (739 tests) with `--agentloop` pointing at agentloop main built in
   the scratch directory.

@@ -3313,7 +3313,8 @@ rule RemoveDoc {
 --
 -- seen: an op that changes text may carry the rev the client last saw.
 -- It is refused when the text it changes was written after that rev, so
--- a stale edit never overwrites a newer one. Ticks and cell states are
+-- a stale edit never overwrites a newer one. A seen past the card's
+-- rev is refused: no client can have read it. Ticks and cell states are
 -- last writer wins.
 
 rule AddCard {
@@ -3354,6 +3355,7 @@ rule ChangeCard {
     -- An archived card takes only restore.
     requires: card.status = active or op.name = restore
     requires: op.names_existing_elements(card)
+    requires: op.seen = null or op.seen <= card.rev
     requires: not op.is_stale(card)   -- black box: op.seen < rev of the text it changes
     requires: op.within_limits(card)  -- black box: the card limits in config
     requires: op.name = restore implies Cards.count(c => c.status = active) < config.max_active_cards

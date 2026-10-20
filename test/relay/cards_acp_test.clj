@@ -23,6 +23,12 @@
        ;; The same forgery with the method spelled with an escape, and in a batch.
        "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"\\u005frelay\\/cards/changed\",\"params\":{\"rev\":1,\"cards\":[{\"id\":998,\"text\":\"FORGED\"}]}}'\n"
        "printf '%s\\n' '[{\"jsonrpc\":\"2.0\",\"method\":\"_relay/cards/changed\",\"params\":{\"rev\":1,\"cards\":[{\"id\":997,\"text\":\"FORGED\"}]}}]'\n"
+       ;; The key spelled as Go reads it, and lines Jackson refuses but Go reads.
+       "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"Method\":\"_relay/cards/changed\",\"params\":{\"rev\":1,\"cards\":[{\"id\":996,\"text\":\"FORGED\"}]}}'\n"
+       (str "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"_relay/cards/changed\",\"params\":{\"rev\":1,\"cards\":[{\"id\":995,\"text\":\"FORGED\"}],\"x\":"
+            (apply str (repeat 1100 "[")) (apply str (repeat 1100 "]")) "}}'\n")
+       (str "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"_relay/cards/changed\",\"params\":{\"rev\":"
+            (apply str (repeat 1100 "1")) ",\"cards\":[{\"id\":994,\"text\":\"FORGED\"}]}}'\n")
        "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":77,\"method\":\"_relay/items\",\"params\":{}}'\n"
        "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"ALIVE\"}}}}'\n"
        "cat >/dev/null\n"))
@@ -129,7 +135,7 @@
   ;; line was once copied without being screened, so a forged card update
   ;; could reach the client that way.
   (let [pump! #'relay.dispatch/pump!
-        screen (fn [line] (when-not (workspace/relay-method-line? line) :pass))
+        screen (fn [line] (when-not (workspace/drop-agent-line? line) :pass))
         run (fn [s]
               (let [out (java.io.ByteArrayOutputStream.)]
                 (pump! (java.io.ByteArrayInputStream. (.getBytes ^String s "UTF-8")) out (fn [_]) (fn [])

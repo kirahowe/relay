@@ -199,12 +199,27 @@
   (doseq [line ["{\"jsonrpc\":\"2.0\",\"method\":\"_relay/cards/changed\",\"params\":{}}"
                 "{\"jsonrpc\":\"2.0\",\"method\":\"\\u005frelay/cards/changed\",\"params\":{}}"
                 "{\"jsonrpc\":\"2.0\",\"method\":\"_relay\\/items\",\"id\":1}"
-                "  [{\"jsonrpc\":\"2.0\",\"method\":\"session/update\"},{\"jsonrpc\":\"2.0\",\"method\":\"_relay/x\"}]"]]
-    (is (workspace/relay-method-line? line) line))
+                "  [{\"jsonrpc\":\"2.0\",\"method\":\"session/update\"},{\"jsonrpc\":\"2.0\",\"method\":\"_relay/x\"}]"
+                ;; Go's encoding/json matches keys ignoring case.
+                "{\"jsonrpc\":\"2.0\",\"Method\":\"_relay/cards/changed\",\"params\":{}}"
+                "{\"jsonrpc\":\"2.0\",\"METHOD\":\"_Relay/items\",\"method\":\"session/update\"}"
+                ;; Any JSON-RPC field in another case: Go reads it, relay would not.
+                "{\"jsonrpc\":\"2.0\",\"Method\":\"session/request\\u005fpermission\",\"id\":1,\"params\":{}}"
+                "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"Params\":{}}"
+                ;; JSON Jackson refuses but Go reads: the screen fails closed.
+                (str "{\"jsonrpc\":\"2.0\",\"method\":\"_relay/cards/changed\",\"params\":"
+                     (apply str (repeat 1100 "[")) (apply str (repeat 1100 "]")) "}")
+                (str "{\"jsonrpc\":\"2.0\",\"method\":\"_relay/cards/changed\",\"params\":{\"rev\":"
+                     (apply str (repeat 1100 "1")) "}}")
+                ;; Not one JSON value, or not JSON at all.
+                "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\"} {\"method\":\"_relay/x\"}"
+                "[0" "[{\"method\":\"_relay/x\"}" "{not json _relay/" "nope"]]
+    (is (workspace/drop-agent-line? line) (subs line 0 (min 80 (count line)))))
   (doseq [line ["{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"x\":\"_relay/items\"}}"
                 "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"method\":\"_relay/items\"}}"
-                "[1,2]" "[0" "[{\"method\":\"_relay/x\"}" "{not json _relay/" "nope" "" nil]]
-    (is (not (workspace/relay-method-line? line)) line)))
+                "  {\"jsonrpc\":\"2.0\",\"method\":\"session/update\"}\r"
+                "[1,2]" "" "   " nil]]
+    (is (not (workspace/drop-agent-line? line)) line)))
 
 (deftest the-display-session-of-an-agent-line
   (let [line (fn [meta] (json/generate-string {:jsonrpc "2.0" :method "session/update"

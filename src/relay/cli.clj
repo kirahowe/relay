@@ -368,6 +368,8 @@ and --instructions marks the id public too.")
     (cond
       (nil? a)
       (fail! "usage: relay card <id> [<op> ...], or relay card add <kind> --title <t> ...")
+      (and (= "add" a) (nil? b))
+      (fail! "usage: relay card add <kind> --title <t> [--item <t> ...] [--row <t> ...] [--column <t> ...] [--text <t>]")
       (= "add" a)
       (let [e (first (operator-card! sys :card/add (cond-> {:kind b :title (:title opts)}
                                                        (:item opts) (assoc :items (:item opts))

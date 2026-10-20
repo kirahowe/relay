@@ -177,6 +177,7 @@
   are the cards there are now; `args` has :kind and :title, and :items for
   a checklist, :rows and :columns for a tracker, or :text for a note."
   [cards {:keys [kind title items rows columns text] :as args}]
+  (when (nil? kind) (refuse! "A card needs a kind: checklist, tracker or note."))
   (when-not (all-kinds kind)
     (refuse! (str "A card's kind is checklist, tracker or note, not " (pr-str kind) ".")))
   (let [others (keep (fn [k] (when (some? (get args k)) (name k)))
@@ -214,7 +215,6 @@
   the text it changes was written after that."
   [what {:keys [rev]} seen]
   (when (some? seen)
-    (when-not (integer? seen) (refuse! "seen must be a rev, a number."))
     (when (> rev seen)
       (refuse! :conflict (str what " was changed at rev " rev ", after rev " seen
                               ". Read the card again before you change it.")))))
@@ -236,8 +236,16 @@
   (let [card (get cards id)
         spec (get ops op)]
     (when-not card (refuse! :not-found (str "There is no card " id ".")))
+    (when (nil? op)
+      (refuse! (str "A card op needs an op: " (str/join ", " (sort (keys ops))) ".")))
     (when-not spec
       (refuse! (str "There is no card op " (pr-str op) ". The ops are " (str/join ", " (sort (keys ops))) ".")))
+    ;; A rev past the card's own cannot be one a client read, and would
+    ;; switch the stale-edit check off.
+    (when (some? seen)
+      (when-not (integer? seen) (refuse! "seen must be a rev, a number."))
+      (when (or (neg? seen) (> seen (:rev card)))
+        (refuse! (str "seen must be a rev you read: card " id " is at rev " (:rev card) "."))))
     (when-not ((:kinds spec) (:kind card))
       (refuse! (str op " is not an op on a " (:kind card) ". A " (:kind card) "'s ops are "
                     (str/join ", " (sort (keep (fn [[o s]] (when ((:kinds s) (:kind card)) o)) ops))) ".")))

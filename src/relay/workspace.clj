@@ -86,25 +86,46 @@
     (when (and (string? method) (str/starts-with? method "_relay/"))
       {:id (get msg "id") :method method :params (let [p (get msg "params")] (if (map? p) p {}))})))
 
-(defn- relay-method? [msg]
-  (and (map? msg)
-       (let [m (get msg "method")] (and (string? m) (str/starts-with? m "_relay/")))))
+(defn- lower ^String [^String s] (.toLowerCase s java.util.Locale/ROOT))
 
-(defn relay-method-line?
-  "True when an agent's line carries one of relay's methods, by itself or
-  in a batch. Unlike extension-request this parses every line that could
-  be JSON, so a method spelled with escapes (\\u005frelay/...) or sent in
-  a batch is caught too: only relay speaks relay's methods to the client."
+(def ^:private envelope-keys #{"jsonrpc" "id" "method" "params" "result" "error"})
+
+(defn- unsafe-message?
+  "True when a message carries one of relay's methods, or names a JSON-RPC
+  field in a case other than its own. Go's encoding/json, which
+  acp-go-sdk clients use, matches a field's key ignoring case: there
+  \"Method\" is the method, and when two keys match the last one wins. A
+  line that two readers can read two ways is not passed on. Every key is
+  checked, not only the one a map kept."
+  [msg]
+  (and (map? msg)
+       (boolean (some (fn [[k v]]
+                        (and (string? k)
+                             (let [lk (lower k)]
+                               (or (and (envelope-keys lk) (not= k lk))
+                                   (and (= "method" lk) (string? v)
+                                        (str/starts-with? (lower v) "_relay/"))))))
+                      msg))))
+
+(defn- carries-unsafe-message? [msg]
+  (or (unsafe-message? msg)
+      (and (sequential? msg) (boolean (some carries-unsafe-message? msg)))))
+
+(defn drop-agent-line?
+  "True when relay acp must not pass an agent's line to the client: it
+  carries one of relay's methods, by itself or in a batch, it spells a
+  JSON-RPC field in another case, or it is not one JSON value. The screen fails closed. A line Jackson refuses (nesting
+  past 1000, a number past 1000 digits, trailing text) may still be one a
+  Go client reads, and such a line is not ACP anyway. A blank line carries
+  nothing and passes. Only relay speaks relay's methods to the client."
   [line]
   (and (string? line)
-       (let [t (str/triml line)]
-         (or (str/starts-with? t "{") (str/starts-with? t "[")))
-       ;; Cheshire parses a top-level array lazily, so a broken one throws
-       ;; only when it is walked: the walk stays inside the try.
-       (try (let [msg (json/parse-string line)]
-              (boolean (or (relay-method? msg)
-                           (and (sequential? msg) (some relay-method? msg)))))
-            (catch Exception _ false))))
+       (not (str/blank? line))
+       ;; Cheshire parses arrays lazily, so a broken one throws only when it
+       ;; is walked: the walk stays inside the try.
+       (try (let [[msg more] (take 2 (json/parsed-seq (java.io.StringReader. ^String line)))]
+              (or (some? more) (carries-unsafe-message? msg)))
+            (catch Throwable _ true))))
 
 (defn result-line [id result]
   (json/generate-string {"jsonrpc" "2.0" "id" id "result" result}))
