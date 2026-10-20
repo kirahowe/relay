@@ -12,6 +12,7 @@
   (:require [cheshire.core :as json]
             [clojure.walk]
             [clojure.string :as str]
+            [relay.cards :as cards]
             [relay.config :as config]
             [relay.core :as core]
             [relay.reports :as reports]
@@ -298,6 +299,20 @@
   [(if (seq events)
      (str "Wrote " path ", version " (:seq (first events)))
      (str path " already says that."))])
+
+(defn card
+  "One card as relay card shows it: its text form, with each element's
+  text marked and defanged when it is contaminated, and a note's text
+  behind the gutter."
+  [c]
+  (cards/text-lines c {:mark text/for-operator :block text/block}))
+
+(defn board
+  "The cards on the board, a blank line between them."
+  [cs]
+  (if (empty? cs)
+    ["The board is empty."]
+    (vec (rest (mapcat #(cons "" (card %)) cs)))))
 
 (defn- why-held
   "Why agentloop's policy held a call, from the tool's class and the

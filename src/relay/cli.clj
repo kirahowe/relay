@@ -5,6 +5,7 @@
             [clojure.java.io :as io]
             [babashka.fs :as fs]
             [clojure.string :as str]
+            [relay.cards :as cards]
             [relay.config :as config]
             [relay.connect :as connect]
             [relay.core :as core]
@@ -71,6 +72,18 @@ Every command needs the data directory, from --data <dir> or from the file
   relay fact revert <id> <version>    put back an earlier version of a fact
   relay notes <role>                  a role's notes
   relay journal <role> [-n <count>]   a role's latest journal entries
+  relay cards [--archived]            the operator's board: the active cards, and
+                                      with --archived the archived ones too
+  relay card <id>                     one card
+  relay card <id> <op> [--item <n>] [--row <n>] [--column <n>] [--state <s>]
+                       [--text <t>] [--seen <rev>]
+                                      change a card: retitle, archive, restore; add,
+                                      tick, untick, edit, remove (a checklist); set,
+                                      add_row, add_column, rename_row, rename_column,
+                                      remove_row, remove_column (a tracker); write
+                                      (a note)
+  relay card add <kind> --title <t> [--item <t> ...] [--row <t> ...] [--column <t> ...]
+                 [--text <t>]         put a checklist, tracker or note on the board
   relay docs                          the docs
   relay doc <path> [--version <n>] [--history]
                                       read a doc, or list its versions
@@ -337,6 +350,49 @@ and --instructions marks the id public too.")
     (result 0 (str (if (= "allow" verdict) "Approved" "Denied") " hold " hold-id ". "
                    (:role h) " carries on at the next tick."))))
 
+;; --- the board
+
+(defn- operator-card! [sys type args]
+  ;; Whatever the operator writes on a card is the operator's: no labels,
+  ;; never public, whatever --untrusted or --public say.
+  (inbound/submit! sys {:type type :actor core/operator :args args :labels [] :public false}))
+
+(defn- card!
+  "relay card: show one card, change it with an op, or add one."
+  [sys [a b] opts]
+  (let [one (fn [k]
+              (let [vs (get opts k)]
+                (when (> (count vs) 1) (fail! (str "--" (name k) " takes one number here.")))
+                (when-let [v (first vs)]
+                  (or (parse-long v) (fail! (str "--" (name k) " takes a number, not " v "."))))))]
+    (cond
+      (nil? a)
+      (fail! "usage: relay card <id> [<op> ...], or relay card add <kind> --title <t> ...")
+      (= "add" a)
+      (let [e (first (operator-card! sys :card/add (cond-> {:kind b :title (:title opts)}
+                                                       (:item opts) (assoc :items (:item opts))
+                                                       (:row opts) (assoc :rows (:row opts))
+                                                       (:column opts) (assoc :columns (:column opts))
+                                                       (some? (:text opts)) (assoc :text (:text opts)))))]
+        (result 0 (str "Added card " (:seq e) ".")))
+      :else
+      (let [id (or (parse-long a) (fail! (str "A card's id is a number, not " a ".")))]
+        (if (nil? b)
+          (if-let [c (core/card (inbound/current-state sys) id)]
+            {:exit 0 :out (render/card c)}
+            (fail! (str "There is no card " id ".")))
+          (let [op (cond-> {:op b}
+                     (one :item) (assoc :item (one :item))
+                     (one :row) (assoc :row (one :row))
+                     (one :column) (assoc :column (one :column))
+                     (:state opts) (assoc :state (:state opts))
+                     (some? (:text opts)) (assoc :text (:text opts))
+                     (:seen opts) (assoc :seen (:seen opts)))]
+            (if-let [e (first (operator-card! sys :card/op (assoc op :card id)))]
+              (result 0 (cards/confirmation id (get-in e [:data :op])))
+              (result 0 (str "That changes nothing: "
+                             (:unchanged (cards/decide (:cards (inbound/current-state sys)) id op)))))))))))
+
 (def ^:private review-answers
   {"a" "accept" "r" "fake" "n" "not-relevant" "s" nil})
 
@@ -416,7 +472,8 @@ and --instructions marks the id public too.")
             :version :long :wake :long :role :string :trace :string :untrusted :boolean :public :boolean :approvals :boolean
             :topic :string :from :string :to :string :why :string :text :string :end :boolean
             :pause-file :string :since :string :until :string :out :string :agentloop :string
-            :client-id :string :url :string}})
+            :client-id :string :url :string
+            :item [:string] :row [:string] :column [:string] :state :string :seen :long :archived :boolean}})
 
 (defn- command
   "Runs one command with the data directory's system. Returns {:exit :out},
@@ -510,6 +567,8 @@ and --instructions marks the id public too.")
       "journal" (let [[r] more]
                   (when-not r (fail! "usage: relay journal <role> [-n <count>]"))
                   (knowledge sys :journal {:owner r :limit (:tail opts)}))
+      "cards" (lines (render/board (core/board (state) (:archived opts))))
+      "card" (card! sys more opts)
       "docs" (knowledge sys :docs {})
       "doc" (let [[path a b] more]
               (when-not path (fail! "usage: relay doc <path> [--version <n>] [--history]"))
