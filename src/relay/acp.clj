@@ -357,6 +357,17 @@
                          {"outcome" "selected" "optionId" opt}
                          {"outcome" "cancelled"})}})
 
+(defn id-key
+  "A JSON-RPC id as a key that two ids share exactly when a client
+  matching responses to its requests takes them for the same id: numbers
+  by value (9, 9.0 and 9e0 are one id to the ACP SDK and to JavaScript),
+  strings by their text, and null. Nil for what cannot be an id."
+  [id]
+  (cond (nil? id) [:null]
+        (string? id) [:string id]
+        (number? id) [:number (str (.stripTrailingZeros (bigdec id)))]
+        :else nil))
+
 (defn answer-of
   "What a client's line says about an outstanding permission request: nil
   when the line is not an answer to it, else {:outcome kind :valid bool}.
@@ -364,7 +375,9 @@
   cancels; anything else counts as a refusal."
   [req line]
   (let [msg (message line)]
-    (when (and (map? msg) (not (contains? msg "method")) (contains? msg "id") (= (:id req) (get msg "id")))
+    (when (and (map? msg) (not (contains? msg "method")) (contains? msg "id")
+               ;; By value, as the client and agentloop match ids: 1 and 1.0 are one.
+               (some? (id-key (:id req))) (= (id-key (:id req)) (id-key (get msg "id"))))
       (let [outcome (get-in msg ["result" "outcome"])
             chosen (when (and (map? outcome) (= "selected" (get outcome "outcome")))
                      (some #(when (= (get outcome "optionId") (get % "optionId")) %) (:options req)))]

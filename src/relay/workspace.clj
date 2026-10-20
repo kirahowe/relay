@@ -105,17 +105,6 @@
 
 ;; --- responses
 
-(defn id-key
-  "A JSON-RPC id as a key that two ids share exactly when a client
-  matching responses to its requests takes them for the same id: numbers
-  by value (9, 9.0 and 9e0 are one id to the ACP SDK and to JavaScript),
-  strings by their text, and null. Nil for what cannot be an id."
-  [id]
-  (cond (nil? id) [:null]
-        (string? id) [:string id]
-        (number? id) [:number (str (.stripTrailingZeros (bigdec id)))]
-        :else nil))
-
 (defn client-request-key
   "The id key of a client's line when it is a request, one the agent owes
   an answer to once relay passes it on, or nil. A request is a message
@@ -124,7 +113,7 @@
   (let [msg (acp/message line)
         m (get msg "method")]
     (when (and (map? msg) (contains? msg "id") (string? m) (not= "" m))
-      (id-key (get msg "id")))))
+      (acp/id-key (get msg "id")))))
 
 (defn agent-response
   "{:key k} when the client would read an agent's line as a response: a
@@ -135,7 +124,7 @@
   (let [msg (acp/message line)
         m (get msg "method")]
     (when (and (map? msg) (contains? msg "id") (not (and (string? m) (not= "" m))))
-      {:key (id-key (get msg "id"))})))
+      {:key (acp/id-key (get msg "id"))})))
 
 (defn owe
   "The answers owed by the agent, once relay passed it the client's

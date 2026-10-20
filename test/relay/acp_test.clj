@@ -821,6 +821,10 @@
     (is (= {:outcome "reject_once" :valid false} (answer {:jsonrpc "2.0" :id 3 :result {:outcome {:outcome "selected" :optionId "zzz"}}})))
     (is (= {:outcome "reject_once" :valid false} (answer {:jsonrpc "2.0" :id 3 :error {:code 1}})))
     (is (nil? (answer {:jsonrpc "2.0" :id 4 :result {}})) "another request's answer")
+    (is (= {:outcome "allow_once" :valid true}
+           (acp/answer-of req "{\"jsonrpc\":\"2.0\",\"id\":3.0,\"result\":{\"outcome\":{\"outcome\":\"selected\",\"optionId\":\"a\"}}}"))
+        "the same id written as a decimal")
+    (is (nil? (answer {:jsonrpc "2.0" :id "3" :result {}})) "a string id is another id")
     (is (nil? (answer {:jsonrpc "2.0" :id 3 :method "x"})) "a request, not an answer")
     (is (= {"outcome" "cancelled"} (get-in (acp/refusal (assoc req :options [])) ["result" "outcome"])))))
 

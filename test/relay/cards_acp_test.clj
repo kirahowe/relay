@@ -7,6 +7,7 @@
   (:require [babashka.fs :as fs]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [relay.acp :as acp]
             [relay.acp-client :as client]
             [relay.core :as core]
             [relay.dispatch]
@@ -229,11 +230,11 @@
 
 (deftest relay-passes-only-answers-the-agent-owes
   (testing "ids match as the client matches them: numbers by value, strings by text"
-    (is (= (workspace/id-key 3) (workspace/id-key 3.0M) (workspace/id-key 3.00M) (workspace/id-key 30E-1M)))
-    (is (not= (workspace/id-key 3) (workspace/id-key "3")))
-    (is (= (workspace/id-key 0) (workspace/id-key 0.000M)))
-    (is (nil? (workspace/id-key {})))
-    (is (nil? (workspace/id-key [1]))))
+    (is (= (acp/id-key 3) (acp/id-key 3.0M) (acp/id-key 3.00M) (acp/id-key 30E-1M)))
+    (is (not= (acp/id-key 3) (acp/id-key "3")))
+    (is (= (acp/id-key 0) (acp/id-key 0.000M)))
+    (is (nil? (acp/id-key {})))
+    (is (nil? (acp/id-key [1]))))
   (testing "what is a request, and what is a response"
     (is (= [:number "4"] (workspace/client-request-key "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"session/prompt\"}")))
     (is (nil? (workspace/client-request-key "{\"jsonrpc\":\"2.0\",\"method\":\"session/cancel\"}")))
