@@ -1289,7 +1289,14 @@ when its text was last written, which is what `seen` is checked against.
 
 Only relay speaks relay's methods to the client: relay acp drops any
 message from the agent whose method starts with `_relay/`, so an agent
-cannot fake a card update or a pane item. Escapes such as
+cannot fake a card update or a pane item. Nor can it answer for relay:
+relay acp keeps count of the requests it passed from the client to the
+agent, and drops any response from the agent that answers none of them,
+or one already answered. A request the client sends relay under an id
+the agent still owes an answer to cancels that debt. So a response with
+the id of a pending `_relay/cards` request never reaches the client. Ids match as a client
+matches them, numbers by value (`3` and `3.0` are one id) and strings by
+their text. Escapes such as
 `_relay\/cards` name the method they spell. Member names match exactly,
 so `Method` is just another member, which no component reads as the
 method.

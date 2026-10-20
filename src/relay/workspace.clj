@@ -102,6 +102,69 @@
   (let [msg (acp/message line)]
     (or (nil? msg) (acp/relay-method? msg))))
 
+;; --- responses
+
+(defn id-key
+  "A JSON-RPC id as a key that two ids share exactly when a client
+  matching responses to its requests takes them for the same id: numbers
+  by value (9, 9.0 and 9e0 are one id to the ACP SDK and to JavaScript),
+  strings by their text, and null. Nil for what cannot be an id."
+  [id]
+  (cond (nil? id) [:null]
+        (string? id) [:string id]
+        (number? id) [:number (str (.stripTrailingZeros (bigdec id)))]
+        :else nil))
+
+(defn client-request-key
+  "The id key of a client's line when it is a request, one the agent owes
+  an answer to once relay passes it on, or nil. A request is a message
+  with an id and a method that is a non-empty string."
+  [line]
+  (let [msg (acp/message line)
+        m (get msg "method")]
+    (when (and (map? msg) (contains? msg "id") (string? m) (not= "" m))
+      (id-key (get msg "id")))))
+
+(defn agent-response
+  "{:key k} when the client would read an agent's line as a response: a
+  message with an id and no method that is a non-empty string (the ACP
+  SDK reads a missing, null or empty method alike). k is the id's key,
+  nil when it can be no request's. Nil for any other line."
+  [line]
+  (let [msg (acp/message line)
+        m (get msg "method")]
+    (when (and (map? msg) (contains? msg "id") (not (and (string? m) (not= "" m))))
+      {:key (id-key (get msg "id"))})))
+
+(defn owe
+  "The answers owed by the agent, once relay passed it the client's
+  request with id key k. A count, since an agent may answer twice to an id
+  the client reused while it was open (one of them an error)."
+  [owed k]
+  (update owed k (fnil inc 0)))
+
+(defn forget
+  "The answers owed once the client sent relay one of its own methods as a
+  request with id key k, before relay answers it. The client has given up on any
+  earlier request under k, or reused its id, so a late answer from the
+  agent under k could only be taken for the answer to this one; it is
+  dropped. A line the strict reader refuses cancels nothing: it may be a
+  malformed answer to the agent, whose ids can equal the client's."
+  [owed k]
+  (dissoc owed k))
+
+(defn settle
+  "[owed' pass?]: whether an agent's response with id key k answers a
+  request the client sent it and that it has not answered yet, and what
+  is owed after it. Only such a response reaches the client, so an agent
+  cannot answer a request the client sent relay (_relay/cards, say), one
+  it never got, or one it has answered already."
+  [owed k]
+  (let [n (get owed k 0)]
+    (if (and (some? k) (pos? n))
+      [(if (= 1 n) (dissoc owed k) (assoc owed k (dec n))) true]
+      [owed false])))
+
 (defn result-line [id result]
   (json/generate-string {"jsonrpc" "2.0" "id" id "result" result}))
 

@@ -663,7 +663,9 @@
 
   Only relay speaks relay's methods to the client: an agent line whose
   method starts with _relay/ is dropped, so an agent cannot fake a card
-  update or a pane item.
+  update or a pane item. Nor can it answer for relay: a response from the
+  agent passes only when it answers a request of the client's that relay
+  passed on and the agent has not answered yet (relay.workspace/settle).
 
   (preview req) gives a request the client will see its tool's preview,
   {:markdown ...} and the preview relay records, or nil. The request is
@@ -706,11 +708,25 @@
                     (on-permission :answered req {:outcome (if (some #(= "reject_once" (get % "kind")) (:options req))
                                                              "reject_once" "cancelled")
                                                   :by "relay" :why why})))
+        ;; The answers the agent owes the client: one for each request
+        ;; of the client's that relay passed it (relay.workspace/owe).
+        owed (atom {})
+        owed? (fn [line]
+                (if-let [{k :key} (workspace/agent-response line)]
+                  (let [[before] (swap-vals! owed #(first (workspace/settle % k)))]
+                    (second (workspace/settle before k)))
+                  true))
         from-agent (fn [line]
                      (let [drop? (workspace/drop-agent-line? line)
                            req (or (acp/permission-request line)
                                    ;; One relay cannot read is never passed on.
                                    (acp/unreadable-permission-request line))]
+                     (if (and (not drop?) (not (owed? line)))
+                       ;; A response to a request the client never sent the
+                       ;; agent, or one already answered: it could pass for
+                       ;; relay's own answer to the client.
+                       (do (binding [*out* *err*] (println "relay dropped a response from the agent to no request it was waiting on."))
+                           nil)
                      (if (and drop? (not req))
                        ;; relay's own methods are relay's to send, and a
                        ;; line the strict reader refuses is passed on to
@@ -752,7 +768,7 @@
                            ;; A client that knows nothing of displays
                            ;; sees their text inert, whatever the agent
                            ;; sent.
-                           (or (acp/with-inert-displays line) :pass))))))
+                           (or (acp/with-inert-displays line) :pass)))))))
         to-client! (fn [^String text]
                      (let [bs (.getBytes (str text "\n") java.nio.charset.StandardCharsets/UTF_8)]
                        (try (locking out (write-chunk! out bs (alength bs)))
@@ -800,7 +816,19 @@
                           ;; Line by line, so a refusal relay writes to the agent
                           ;; never lands inside one of the client's messages.
                           (pump! in agent-in (tap :client) #(deliver stop :agent-gone)
-                                 {:screen from-client :limit line-limit :on-oversized client-oversized})
+                                 {:screen (fn [line]
+                                            (let [k (workspace/client-request-key line)]
+                                              ;; A request for relay cancels any debt
+                                              ;; under its id before relay works on
+                                              ;; its answer, which may take a while.
+                                              (when (and k (acp/relay-method? (acp/message line)))
+                                                (swap! owed workspace/forget k))
+                                              (let [decision (from-client line)]
+                                                ;; Owed before the agent can read it.
+                                                (when (and k (= :pass decision))
+                                                  (swap! owed workspace/owe k))
+                                                decision)))
+                                  :limit line-limit :on-oversized client-oversized})
                           ;; A request the client never answered is refused,
                           ;; and so is any asked from now on.
                           (reset! client-gone true)

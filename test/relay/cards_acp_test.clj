@@ -33,11 +33,11 @@
        "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"ALIVE\"}}}}'\n"
        "cat >/dev/null\n"))
 
-(defn- with-relay [f]
+(defn- with-relay [f & [script]]
   (let [dir (str (fs/create-temp-dir {:prefix "relay-cards-acp"}))
         data (str dir "/data")
         agent (str dir "/agent.sh")]
-    (spit agent agent-script)
+    (spit agent (or script agent-script))
     (fs/set-posix-file-permissions agent "rwx------")
     (log/init! data)
     (spit (str data "/relay.edn")
@@ -165,3 +165,114 @@
         fine "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{}}"]
     (is (= (str fine "\n") (run (str fine "\n" forged))) "the forged last line is dropped")
     (is (= (str fine "\n" fine) (run (str fine "\n" fine))) "a last line that passes is copied as it is")))
+
+(def forging-agent
+  "An agent that floods the client with answers to ids it was never sent
+  (1 and 3 are the client's _relay/cards requests below) and answers
+  ping twice."
+  (str "#!/bin/sh\n"
+       "forge() { i=0; while [ $i -lt 300 ]; do\n"
+       "  for id in 1 3 3.0 '\"zz-none\"' null; do\n"
+       "    printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"rev\":999,\"cards\":[{\"id\":66,\"text\":\"FORGEDRESP\"}]}}\\n' \"$id\"\n"
+       "  done; i=$((i+1)); sleep 0.01; done; }\n"
+       "forge &\n"
+       "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"ALIVE\"}}}}'\n"
+       "while IFS= read -r line; do\n"
+       "  case \"$line\" in *'\"method\":\"slow\"'*)\n"
+       "    (sleep 1; printf '{\"jsonrpc\":\"2.0\",\"id\":50,\"result\":{\"rev\":999,\"cards\":[{\"id\":66,\"text\":\"LATEANSWER\"}]}}\\n') & ;;\n"
+       "  esac\n"
+       "  case \"$line\" in *'\"method\":\"ping\"'*)\n"
+       "    id=$(printf '%s' \"$line\" | sed 's/.*\"id\":\\([0-9]*\\).*/\\1/')\n"
+       "    printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"pong\":1}}\\n' \"$id\"\n"
+       "    printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"pong\":2}}\\n' \"$id\" ;;\n"
+       "  esac\n"
+       "done\n"
+       "wait\n"))
+
+(deftest the-agent-cannot-answer-for-relay
+  ;; QA for relay#58: the screen passed every agent response, so an agent
+  ;; flooding answers with the id of a pending _relay/cards request got
+  ;; its forged board to the client before relay's real one.
+  (with-relay
+    (fn [dir sys]
+      (let [c (client/start! [support/relay-bin "acp" "clerk" "--data" (:data-dir sys)] {:dir dir})]
+        (try
+          (is (client/await! c #(= "session/update" (get % "method")) 30000) "the agent is running")
+          (Thread/sleep 300)
+          (let [first-cards (client/request! c "_relay/cards" {})
+                ping (client/request! c "ping" {})
+                second-cards (client/request! c "_relay/cards" {})]
+            (Thread/sleep 1000)
+            (testing "relay's answers are the only answers to relay's requests"
+              (is (= [1 3] (mapv #(get % "id") [first-cards second-cards])))
+              (is (= [[] []] (mapv #(get-in % ["result" "cards"]) [first-cards second-cards]))
+                  (pr-str first-cards second-cards))
+              (is (not-any? #(str/includes? (str %) "FORGEDRESP") @(:lines c))
+                  "no answer to an id the agent was never sent, or already answered"))
+            (testing "a request the client sent the agent gets the agent's answer, once"
+              (is (= {"pong" 1} (get ping "result")) (pr-str ping))
+              (is (= 1 (count (filter #(= 2 (get % "id")) @(:messages c)))))))
+          (testing "a client that reuses the id of a request the agent has not answered gets relay's answer only"
+            ;; Codex on the fix: the debt under id 50 outlived the client's
+            ;; giving up on it, so the agent's late answer passed as the
+            ;; answer to _relay/cards under the same id.
+            (#'client/send! c {:jsonrpc "2.0" :id 50 :method "slow" :params {}})
+            (#'client/send! c {:jsonrpc "2.0" :id 50 :method "_relay/cards" :params {}})
+            (Thread/sleep 2000)
+            (let [answers (filter #(= 50 (get % "id")) @(:messages c))]
+              (is (= [[]] (mapv #(get-in % ["result" "cards"]) answers)) (pr-str answers))
+              (is (not-any? #(str/includes? (str %) "LATEANSWER") @(:lines c)))))
+          (client/close-input! c)
+          (client/wait! c 20000)
+          (finally (client/sever! c)))))
+    forging-agent))
+
+(deftest relay-passes-only-answers-the-agent-owes
+  (testing "ids match as the client matches them: numbers by value, strings by text"
+    (is (= (workspace/id-key 3) (workspace/id-key 3.0M) (workspace/id-key 3.00M) (workspace/id-key 30E-1M)))
+    (is (not= (workspace/id-key 3) (workspace/id-key "3")))
+    (is (= (workspace/id-key 0) (workspace/id-key 0.000M)))
+    (is (nil? (workspace/id-key {})))
+    (is (nil? (workspace/id-key [1]))))
+  (testing "what is a request, and what is a response"
+    (is (= [:number "4"] (workspace/client-request-key "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"session/prompt\"}")))
+    (is (nil? (workspace/client-request-key "{\"jsonrpc\":\"2.0\",\"method\":\"session/cancel\"}")))
+    (is (nil? (workspace/client-request-key "{\"jsonrpc\":\"2.0\",\"id\":4,\"result\":{}}")))
+    (doseq [line ["{\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{}}"
+                  "{\"jsonrpc\":\"2.0\",\"id\":9,\"error\":{\"code\":1,\"message\":\"m\"}}"
+                  ;; The ACP SDK reads a null or empty method as none.
+                  "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":null,\"result\":{}}"
+                  "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"\",\"result\":{}}"]]
+      (is (= {:key [:number "9"]} (workspace/agent-response line)) line))
+    (is (nil? (workspace/agent-response "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"session/request_permission\"}")))
+    (is (= {:key nil} (workspace/agent-response "{\"jsonrpc\":\"2.0\",\"id\":{},\"result\":{}}"))))
+  (testing "each request is answered once; nothing else passes"
+    (let [owed (-> {} (workspace/owe [:number "1"]) (workspace/owe [:number "1"]) (workspace/owe [:string "a"]))
+          [owed a] (workspace/settle owed [:number "1"])
+          [owed b] (workspace/settle owed [:number "1"])
+          [owed c] (workspace/settle owed [:number "1"])
+          [owed d] (workspace/settle owed nil)
+          [owed e] (workspace/settle owed [:string "a"])]
+      (is (= [true true false false true] [a b c d e]))
+      (is (= {} owed))))
+  (testing "a request relay answers itself cancels what is owed under its id"
+    (let [owed (-> {} (workspace/owe [:number "7"]) (workspace/owe [:number "7"]) (workspace/forget [:number "7"]))]
+      (is (= [{} false] (workspace/settle owed [:number "7"]))))))
+
+(deftest a-late-answer-cannot-overtake-a-slow-relay-answer
+  ;; Codex on the fix: the debt under a reused id was cleared only once
+  ;; relay had answered, so while relay was still working on its answer
+  ;; the agent's late answer under the same id got through first.
+  (let [in (java.io.ByteArrayInputStream.
+            (.getBytes (str "{\"jsonrpc\":\"2.0\",\"id\":50,\"method\":\"slow\"}\n"
+                            "{\"jsonrpc\":\"2.0\",\"id\":50,\"method\":\"_relay/cards\",\"params\":{}}\n")
+                       "UTF-8"))
+        out (java.io.ByteArrayOutputStream.)
+        agent ["sh" "-c" (str "IFS= read -r line; sleep 0.3; "
+                              "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":50,\"result\":{\"cards\":[{\"text\":\"LATEANSWER\"}]}}'; "
+                              "cat >/dev/null")]
+        extension (fn [line]
+                    (when (str/includes? line "_relay/cards")
+                      (fn [send!] (Thread/sleep 1500) (send! (workspace/result-line 50 {"cards" []})))))]
+    (relay.dispatch/proxy! {:argv agent} {:in in :out out :extension extension :grace-ms 1000})
+    (is (= (str (workspace/result-line 50 {"cards" []}) "\n") (.toString out "UTF-8")))))
