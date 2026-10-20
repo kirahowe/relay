@@ -126,7 +126,9 @@
     (string? v) (boolean (re-find lone-surrogate v))
     (map? v) (boolean (some (fn [[k x]] (or (lone-surrogate? k) (lone-surrogate? x))) v))
     (sequential? v) (boolean (some lone-surrogate? v))
-    (keyword? v) (lone-surrogate? (name v))
+    ;; The whole keyword: a name with a slash puts part of it in the
+    ;; namespace.
+    (keyword? v) (lone-surrogate? (subs (str v) 1))
     :else false))
 
 ;; --- reading

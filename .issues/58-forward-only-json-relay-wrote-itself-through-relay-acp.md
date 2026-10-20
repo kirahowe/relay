@@ -76,7 +76,7 @@ The boundaries between the three components:
       acp, tck (if it runs here) and proxy pentest scenarios pass.
 - [ ] Numbers and strings survive exactly; property tests.
 - [ ] README, spec/relay.allium, agentloop and acp-tui docs say so.
-- [ ] Codex loop converges.
+- [x] Codex loop converges.
 
 ## Log
 
@@ -87,6 +87,51 @@ The boundaries between the three components:
   s6-acp-tui, s7-kill-conversation, s9, s16; 20 of 20); bb tck is
   CONFORMANT (39 passed, 17 skipped as not advertised). The Codex loop is
   still to run.
+- 2026-10-20: the Codex loop converged in two rounds (below). bb test
+  passes (756 tests); agentloop's make test passes.
+
+## Codex loop
+
+Before round 1, relay's copy of the shared table was one line behind
+agentloop's and acp-tui's (the case "capitalised name with params a lax
+reader cannot type"). Copied; relay reads it as the table says.
+
+Round 1, five findings:
+
+1. Fixed in agentloop. The fold check refused a client's
+   `"_meta":{"Title":"hello"}`, valid ACP that relay and acp-tui accept,
+   because `Title` folds to an SDK field. The SDK keeps `_meta` as raw
+   JSON and decodes `data` into `any` or a string, so v1 folds no names
+   inside either; the screen now skips those values. A test checks the
+   field types against the SDK.
+2. Fixed in relay. With `:keywords?`, a name like `"\ud800/x"` puts the
+   lone surrogate in the keyword's namespace, and the check looked only
+   at the name part, so `parse-outcome` accepted what both Go readers
+   refuse. The check now covers the whole keyword.
+3. In scope, not a defect of this change; to file against acp-tui.
+   acp-tui shows a tool's rawInput through the SDK's v1 decode into
+   `any`, so an integer past 2^53 shows rounded on a permission prompt
+   (`9007199254740993` as `9007199254740992`), and `1e400` makes the SDK
+   drop the update. The SDK did this before relay#58, and acp-tui never
+   passes rawInput on, so the dialect's rule (exact where passed on)
+   holds. It still means Kira can approve a call whose shown argument
+   differs from the real one.
+4. In scope, needs Kira: relay refuses an exponent past an int
+   (`1e-2147483648`, which BigDecimal cannot hold), while agentloop and
+   acp-tui accept it, since the dialect sets no bound. relay sits in the
+   middle, so such a line reaches no one and the failure is closed. To
+   remove the difference, either the dialect gains an exponent bound that
+   the Go readers enforce too, or relay keeps such numbers some other
+   exact way. That is a change to the dialect, so it is Kira's call.
+5. Rejected. acp-tui drops a line with an unknown folded member of the
+   wrong type (`"Method":1`) that relay passes. The failure is closed at
+   the endpoint, and only a hand-crafted line can put such a name in a
+   typed position: agentloop and relay write with encoders, and model
+   text lands only in free-form values. Out of scope under "an attacker
+   who studies relay's code to target Kira".
+
+Round 2: no findings. Codex checked both fixes and the four copies of the
+table.
 
 ## relay's half: judgment calls
 

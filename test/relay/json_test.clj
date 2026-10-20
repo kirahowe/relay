@@ -114,6 +114,14 @@
                    ["an exponent past an int" "[1e99999999999]"] ["NaN" "[NaN]"] ["a vertical tab" "[1]\u000b"]]]
     (testing why (is (= ::bad (json/parse-or s ::bad))))))
 
+(deftest a-lone-surrogate-in-a-keyword-namespace-is-refused
+  ;; (keyword "\ud800/x") puts the surrogate in the namespace, where a
+  ;; check of the name alone missed it.
+  (doseq [s ["{\"\\ud800/x\":1}" "{\"type\":\"outcome\",\"\\ud800/x\":1}" "{\"a/\\udc00\":1}"]]
+    (testing s
+      (is (= ::bad (json/parse-or s ::bad {:keywords? true})))
+      (is (= ::bad (json/parse-or s ::bad))))))
+
 (deftest what-the-rule-takes
   (is (= ["😀" "a\u2028b"] (json/parse "[\"\\ud83d\\ude00\", \"a\u2028b\"]")))
   (is (= [(str (apply str (repeat 999 "1")) "1")] (json/parse (str "[\"" (apply str (repeat 1000 "1")) "\"]")))
