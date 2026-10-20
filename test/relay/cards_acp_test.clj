@@ -272,7 +272,7 @@
                               "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":50,\"result\":{\"cards\":[{\"text\":\"LATEANSWER\"}]}}'; "
                               "cat >/dev/null")]
         extension (fn [line]
-                    (when (str/includes? line "_relay/cards")
+                    (when (str/includes? (:text line) "_relay/cards")
                       (fn [send!] (Thread/sleep 1500) (send! (workspace/result-line 50 {"cards" []})))))]
     (relay.dispatch/proxy! {:argv agent} {:in in :out out :extension extension :grace-ms 1000})
     (is (= (str (workspace/result-line 50 {"cards" []}) "\n") (.toString out "UTF-8")))))

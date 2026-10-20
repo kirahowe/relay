@@ -81,13 +81,14 @@
   with _relay/, whether or not it is one of `methods`. A line the strict
   reader refuses (relay.acp/message) is {:id :refused why}, with the id
   relay can find in it (relay.acp/line-id) or nil: it never reaches the
-  agent. Nil for any other line, which goes on to the agent as it is."
-  [line]
-  (when (string? line)
-    (let [msg (acp/message line)]
+  agent. Nil for any other line, which goes on to the agent as it is.
+  Takes a line as relay.acp/line reads it, or its text."
+  [x]
+  (let [{text :text msg :message} (acp/line x)]
+    (when (some? text)
       (cond
         (nil? msg)
-        {:id (acp/line-id line) :refused "relay does not pass on a line that is not one strictly valid JSON object."}
+        {:id (acp/line-id text) :refused "relay does not pass on a line that is not one strictly valid JSON object."}
 
         (acp/relay-method? msg)
         {:id (get msg "id") :method (get msg "method") :params (let [p (get msg "params")] (if (map? p) p {}))}))))

@@ -249,17 +249,8 @@ test unrelated to these changes; left alone.
   before. The reader's `:doubles?` option exists for such reads but no
   site needs it yet.
 
-- relay acp reads each line once per direction. The screen, the
-  permission and display checks, the observer and the trace all ask
-  `relay.acp/message` about the same line, and the strict reader runs
-  Jackson and then data.json, about 150 ms on a 6 MB line. `message`
-  keeps the last string it read on each thread and returns its answer
-  when asked about the same string object again; each direction is copied
-  on its own thread. Strings cannot change, so the answer cannot go
-  stale. Bytes are read every time. I chose this over passing the parsed
-  message through every function because it leaves their signatures
-  alone. Test: relay-acp-reads-each-line-once-in-each-direction (six
-  reads of the agent's line before the change). The surrogate checks also
+- relay acp reads each line once per direction. See "One read per line"
+  below; a per-thread cache did this at first. The surrogate checks also
   got cheaper: the UTF-8 encoder's canEncode finds a raw lone surrogate,
   and indexOf rules out a line with no `\u` escape before any regex
   runs.
@@ -317,3 +308,61 @@ Judgment calls:
 
 Checks: relay `bb test` passes (761 tests); agentloop `make test && make
 build` and acp-tui `make check && make build` pass.
+
+## One read per line
+
+relay acp asks many things of each line: the screen, the permission and
+display checks, the observer, the trace, extension-request,
+client-request-key, agent-response. The first version kept the last
+string each thread had read in a ThreadLocal inside `relay.acp/message`,
+so asking about the same string object again cost nothing. It worked,
+but the read-once guarantee depended on every caller passing the same
+object on the same thread, and nothing in the code showed it.
+
+Now `pump!`, the shell, reads each complete line once with
+`relay.acp/line`, which returns `{:text :message}`: the line's text and
+what the strict reader made of it (the object, or nil when it refused
+the line). The screen and the tap both get that value, and so does every
+decision about the line. The ThreadLocal is gone.
+
+Judgment calls:
+
+- Every function that takes a line also takes plain text and reads it
+  itself, since `line` passes a value it already read straight through.
+  The tests call these functions with strings, and I left them that way
+  so they stay the spec unchanged. Functions that only search the text
+  (`line-id`, the `relay/display` and `request_permission` substring
+  checks) take the text from the value and never parse.
+- The `:extension` hook of `proxy!` now gets the read line, not the
+  string, so the handler can pass it to `workspace/extension-request`
+  without a second read. One test's stand-in hook did `str/includes?` on
+  its argument and now looks at `(:text line)`. That changes the
+  fixture, not the behaviour under test.
+- A line relay rewrites (`with-preview`) is read again so the request is
+  recorded as the client sees it. That line is relay's own output, not
+  a second read of the agent's line.
+- A function given bytes used to return nil from some checks (they
+  tested `string?`) and read them in others. They all read bytes now. No
+  caller passes bytes; `pump!` decodes them in `line`.
+
+Measured with a 2.25 MB session/update (a tool_call_update with about
+1.9 MB of text holding escapes, tabs and non-ASCII, plus a 2000-element
+rawOutput array), sent ten times by an agent through `proxy!` with
+approvals on. The figure is wall time per line until the client has it.
+The bench script counts reads by wrapping `relay.json/check!`. It lives
+in the session scratchpad, not the repo.
+
+| | ms per line | strict reads per line |
+|---|---|---|
+| cheshire parse alone (the old reader) | 6.7 | n/a |
+| strict reader alone | 77 | 1 |
+| proxy, every check reading for itself (cache disabled) | 475 | 6 |
+| proxy, before this change (per-thread cache) | 89 | 1 |
+| proxy, after (one read passed down) | 89 | 1 |
+
+The read itself is the cost: 77 of the 89 ms is the strict reader, and
+the rest is decoding and copying. The change keeps the single read the
+cache already gave and makes it structural, so a new check cannot bring
+back the 475 ms path by passing a fresh string. The existing test
+relay-acp-reads-each-line-once-in-each-direction checks one read per
+line in each direction. bb test passes (761 tests).

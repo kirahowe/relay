@@ -6,7 +6,12 @@
 
   Nothing here does I/O. relay.dispatch/acp! is the shell.
 
-  A direction is :client (client to agent) or :agent (agent to client)."
+  A direction is :client (client to agent) or :agent (agent to client).
+
+  The shell reads each complete line once (`line`) and passes that value,
+  its text and its message together, to every decision about it. Each
+  function here that takes a line also takes plain text, which it reads
+  itself."
   (:require [cheshire.core :as json]
             [clojure.string :as str]
             [relay.json :as strict]
@@ -70,35 +75,37 @@
   without a cost."
   {:requests {} :sessions [] :last nil :costs {} :unpriced false})
 
-(def ^:private last-message
-  "The last string line this thread read as a message, and what it read:
-  relay acp asks about one line many times (the screen, permissions,
-  displays, the observer, the trace), and the strict reader is slow
-  enough on a large line that reading it once matters. Kept per thread,
-  since each direction is copied on its own thread; it holds at most one
-  line per thread."
-  (ThreadLocal.))
+(defrecord Line [text message])
+
+(defn line
+  "A line read once: {:text :message}, its text (`text` for bytes) and the
+  message relay's strict reader (relay.json) makes of it, the JSON object
+  it is or nil. relay acp asks many things of one line (the screen,
+  permissions, displays, the observer, the trace), and the strict reader
+  is slow enough on a large line that it must read it only once: the
+  shell makes this value and every decision takes it. A line already read
+  comes back as it is; anything but text or bytes has neither."
+  [x]
+  (cond
+    (instance? Line x) x
+    (string? x) (->Line x (strict/object x))
+    (bytes? x) (line (text x))
+    :else (->Line nil nil)))
 
 (defn message
   "A line as a message: the JSON object it is, read by relay's strict
   reader (relay.json), or nil when it is not one. Every reader of ACP in
   relay, agentloop and acp-tui reads by the same rule, so a line that
-  passes means the same to all of them.
+  passes means the same to all of them. A line already read (`line`) is
+  not read again."
+  [x]
+  (:message (line x)))
 
-  The same string asked about again on the same thread is not read again.
-  Strings cannot change, so the answer cannot go stale; bytes, which can,
-  are read every time."
-  [line]
-  (cond
-    (string? line)
-    (let [[seen msg :as hit] (.get ^ThreadLocal last-message)]
-      (if (and hit (identical? seen line))
-        msg
-        (let [msg (strict/object line)]
-          (.set ^ThreadLocal last-message [line msg])
-          msg)))
-
-    (bytes? line) (strict/object line)))
+(defn- text-of
+  "A line's text, without reading it as JSON: for a Line its text, else
+  the string."
+  [x]
+  (if (instance? Line x) (:text x) (when (some? x) (str x))))
 
 (defn relay-method?
   "Whether a message's method is one of relay's: its exact method member
@@ -116,9 +123,7 @@
   \"id\" member with a number or a string, or nil. Only for answering
   or refusing such a line, never for passing it on."
   [line]
-  (some-> (re-find id-pattern (str line)) second (strict/parse-or nil)))
-
-(defn- parse [line] (message line))
+  (some-> (re-find id-pattern (str (text-of line))) second (strict/parse-or nil)))
 
 (defn- session-id [x]
   (when (and (string? x) (not (str/blank? x))) x))
@@ -192,7 +197,7 @@
   (session/update, say) add no session, though a usage_update records
   what its session has cost so far."
   [obs direction line]
-  (let [msg (when (string? line) (parse line))]
+  (let [msg (message line)]
     (if-not (map? msg)
       obs
       (case direction
@@ -226,11 +231,11 @@
 (defn trace-entry
   "One line of a --trace file: who sent the line, and the message, or the
   raw text when the line is not JSON."
-  [direction line]
-  (let [msg (parse line)]
+  [direction x]
+  (let [{:keys [text message]} (line x)]
     (cond-> {:from (name direction)}
-      (some? msg) (assoc :message msg)
-      (nil? msg) (assoc :text (strict/shown (str line))))))
+      (some? message) (assoc :message message)
+      (nil? message) (assoc :text (strict/shown (str text))))))
 
 ;; --- displays
 
@@ -239,8 +244,8 @@
   tool call content block with _meta relay/display), or nil for any other
   line."
   [line]
-  (when (and (string? line) (str/includes? line "relay/display"))
-    (let [msg (parse line)
+  (when (some-> (text-of line) (str/includes? "relay/display"))
+    (let [msg (message line)
           params (when (map? msg) (get msg "params"))
           u (when (map? params) (get params "update"))
           content (when (map? u) (get u "content"))]
@@ -297,7 +302,7 @@
   input, the options offered, the session's labels if the agent sent
   them, and the preview, if the call's content has one."
   [line]
-  (let [msg (when (string? line) (parse line))]
+  (let [msg (message line)]
     (when (and (map? msg) (= "session/request_permission" (get msg "method")) (contains? msg "id"))
       (let [params (get msg "params")
             call (when (map? params) (get params "toolCall"))
@@ -324,19 +329,19 @@
   session/request_permission that permission-request cannot read (it has
   no id). Nil for any other line. Such a line is refused, never passed
   on."
-  [line]
-  (when (and (string? line) (nil? (permission-request line)))
-    (let [msg (message line)]
-      (when (if msg
-              (= "session/request_permission" (get msg "method"))
-              (str/includes? line "request_permission"))
-        {:id (when-not msg (line-id line)) :unreadable true :options []}))))
+  [x]
+  (let [{:keys [text message] :as l} (line x)]
+    (when (and (some? text) (nil? (permission-request l)))
+      (when (if message
+              (= "session/request_permission" (get message "method"))
+              (str/includes? text "request_permission"))
+        {:id (when-not message (line-id text)) :unreadable true :options []}))))
 
 (defn stray-answer?
   "Whether a client's line is an answer (a result or an error, with an
   id, and no method), whichever request it claims to answer."
   [line]
-  (let [msg (when (string? line) (parse line))]
+  (let [msg (message line)]
     (and (map? msg) (contains? msg "id") (not (contains? msg "method"))
          (or (contains? msg "result") (contains? msg "error")))))
 
@@ -358,7 +363,7 @@
   An answer is valid only when it selects an option the agent offered or
   cancels; anything else counts as a refusal."
   [req line]
-  (let [msg (when (string? line) (parse line))]
+  (let [msg (message line)]
     (when (and (map? msg) (not (contains? msg "method")) (contains? msg "id") (= (:id req) (get msg "id")))
       (let [outcome (get-in msg ["result" "outcome"])
             chosen (when (and (map? outcome) (= "selected" (get outcome "outcome")))
@@ -406,8 +411,8 @@
   text. A display that cannot be read is made inert from the block's own
   text."
   [line]
-  (when (and (string? line) (str/includes? line "relay/display"))
-    (let [msg (parse line)
+  (when (some-> (text-of line) (str/includes? "relay/display"))
+    (let [msg (message line)
           content (when (map? msg) (get-in msg ["params" "update" "content"]))]
       (when (and (= "session/update" (get msg "method")) (sequential? content)
                  (some #(and (map? %) (contains? (get-in % ["content" "_meta"]) "relay/display")) content))
@@ -466,7 +471,7 @@
   no more contaminated for it. Everything else in the request is kept.
   Nil when the line is not such a request."
   [line markdown labels]
-  (let [msg (when (string? line) (parse line))
+  (let [msg (message line)
         call (get-in msg ["params" "toolCall"])]
     (when (and (map? msg) (= "session/request_permission" (get msg "method")) (map? call))
       (let [content (get call "content")

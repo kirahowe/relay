@@ -526,7 +526,8 @@
 
 (defn- pump!
   "Copies from `in` to `out`, flushing each write, and passes each complete
-  line to (tap line). Once a write fails, calls (on-write-failed) and keeps
+  line to (tap line), read once (relay.acp/line) for the tap and the
+  screen alike. Once a write fails, calls (on-write-failed) and keeps
   reading, so the writer on the far side of `in` is never blocked, but
   writes nothing more. Returns at the end of `in`, after tapping any last
   unfinished line.
@@ -559,9 +560,9 @@
               (pos? (alength last-bytes))
               ;; A last line with no newline is screened like any other:
               ;; a client may still read it, so it must not get past.
-              (let [text (acp/text last-bytes)
-                    decision (when screen (screen text))]
-                (tap text)
+              (let [l (acp/line last-bytes)
+                    decision (when screen (screen l))]
+                (tap l)
                 (cond
                   (= :pass decision) (write! last-bytes (alength last-bytes))
                   (string? decision) (let [bs (.getBytes (str decision) java.nio.charset.StandardCharsets/UTF_8)]
@@ -571,7 +572,7 @@
                 [rest' lines] (acp/split pending chunk)]
             (if-not screen
               (do (write! chunk n)
-                  (doseq [line lines] (tap (acp/text line)))
+                  (doseq [line lines] (tap (acp/line line)))
                   (recur rest' nil))
               (let [;; An oversized line ends at the first newline of this chunk.
                     nl (when over (let [i (.indexOf (iso chunk n) 10)] (when (>= i 0) i)))
@@ -581,9 +582,10 @@
                                        nl [(rest lines) nil]
                                        :else [[] over])]
                 (doseq [^bytes line lines
-                        :let [text (acp/text line)
-                              decision (screen text)]]
-                  (tap text)
+                        ;; Read once, for the screen and the tap alike.
+                        :let [l (acp/line line)
+                              decision (screen l)]]
+                  (tap l)
                   (cond
                     (= :pass decision) (let [bs (byte-array (inc (alength line)))]
                                          (System/arraycopy line 0 bs 0 (alength line))
@@ -652,10 +654,10 @@
   its id.
 
   More hooks serve the workspace pane. (extension line) sees each of the
-  client's lines first: a string it returns is written to the client as
-  the answer and the line goes no further; a function it returns is
-  called with the writer to the client, to write the answer itself; :none
-  drops the line; nil passes it on. (on-display session) is called for an
+  client's lines first, as relay.acp/line read it: a string it returns
+  is written to the client as the answer and the line goes no further; a
+  function it returns is called with the writer to the client, to write
+  the answer itself; :none drops the line; nil passes it on. (on-display session) is called for an
   agent line that carries a display, before the line is passed on.
   (watch send! done) runs on a thread of its own from the start, with
   `send!` writing one line to the client, until the promise `done` is
@@ -731,7 +733,7 @@
                        ;; relay's own methods are relay's to send, and a
                        ;; line the strict reader refuses is passed on to
                        ;; no one. A blank line carries nothing to tell.
-                       (do (when-not (str/blank? line)
+                       (do (when-not (str/blank? (:text line))
                              (binding [*out* *err*] (println "relay dropped an agent line that was not strict JSON or used one of relay's methods.")))
                            nil)
                      ;; A permission request the screen drops is refused
