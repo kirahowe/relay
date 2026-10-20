@@ -186,3 +186,18 @@ approved by Kira on 2026-10-20. The acp-tui board is #55; `relay serve` is
   plain-words refusals, seen past the card's rev). bb test passes in
   full (739 tests) with `--agentloop` pointing at agentloop main built in
   the scratch directory.
+- 2026-10-20: follow-up round. Refused unknown `_relay/cards/op`
+  parameters (a misspelled `seen` would otherwise turn off the stale-edit
+  check) and counted text limits in code points. bb test passes (740).
+- 2026-10-20: second Codex loop, on the fail-closed screen and the
+  tightened op params. Three rounds; every round found an in-scope defect,
+  each fixed with a regression test: duplicate and Go-folded envelope keys
+  (Jackson keeps the last duplicate, Go the first), escaped client methods
+  reaching the agent, `relay card` ignoring unknown options, client lines
+  over 8 MB reaching the agent unscreened, a qualified `card/seen` key
+  slipping past card_op's schema, and a second JSON value on one line
+  (`{...} null`) passing the screen and, with a stray quote, crashing the
+  pump. No round has reviewed that last fix, so the loop did not
+  converge. Per AGENTS.md it stops here for Kira. Two findings are filed
+  as #57. The issue stays in progress until Kira decides.
+

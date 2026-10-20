@@ -1,0 +1,10 @@
+{:id 56
+ :title "Serve the board over HTTP and SSE on the tailnet for a web client"
+ :status :inbox
+ :type :feature
+ :priority :p3
+ :created "2026-10-20"
+ :updated "2026-10-20"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}}

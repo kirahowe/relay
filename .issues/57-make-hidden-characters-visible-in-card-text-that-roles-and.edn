@@ -1,0 +1,11 @@
+{:id 57
+ :title "Make hidden characters visible in card text that roles and resolve get"
+ :status :ready
+ :type :bug
+ :priority :p2
+ :created "2026-10-20"
+ :updated "2026-10-20"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "57-make-hidden-characters-visible-in-card-text-that-roles-and.md"}

@@ -1,0 +1,11 @@
+{:id 55
+ :title "Show the board in the acp-tui workspace pane"
+ :status :review
+ :type :feature
+ :priority :p1
+ :created "2026-10-20"
+ :updated "2026-10-20"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "55-show-the-board-in-the-acp-tui-workspace-pane.md"}

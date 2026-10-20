@@ -1,0 +1,11 @@
+{:id 54
+ :title "Let roles keep cards on a board that every client renders"
+ :status :in-progress
+ :type :feature
+ :priority :p1
+ :created "2026-10-20"
+ :updated "2026-10-20"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "54-let-roles-keep-cards-on-a-board-that-every-client-renders.md"}

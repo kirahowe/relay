@@ -9,6 +9,7 @@
 | --- | --- | --- | --- |
 | [48](48-judge-remote-tool-definitions-with-a-decision-model.md) | Judge remote tool definitions with a decision model | feature | P2 |
 | [49](49-haiku-leaves-the-memo-or-journal-undone-before-an-act-call.md) | Haiku leaves the memo or journal undone before an act call | bug | P2 |
+| [56](56-serve-the-board-over-http-and-sse-on-the-tailnet-for-a-web.edn) | Serve the board over HTTP and SSE on the tailnet for a web client | feature | P3 |
 
 ### Ready
 
@@ -19,8 +20,21 @@
 | [38](38-stop-the-hub-notifying-twice-for-one-stuck-memo.md) | Stop the hub notifying twice for one stuck memo | bug | P2 |
 | [52](52-show-large-numbers-in-a-permission-request-exactly-in-acp.md) | Show large numbers in a permission request exactly in acp-tui | bug | P2 |
 | [53](53-let-the-personal-agent-move-and-rename-my-files.md) | Let the personal agent move and rename my files | feature | P2 |
+| [57](57-make-hidden-characters-visible-in-card-text-that-roles-and.md) | Make hidden characters visible in card text that roles and resolve get | bug | P2 |
 | [36](36-clean-up-after-an-interrupted-deploy-and-leave-no-check.md) | Clean up after an interrupted deploy, and leave no check dirs in TMPDIR | bug | P3 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
+
+### In progress
+
+| ID | Title | Type | Priority |
+| --- | --- | --- | --- |
+| [54](54-let-roles-keep-cards-on-a-board-that-every-client-renders.md) | Let roles keep cards on a board that every client renders | feature | P1 |
+
+### Review
+
+| ID | Title | Type | Priority |
+| --- | --- | --- | --- |
+| [55](55-show-the-board-in-the-acp-tui-workspace-pane.md) | Show the board in the acp-tui workspace pane | feature | P1 |
 
 ### Blocked
 
