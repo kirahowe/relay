@@ -357,6 +357,10 @@ and --instructions marks the id public too.")
   ;; never public, whatever --untrusted or --public say.
   (inbound/submit! sys {:type type :actor core/operator :args args :labels [] :public false}))
 
+(def ^:private card-options
+  "What relay card reads, and the options every command may be given."
+  #{:item :row :column :state :text :seen :title :data :untrusted :public})
+
 (defn- card!
   "relay card: show one card, change it with an op, or add one."
   [sys [a b] opts]
@@ -364,7 +368,13 @@ and --instructions marks the id public too.")
               (let [vs (get opts k)]
                 (when (> (count vs) 1) (fail! (str "--" (name k) " takes one number here.")))
                 (when-let [v (first vs)]
-                  (or (parse-long v) (fail! (str "--" (name k) " takes a number, not " v "."))))))]
+                  (or (parse-long v) (fail! (str "--" (name k) " takes a number, not " v "."))))))
+        ;; An option relay would ignore is refused, so a mistyped --seen
+        ;; cannot quietly turn off the stale-edit check.
+        unknown (sort (map name (remove card-options (keys opts))))]
+    (when (seq unknown)
+      (fail! (str "relay card has no option " (str/join ", " (map #(str "--" %) unknown))
+                  ". It takes --item, --row, --column, --state, --text, --seen and, to add, --title.")))
     (cond
       (nil? a)
       (fail! "usage: relay card <id> [<op> ...], or relay card add <kind> --title <t> ...")

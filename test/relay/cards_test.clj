@@ -519,3 +519,22 @@
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^usage: relay card add <kind> --title"
                             ((requiring-resolve 'relay.cli/execute) ["--data" data "card" "add"])))
       (finally (fs/delete-tree dir)))))
+
+(deftest relay-card-refuses-an-option-it-would-ignore
+  ;; --sen for --seen was once dropped, and the stale edit went through.
+  (let [dir (str (fs/create-temp-dir {:prefix "relay-cards-cli"}))
+        data (str dir "/data")
+        run (fn [& args] ((requiring-resolve 'relay.cli/execute) (into ["--data" data] args)))]
+    (try
+      (fs/create-dirs data)
+      (spit (str data "/relay.edn") (pr-str {:timezone "UTC" :default-harness :x
+                                             :harnesses {:x {:kind :script :command ["true"]}}
+                                             :notify {:kind :none}}))
+      (log/init! data)
+      (run "card" "add" "checklist" "--title" "Errands" "--item" "milk")
+      (let [id (:id (first (core/board (inbound/current-state (inbound/system data {})) false)))]
+        (run "card" (str id) "edit" "--item" "1" "--text" "oat milk")
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"relay card has no option --sen\."
+                              (run "card" (str id) "edit" "--item" "1" "--text" "stale" "--sen" (str id))))
+        (is (= "oat milk" (-> (core/card (inbound/current-state (inbound/system data {})) id) :items first :text))))
+      (finally (fs/delete-tree dir)))))
