@@ -26,7 +26,9 @@
 --
 -- Beside the memos relay keeps what it knows: facts that hold over a span of
 -- world time and are recorded at a moment of real time, notes and a journal
--- for each role, and docs.
+-- for each role, and docs. It also keeps the operator's board: cards the
+-- operator works through over days, which roles and the operator change
+-- with ops.
 --
 -- Every event carries labels, private and contaminated, saying what the
 -- text in it has seen. A role's session gathers the labels of what it
@@ -430,6 +432,9 @@ enum FlagKind {
 }
 enum ReviewDecision { accept | fake | not_relevant }
 enum LedgerStatus { new | seen | applied | passed }
+enum CardKind { checklist | tracker | note }
+enum CardStatus { active | archived }
+enum CellState { open | done | skip }
 
 ------------------------------------------------------------
 -- Entities and Variants
@@ -949,6 +954,72 @@ entity Doc {
     is_present: not current.removed
 }
 
+-- The operator's board. There is one board, and every active card is
+-- on it. Cards are private only: a public role is not offered the card
+-- tools, and a card command from a public role's session is refused. A
+-- card change never wakes a role and never notifies anyone.
+entity Card {
+    -- The id is the seq of the event that added it.
+    kind: CardKind
+    title: CardText
+    -- The role that added it, or the operator.
+    owner: Caller
+    added_at: Timestamp
+    -- The seq of the last event that changed it.
+    rev: Integer
+    status: CardStatus
+
+    items: List<CardItem> when kind = checklist
+    rows: List<CardElement> when kind = tracker
+    columns: List<CardElement> when kind = tracker
+    -- Cells that are not open, by row and column. A cell not listed is open.
+    cells: Set<Cell> when kind = tracker
+    note: CardText when kind = note
+
+    -- The next id for each kind of element. Ids are never reused, and
+    -- decide assigns them and writes them into the event.
+    next_item: Integer when kind = checklist
+    next_row: Integer when kind = tracker
+    next_column: Integer when kind = tracker
+
+    is_complete:
+        (kind = checklist and items.count > 0 and items.all(i => i.done))
+        or (kind = tracker and rows.count * columns.count > 0
+            and cells.count = rows.count * columns.count)
+
+    -- What reading the card adds: private, and the labels of the text it
+    -- shows now. Ticks, cell states, archive and restore carry no text,
+    -- so they add none.
+    labels: {private} + title.labels + items.labels + rows.labels + columns.labels + note.labels
+}
+
+value CardText {
+    -- One line of 1 to card_line_length characters, except a note's
+    -- text, which may be empty and run to card_note_length.
+    text: String
+    -- The labels and seq of the event that last wrote this text.
+    labels: Set<Label>
+    rev: Integer
+}
+
+value CardElement {
+    -- An item, row or column: a number of the card's own, and its text.
+    id: Integer
+    text: CardText
+}
+
+value CardItem {
+    id: Integer
+    text: CardText
+    done: Boolean
+}
+
+value Cell {
+    row: Integer
+    column: Integer
+    state: CellState   -- done or skip; open is not stored
+}
+
 -- Skills. A role's skills are the docs under skills/<role id>/, each with
 -- a `# Title` first line and a line starting `Use when:`. A role writes
 -- or removes docs there only for its own id, and elsewhere under skills/
@@ -962,12 +1033,12 @@ entity Doc {
 
 -- Refs. A ref is [[kind:id]]: a kind from the list below and an id the
 -- kind defines (fact number, doc path with an optional @version, a note
--- as role/name, memo, journal and report numbers, shown/<date>/<call>,
+-- as role/name, memo, journal, report and card numbers, shown/<date>/<call>,
 -- and for rem, file and web the reminder id, path or URL). Resolving one
 -- against the state gives :ok with the item's title, text and labels,
 -- :missing, or :external for the kinds relay cannot look up.
 value Ref {
-    kind: fact | doc | note | memo | journal | rem | file | web | shown | report
+    kind: fact | doc | note | memo | journal | rem | file | web | shown | report | card
     id: String
 }
 
@@ -1186,6 +1257,14 @@ config {
     brief_tool_timeout: Duration = 1.minute
     -- How long an external tool may run when it has no timeout_seconds.
     external_tool_timeout: Duration = 10.minutes
+
+    -- The board.
+    max_active_cards: Integer = 30
+    card_line_length: Integer = 200
+    card_note_length: Integer = 8000
+    max_checklist_items: Integer = 100
+    max_tracker_rows: Integer = 40
+    max_tracker_columns: Integer = 24
 }
 
 ------------------------------------------------------------
@@ -3220,6 +3299,95 @@ rule RemoveDoc {
         -- is still there.
 }
 
+
+-- The board
+--
+-- Every change to a card is an op, from a role's card_op, the operator's
+-- relay card, or a client's _relay/cards/op, which is the operator's with
+-- no labels. Each rule below writes a card/changed event carrying the op
+-- as decided; its text elements take the caller's session labels and the
+-- event's seq as their rev. An op that changes nothing (ticking an item
+-- already done, writing the text already there) records nothing and says
+-- so. An op naming a card, item, row or column that does not exist is
+-- refused, saying so.
+--
+-- seen: an op that changes text may carry the rev the client last saw.
+-- It is refused when the text it changes was written after that rev, so
+-- a stale edit never overwrites a newer one. Ticks and cell states are
+-- last writer wins.
+
+rule AddCard {
+    when: CardAddRequested(caller, kind, title, items, rows, columns, text)
+
+    requires: caller.is_operator or (caller.is_role and not caller.is_public)
+    requires: Cards.count(c => c.status = active) < config.max_active_cards
+    requires: is_card_line(title)   -- black box: one line, 1 to card_line_length characters once trimmed
+    -- A kind takes only its own contents.
+    requires: kind = checklist implies (rows = null and columns = null and text = null
+                                        and items.count <= config.max_checklist_items)
+    requires: kind = tracker implies (items = null and text = null
+                                      and rows.count <= config.max_tracker_rows
+                                      and columns.count <= config.max_tracker_columns)
+    requires: kind = note implies (items = null and rows = null and columns = null
+                                   and text.length <= config.card_note_length)
+
+    ensures: Card.created(
+        kind: kind,
+        title: title,
+        owner: caller,
+        added_at: now,
+        status: active
+    )
+
+    @guidance
+        -- The card's items, rows and columns are numbered from 1 in the
+        -- order given, and the numbers are written into the card/added
+        -- event with the next free one of each, so folding the log never
+        -- invents an id. Nothing a role chooses becomes an id.
+}
+
+rule ChangeCard {
+    when: CardOpRequested(caller, card, op)
+
+    requires: caller.is_operator or (caller.is_role and not caller.is_public)
+    requires: op.applies_to(card.kind)   -- black box: relay.cards/ops
+    -- An archived card takes only restore.
+    requires: card.status = active or op.name = restore
+    requires: op.names_existing_elements(card)
+    requires: not op.is_stale(card)   -- black box: op.seen < rev of the text it changes
+    requires: op.within_limits(card)  -- black box: the card limits in config
+    requires: op.name = restore implies Cards.count(c => c.status = active) < config.max_active_cards
+    requires: op.changes(card)
+
+    ensures: card.rev = now_seq
+
+    @guidance
+        -- retitle, archive, restore: any card. add, tick, untick, edit,
+        -- remove: a checklist's items. set: a tracker cell, to open, done
+        -- or skip; add_row, add_column, rename_row, rename_column,
+        -- remove_row, remove_column. write: a note's text. Removing a
+        -- row or column drops its cells. A new item, row or column takes
+        -- the next number, written into the op.
+}
+
+rule ReadCard {
+    when: CardRead(caller, card)
+
+    requires: caller.is_operator or (caller.is_role and not caller.is_public)
+
+    ensures: caller.session_labels = caller.session_labels + card.labels
+
+    @guidance
+        -- A role is shown a contaminated card only when it passes
+        -- accept_contamination; otherwise a placeholder that names only
+        -- the card's number. Removing a contaminated item, or the
+        -- operator writing it again, takes contaminated off the card.
+        -- A wake's or conversation's prompt lists the active cards whose
+        -- title's labels, with private, the session already holds, one
+        -- line each with its progress, and says when some were left out.
+        -- A client is sent each card's wire form: every text field made
+        -- visible, and defanged and marked outsider when contaminated.
+}
 
 -- Research reports
 

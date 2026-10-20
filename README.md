@@ -41,6 +41,8 @@ A role has no files and no shell. It works only through tools, each one a
   `fact_correct`, `notes`, `note_write`, `note_remove`, `journal`,
   `journal_write`, `docs`, `doc_get`, `doc_history`, `doc_put`,
   `doc_remove`
+- the board, for roles that are not public: `cards`, `card_add`,
+  `card_op` (see Cards)
 - the registry, for roles granted `:may-add`: `role_add`, `role_update`,
   `role_remove`
 - `dead_letters_retry`, for the dead letter handler and roles granted
@@ -98,12 +100,13 @@ a read tool shows has a ref (below).
 A ref names one thing relay knows, as `[[kind:id]]`. The kinds are `fact`
 (`[[fact:12]]`), `doc` (`[[doc:hear-here/style.md]]`, or a version with
 `@3`), `note` (`[[note:hub/venues]]`, role and name), `memo`, `journal`,
-`report`, `shown` (something the operator was shown,
-`[[shown:2026-10-18/call-9]]`), `rem` (a reminder), `file` and `web`.
+`report`, `card` (`[[card:1840]]`, a card on the board), `shown`
+(something the operator was shown, `[[shown:2026-10-18/call-9]]`), `rem`
+(a reminder), `file` and `web`.
 The shared instructions require a role to put a ref after every claim it
 draws from relay's knowledge or a source. The tools `facts`,
 `fact_history`, `docs`, `doc_get`, `doc_history`, `notes`, `journal`,
-`inbox`, `reports` and `ledger` print each item's ref beside it. A path or
+`inbox`, `reports`, `ledger` and `cards` print each item's ref beside it. A path or
 role id that someone else chose is printed in a ref only when the item's
 own labels already cover it.
 
@@ -137,6 +140,75 @@ edit any skill. Skills shared between roles are not built.
 
 `relay export <dir>` writes all of it out as read-only markdown for
 browsing. Nothing reads an export back.
+
+#### Cards
+
+A card is a small structured thing on your board that you work through
+over days, or a status worth a glance. Roles make them, mostly the hub,
+and you change them from the command line or a client's pane. There are
+three kinds, and the set is closed:
+
+- a checklist: items, each done or not
+- a tracker: rows and columns, each cell open, done or skip, such as
+  accounts by month
+- a note: one text of up to 8000 characters
+
+There is one board, and every active card is on it, at most 30 at once.
+A card's id is the seq of the event that added it. Its items, rows and
+columns get small numbers of their own, counted per card from 1, which
+relay assigns and writes into the event. A title and every item, row and
+column is one line of 1 to 200 characters. A checklist has at most 100
+items, a tracker 40 rows and 24 columns.
+
+Cards are private only. A public role is not offered the card tools, and
+relay refuses a card command from a public role's session. A change to a
+card never wakes a role and never notifies you; a role sees the new state
+the next time it reads.
+
+A card lives in the log as `card/added` and `card/changed` events, and
+everyone changes it the same way: with an op, `{op, item, row, column,
+state, text, seen}`. relay decides the op against the card and appends
+the change, and every client redraws from what relay sends back. The ops
+are `retitle`, `archive` and `restore` for any card; `add`, `tick`,
+`untick`, `edit` and `remove` for a checklist; `set`, `add_row`,
+`add_column`, `rename_row`, `rename_column`, `remove_row` and
+`remove_column` for a tracker; and `write` for a note. An op on an
+archived card is refused, except `restore`. An op that changes nothing
+appends nothing and says so. `seen` is the card's rev when the client
+last read it: an edit of text that changed after `seen` is refused, so a
+stale edit cannot overwrite a newer one. Ticks and cell states go to
+whoever wrote last.
+
+Each piece of a card's text (the title, an item, a row or column, the
+note) keeps the labels of whoever last wrote it. Reading a card adds
+private and the labels of the text it shows now, so removing a
+contaminated item, or writing it again yourself, cleans the card. Ticks,
+cell states, archive and restore carry no text and add no labels. A role
+is shown a contaminated card only when it passes `accept_contamination`.
+Whatever you write on a card carries no labels, whichever way you write
+it.
+
+A wake's prompt, and a conversation's, lists the active cards after the
+fact topics, one line each with the card's progress. A card whose
+title's labels the session does not hold is left out, with a line saying
+so.
+
+```
+relay cards [--archived]
+relay card 1840
+relay card 1840 set --row 1 --column 3 --state done
+relay card 1851 edit --item 2 --text "Download the statements" --seen 1852
+relay card add checklist --title "Before the trip" --item "Passport" --item "Charger"
+```
+
+A card prints as its text form, which is also what roles read:
+
+```
+Card 1840: Catch up monthly financials (tracker, 6 of 24 done) [[card:1840]]
+Columns: 1 Jun, 2 Jul, 3 Aug, 4 Sep
+Row 1 BMO: Jun done, Jul done, Aug open, Sep open
+Row 2 RBC: all open
+```
 
 ### Settings
 
@@ -1158,8 +1230,8 @@ nothing in it can close. relay makes it so from the display, whatever
 the agent sent, so no client fetches an image in it or follows a link
 before you have read it. acp-tui shows the display from `_meta`.
 
-relay acp also answers three ACP extension methods of its own, which
-never reach agentloop. `_relay/items` lists a session's shown docs and
+relay acp also answers ACP extension methods of its own, which never
+reach agentloop. `_relay/items` lists a session's shown docs and
 the permission requests relay passed on, with their previews.
 `_relay/resolve` looks up a `[[kind:id]]` ref. `_relay/trust` trusts a
 shown doc. relay takes `_relay/trust` only with `--approvals`, for the
@@ -1170,6 +1242,48 @@ not trusted. Without `--approvals` the client is given the `relay trust
 doc` command to run instead. The log records that a trust came from the
 chat. relay keeps each display as the conversation goes, before the
 client sees it.
+
+relay acp also gives the client your board. `_relay/cards`, with
+`{"archived": true}` to include archived cards, answers `{"rev": <the
+log's last seq>, "cards": [...]}`, each card in its wire form (below).
+The first call subscribes the client: from then on relay acp watches the
+log, about once a second, and sends `_relay/cards/changed` `{"rev",
+"cards"}` with every card whose rev changed since it last sent one,
+archived cards included so the client can drop them. A change made by
+another process (a role's wake, the command line) arrives this way.
+`_relay/cards/op` takes `{card, op, item, row, column, state, text,
+seen}` and answers `{"card": <wire form>, "changed": true|false}`, or a
+JSON-RPC error whose message is relay's refusal. An op from the client is
+yours, with no labels, whether or not relay acp was started with
+`--approvals`.
+
+A card's wire form uses string keys and is ready to show. relay has
+already made every text field safe: hidden characters shown as
+`\u{XXXX}`, and text whose labels are contaminated defanged, with
+`"outsider": true` beside it. A client renders what it gets and works
+nothing out for itself. `text` is the card's text form, for a client
+that does not know its kind.
+
+```json
+{"id": 1840, "kind": "tracker", "status": "active", "complete": false,
+ "rev": 1842, "owner": "hub", "addedAt": "2026-10-20T15:03:00Z",
+ "title": {"text": "Catch up monthly financials", "outsider": false, "rev": 1840},
+ "progress": {"done": 6, "total": 24},
+ "labels": ["private"],
+ "rows": [{"id": 1, "text": "BMO", "outsider": false, "rev": 1840}],
+ "columns": [{"id": 1, "text": "Jun", "outsider": false, "rev": 1840}],
+ "cells": [{"row": 1, "column": 1, "state": "done"}],
+ "text": "Card 1840: ..."}
+```
+
+A checklist has `"items": [{"id", "text", "done", "outsider", "rev"}]`
+and a note `"note": {"text", "outsider", "rev"}`. Only cells that are not
+open are listed, and a note has no `progress`. An element's `rev` is
+when its text was last written, which is what `seen` is checked against.
+
+Only relay speaks relay's methods to the client: relay acp drops any
+line from the agent whose method starts with `_relay/`, so an agent
+cannot fake a card update or a pane item.
 
 A message from
 the agent too long for relay to read whole (over 8 MB) never reaches the
