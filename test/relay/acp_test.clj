@@ -179,6 +179,26 @@
         (is (= "{\"after\":1}\n" seen) (str what ": only the next line reached the client")))
       (fs/delete-tree dir))))
 
+(deftest a-client-line-too-long-to-read-never-reaches-the-agent
+  ;; Regression: a client line past the limit went on unread, so a huge
+  ;; _relay/cards/op, the operator's card text with it, reached the agent.
+  (let [dir (fs/create-temp-dir {:prefix "relay-oversize-client"})
+        got (str dir "/got")
+        client-out (java.io.PipedOutputStream.)
+        out (ByteArrayOutputStream.)
+        run (future (dispatch/proxy! {:argv ["sh" "-c" (str "cat > " got)]}
+                                     {:in (java.io.PipedInputStream. client-out) :out out
+                                      :line-limit 65536}))
+        line (json/generate-string {:jsonrpc "2.0" :id 7 :method "_relay/cards/op"
+                                    :params {:card 2 :op "write" :text (apply str (repeat 200000 "z"))}})]
+    (.write client-out (.getBytes (str line "\n{\"after\":1}\n") "UTF-8"))
+    (.close client-out)
+    (deref run 10000 nil)
+    (is (= "{\"after\":1}\n" (slurp got)) "only the next line reached the agent")
+    (is (= {"jsonrpc" "2.0" "id" 7 "error" {"code" -32600 "message" "relay does not pass on a message over 8 MB."}}
+           (json/parse-string (.toString out "UTF-8"))) "the client is told why")
+    (fs/delete-tree dir)))
+
 (deftest a-stop-closes-the-agents-stdin-and-kills-it-after-the-grace
   (let [stop (promise)
         pipe-out (java.io.PipedOutputStream.)

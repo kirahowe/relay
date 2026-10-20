@@ -647,7 +647,9 @@
   relay. An agent line longer than `line-limit` is never passed on, since
   it cannot be read whole: relay refuses it if it is a permission request
   whose id it can find, and calls (on-oversized {:size :permission?
-  :refused}). A client line that long is passed on unread.
+  :refused}). A client line that long is dropped too, since it might be
+  one of relay's methods, and answered with an error when relay can find
+  its id.
 
   More hooks serve the workspace pane. (extension line) sees each of the
   client's lines first: a string it returns is written to the client as
@@ -774,13 +776,22 @@
                                 (refuse! req "client-error"))
                               nil)
                           :pass))))
+        ;; A client line too long to read whole could be one of relay's
+        ;; methods, which must not reach the agent, so it goes nowhere. A
+        ;; request whose id relay can find is told why.
+        client-oversized (fn [{:keys [prefix]}]
+                           (binding [*out* *err*]
+                             (println "relay dropped a message from the client too long to read (over 8 MB)."))
+                           (when-let [id (some-> (re-find #"\"id\"\s*:\s*(-?\d+|\"(?:[^\"\\\\]|\\\\.)*\")" (str prefix))
+                                                 second json/parse-string)]
+                             (to-client! (workspace/error-line id -32600 "relay does not pass on a message over 8 MB."))))
         watch-done (promise)
         watcher (when watch (spawn (fn [] (watch to-client! watch-done))))
         to-agent (spawn (fn []
                           ;; Line by line, so a refusal relay writes to the agent
                           ;; never lands inside one of the client's messages.
                           (pump! in agent-in (tap :client) #(deliver stop :agent-gone)
-                                 {:screen from-client :limit line-limit})
+                                 {:screen from-client :limit line-limit :on-oversized client-oversized})
                           ;; A request the client never answered is refused,
                           ;; and so is any asked from now on.
                           (reset! client-gone true)

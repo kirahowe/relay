@@ -1300,7 +1300,10 @@ error. Escapes such as `_relay\/cards` name the method they spell.
 A message from
 the agent too long for relay to read whole (over 8 MB) never reaches the
 client: relay refuses it if it is a permission request whose id it can
-find, drops it either way, records that, and tells the operator.
+find, drops it either way, records that, and tells the operator. A
+message from the client that long never reaches the agent either, since
+it could be one of relay's methods: relay drops it and answers with an
+error when it can find the message's id.
 
 ## Development
 
