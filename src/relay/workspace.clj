@@ -1,11 +1,15 @@
 (ns relay.workspace
-  "What `relay acp` tells a chat client's workspace pane, through three
-  ACP extension methods (their names start with _, as ACP requires):
+  "What `relay acp` tells a chat client's workspace pane, through ACP
+  extension methods (their names start with _, as ACP requires):
 
-    _relay/items    what the operator was shown in a session, and the
-                    calls it proposed, newest first
-    _relay/resolve  look a [[kind:id]] ref up
-    _relay/trust    trust a shown doc, as `relay trust doc <path>` does
+    _relay/items     what the operator was shown in a session, and the
+                     calls it proposed, newest first
+    _relay/resolve   look a [[kind:id]] ref up
+    _relay/trust     trust a shown doc, as `relay trust doc <path>` does
+    _relay/cards     the operator's board, as wire forms (relay.cards/wire);
+                     the first call subscribes the client to
+                     _relay/cards/changed notifications
+    _relay/cards/op  change a card, as the operator
 
   relay acp answers them itself; agentloop never sees them. A conversation
   keeps what it learns from the traffic in a value, `conversation`: the
@@ -20,14 +24,16 @@
   a doc that changed since is not trusted."
   (:require [cheshire.core :as json]
             [clojure.string :as str]
+            [relay.cards :as cards]
             [relay.core :as core]))
 
 ;; --- what a conversation has learned
 
 (def conversation
-  "Nothing learned yet: the displays kept, in the order they came, and the
-  permission requests passed on, by [session call]."
-  {:displays [] :proposals {}})
+  "Nothing learned yet: the displays kept, in the order they came, the
+  permission requests passed on, by [session call], and the rev of every
+  card the client was last sent, nil until it subscribes to the board."
+  {:displays [] :proposals {} :cards nil})
 
 (defn shown
   "The conversation once a session's displays are kept: each {:session
@@ -66,7 +72,7 @@
 
 ;; --- the requests
 
-(def methods #{"_relay/items" "_relay/resolve" "_relay/trust"})
+(def methods #{"_relay/items" "_relay/resolve" "_relay/trust" "_relay/cards" "_relay/cards/op"})
 
 (defn extension-request
   "A client's line as one of relay's extension methods: {:id :method
@@ -165,3 +171,62 @@
     :else
     {:command {:type :label/trust :actor core/operator :labels []
                :args {:kind "doc" :ref path :version version :sha256 sha256 :via "chat"}}}))
+
+;; --- the board
+;;
+;; A client never holds the truth about a card: it sends an op, relay
+;; decides it, and the client draws whatever relay sends back. Every op
+;; from the client is the operator's, with no labels, whether or not
+;; relay acp takes approvals: the pane is the operator's as the command
+;; line is. A card change never wakes a role.
+
+(defn card-wire [c] (cards/wire c (core/card-labels c)))
+
+(defn log-rev
+  "The seq of the log's last event, which a client can compare revs with."
+  [state]
+  (dec (:next-seq state)))
+
+(defn subscribed
+  "The conversation once the client has been sent every card as it is in
+  `state`, so it is told of each change from here on."
+  [conv state]
+  (assoc conv :cards (cards/revs (:cards state))))
+
+(defn cards-answer
+  "The _relay/cards answer: the board's cards as wire forms, the
+  archived ones too when asked."
+  [state {:strs [archived]}]
+  {"rev" (log-rev state)
+   "cards" (mapv card-wire (core/board state (true? archived)))})
+
+(defn cards-changed
+  "The _relay/cards/changed notification's params for a subscribed
+  conversation: every card whose rev is not the one the client was last
+  sent, archived ones included, so the client can drop them. Nil when
+  nothing changed or the client has not subscribed."
+  [state conv]
+  (when-let [sent (:cards conv)]
+    (when-let [ids (seq (cards/changed-since sent (:cards state)))]
+      {"rev" (log-rev state) "cards" (mapv #(card-wire (core/card state %)) ids)})))
+
+(defn notification-line [method params]
+  (json/generate-string {"jsonrpc" "2.0" "method" method "params" params}))
+
+(defn card-op-command
+  "What a _relay/cards/op asks for, as the :card/op command relay
+  submits, or {:error why}. It is the operator's, with no labels."
+  [params]
+  (let [{:strs [card]} params]
+    (if-not (integer? card)
+      {:error "_relay/cards/op needs a card, by number."}
+      {:command {:type :card/op :actor core/operator :labels [] :public false
+                 :args (into {:card card}
+                             (keep (fn [k] (when (contains? params (name k)) [k (get params (name k))])))
+                             cards/op-fields)}})))
+
+(defn card-op-answer
+  "The _relay/cards/op answer once the op is decided: the card as it is
+  now, and whether the op changed it."
+  [state card-id changed?]
+  {"card" (card-wire (core/card state card-id)) "changed" (boolean changed?)})
