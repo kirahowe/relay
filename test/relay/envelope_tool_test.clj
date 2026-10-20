@@ -100,3 +100,19 @@
           (is (= {:entry "001" :memo "7"} @seen) "an external tool's input is not coerced")
           (tools/call! sys "clerk" "memo_close" {:memo "7" :outcome "x"} [] "c")
           (is (= 7 (:memo @seen)) "relay's own tools still take a quoted number"))))))
+
+(deftest a-number-parameter-takes-a-decimal-exactly
+  ;; Regression: the schema check knew no "number", so every decimal
+  ;; argument to a tool whose schema said {"type" "number"} was refused
+  ;; with "d must be a number."
+  (let [seen (atom nil)
+        d (bigdec "0.1000000000000000055511151231257827")]
+    (with-redefs [tools/run-tool (fn [_ _ _ args _] (reset! seen args) {:ok "ran" :labels []})]
+      (with-tools {"mail" (tool "echo" :parameters {:type "object" :properties {:d {:type "number"}}})}
+        (fn [sys]
+          (doseq [v [d 7 123456789012345678901234567890N]]
+            (reset! seen nil)
+            (is (= "ran" (:ok (tools/call! sys "clerk" "mail" {:d v} [] "c"))) (pr-str v))
+            (is (= {:d v} @seen) "the value reaches the tool as it came")
+            (is (= (class v) (class (:d @seen)))))
+          (is (= "d must be a number." (tools/input-problem {:type "object" :properties {:d {:type "number"}}} {:d "0.1"}))))))))

@@ -1282,6 +1282,8 @@
   (case type
     "string" (string? v)
     "integer" (integer? v)
+    ;; The strict reader keeps a decimal as a BigDecimal, exactly.
+    "number" (number? v)
     "boolean" (boolean? v)
     "array" (and (sequential? v) (every? #(type-ok? items %) v))
     "object" (map? v)
