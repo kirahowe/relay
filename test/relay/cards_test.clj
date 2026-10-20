@@ -538,3 +538,17 @@
                               (run "card" (str id) "edit" "--item" "1" "--text" "stale" "--sen" (str id))))
         (is (= "oat milk" (-> (core/card (inbound/current-state (inbound/system data {})) id) :items first :text))))
       (finally (fs/delete-tree dir)))))
+
+(deftest a-qualified-seen-is-refused-not-dropped
+  ;; "card/seen" once passed the schema as "seen" and was then dropped, so
+  ;; a stale write went through.
+  (with-relay
+    (fn [sys]
+      (let [added (call sys "hub" "card_add" {:kind "note" :title "Plan" :text "first"} ["private"])
+            id (parse-long (second (re-find #"Added card (\d+)" (:ok added))))]
+        (call sys "hub" "card_op" {:card id :op "write" :text "newer"} [])
+        (let [r (call sys "hub" "card_op" {:card id :op "write" :text "stale" :card/seen id} [])]
+          (is (:error r) (pr-str r))
+          (is (= "newer" (get-in (the-card sys id) [:note :text]))))
+        (is (some? (tools/input-problem (:parameters (get (tools/offered (:config sys) "hub") "card_op"))
+                                        {:card id :op "write" :text "x" (keyword "x" "seen") 1})))))))

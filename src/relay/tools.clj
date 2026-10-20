@@ -1300,7 +1300,9 @@
       (or (first (for [r required :when (not (contains? input (keyword r)))]
                    (str "The input needs " r ".")))
           (first (for [[k v] input
-                       :let [schema (get props (name k))]
+                       ;; The whole key: "card/seen" is not "seen", though
+                       ;; (name :card/seen) is.
+                       :let [schema (get props (if (keyword? k) (subs (str k) 1) (str k)))]
                        :when (or (nil? schema) (not (type-ok? schema v)))]
                    (if schema
                      (str (name k) " must be " (case (:type schema)
