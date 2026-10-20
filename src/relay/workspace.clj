@@ -149,10 +149,11 @@
   [^String line]
   ;; Cheshire parses arrays lazily, so a broken one throws only when it
   ;; is walked: the walk stays inside the try.
-  (try (let [[msg more] (take 2 (json/parsed-seq (java.io.StringReader. line)))]
-         (when (nil? more)
-           (dorun (tree-seq coll? seq msg))
-           [:ok msg]))
+  ;; Counted, not tested for nil: a second value may itself be null.
+  (try (let [vs (doall (take 2 (json/parsed-seq (java.io.StringReader. line))))]
+         (when (= 1 (count vs))
+           (dorun (tree-seq coll? seq (first vs)))
+           [:ok (first vs)]))
        (catch Throwable _ nil)))
 
 (defn- two-way?
@@ -160,7 +161,9 @@
   carries one of relay's methods."
   [line msg]
   (or (carries-unsafe-message? msg)
-      (boolean (some unsafe-keys? (message-keys line)))))
+      ;; A line message-keys cannot walk is not passed on either.
+      (try (boolean (some unsafe-keys? (message-keys line)))
+           (catch Throwable _ true))))
 
 (defn extension-request
   "A client's line as one of relay's extension methods: {:id :method
@@ -181,7 +184,7 @@
           {:id nil :refused "relay could not read a line that may name one of its methods."})
 
         (and (string? method) (str/starts-with? method "_relay/")
-             (not (some unsafe-keys? (message-keys line))))
+             (not (try (some unsafe-keys? (message-keys line)) (catch Throwable _ true))))
         {:id id :method method :params (let [p (get msg "params")] (if (map? p) p {}))}
 
         (two-way? line msg)

@@ -223,7 +223,10 @@
                 "{\"jsonrpc\":\"2.0\",\"\u0131d\":1,\"result\":{}}"
                 ;; Not one JSON value, or not JSON at all.
                 "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\"} {\"method\":\"_relay/x\"}"
-                "[0" "[{\"method\":\"_relay/x\"}" "{not json _relay/" "nope"]]
+                "[0" "[{\"method\":\"_relay/x\"}" "{not json _relay/" "nope"
+                ;; A second value that is null still makes two values.
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}} null"
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}} null \""]]
     (is (workspace/drop-agent-line? line) (subs line 0 (min 80 (count line)))))
   (doseq [line ["{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"x\":\"_relay/items\"}}"
                 "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"method\":\"_relay/items\"}}"
@@ -250,6 +253,7 @@
         (is (string? (:refused r)) line))))
   (testing "a broken line that names relay is refused; ordinary prompts pass"
     (is (:refused (workspace/extension-request "{\"method\":\"_relay/cards\"")))
+    (is (:refused (workspace/extension-request "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"_relay/cards\"} null \"")))
     (doseq [line ["{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session/prompt\",\"params\":{\"t\":\"a\\nb _relay/cards\"}}"
                   "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"outcome\":\"x\\ty\"}}"]]
       (is (nil? (workspace/extension-request line)) line))))
