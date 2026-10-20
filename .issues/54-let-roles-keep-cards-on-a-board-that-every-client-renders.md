@@ -108,6 +108,13 @@ approved by Kira on 2026-10-20. The acp-tui board is #55; `relay serve` is
   thread and broke the byte-exact pass-through (P6-2 caught it). Client
   lines still use the substring check: what the operator sends is the
   operator's, and an escaped method from them only reaches agentloop.
+- Second review, 2026-10-20: the board watcher took the log stamp
+  outside the conversation's lock and kept it while the client was not
+  subscribed. A write landing between _relay/cards reading the state and
+  subscribing could then count as seen, and its card waited for a later
+  write. The watcher now keeps no stamp until the client subscribes, and
+  takes it holding the lock, before it reads the state. The test plays
+  the race in order by hand rather than relying on timing.
 - Rewrapped the start-of-wake paragraph in resources/AGENTS.md. Older
   long lines elsewhere in that file are not part of this change.
 
@@ -122,3 +129,6 @@ approved by Kira on 2026-10-20. The acp-tui board is #55; `relay serve` is
   agent-line drop, the AGENTS.md wrap). bb test passes in full (735
   tests) with `--agentloop` pointing at agentloop main built in the
   scratch directory.
+- 2026-10-20: fixed the watcher's first-subscription race. bb test
+  passes in full (736 tests) with `--agentloop` pointing at agentloop
+  main built in the scratch directory.

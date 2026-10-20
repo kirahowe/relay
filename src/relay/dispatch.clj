@@ -934,21 +934,27 @@
   the client is subscribed to the board, looks at the log, and when it
   has changed (another process may have written), sends
   _relay/cards/changed with every card whose rev the client has not been
-  sent. Never throws: a look that fails is tried again at the next."
+  sent. Never throws: a look that fails is tried again at the next.
+
+  The stamp is taken holding the conversation, before the state is read,
+  and kept only while subscribed. Taken outside, a write landing between
+  _relay/cards reading the state and subscribing could be stamped as
+  seen, and its card would wait for some later write."
   [sys conv]
   (fn [send! done]
     (loop [stamp nil]
       (when (= ::waiting (deref done board-poll-ms ::waiting))
         (recur
          (try
-           (let [now (log-stamp (:data-dir sys))]
-             (when (and (:cards @conv) (not= now stamp))
-               (locking conv
-                 (let [state (inbound/current-state sys)]
-                   (when-let [params (workspace/cards-changed state @conv)]
-                     (send! (workspace/notification-line "_relay/cards/changed" params)))
-                   (swap! conv workspace/subscribed state))))
-             now)
+           (when (:cards @conv)
+             (locking conv
+               (let [now (log-stamp (:data-dir sys))]
+                 (when (not= now stamp)
+                   (let [state (inbound/current-state sys)]
+                     (when-let [params (workspace/cards-changed state @conv)]
+                       (send! (workspace/notification-line "_relay/cards/changed" params)))
+                     (swap! conv workspace/subscribed state)))
+                 now)))
            (catch Exception e
              (binding [*out* *err*] (println "relay could not look at the board:" (ex-message e)))
              stamp)))))))

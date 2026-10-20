@@ -9,6 +9,7 @@
             [clojure.test :refer [deftest is testing]]
             [relay.acp-client :as client]
             [relay.core :as core]
+            [relay.dispatch]
             [relay.inbound :as inbound]
             [relay.log :as log]
             [relay.test-support :as support]
@@ -98,3 +99,27 @@
           (client/close-input! c)
           (is (= 0 (client/wait! c 20000)))
           (finally (client/sever! c)))))))
+
+(deftest a-write-just-before-subscribing-is-still-sent
+  ;; The race: _relay/cards reads the state, another process writes, the
+  ;; watcher looks at the log, and only then is the conversation
+  ;; subscribed with the older state. Played here in that order, by hand.
+  (with-relay
+    (fn [_ sys]
+      (let [id (add-card! sys)
+            stale (inbound/current-state sys)
+            conv (atom {})
+            sent (atom [])
+            done (promise)]
+        (with-redefs [relay.dispatch/board-poll-ms 20]
+          (let [watcher (future ((#'relay.dispatch/board-watcher sys conv) #(swap! sent conj %) done))]
+            (try
+              (inbound/submit! sys {:type :card/op :actor "clerk" :labels [] :args {:card id :op "tick" :item 1}})
+              (Thread/sleep 200)
+              (swap! conv workspace/subscribed stale)
+              (Thread/sleep 200)
+              (is (some #(str/includes? % "_relay/cards/changed") @sent)
+                  "the tick is sent though the log has not moved since the watcher last looked")
+              (finally
+                (deliver done true)
+                (deref watcher 5000 nil)))))))))
