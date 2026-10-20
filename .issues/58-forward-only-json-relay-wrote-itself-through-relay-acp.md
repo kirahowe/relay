@@ -89,6 +89,11 @@ The boundaries between the three components:
   still to run.
 - 2026-10-20: the Codex loop converged in two rounds (below). bb test
   passes (756 tests); agentloop's make test passes.
+- 2026-10-20: QA findings fixed (see "QA round" below). bb test passes
+  (760 tests); agentloop's make test and acp-tui's make check pass; bb
+  pentest passes the proxy and envelope scenarios (20 of 20); bb tck is
+  CONFORMANT (39 passed, 17 skipped). A second Codex loop on the fixes
+  converged in three rounds.
 
 ## Codex loop
 
@@ -132,6 +137,67 @@ Round 1, five findings:
 
 Round 2: no findings. Codex checked both fixes and the four copies of the
 table.
+
+## QA round
+
+Four findings, all fixed.
+
+1. Blocking, agentloop. agentloop refused four table lines that relay
+   and acp-tui accept: the case variants (`Method`, `METHOD`, `paramſ`,
+   and `Method` beside `method`). agentloop's table tests skipped
+   exactly those cases. The fold check now removes such a member rather
+   than refusing the line, as acp-tui's ForV1 does. To the dialect it is
+   an unknown member, so after the removal the SDK reads what relay and
+   acp-tui read. A line with nothing to remove still passes byte for
+   byte. The table tests check every accepted case through the screen,
+   reading the method with v1 the way the SDK does. This keeps the
+   dialect as it was; the other fix the finding offered (refusing folded
+   names everywhere) would have changed it. New table case: "capitalised
+   names nested in params", copied to all four places.
+2. Blocking, relay. The agent could forge relay's answer to
+   `_relay/cards`: the screen passed every agent response, whatever its
+   id. relay acp now counts the client requests it passed to the agent
+   and passes an agent response only when it settles one of them
+   (`relay.workspace/owe`, `settle`). It predates this issue, but it
+   broke the README's claim, so it is fixed here rather than filed.
+   Judgment calls:
+   - Ids match as the ACP SDK matches them: numbers by value (`3`, `3.0`,
+     `30E-1`), strings by text. A response is any message with an id and
+     no non-empty method, which is how the SDK reads one.
+   - A count, not a set. The SDK answers a reused id with an error and
+     then answers the original too; with a set the second answer would
+     be dropped and the turn would hang.
+   - A response with a null id is dropped like any other unowed one.
+     The SDK sends those only for frames it cannot read.
+   - Codex, rounds 1 and 2: a request for one of relay's methods clears
+     whatever the agent still owes under its id, before relay works on
+     the answer. Otherwise a client that gave up on a request and reused
+     its id for `_relay/cards` could get the agent's late answer. A line
+     the strict reader refuses clears nothing: it may be a malformed
+     answer to the agent, and the agent's ids can equal the client's.
+3. Minor, acp-tui (relay#52). The permission prompt showed rawInput
+   through the SDK's v1 decode, rounding numbers. acp-tui now reads
+   rawInput from the request's own params, which the SDK puts in the
+   handler's context (`acp.InboundParamsFromContext`), with the strict
+   reader, numbers as written. A first version kept inputs from the
+   screen by session and tool call; Codex found it missed an escaped
+   method and let a request the SDK refused lend its input to a later
+   one, and reading the handler's own params rules out both. This
+   meets relay#52's criteria; relay#52 is still open in the tracker for
+   Kira to move.
+4. Minor, relay. An envelope tool's schema could not take `"number"`:
+   the check knew no such type. It now accepts any number, BigDecimal
+   included.
+
+Also fixed: three property-test generators that failed on rare seeds
+(relay.json: `1` then `0` concatenate to the single number `10`, and a
+BigDecimal with no fraction digits is written as an integer or with an
+exponent; relay.vet: a random key can be a JSON Schema keyword such as
+`if`). In each case the test was wrong and the code was right.
+
+acp-tui's TestEnterWhileBusyQueuesOnePrompt/40x10 failed once under the
+full `make check` load and passed alone and on reruns. It is a UI timing
+test unrelated to these changes; left alone.
 
 ## relay's half: judgment calls
 

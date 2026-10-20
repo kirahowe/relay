@@ -188,7 +188,8 @@
   (is (:pass? (tc/quick-check 300
                               (prop/for-all [schema (gen/map gen-key gen-json-value {:max-elements 4})]
                                 (let [shown (set (map second (vet/texts {:name "t" :input_schema schema})))]
-                                  (every? #(or (shown %) (#{"properties" "items" "required" "enum" "default" "anyOf" "$defs"
-                                                            "dependentRequired" "description" "type"} %)
+                                  ;; A key that is one of JSON Schema's keywords, which
+                                  ;; the alphanumeric keys can hit ("if"), is not listed.
+                                  (every? #(or (shown %) (@#'vet/keywords %)
                                                (#{"string" "number" "integer" "boolean" "object" "array" "null"} %))
                                           (strings-in schema))))))))

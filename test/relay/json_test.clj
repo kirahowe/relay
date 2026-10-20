@@ -65,6 +65,10 @@
     (map? a) (and (map? b) (= (set (keys a)) (set (keys b))) (every? #(same? (get a %) (get b %)) (keys a)))
     (sequential? a) (and (sequential? b) (= (count a) (count b)) (every? true? (map same? a b)))
     (integer? a) (and (integer? b) (== a b))
+    ;; A decimal with no fraction digits is written as an integer literal
+    ;; (0M as 0) or with an exponent (0E+1M as 0E+1), and read back as an
+    ;; integer or a decimal of the same value.
+    (and (decimal? a) (<= (.scale ^BigDecimal a) 0)) (and (or (integer? b) (decimal? b)) (== a b))
     :else (= a b)))
 
 (defspec any-value-reads-back-exactly 300
@@ -103,7 +107,9 @@
 
 (defspec a-second-value-is-never-accepted 200
   (prop/for-all [a gen-value b gen-value ws (gen/elements ["" " " "\n" "\t" "\r\n"])]
-    (= ::bad (json/parse-or (str (cheshire/generate-string a) ws (cheshire/generate-string b)) ::bad))))
+    ;; Two numbers with nothing between them are one number: 1 and 0 are 10.
+    (or (and (= "" ws) (number? a) (number? b))
+        (= ::bad (json/parse-or (str (cheshire/generate-string a) ws (cheshire/generate-string b)) ::bad)))))
 
 (deftest what-the-rule-refuses
   (doseq [[why s] [["nothing" ""] ["only whitespace" " \t"] ["a duplicate after unescaping" "{\"a\":1,\"\\u0061\":2}"]
