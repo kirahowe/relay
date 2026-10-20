@@ -1,7 +1,8 @@
 (ns relay.cards-test
   "Cards on the board: the pure rules in relay.cards, and the card
   commands as relay.core decides and folds them."
-  (:require [cheshire.core :as json]
+  (:require [babashka.fs :as fs]
+            [cheshire.core :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [clojure.test.check :as tc]
@@ -10,7 +11,12 @@
             [clojure.walk :as walk]
             [relay.cards :as cards]
             [relay.core :as core]
-            [relay.core-test :refer [cfg t0]]))
+            [relay.core-test :refer [cfg t0]]
+            [relay.inbound :as inbound]
+            [relay.log :as log]
+            [relay.prompt :as prompt]
+            [relay.refs :as refs]
+            [relay.tools :as tools]))
 
 (defn- check [n property]
   (let [result (tc/quick-check n property)]
@@ -329,3 +335,128 @@
       (is (empty? (second (run state "operator" :card/op {:card (:seq (first events)) :op "tick" :item 1})))))
     (testing "the dispatcher keeps no cards"
       (is (= :forbidden (:rejected (run state "dispatcher" :card/add {:kind "note" :title "T"})))))))
+
+;; --- roles, labels and the board's readers
+
+(defn- with-relay
+  "Calls (f sys) with a relay on artificial data: hub and clerk, and scout,
+  a public role."
+  [f]
+  (let [dir (str (fs/create-temp-dir {:prefix "relay-cards"}))
+        data (str dir "/data")]
+    (log/init! data)
+    (spit (str data "/relay.edn")
+          (pr-str {:timezone "UTC" :default-harness :a
+                   :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}}
+                   :notify {:kind :none}
+                   :tools {"search" {:class :egress :labels ["contaminated"] :description "Search." :command ["true"]}}
+                   :grants {"scout" {:public true :tools ["search"]}}}))
+    (try
+      (let [sys (inbound/system data)]
+        (doseq [id ["hub" "clerk"]]
+          (inbound/submit! sys {:type :role/add :actor "operator" :args {:id id :title id :instructions "x"}}))
+        (inbound/submit! sys {:type :role/add :actor "operator" :public true
+                              :args {:id "scout" :title "Scout" :instructions "Search."}})
+        (f sys))
+      (finally (fs/delete-tree dir)))))
+
+(defn- call [sys role tool args labels]
+  (tools/call! sys role tool args labels))
+
+(defn- the-card [sys id] (core/card (inbound/current-state sys) id))
+
+(deftest a-contaminated-item-taints-the-card-until-it-is-gone
+  (with-relay
+    (fn [sys]
+      (let [added (call sys "hub" "card_add" {:kind "checklist" :title "Taxes" :items ["Find the T4"]} ["private"])
+            id (parse-long (second (re-find #"Added card (\d+)" (:ok added))))]
+        (testing "card_add answers with the card, carrying the session's labels"
+          (is (str/includes? (:ok added) "[ ] 1 Find the T4") (pr-str added))
+          (is (= ["private"] (:labels added))))
+        (is (= ["private"] (core/card-labels (the-card sys id))))
+        (testing "a contaminated session's item makes the card contaminated"
+          (is (= {:ok (str "Added item 2 to card " id ".") :labels []}
+                 (call sys "clerk" "card_op" {:card id :op "add" :text "Read https://evil.example"} ["contaminated"])))
+          (is (= ["contaminated" "private"] (core/card-labels (the-card sys id)))))
+        (testing "a role's read withholds it unless the role accepts contamination"
+          (let [r (call sys "hub" "cards" {} [])]
+            (is (= (str "Card " id ": contaminated, withheld. Pass accept_contamination to read it.") (:ok r)))
+            (is (= [] (:labels r))))
+          (let [r (call sys "hub" "cards" {:card id :accept_contamination true} [])]
+            (is (str/includes? (:ok r) "[ ] 2 Read https://evil.example"))
+            (is (= ["contaminated" "private"] (:labels r)))))
+        (testing "ticks add nothing"
+          (call sys "clerk" "card_op" {:card id :op "tick" :item 1} ["contaminated"])
+          (is (= ["contaminated" "private"] (core/card-labels (the-card sys id))))
+          (let [c (the-card sys id)]
+            (is (= [["private"] ["contaminated"]] (map :labels (:items c))))))
+        (testing "the operator rewriting it cleans the card"
+          (inbound/submit! sys {:type :card/op :actor "operator" :labels []
+                                :args {:card id :op "edit" :item 2 :text "Read the CRA page"}})
+          (is (= ["private"] (core/card-labels (the-card sys id)))))
+        (testing "so does removing it"
+          (call sys "clerk" "card_op" {:card id :op "add" :text "Dirty"} ["contaminated"])
+          (is (core/contaminated? (core/card-labels (the-card sys id))))
+          (call sys "hub" "card_op" {:card id :op "remove" :item 3} [])
+          (is (= ["private"] (core/card-labels (the-card sys id)))))
+        (testing "an op that changes nothing says so, with the labels of what it tells"
+          (is (= {:ok "That changes nothing: Item 2 already says that." :labels ["private"]}
+                 (call sys "hub" "card_op" {:card id :op "edit" :item 2 :text "Read the CRA page"} []))))
+        (testing "a refusal comes back as text"
+          (is (= (str "Card " id " has no item 9.") (:error (call sys "hub" "card_op" {:card id :op "tick" :item 9} [])))))
+        (testing "a ref resolves to the card's text form and labels"
+          (let [r (refs/resolve (inbound/current-state sys) (str "[[card:" id "]]"))]
+            (is (= [:ok (str "Card " id ": Taxes") ["private"]] [(:status r) (:title r) (:labels r)]))
+            (is (str/includes? (:text r) "[x] 1 Find the T4"))))))))
+
+(deftest public-roles-have-no-board
+  (with-relay
+    (fn [sys]
+      (testing "they are not offered the card tools"
+        (is (not-any? (set (keys (tools/offered (:config sys) "scout"))) ["cards" "card_add" "card_op"]))
+        (is (every? (set (keys (tools/offered (:config sys) "hub"))) ["cards" "card_add" "card_op"])))
+      (testing "and decide refuses their card commands"
+        (is (thrown-with-msg? Exception #"public role has no board"
+                              (inbound/submit! sys {:type :card/add :actor "scout" :labels []
+                                                    :args {:kind "note" :title "x"}}))))
+      (testing "and the read tool does not exist for them"
+        (is (= "You have no tool called cards." (:error (call sys "scout" "cards" {} [])))))
+      (testing "and their prompt lists no board"
+        (is (nil? (core/prompt-cards (inbound/current-state sys) (:config sys) "scout" [])))))))
+
+(deftest the-prompt-lists-only-cards-its-labels-cover
+  (with-relay
+    (fn [sys]
+      (let [add! (fn [title labels]
+                   (:seq (first (inbound/submit! sys {:type :card/add :actor "hub" :labels labels
+                                                      :args {:kind "tracker" :title title :rows ["BMO"]
+                                                             :columns ["Jun" "Jul"]}}))))
+            clean (add! "Catch up monthly financials" [])
+            dirty (add! "From a web page" ["contaminated"])
+            _ (inbound/submit! sys {:type :card/op :actor "hub" :labels []
+                                    :args {:card clean :op "set" :row 1 :column 1 :state "done"}})
+            _ (inbound/submit! sys {:type :card/op :actor "hub" :labels ["contaminated"]
+                                    :args {:card clean :op "add_row" :text "RBC"}})
+            state (inbound/current-state sys)
+            for-labels #(core/prompt-cards state (:config sys) "hub" %)]
+        (testing "a card is listed by its title's labels: counts and other text add none"
+          (is (= {:cards [{:id clean :title "Catch up monthly financials" :kind "tracker" :progress {:done 1 :total 4}}]
+                  :left-out true}
+                 (for-labels ["private"]))))
+        (testing "a session that holds contaminated is shown both"
+          (is (= [clean dirty] (map :id (:cards (for-labels ["contaminated" "private"])))))
+          (is (false? (:left-out (for-labels ["contaminated" "private"])))))
+        (testing "a session without private is shown none, and told some were left out"
+          (is (= {:cards [] :left-out true} (for-labels []))))
+        (testing "the prompt's lines"
+          (is (= (str "\n# The operator's board\n\n"
+                      "The active cards, which you read with `cards` and change with `card_op`:\n\n"
+                      "card " clean ": Catch up monthly financials (tracker, 1 of 4 done)\n\n"
+                      "Some cards carry data this session has not seen, so they are not listed here."
+                      " `cards` shows them.\n")
+                 (prompt/board (for-labels ["private"]))))
+          (is (= "\n# The operator's board\n\nThe board has no cards.\n" (prompt/board {:cards [] :left-out false}))))
+        (testing "a wake's prompt carries it after the fact topics"
+          (let [p (prompt/wake {:role {:id "hub" :title "Hub"} :memos [] :now t0 :zone (java.time.ZoneId/of "UTC")
+                                :fact-topics {:topics [] :left-out false} :cards (for-labels ["private"])})]
+            (is (< (str/index-of p "# Fact topics") (str/index-of p "# The operator's board")))))))))

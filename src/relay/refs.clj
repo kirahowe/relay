@@ -1,6 +1,6 @@
 (ns relay.refs
   "References to things relay knows: `[[kind:id]]`, where kind is one of
-  fact, doc, note, memo, journal, rem, file, web, shown and report. A role
+  fact, doc, note, memo, journal, rem, file, web, shown, report and card. A role
   puts a ref after every claim drawn from relay's knowledge or from a
   source, and relay's read tools print one beside each item they show.
   Pure.
@@ -14,6 +14,7 @@
     [[memo:7]]                   a memo, by number
     [[journal:31]]               a journal entry, by number
     [[report:5]]                 a research report, by number
+    [[card:1840]]                a card on the operator's board, by number
     [[shown:2026-10-18/call-9]]  something the operator was shown
     [[rem:<id>]]                 a reminder in the operator's list
     [[file:/Users/kira/x.pdf]]   a file on the operator's disk
@@ -22,11 +23,12 @@
   `resolve` is the lookup a chat client uses to check a ref and open it."
   (:refer-clojure :exclude [ref resolve])
   (:require [clojure.string :as str]
+            [relay.cards :as cards]
             [relay.core :as core]))
 
 (def kinds
   "Every kind a ref can have, in the order the design lists them."
-  [:fact :doc :note :memo :journal :rem :file :web :shown :report])
+  [:fact :doc :note :memo :journal :rem :file :web :shown :report :card])
 
 (def ^:private kind-names (set (map name kinds)))
 
@@ -125,6 +127,10 @@
       :report (if-let [r (core/report state n)]
                 {:status :ok :title (str "Report " n " by " (:role r)) :text (:summary r) :labels (core/item-labels r)}
                 {:status :missing})
+      :card (if-let [c (core/card state n)]
+              {:status :ok :title (str "Card " n ": " (get-in c [:title :text])) :text (cards/text-form c)
+               :labels (core/card-labels c)}
+              {:status :missing})
       ;; relay cannot look these up. The client may.
       {:status :external :target id})))
 

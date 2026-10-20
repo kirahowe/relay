@@ -183,7 +183,7 @@
                      "routine_write" "routine_remove" "facts" "fact_history" "fact_add"
                      "fact_supersede" "fact_correct" "notes" "note_write" "note_remove" "journal"
                      "journal_write" "docs" "doc_get" "doc_history" "doc_put" "doc_remove"
-                     "clock" "printenv"}
+                     "cards" "card_add" "card_op" "clock" "printenv"}
                    (set (map :name (:tools first-req)))))
             (let [json-round-trip #(json/parse-string (json/generate-string %) true)
                   manifest (tools/manifest (:config *sys*) "clerk")]

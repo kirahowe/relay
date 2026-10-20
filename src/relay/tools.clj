@@ -25,6 +25,7 @@
             [cheshire.factory :as json-factory]
             [clojure.set :as set]
             [clojure.string :as str]
+            [relay.cards :as cards]
             [relay.clock :as clock]
             [relay.config :as config]
             [relay.core :as core]
@@ -557,6 +558,79 @@
            (submit sys actor labels :doc/remove (select-keys args [:path]))
            (str "Removed " (:path args) "."))}
 
+   "cards"
+   {:class :read
+    :grant :private
+    :description (str "Read the operator's board: cards for work the operator comes back to over days,"
+                      " or a status worth a glance. With no arguments, the active cards. `card` shows one"
+                      " card, archived or not; `archived` lists the archived cards too. Each card shows the"
+                      " numbers of its items, rows and columns, which card_op takes.")
+    :parameters (obj {:card {:type "integer" :description "The card's number."}
+                      :archived flag
+                      :accept_contamination accept})
+    :read (fn [{:keys [state config]} actor {:keys [card archived accept_contamination]}]
+            ;; A public role has no board: cards are private only.
+            (when (public-reader? state config actor)
+              (throw (ex-info "You have no tool called cards." {})))
+            (let [cs (if card
+                       [(or (core/card state card) (core/reject! :not-found (str "There is no card " card ".")))]
+                       (core/board state archived))]
+              (if (empty? cs)
+                "The board is empty."
+                (show (for [c cs]
+                        (item (cards/text-form c) (core/card-labels c) (withheld (str "Card " (:id c)))))
+                      "\n\n" accept_contamination))))}
+
+   "card_add"
+   {:class :write
+    :grant :private
+    :description (str "Put a card on the operator's board, for work they come back to over days or a status"
+                      " worth a glance: a checklist (`items`), a tracker of rows by columns, such as accounts"
+                      " by month (`rows`, `columns`), or a note (`text`). Keep it current with card_op and"
+                      " archive it when it is finished.")
+    :parameters (obj {:kind {:type "string" :enum cards/kinds}
+                      :title {:type "string" :description "One line."}
+                      :items {:type "array" :items text :description "A checklist's items, one line each."}
+                      :rows {:type "array" :items text :description "A tracker's rows, one line each."}
+                      :columns {:type "array" :items text :description "A tracker's columns, one line each."}
+                      :text {:type "string" :description "A note's text."}}
+                     "kind" "title")
+    :run (fn [sys actor labels args]
+           (let [e (first (submit sys actor labels :card/add args))]
+             ;; The card as its event added it holds only the caller's own
+             ;; text, so it carries the session's labels, as a refusal would.
+             (labelled (str "Added card " (:seq e) ".\n\n" (cards/text-form (get (cards/add {} e) (:seq e))))
+                       labels)))}
+
+   "card_op"
+   {:class :write
+    :grant :private
+    :description (str "Change a card on the operator's board. op is one of retitle, archive, restore (any"
+                      " card); add, tick, untick, edit, remove (a checklist, by `item`); set (a tracker cell,"
+                      " by `row` and `column`, to open, done or skip), add_row, add_column, rename_row,"
+                      " rename_column, remove_row, remove_column (a tracker); write (a note). `text` is the"
+                      " new text. Give `seen`, the card's rev when you last read it, with an edit so that"
+                      " you do not overwrite a newer one.")
+    :parameters (obj {:card {:type "integer" :description "The card's number."}
+                      :op {:type "string" :enum (vec (sort (keys cards/ops)))}
+                      :item {:type "integer"} :row {:type "integer"} :column {:type "integer"}
+                      :state {:type "string" :enum cards/cell-states}
+                      :text text
+                      :seen {:type "integer" :description "The rev you last read the card at."}}
+                     "card" "op")
+    :run (fn [sys actor labels args]
+           (let [events (submit sys actor labels :card/op args)]
+             (if-let [e (first events)]
+               (cards/confirmation (:card args) (get-in e [:data :op]))
+               ;; Saying it changes nothing says something of what the
+               ;; card holds, which is private.
+               (let [{:keys [unchanged labels]} (try (cards/decide (:cards (inbound/current-state sys)) (:card args)
+                                                                   (select-keys args cards/op-fields))
+                                                     (catch clojure.lang.ExceptionInfo _ nil))]
+                 (if unchanged
+                   (labelled (str "That changes nothing: " unchanged) (core/content-labels labels))
+                   "That changes nothing.")))))}
+
    "role_add"
    {:class :write
     :grant :may-add
@@ -1009,7 +1083,9 @@
                    :reports (some? (config/report-kinds config role-id))
                    ;; Only once some role writes reports, so there can be a
                    ;; ledger at all.
-                   :ledger (and (not (config/public? config role-id)) (seq (config/research-roles config)))))]
+                   :ledger (and (not (config/public? config role-id)) (seq (config/research-roles config)))
+                   ;; Cards are private only.
+                   :private (not (config/public? config role-id))))]
     (cond-> (merge (into {} (filter #(holds? (:grant (val %))) builtin))
                    (into {} (map external-tool (select-keys (:tools config) tools))))
       ;; report_submit's schema names the kinds this role may report.
@@ -1242,7 +1318,7 @@
     (reduce (fn [args k]
               (cond-> args
                 (string? (get args k)) (update k #(or (parse-long (str/trim %)) %))))
-            input [:memo :fact :version :limit :entry])
+            input [:memo :fact :version :limit :entry :card :item :row :column :seen])
     input))
 
 (defn parse-envelope

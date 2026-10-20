@@ -138,12 +138,33 @@
               " `facts` shows them."))
        "\n"))
 
+(defn board
+  "What a prompt says of the operator's board: one line per active card
+  that `cards` (relay.core/prompt-cards) lists, and a line saying some
+  were left out when any were. Nil when `cards` is nil, as for a public
+  role, which has no board."
+  [{:keys [cards left-out] :as board}]
+  (when board
+    (str "\n# The operator's board\n\n"
+         (if (seq cards)
+           (str "The active cards, which you read with `cards` and change with `card_op`:\n\n"
+                (str/join "\n" (for [{:keys [id title kind progress]} cards]
+                                 (str "card " id ": " title " (" kind
+                                      (when progress (str ", " (:done progress) " of " (:total progress) " done"))
+                                      ")"))))
+           (if left-out "No cards are listed here." "The board has no cards."))
+         (when left-out
+           (str (if (seq cards) "\n\n" " ")
+                "Some cards carry data this session has not seen, so they are not listed here. `cards` shows them."))
+         "\n")))
+
 (defn wake
   "The prompt for one wake. `journal` is the tail of the role's journal
   (relay.core/prompt-journal) and `fact-topics` the topics with a count
-  each (relay.core/prompt-fact-topics); either is left out when nil.
-  Both show only what the wake's labels already cover."
-  [{:keys [role memos note now zone resumed? decided journal fact-topics public?]}]
+  each (relay.core/prompt-fact-topics); either is left out when nil, as
+  is `cards`, the board (relay.core/prompt-cards). All three show only
+  what the wake's labels already cover."
+  [{:keys [role memos note now zone resumed? decided journal fact-topics cards public?]}]
   (str "You are " (:title role) " (`" (:id role) "`). It is " (local now zone) ".\n\n"
        (cond
          (seq decided)
@@ -169,4 +190,5 @@
        (when-not (str/blank? note)
          (str "\n# Note from whoever woke you\n\n" note "\n"))
        (when journal (fmt-journal zone journal public?))
-       (when fact-topics (fmt-topics fact-topics public?))))
+       (when fact-topics (fmt-topics fact-topics public?))
+       (board cards)))
