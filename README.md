@@ -1289,9 +1289,13 @@ Only relay speaks relay's methods to the client: relay acp drops any
 line from the agent whose method starts with `_relay/`, so an agent
 cannot fake a card update or a pane item. The check fails closed. relay
 also drops a line from the agent that is not one JSON value, and a line
-that spells a JSON-RPC field such as `method` in another case, since a
-Go client reads keys without regard to case. A permission request among
-them is refused, so the agent is not left waiting.
+that gives a JSON-RPC field such as `method` twice or spells it another
+way that a Go client still reads as that field (`Method`, or `paramſ`,
+since Go folds case). A permission request among them is refused, so
+the agent is not left waiting. The same holds the other way: a client
+line that names one of relay's methods in another case, or spells a
+field two ways, never reaches the agent, and relay answers it with an
+error. Escapes such as `_relay\/cards` name the method they spell.
 
 A message from
 the agent too long for relay to read whole (over 8 MB) never reaches the

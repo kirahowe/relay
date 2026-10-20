@@ -881,9 +881,13 @@
   one conversation."
   [sys conv approvals]
   (fn [line]
-    (when-let [{:keys [id method params]} (workspace/extension-request line)]
-      (if (nil? id)
-        :none
+    (when-let [{:keys [id method params refused]} (workspace/extension-request line)]
+      (cond
+        ;; Never passed on to the agent, which could read it as one of
+        ;; relay's methods; a request is told why.
+        refused (if (some? id) (workspace/error-line id -32600 refused) :none)
+        (nil? id) :none
+        :else
         (try
           (case method
             "_relay/items"

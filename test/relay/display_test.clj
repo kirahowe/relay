@@ -192,8 +192,11 @@
   (is (= {:id nil :method "_relay/x" :params {}}
          (workspace/extension-request "{\"jsonrpc\":\"2.0\",\"method\":\"_relay/x\"}")))
   (doseq [line ["{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session/prompt\",\"params\":{\"x\":\"_relay/items\"}}"
-                "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"m\":\"_relay/items\"}}" "nope _relay/" nil]]
-    (is (nil? (workspace/extension-request line)) line)))
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"m\":\"_relay/items\"}}" "nope" nil]]
+    (is (nil? (workspace/extension-request line)) line))
+  ;; Not JSON, and it names relay: never passed on, as nothing to answer.
+  (is (= {:id nil :refused "relay could not read a line that may name one of its methods."}
+         (workspace/extension-request "nope _relay/"))))
 
 (deftest an-agent-line-with-relays-method-is-caught-however-it-is-spelled
   (doseq [line ["{\"jsonrpc\":\"2.0\",\"method\":\"_relay/cards/changed\",\"params\":{}}"
@@ -211,6 +214,13 @@
                      (apply str (repeat 1100 "[")) (apply str (repeat 1100 "]")) "}")
                 (str "{\"jsonrpc\":\"2.0\",\"method\":\"_relay/cards/changed\",\"params\":{\"rev\":"
                      (apply str (repeat 1100 "1")) "}}")
+                ;; Two keys for one field: Go keeps the string, since a
+                ;; null does not overwrite it; Jackson keeps the null.
+                "{\"jsonrpc\":\"2.0\",\"method\":\"_relay/cards/changed\",\"method\":null,\"params\":{}}"
+                "[{\"jsonrpc\":\"2.0\",\"id\":1,\"id\":2,\"result\":{}}]"
+                ;; Keys Go folds to a JSON-RPC field: ſ is S, ı is I.
+                "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"param\u017f\":{}}"
+                "{\"jsonrpc\":\"2.0\",\"\u0131d\":1,\"result\":{}}"
                 ;; Not one JSON value, or not JSON at all.
                 "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\"} {\"method\":\"_relay/x\"}"
                 "[0" "[{\"method\":\"_relay/x\"}" "{not json _relay/" "nope"]]
@@ -218,8 +228,31 @@
   (doseq [line ["{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"x\":\"_relay/items\"}}"
                 "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"method\":\"_relay/items\"}}"
                 "  {\"jsonrpc\":\"2.0\",\"method\":\"session/update\"}\r"
-                "[1,2]" "" "   " nil]]
+                "[1,2]" "" "   " nil
+                ;; Keys deeper than the envelope are the agent's own.
+                "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"a\":1,\"a\":{\"Method\":\"_x\",\"Method\":2}}}"
+                "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"t\":\"a\\\"b:{\\\"Method\\\":1\"}}"]]
     (is (not (workspace/drop-agent-line? line)) line)))
+
+(deftest a-client-line-the-agent-could-read-as-relays-method-never-reaches-it
+  (testing "escapes spell the same method"
+    (is (= {:id 1 :method "_relay/cards" :params {}}
+           (workspace/extension-request "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"_relay\\/cards\",\"params\":{}}")))
+    (is (= {:id 1 :method "_relay/cards/op" :params {"card" 3}}
+           (workspace/extension-request "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"\\u005frelay/cards/op\",\"params\":{\"card\":3}}"))))
+  (testing "another case, or two keys for one field, is refused with its id"
+    (doseq [line ["{\"jsonrpc\":\"2.0\",\"id\":4,\"Method\":\"_relay/cards\"}"
+                  "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"_RELAY/cards\"}"
+                  "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"_relay/cards\",\"method\":\"session/prompt\"}"
+                  "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"session/prompt\",\"meth\\u006fd\":\"_relay/x\"}"]]
+      (let [r (workspace/extension-request line)]
+        (is (= 4 (:id r)) line)
+        (is (string? (:refused r)) line))))
+  (testing "a broken line that names relay is refused; ordinary prompts pass"
+    (is (:refused (workspace/extension-request "{\"method\":\"_relay/cards\"")))
+    (doseq [line ["{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session/prompt\",\"params\":{\"t\":\"a\\nb _relay/cards\"}}"
+                  "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"outcome\":\"x\\ty\"}}"]]
+      (is (nil? (workspace/extension-request line)) line))))
 
 (deftest the-display-session-of-an-agent-line
   (let [line (fn [meta] (json/generate-string {:jsonrpc "2.0" :method "session/update"

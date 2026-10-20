@@ -74,58 +74,133 @@
 
 (def methods #{"_relay/items" "_relay/resolve" "_relay/trust" "_relay/cards" "_relay/cards/op"})
 
-(defn extension-request
-  "A client's line as one of relay's extension methods: {:id :method
-  :params}, with :id nil for a notification. Nil for any other line, which
-  goes on to the agent as it is. A method that starts with _relay/ is
-  relay's whether or not it is one of `methods`."
-  [line]
-  (let [msg (when (and (string? line) (str/includes? line "_relay/"))
-              (try (json/parse-string line) (catch Exception _ nil)))
-        method (when (map? msg) (get msg "method"))]
-    (when (and (string? method) (str/starts-with? method "_relay/"))
-      {:id (get msg "id") :method method :params (let [p (get msg "params")] (if (map? p) p {}))})))
-
 (defn- lower ^String [^String s] (.toLowerCase s java.util.Locale/ROOT))
 
 (def ^:private envelope-keys #{"jsonrpc" "id" "method" "params" "result" "error"})
 
+(defn- go-fold
+  "A key as Go's encoding/json compares it: ASCII letters in upper case,
+  and every other character as unicode.ToUpper has it, so ſ is S and ı
+  is I."
+  ^String [^String s]
+  (let [sb (StringBuilder.)]
+    (doseq [cp (iterator-seq (.iterator (.codePoints s)))]
+      (.appendCodePoint sb (Character/toUpperCase (int cp))))
+    (str sb)))
+
+(def ^:private envelope-folds (set (map go-fold envelope-keys)))
+
+(defn- message-keys
+  "The keys of every message in a line that is one valid JSON value, in
+  the order written and duplicates kept, as one vector per message: the
+  top-level object's, or each object's in a top-level array. A parsed map
+  keeps only one of two equal keys, and Go and Jackson do not keep the
+  same one."
+  [^String s]
+  (let [n (.length s)
+        next-char (fn [i] (loop [i i]
+                            (if (and (< i n) (Character/isWhitespace (.charAt s i))) (recur (inc i)) i)))]
+    (loop [i 0, stack (), out []]
+      (if (>= i n)
+        out
+        (let [c (.charAt s i)]
+          (case c
+            \" (let [end (loop [j (inc i)]
+                           (case (.charAt s j) \\ (recur (+ j 2)) \" j (recur (inc j))))
+                     msg (:msg (first stack))
+                     k (next-char (inc end))]
+                 (recur (inc end) stack
+                        (if (and msg (< k n) (= \: (.charAt s k)))
+                          (update out msg conj (json/parse-string (subs s i (inc end))))
+                          out)))
+            \{ (let [msg? (or (empty? stack) (and (= [:array] (map :type stack)) (= 1 (count stack))))]
+                 (recur (inc i) (conj stack {:type :object :msg (when msg? (count out))})
+                        (cond-> out msg? (conj []))))
+            \[ (recur (inc i) (conj stack {:type :array}) out)
+            (\} \]) (recur (inc i) (pop stack) out)
+            (recur (inc i) stack out)))))))
+
+(defn- unsafe-keys?
+  "True when a message's keys can be read two ways: a JSON-RPC field
+  spelled other than as JSON-RPC spells it but as Go's encoding/json would
+  still take it (\"Method\", \"paramſ\"), or two keys Go takes for the
+  same field. Go matches keys ignoring case, and the last one wins only
+  when it is not null."
+  [ks]
+  (let [folds (map go-fold ks)]
+    (boolean (or (some (fn [k] (and (envelope-folds (go-fold k)) (not (envelope-keys k)))) ks)
+                 (some (fn [[f c]] (and (envelope-folds f) (> c 1))) (frequencies folds))))))
+
 (defn- unsafe-message?
-  "True when a message carries one of relay's methods, or names a JSON-RPC
-  field in a case other than its own. Go's encoding/json, which
-  acp-go-sdk clients use, matches a field's key ignoring case: there
-  \"Method\" is the method, and when two keys match the last one wins. A
-  line that two readers can read two ways is not passed on. Every key is
-  checked, not only the one a map kept."
+  "True when a message carries one of relay's methods, in any case."
   [msg]
   (and (map? msg)
        (boolean (some (fn [[k v]]
-                        (and (string? k)
-                             (let [lk (lower k)]
-                               (or (and (envelope-keys lk) (not= k lk))
-                                   (and (= "method" lk) (string? v)
-                                        (str/starts-with? (lower v) "_relay/"))))))
+                        (and (string? k) (= "METHOD" (go-fold k)) (string? v)
+                             (str/starts-with? (lower v) "_relay/")))
                       msg))))
 
 (defn- carries-unsafe-message? [msg]
   (or (unsafe-message? msg)
       (and (sequential? msg) (boolean (some carries-unsafe-message? msg)))))
 
+(defn- one-value
+  "[:ok value] when the line is one JSON value Jackson reads, else nil."
+  [^String line]
+  ;; Cheshire parses arrays lazily, so a broken one throws only when it
+  ;; is walked: the walk stays inside the try.
+  (try (let [[msg more] (take 2 (json/parsed-seq (java.io.StringReader. line)))]
+         (when (nil? more)
+           (dorun (tree-seq coll? seq msg))
+           [:ok msg]))
+       (catch Throwable _ nil)))
+
+(defn- two-way?
+  "True when two JSON readers could read this parsed line two ways, or it
+  carries one of relay's methods."
+  [line msg]
+  (or (carries-unsafe-message? msg)
+      (boolean (some unsafe-keys? (message-keys line)))))
+
+(defn extension-request
+  "A client's line as one of relay's extension methods: {:id :method
+  :params}, with :id nil for a notification. Nil for any other line, which
+  goes on to the agent as it is. A method that starts with _relay/ is
+  relay's whether or not it is one of `methods`, and whatever escapes
+  spell it. A line that names one of relay's methods another way, or
+  spells a JSON-RPC field so that the agent could read it otherwise, is
+  {:id :refused why}: it never reaches the agent."
+  [line]
+  (when (and (string? line) (re-find #"(?i)_relay|\\" line))
+    (let [[ok msg] (one-value line)
+          method (when (map? msg) (get msg "method"))
+          id (when (map? msg) (get msg "id"))]
+      (cond
+        (not ok)
+        (when (re-find #"(?i)_relay|\\u" line)
+          {:id nil :refused "relay could not read a line that may name one of its methods."})
+
+        (and (string? method) (str/starts-with? method "_relay/")
+             (not (some unsafe-keys? (message-keys line))))
+        {:id id :method method :params (let [p (get msg "params")] (if (map? p) p {}))}
+
+        (two-way? line msg)
+        {:id id :refused (str "relay does not pass on a line that names one of its methods another way"
+                              " or spells a JSON-RPC field two ways.")}))))
+
 (defn drop-agent-line?
   "True when relay acp must not pass an agent's line to the client: it
   carries one of relay's methods, by itself or in a batch, it spells a
-  JSON-RPC field in another case, or it is not one JSON value. The screen fails closed. A line Jackson refuses (nesting
-  past 1000, a number past 1000 digits, trailing text) may still be one a
-  Go client reads, and such a line is not ACP anyway. A blank line carries
-  nothing and passes. Only relay speaks relay's methods to the client."
+  JSON-RPC field in another case or twice, or it is not one JSON value.
+  The screen fails closed. A line Jackson refuses (nesting past 1000, a
+  number past 1000 digits, trailing text) may still be one a Go client
+  reads, and such a line is not ACP anyway. A blank line carries nothing
+  and passes. Only relay speaks relay's methods to the client."
   [line]
   (and (string? line)
        (not (str/blank? line))
-       ;; Cheshire parses arrays lazily, so a broken one throws only when it
-       ;; is walked: the walk stays inside the try.
-       (try (let [[msg more] (take 2 (json/parsed-seq (java.io.StringReader. ^String line)))]
-              (or (some? more) (carries-unsafe-message? msg)))
-            (catch Throwable _ true))))
+       (let [[ok msg] (one-value line)]
+         (or (not ok) (two-way? line msg)))))
 
 (defn result-line [id result]
   (json/generate-string {"jsonrpc" "2.0" "id" id "result" result}))
