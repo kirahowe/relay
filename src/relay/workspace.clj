@@ -86,6 +86,26 @@
     (when (and (string? method) (str/starts-with? method "_relay/"))
       {:id (get msg "id") :method method :params (let [p (get msg "params")] (if (map? p) p {}))})))
 
+(defn- relay-method? [msg]
+  (and (map? msg)
+       (let [m (get msg "method")] (and (string? m) (str/starts-with? m "_relay/")))))
+
+(defn relay-method-line?
+  "True when an agent's line carries one of relay's methods, by itself or
+  in a batch. Unlike extension-request this parses every line that could
+  be JSON, so a method spelled with escapes (\\u005frelay/...) or sent in
+  a batch is caught too: only relay speaks relay's methods to the client."
+  [line]
+  (and (string? line)
+       (let [t (str/triml line)]
+         (or (str/starts-with? t "{") (str/starts-with? t "[")))
+       ;; Cheshire parses a top-level array lazily, so a broken one throws
+       ;; only when it is walked: the walk stays inside the try.
+       (try (let [msg (json/parse-string line)]
+              (boolean (or (relay-method? msg)
+                           (and (sequential? msg) (some relay-method? msg)))))
+            (catch Exception _ false))))
+
 (defn result-line [id result]
   (json/generate-string {"jsonrpc" "2.0" "id" id "result" result}))
 

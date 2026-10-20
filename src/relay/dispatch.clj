@@ -697,7 +697,7 @@
                                                              "reject_once" "cancelled")
                                                   :by "relay" :why why})))
         from-agent (fn [line]
-                     (if (workspace/extension-request line)
+                     (if (workspace/relay-method-line? line)
                        ;; relay's own methods are relay's to send.
                        (do (binding [*out* *err*] (println "relay dropped an agent line that used one of relay's methods."))
                            nil)

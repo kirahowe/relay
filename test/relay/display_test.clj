@@ -195,6 +195,17 @@
                 "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"m\":\"_relay/items\"}}" "nope _relay/" nil]]
     (is (nil? (workspace/extension-request line)) line)))
 
+(deftest an-agent-line-with-relays-method-is-caught-however-it-is-spelled
+  (doseq [line ["{\"jsonrpc\":\"2.0\",\"method\":\"_relay/cards/changed\",\"params\":{}}"
+                "{\"jsonrpc\":\"2.0\",\"method\":\"\\u005frelay/cards/changed\",\"params\":{}}"
+                "{\"jsonrpc\":\"2.0\",\"method\":\"_relay\\/items\",\"id\":1}"
+                "  [{\"jsonrpc\":\"2.0\",\"method\":\"session/update\"},{\"jsonrpc\":\"2.0\",\"method\":\"_relay/x\"}]"]]
+    (is (workspace/relay-method-line? line) line))
+  (doseq [line ["{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"x\":\"_relay/items\"}}"
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"method\":\"_relay/items\"}}"
+                "[1,2]" "[0" "[{\"method\":\"_relay/x\"}" "{not json _relay/" "nope" "" nil]]
+    (is (not (workspace/relay-method-line? line)) line)))
+
 (deftest the-display-session-of-an-agent-line
   (let [line (fn [meta] (json/generate-string {:jsonrpc "2.0" :method "session/update"
                                                :params {:sessionId "s1"

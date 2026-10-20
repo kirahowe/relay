@@ -19,6 +19,9 @@
   then reads until its input ends."
   (str "#!/bin/sh\n"
        "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"_relay/cards/changed\",\"params\":{\"rev\":1,\"cards\":[{\"id\":999,\"text\":\"FORGED\"}]}}'\n"
+       ;; The same forgery with the method spelled with an escape, and in a batch.
+       "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"\\u005frelay\\/cards/changed\",\"params\":{\"rev\":1,\"cards\":[{\"id\":998,\"text\":\"FORGED\"}]}}'\n"
+       "printf '%s\\n' '[{\"jsonrpc\":\"2.0\",\"method\":\"_relay/cards/changed\",\"params\":{\"rev\":1,\"cards\":[{\"id\":997,\"text\":\"FORGED\"}]}}]'\n"
        "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":77,\"method\":\"_relay/items\",\"params\":{}}'\n"
        "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"ALIVE\"}}}}'\n"
        "cat >/dev/null\n"))
