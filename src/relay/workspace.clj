@@ -22,11 +22,11 @@
   terminal. Without it the pane is told to show the command instead. A
   trust names the version and the digest of the text the pane showed, so
   a doc that changed since is not trusted."
-  (:require [cheshire.core :as json]
-            [clojure.string :as str]
+  (:require [clojure.string :as str]
             [relay.acp :as acp]
             [relay.cards :as cards]
-            [relay.core :as core]))
+            [relay.core :as core]
+            [relay.json :as strict]))
 
 ;; --- what a conversation has learned
 
@@ -167,10 +167,10 @@
       [owed false])))
 
 (defn result-line [id result]
-  (json/generate-string {"jsonrpc" "2.0" "id" id "result" result}))
+  (strict/generate {"jsonrpc" "2.0" "id" id "result" result}))
 
 (defn error-line [id code message]
-  (json/generate-string {"jsonrpc" "2.0" "id" id "error" {"code" code "message" message}}))
+  (strict/generate {"jsonrpc" "2.0" "id" id "error" {"code" code "message" message}}))
 
 ;; --- items
 
@@ -291,7 +291,7 @@
       {"rev" (log-rev state) "cards" (mapv #(card-wire (core/card state %)) ids)})))
 
 (defn notification-line [method params]
-  (json/generate-string {"jsonrpc" "2.0" "method" method "params" params}))
+  (strict/generate {"jsonrpc" "2.0" "method" method "params" params}))
 
 (defn card-op-command
   "What a _relay/cards/op asks for, as the :card/op command relay

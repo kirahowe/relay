@@ -416,7 +416,7 @@
           content (when (map? msg) (get-in msg ["params" "update" "content"]))]
       (when (and (= "session/update" (get msg "method")) (sequential? content)
                  (some #(and (map? %) (contains? (get-in % ["content" "_meta"]) "relay/display")) content))
-        (json/generate-string
+        (strict/generate
          (assoc-in msg ["params" "update" "content"]
                    (mapv (fn [c]
                            (let [d (when (map? c) (get-in c ["content" "_meta" "relay/display"]))]
@@ -478,6 +478,6 @@
             meta (assoc preview-meta "relay/labels" (vec labels))
             item {"type" "content" "_meta" meta
                   "content" {"type" "text" "text" (str markdown) "_meta" meta}}]
-        (json/generate-string
+        (strict/generate
          (assoc-in msg ["params" "toolCall" "content"]
                    (conj (if (sequential? content) (vec content) []) item)))))))

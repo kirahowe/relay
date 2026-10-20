@@ -28,6 +28,9 @@
   literal, the exponent bound) are made here, on a fast path that skips them for a text that
   cannot break them.
 
+  `generate` writes JSON that relay passes on, so that every number the
+  reader took is written in a form the rule takes too.
+
   Pure: nothing here does I/O."
   (:refer-clojure :exclude [read])
   (:require [cheshire.core :as cheshire]
@@ -228,3 +231,75 @@
   ([x opts]
    (let [v (parse-or x nil opts)]
      (when (map? v) v))))
+
+;; --- writing
+
+(defn- literal-ok?
+  "Whether a number literal s is within the rule's bounds."
+  [^String s]
+  (and (<= (count s) max-number-length) (exponent-in-bounds? s)))
+
+(defn number-text
+  "A decimal as a number literal the rule takes. BigDecimal's own text
+  writes the exponent of the first digit, so a number read as 0.1e-9999
+  would come out as 1.0E-10000, which the rule refuses; such a number is
+  written with its exponent held at the bound and its digits moved to
+  fit. Every decimal the reader returns fits within the length bound this
+  way, since its literal did."
+  [^BigDecimal d]
+  (let [s (str d)]
+    (if (literal-ok? s)
+      s
+      (let [u (.unscaledValue d)
+            ds (str (.abs u))
+            scale (.scale d)
+            e (-> (- (count ds) 1 scale) (min max-exponent) (max (- max-exponent)))
+            ;; d is ds * 10^shift * 10^e.
+            shift (- (- scale) e)
+            mantissa (if (>= shift 0)
+                       (str ds (str/join (repeat shift \0)))
+                       (let [k (- shift)
+                             padded (str (str/join (repeat (max 0 (- k (count ds))) \0)) ds)
+                             i (- (count padded) k)]
+                         (str (if (zero? i) "0" (subs padded 0 i)) "." (subs padded i))))]
+        (str (when (neg? (.signum u)) "-") mantissa "e" e)))))
+
+(defn- odd-decimal?
+  "Whether x holds a decimal whose own text the rule refuses."
+  [x]
+  (cond
+    (map? x) (some odd-decimal? (vals x))
+    (or (sequential? x) (set? x)) (some odd-decimal? x)
+    (decimal? x) (not (literal-ok? (str x)))
+    :else false))
+
+(defn- write! [^StringBuilder sb x]
+  (cond
+    (map? x)
+    (do (.append sb "{")
+        (doseq [[i [k v]] (map-indexed vector x)]
+          (when (pos? i) (.append sb ","))
+          (.append sb (cheshire/generate-string (if (keyword? k) (subs (str k) 1) (str k))))
+          (.append sb ":")
+          (write! sb v))
+        (.append sb "}"))
+
+    (or (sequential? x) (set? x))
+    (do (.append sb "[")
+        (doseq [[i v] (map-indexed vector x)]
+          (when (pos? i) (.append sb ","))
+          (write! sb v))
+        (.append sb "]"))
+
+    (decimal? x) (.append sb (number-text x))
+    :else (.append sb (cheshire/generate-string x))))
+
+(defn generate
+  "x as JSON text, as cheshire writes it, but with every decimal written
+  so that the rule takes it (number-text). Use it to write what relay
+  read from another process and passes on, such as a line it rewrites, a
+  tool's input, or an answer carrying a client's id."
+  [x]
+  (if (odd-decimal? x)
+    (let [sb (StringBuilder.)] (write! sb x) (str sb))
+    (cheshire/generate-string x)))

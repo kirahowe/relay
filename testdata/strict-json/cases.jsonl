@@ -44,3 +44,5 @@
 {"name": "exponent past an int", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJuIjoxZS0yMTQ3NDgzNjQ4fX0=", "expect": "reject"}
 {"name": "exponent of 30 digits", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJuIjoxZTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMX19", "expect": "reject"}
 {"name": "exponent text inside a string", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJzIjoiMWUxMDAwMCJ9fQ==", "expect": {"method": "x"}}
+{"name": "value below 1e-9999 with a literal exponent of -9999", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJuIjowLjFlLTk5OTl9fQ==", "expect": {"method": "x"}}
+{"name": "value above 1e9999 with a literal exponent of 9999", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJuIjoxMjM0NWU5OTk5fX0=", "expect": {"method": "x"}}

@@ -8,7 +8,9 @@
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
             [relay.acp :as acp]
-            [relay.json :as json])
+            [relay.json :as json]
+            [relay.tools :as tools]
+            [relay.workspace :as workspace])
   (:import (java.util Base64)))
 
 ;; --- the shared table
@@ -121,6 +123,49 @@
     (let [lit (str "1" e (cond (neg? n) "-" plus "+" :else "") (apply str (repeat zeros "0")) (abs n))
           ok (map? (json/parse-or (str "{\"n\":" lit "}") nil))]
       (= ok (<= (abs n) json/max-exponent)))))
+
+;; --- writing
+
+(def gen-edge-literal
+  "A decimal literal the rule takes whose value may lie past the bound:
+  digits on both sides of the point and an exponent near ±9999."
+  (gen/let [neg gen/boolean
+            int-digits (gen/one-of [(gen/return "0")
+                                    (gen/fmap (fn [[d ds]] (apply str d ds))
+                                              (gen/tuple (gen/elements "123456789") (gen/vector (gen/elements "0123456789") 0 29)))])
+            frac-digits (gen/fmap #(apply str %) (gen/vector (gen/elements "0123456789") 0 30))
+            e (gen/one-of [(gen/choose (- json/max-exponent 40) json/max-exponent)
+                           (gen/choose (- json/max-exponent) (+ (- json/max-exponent) 40))
+                           (gen/choose -40 40)])]
+    (str (when neg "-") int-digits (when (seq frac-digits) (str "." frac-digits)) "e" e)))
+
+;; BigDecimal's own text writes 0.1e-9999 as 1.0E-10000, which the rule
+;; refuses, so a line relay rewrote could break the rule (relay#58).
+(defspec a-decimal-the-rule-takes-is-written-so-the-rule-takes-it 300
+  (prop/for-all [lit gen-edge-literal]
+    (let [v (json/parse (str "[" lit "]"))
+          back (json/parse-or (json/generate v) ::bad)]
+      (and (not= ::bad back) (same? v back)))))
+
+(deftest numbers-past-the-bound-by-value-are-written-within-it
+  (doseq [[lit text] [["0.1e-9999" "0.1e-9999"] ["-0.00123e-9999" "-0.00123e-9999"] ["12345e9999" "12345e9999"]
+                      ;; Plain, BigDecimal writes this one past 1000 characters.
+                      [(str "1." (apply str (repeat 994 "0")) "e-6") (str "1." (apply str (repeat 994 "0")) "e-6")]]]
+    (testing lit
+      (let [v (json/parse (str "{\"n\":" lit "}"))]
+        (is (= (str "{\"n\":" text "}") (json/generate v)))
+        (is (= v (json/parse (json/generate v)))))))
+  (testing "a value with no such number is written as cheshire writes it"
+    (let [v {"a" [1 1.5M 1E+400M "x" nil true] :b/c {"d" 2}}]
+      (is (= (cheshire/generate-string v) (json/generate v))))))
+
+(deftest a-rewritten-line-keeps-a-number-past-the-bound-by-value
+  (let [request "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"session/request_permission\",\"params\":{\"sessionId\":\"s\",\"toolCall\":{\"toolCallId\":\"c\",\"rawInput\":{\"n\":0.1e-9999}},\"options\":[{\"optionId\":\"allow\",\"name\":\"Allow\",\"kind\":\"allow_once\"}]}}"
+        out (acp/with-preview request "md" [])]
+    (is (= 1E-10000M (get-in (json/parse out) ["params" "toolCall" "rawInput" "n"])))
+    (is (= 7 (:id (acp/permission-request out)))))
+  (is (= 1E-10000M (get-in (json/parse (workspace/result-line 0.1E-9999M {})) ["id"])))
+  (is (= {:n 1E-10000M} (:input (tools/parse-envelope "{\"input\":{\"n\":0.1e-9999},\"labels\":[],\"call_id\":\"c\"}")))))
 
 (deftest what-the-rule-refuses
   (doseq [[why s] [["nothing" ""] ["only whitespace" " \t"] ["a duplicate after unescaping" "{\"a\":1,\"\\u0061\":2}"]

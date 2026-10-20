@@ -16,6 +16,7 @@
             [relay.harness :as harness]
             [relay.harness.agentloop :as agentloop]
             [relay.inbound :as inbound]
+            [relay.json :as strict]
             [relay.log :as log]
             [relay.prompt :as prompt]
             [relay.refs :as refs]
@@ -700,7 +701,7 @@
         outstanding (atom {})
         client-gone (atom false)
         refuse! (fn [req why]
-                  (let [bs (.getBytes (str (json/generate-string (acp/refusal req)) "\n")
+                  (let [bs (.getBytes (str (strict/generate (acp/refusal req)) "\n")
                                       java.nio.charset.StandardCharsets/UTF_8)]
                     ;; Without an id there is nothing to answer; the line is
                     ;; still never passed on.
@@ -794,7 +795,7 @@
                                                   (vals @outstanding))]
                         (do (swap! outstanding dissoc (:id req))
                             (on-permission :answered req {:outcome (:outcome answer) :by "client"})
-                            (if (:valid answer) :pass (json/generate-string (acp/refusal req))))
+                            (if (:valid answer) :pass (strict/generate (acp/refusal req))))
                         (if (and (seq @outstanding) (acp/stray-answer? line))
                           ;; An answer to no open request: the client is
                           ;; confused, so what is open is refused rather
@@ -846,7 +847,7 @@
                                (acp/line-id prefix))
                           req (when (some? id) {:id id :options []})]
                       (when req
-                        (let [bs (.getBytes (str (json/generate-string (acp/refusal req)) "\n")
+                        (let [bs (.getBytes (str (strict/generate (acp/refusal req)) "\n")
                                             java.nio.charset.StandardCharsets/UTF_8)]
                           (try (locking agent-in (write-chunk! agent-in bs (alength bs)))
                                (catch java.io.IOException _ nil))))

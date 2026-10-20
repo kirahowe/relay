@@ -918,7 +918,7 @@
   (let [failed (fn [why out err]
                  (binding [*out* *err*] (println (str tool-name ": " why)) (print err out) (flush))
                  (throw (ex-info (str "The tool " tool-name " failed.") {:relay/labels static})))
-        result (try (run-limited (vec command) (json/generate-string {:input args :labels labels :call_id (str *call-id*)})
+        result (try (run-limited (vec command) (strict/generate {:input args :labels labels :call_id (str *call-id*)})
                                  timeout-ms {:bytes? true})
                     (catch Exception e (failed (str "could not start: " (ex-message e)) "" "")))]
     (if (= ::timeout result)
@@ -953,7 +953,7 @@
                  (binding [*out* *err*] (println (str tool-name " preview: " why)) (print err out) (flush))
                  {:content (str "relay could not get a preview: the preview command " why ".")
                   :is-error true :labels []})
-        result (try (run-limited (vec command) (json/generate-string {:input input :labels (vec labels)
+        result (try (run-limited (vec command) (strict/generate {:input input :labels (vec labels)
                                                                       :call_id (str call-id)})
                                  preview-timeout-ms {:bytes? true})
                     (catch Exception e (ex-message e)))]
@@ -994,7 +994,7 @@
   (let [failed (fn [why]
                  (binding [*out* *err*] (println (str "verifier: " why)) (flush))
                  (throw (ex-info "The verifier failed." {})))
-        proc (p/process (vec command) {:in (json/generate-string {:input request :labels labels :call_id (str call-id)})
+        proc (p/process (vec command) {:in (strict/generate {:input request :labels labels :call_id (str call-id)})
                                        :out :stream :err :inherit :env (harness/base-env {})})
         out (future (read-bounded (:out proc) verifier-output-limit))
         timeout-ms (* 1000 (or timeout-seconds config/verifier-timeout-seconds))
@@ -1343,7 +1343,7 @@
       (not (and (string? (get env "call_id")) (not (str/blank? (get env "call_id")))))
       {:problem "The call has no call_id."}
       (not (map? (get env "input"))) {:problem "The call's input must be a JSON object."}
-      :else {:input (strict/parse (json/generate-string (get env "input")) {:keywords? true})
+      :else {:input (strict/parse (strict/generate (get env "input")) {:keywords? true})
              :labels (core/union (get env "labels"))
              :call-id (get env "call_id")})))
 
