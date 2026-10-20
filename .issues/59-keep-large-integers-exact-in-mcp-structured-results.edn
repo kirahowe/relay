@@ -1,0 +1,11 @@
+{:id 59
+ :title "Keep large integers exact in MCP structured results"
+ :status :inbox
+ :type :bug
+ :priority :p3
+ :created "2026-10-21"
+ :updated "2026-10-21"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "59-keep-large-integers-exact-in-mcp-structured-results.md"}

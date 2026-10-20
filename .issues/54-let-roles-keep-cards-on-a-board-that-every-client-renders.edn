@@ -1,10 +1,10 @@
 {:id 54
  :title "Let roles keep cards on a board that every client renders"
- :status :in-progress
+ :status :review
  :type :feature
  :priority :p1
  :created "2026-10-20"
- :updated "2026-10-20"
+ :updated "2026-10-21"
  :tags #{}
  :blocked-by #{}
  :related #{}

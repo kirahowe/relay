@@ -66,17 +66,24 @@ The boundaries between the three components:
 
 ## Acceptance criteria
 
-- [ ] One strict reader per language, used at every boundary in scope.
-- [ ] Duplicate names, case-variant envelope names, trailing values and
-      invalid UTF-8 are rejected identically by relay, agentloop and
-      acp-tui; one shared table of hostile lines is tested against all
-      three (fixtures in each repo, same lines).
-- [ ] The hand-written screen checks are gone.
-- [ ] relay acp still passes bytes unchanged for valid lines; existing
+- [x] One strict reader per language, used at every boundary in scope.
+  - Receipt: relay.json (Jackson checks the text, clojure.data.json reads exact values); agentloop and acp-tui internal/strictjson on encoding/json/v2. The deliberate exceptions (relay's own log, provider SDKs, remote MCP over HTTP) are listed above.
+- [x] Duplicate names, trailing values and invalid UTF-8 are rejected
+      identically by relay, agentloop and acp-tui, and a name in another
+      case is read by all three as a different member; one shared table
+      of hostile lines is tested against all three.
+  - Receipt: ~/code/projects/.cards/strict-json/cases.jsonl, 48 cases, byte-identical copies in all three repos (md5 checked by QA, 2026-10-21); final QA ran every case through each component's real entry point and all three agreed on accept/reject and method.
+- [x] The hand-written screen checks are gone.
+  - Receipt: relay's screen is "strict object, else drop; exact method _relay/ dropped; responses only to ids the agent owes". The Go SDKs decode with v1, so agentloop and acp-tui strip members v1 would misread, generically (decode, re-encode, compare), with no list of names.
+- [x] relay acp still passes bytes unchanged for valid lines; existing
       acp, tck (if it runs here) and proxy pentest scenarios pass.
-- [ ] Numbers and strings survive exactly; property tests.
-- [ ] README, spec/relay.allium, agentloop and acp-tui docs say so.
+  - Receipt: QA byte-for-byte checks; bb tck CONFORMANT (39 pass, 17 not advertised); bb pentest s5, consent-acp, s6-acp-tui, s7-kill-conversation, s9, s16: 20/20.
+- [x] Numbers and strings survive exactly; property tests.
+  - Receipt: relay json-test round trips (huge ints, long decimals, astral strings, both bounds); relay writes numbers within the bounds (Codex rounds 1-2); acp-tui shows rawInput numbers as written (fixes #52).
+- [x] README, spec/relay.allium, agentloop and acp-tui docs say so.
+  - Receipt: relay README (ACP clients, envelopes) and spec; agentloop DESIGN.md; acp-tui README.
 - [x] Codex loop converges.
+  - Receipt: first loop converged in round 2; the post-QA loop converged in round 3, whose one finding (permission ids compared with =) predates #58 and is fixed in ed095f19.
 
 ## Log
 
@@ -428,3 +435,6 @@ cache already gave and makes it structural, so a new check cannot bring
 back the 475 ms path by passing a fresh string. The existing test
 relay-acp-reads-each-line-once-in-each-direction checks one read per
 line in each direction. bb test passes (761 tests).
+- 2026-10-21: fixed the permission-id comparison from the last Codex
+  round (ed095f19). Filed #59 (MCP structured results round large
+  integers) and #60 (relay acp with a relative --data). bb test 764/764.

@@ -21,5 +21,7 @@ SDK's decoding.
 
 ## Acceptance criteria
 
-- [ ] acp-tui shows every number in a request's input as written.
-- [ ] A wire test with a number above 2^53.
+- [x] acp-tui shows every number in a request's input as written.
+  - Receipt: acp-tui zwrrpnsy (relay#58 QA round) reads rawInput from the raw line, not the SDK's float64 decode.
+- [x] A wire test with a number above 2^53.
+  - Receipt: acp-tui internal/wire/wire_test.go, rawInput 9007199254740993 and a 34-digit decimal shown exactly.

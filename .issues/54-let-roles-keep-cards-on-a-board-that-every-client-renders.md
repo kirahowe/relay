@@ -9,15 +9,25 @@ approved by Kira on 2026-10-20. The acp-tui board is #55; `relay serve` is
 ## Acceptance criteria
 
 - [x] relay.cards: kinds, op checks, apply, progress, text form, wire form, pure
+  - Receipt: cards-test: the-projection-is-a-fold-of-the-decided-events, text-and-wire-forms-are-total-and-the-wire-form-round-trips, ops-do-what-they-say; relay.cards requires no relay.core.
 - [x] card/added and card/changed through relay.inbound (decide*/evolve*)
+  - Receipt: cards-test: relay-core-folds-cards-as-replay-does, a-card-change-wakes-nobody-and-notifies-nobody.
 - [x] labels per text element; reads withhold contaminated cards
+  - Receipt: cards-test: a-contaminated-item-taints-the-card-until-it-is-gone.
 - [x] tools cards, card_add, card_op for roles that are not public
+  - Receipt: cards-test: public-roles-have-no-board, a-qualified-seen-is-refused-not-dropped.
 - [x] refs: [[card:N]]
+  - Receipt: refs resolve the card kind; covered in cards-test and refs-test.
 - [x] wake and conversation prompts list the active cards within their labels
+  - Receipt: cards-test: the-prompt-lists-only-cards-its-labels-cover.
 - [x] CLI: relay cards, relay card <id>, relay card <id> <op>, relay card add
+  - Receipt: cards-test: relay-card-add-without-a-kind-shows-its-usage, relay-card-refuses-an-option-it-would-ignore.
 - [x] relay acp: _relay/cards, _relay/cards/op, _relay/cards/changed; agent _relay/ lines dropped
+  - Receipt: cards-acp-test: the-board-over-relay-acp, the-agent-cannot-answer-for-relay; #58 QA end to end.
 - [x] README, resources/AGENTS.md, spec/relay.allium
+  - Receipt: commit opqqxxqx and later doc updates.
 - [x] tests from the brief; bb test passes
+  - Receipt: bb test 764/764 on 2026-10-21 (ed095f19).
 
 ## Plan
 
@@ -200,4 +210,9 @@ approved by Kira on 2026-10-20. The acp-tui board is #55; `relay serve` is
   pump. No round has reviewed that last fix, so the loop did not
   converge. Per AGENTS.md it stops here for Kira. Two findings are filed
   as #57. The issue stays in progress until Kira decides.
+- 2026-10-21: the agent-line screen question went to Kira, who chose to
+  standardize JSON parsing (#58) instead of patching. With #58 done the
+  screen is settled, and the board's relay acp behaviour is covered by
+  #58's QA (cards end to end, a forged answer to a client's _relay/ id
+  dropped). Ready for review.
 
