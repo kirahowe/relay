@@ -107,10 +107,21 @@
            (str/starts-with? (cards/text-form c) "Card 1: ")
            ;; The wire form survives a JSON round trip unchanged.
            (= wire (json/parse-string (json/generate-string wire)))
-           (= (get wire "rev") (:rev c))))))
+           (= (get wire "rev") (:rev c))
+           ;; A role or the CLI reads the rev it passes as `seen` from the
+           ;; header, and a client from the wire form's text.
+           (str/includes? (first (str/split-lines (cards/text-form c))) (str ", rev " (:rev c) ")"))
+           (str/includes? (get wire "text") (str ", rev " (:rev c) ")"))))))
 
 (deftest text-and-wire-forms-are-total-and-the-wire-form-round-trips
   (check 300 text-and-wire-are-total))
+
+(deftest the-rev-a-reader-sees-is-the-seen-an-edit-takes
+  (let [w (-> (new-card {:kind "checklist" :title "T" :items ["a" "b"]})
+              (op! {:op "edit" :item 2 :text "b2"}))
+        shown (parse-long (second (re-find #", rev (\d+)\)" (cards/text-form (card w)))))]
+    (is (some? (cards/decide (:cards w) 1 {:op "edit" :item 2 :text "b3" :seen shown})))
+    (is (= :conflict (refusal #(cards/decide (:cards w) 1 {:op "edit" :item 2 :text "b3" :seen (dec shown)}))))))
 
 (defn- refold
   "The cards folded again from the events alone, after a JSON round trip,
@@ -228,7 +239,7 @@
                          :items ["Make a folder for the statements" "Download one account's months in one login"
                                  "Import into the app, then the spreadsheet"]})
               (op! {:op "tick" :item 1}))]
-    (is (= (str "Card 1: How to work through it (checklist, 1 of 3 done) [[card:1]]\n"
+    (is (= (str "Card 1: How to work through it (checklist, 1 of 3 done, rev 2) [[card:1]]\n"
                 "[x] 1 Make a folder for the statements\n"
                 "[ ] 2 Download one account's months in one login\n"
                 "[ ] 3 Import into the app, then the spreadsheet")
@@ -241,10 +252,10 @@
     (testing "complete when every item is done"
       (let [w (-> w (op! {:op "tick" :item 2}) (op! {:op "tick" :item 3}))]
         (is (cards/complete? (card w)))
-        (is (str/includes? (cards/text-form (card w)) "(checklist, 3 of 3 done, complete)"))))
+        (is (str/includes? (cards/text-form (card w)) "(checklist, 3 of 3 done, complete, rev 4)"))))
     (testing "an archived card takes only restore"
       (let [w (op! w {:op "archive"})]
-        (is (str/includes? (cards/text-form (card w)) ", archived)"))
+        (is (str/includes? (cards/text-form (card w)) ", archived, rev 3)"))
         (is (= :invalid (refusal #(cards/decide (:cards w) 1 {:op "tick" :item 2}))))
         (is (cards/active? (card (op! w {:op "restore"})))))))
   (let [w (-> (new-card {:kind "tracker" :title "Catch up monthly financials"
@@ -252,7 +263,7 @@
               (op! {:op "remove_row" :row 3}) (op! {:op "remove_row" :row 4})
               (op! {:op "set" :row 1 :column 1 :state "done"}) (op! {:op "set" :row 1 :column 2 :state "done"})
               (op! {:op "set" :row 5 :column 1 :state "skip"}) (op! {:op "set" :row 5 :column 2 :state "done"}))]
-    (is (= (str "Card 1: Catch up monthly financials (tracker, 4 of 12 done) [[card:1]]\n"
+    (is (= (str "Card 1: Catch up monthly financials (tracker, 4 of 12 done, rev 7) [[card:1]]\n"
                 "Columns: 1 Jun, 2 Jul, 3 Aug, 4 Sep\n"
                 "Row 1 BMO: Jun done, Jul done, Aug open, Sep open\n"
                 "Row 2 RBC: all open\n"
@@ -265,7 +276,7 @@
       (is (= {[1 2] "done" [5 1] "skip" [5 2] "done"}
              (:cells (card (op! w {:op "set" :row 1 :column 1 :state "open"})))))))
   (let [w (new-card {:kind "note" :title "Plan" :text "one\ntwo"})]
-    (is (= "Card 1: Plan (note) [[card:1]]\n  │ one\n  │ two" (cards/text-form (card w))))
+    (is (= "Card 1: Plan (note, rev 1) [[card:1]]\n  │ one\n  │ two" (cards/text-form (card w))))
     (is (not (cards/complete? (card w))))))
 
 (deftest the-wire-form-is-safe-to-show

@@ -374,13 +374,16 @@
 (defn- plain-block [_labels s]
   (map #(str text/gutter %) (str/split s #"\n" -1)))
 
-(defn- header [{:keys [id kind status] :as card} mark]
+(defn- header [{:keys [id kind rev] :as card} mark]
   (let [{:keys [done total] :as p} (progress card)]
     (str "Card " id ": " (mark (get-in card [:title :labels]) (get-in card [:title :text]))
          " (" kind
          (when p (str ", " done " of " total " done"))
          (when (complete? card) ", complete")
          (when-not (active? card) ", archived")
+         ;; The rev is what an edit passes as `seen`, so every reader
+         ;; of the text form (roles, the CLI) can give it.
+         ", rev " rev
          ") [[card:" id "]]")))
 
 (defn- tracker-lines [{:keys [rows columns cells]} mark]

@@ -94,6 +94,22 @@ approved by Kira on 2026-10-20. The acp-tui board is #55; `relay serve` is
   and RTLO; a note with fake approve lines) and the `relay cards` view,
   plus checks on the wire form. Ran it with an agentloop built from
   agentloop's main into the scratch directory: passes.
+- Review fixes, 2026-10-20. The text form's header now ends with the
+  card's rev (`(tracker, 6 of 24 done, rev 1842)`). Roles and the CLI
+  only see the text form, so without it they had no way to give `seen`
+  and the stale-edit check never applied to them. I kept `seen` rather
+  than dropping it from the docs, because dropping it loses that check
+  for roles. This changes the brief's example header by one field.
+- relay acp drops an agent line by parsing it, not by looking for the
+  substring `_relay/`. Any line that starts with `{` or `[` is parsed,
+  so an escaped method (`\u005frelay/...`) or a batch array holding one
+  is dropped too. Cheshire parses a top-level array lazily, so the walk
+  stays inside the try: an unclosed `[0` otherwise threw from the reader
+  thread and broke the byte-exact pass-through (P6-2 caught it). Client
+  lines still use the substring check: what the operator sends is the
+  operator's, and an escaped method from them only reaches agentloop.
+- Rewrapped the start-of-wake paragraph in resources/AGENTS.md. Older
+  long lines elsewhere in that file are not part of this change.
 
 ## Log
 
@@ -102,3 +118,7 @@ approved by Kira on 2026-10-20. The acp-tui board is #55; `relay serve` is
   build, so bb test ran with `--agentloop` pointing at a build of
   agentloop main made in a scratch directory. The one test that needs
   acp-tui (display-test's pane on a pty) cannot run here.
+- 2026-10-20: fixed the review findings (rev in the text form, the
+  agent-line drop, the AGENTS.md wrap). bb test passes in full (735
+  tests) with `--agentloop` pointing at agentloop main built in the
+  scratch directory.

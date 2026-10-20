@@ -175,7 +175,7 @@ are `retitle`, `archive` and `restore` for any card; `add`, `tick`,
 `remove_column` for a tracker; and `write` for a note. An op on an
 archived card is refused, except `restore`. An op that changes nothing
 appends nothing and says so. `seen` is the card's rev when the client
-last read it: an edit of text that changed after `seen` is refused, so a
+last read it, which the header of its text form shows: an edit of text that changed after `seen` is refused, so a
 stale edit cannot overwrite a newer one. Ticks and cell states go to
 whoever wrote last.
 
@@ -204,7 +204,7 @@ relay card add checklist --title "Before the trip" --item "Passport" --item "Cha
 A card prints as its text form, which is also what roles read:
 
 ```
-Card 1840: Catch up monthly financials (tracker, 6 of 24 done) [[card:1840]]
+Card 1840: Catch up monthly financials (tracker, 6 of 24 done, rev 1842) [[card:1840]]
 Columns: 1 Jun, 2 Jul, 3 Aug, 4 Sep
 Row 1 BMO: Jun done, Jul done, Aug open, Sep open
 Row 2 RBC: all open

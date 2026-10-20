@@ -609,14 +609,14 @@
                       " card); add, tick, untick, edit, remove (a checklist, by `item`); set (a tracker cell,"
                       " by `row` and `column`, to open, done or skip), add_row, add_column, rename_row,"
                       " rename_column, remove_row, remove_column (a tracker); write (a note). `text` is the"
-                      " new text. Give `seen`, the card's rev when you last read it, with an edit so that"
-                      " you do not overwrite a newer one.")
+                      " new text. Give `seen`, the card's rev when you last read it (the header shows"
+                      " it as \"rev N\"), with an edit so that you do not overwrite a newer one.")
     :parameters (obj {:card {:type "integer" :description "The card's number."}
                       :op {:type "string" :enum (vec (sort (keys cards/ops)))}
                       :item {:type "integer"} :row {:type "integer"} :column {:type "integer"}
                       :state {:type "string" :enum cards/cell-states}
                       :text text
-                      :seen {:type "integer" :description "The rev you last read the card at."}}
+                      :seen {:type "integer" :description "The rev in the card's header when you last read it."}}
                      "card" "op")
     :run (fn [sys actor labels args]
            (let [events (submit sys actor labels :card/op args)]
