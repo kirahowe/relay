@@ -29,6 +29,7 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [54](54-let-roles-keep-cards-on-a-board-that-every-client-renders.md) | Let roles keep cards on a board that every client renders | feature | P1 |
+| [58](58-forward-only-json-relay-wrote-itself-through-relay-acp.md) | Read JSON with one strict dialect across relay, agentloop and acp-tui | bug | P1 |
 
 ### Review
 
