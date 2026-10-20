@@ -66,8 +66,14 @@
 
 ;; --- limits
 
-(def max-line "The most characters in a title or an item, row or column." 200)
-(def max-note "The most characters in a note." 8000)
+(def max-line "The most characters (code points) in a title or an item, row or column." 200)
+(def max-note "The most characters (code points) in a note." 8000)
+
+(defn- characters
+  "How many characters `s` holds, counted as code points, so an emoji
+  outside the Basic Multilingual Plane is one, not a surrogate pair's two."
+  [^String s]
+  (.codePointCount s 0 (.length s)))
 (def max-items "The most items on a checklist." 100)
 (def max-rows "The most rows on a tracker." 40)
 (def max-columns "The most columns on a tracker." 24)
@@ -149,12 +155,12 @@
     (when (re-find #"[\n\r\u000b\u000c\u0085\u2028\u2029]" t)
       (refuse! (str what " is one line, with no line breaks.")))
     (when (empty? t) (refuse! (str what " must not be empty.")))
-    (when (> (count t) max-line) (refuse! (str what " is at most " max-line " characters.")))
+    (when (> (characters t) max-line) (refuse! (str what " is at most " max-line " characters.")))
     t))
 
 (defn- note-text [s]
   (when-not (string? s) (refuse! "A note's text must be text."))
-  (when (> (count s) max-note) (refuse! (str "A note is at most " max-note " characters.")))
+  (when (> (characters s) max-note) (refuse! (str "A note is at most " max-note " characters.")))
   s)
 
 (defn- line-texts

@@ -57,6 +57,19 @@
   (:seq (first (inbound/submit! sys {:type :card/add :actor "clerk" :labels ["private"]
                                      :args {:kind "checklist" :title "Taxes" :items ["Find the T4" "File"]}}))))
 
+(deftest an-op-with-a-parameter-it-does-not-know-is-refused
+  ;; Unknown parameters were once dropped and the op answered success, so
+  ;; a misspelled seen silently turned off the stale-edit check.
+  (doseq [[typo params] [["iten" {"card" 1 "op" "tick" "iten" 2}]
+                         ["sen" {"card" 1 "op" "edit" "item" 2 "text" "x" "sen" 5}]]]
+    (let [{:keys [command error]} (workspace/card-op-command params)]
+      (is (nil? command))
+      (is (str/includes? (str error) (str "no parameter " typo)) error)))
+  (testing "sessionId, which acp-tui sends, is accepted and not passed on"
+    (is (= {:card 1 :op "edit" :item 2 :text "x" :seen 5}
+           (get-in (workspace/card-op-command {"sessionId" "s1" "card" 1 "op" "edit" "item" 2 "text" "x" "seen" 5})
+                   [:command :args])))))
+
 (deftest the-board-over-relay-acp
   (with-relay
     (fn [dir sys]
@@ -95,6 +108,13 @@
             (let [r (client/request! c "_relay/cards/op" {:card id :op "tick" :item 9})]
               (is (= (str "Card " id " has no item 9.") (get-in r ["error" "message"])) (pr-str r)))
             (is (= -32602 (get-in (client/request! c "_relay/cards/op" {:op "tick"}) ["error" "code"]))))
+          (testing "an unknown parameter is refused over the wire, naming it"
+            (let [r (client/request! c "_relay/cards/op" {:card id :op "tick" :iten 2})]
+              (is (= -32602 (get-in r ["error" "code"])) (pr-str r))
+              (is (str/includes? (str (get-in r ["error" "message"])) "no parameter iten"))))
+          (testing "a seen past every rev in the log is refused, so it cannot turn off the stale-edit check"
+            (let [r (client/request! c "_relay/cards/op" {:card id :op "edit" :item 1 :text "Y" :seen 99999999})]
+              (is (str/includes? (str (get-in r ["error" "message"])) "seen must be a rev you read") (pr-str r))))
           (testing "an archived card is sent too, so the client can drop it"
             (let [before (count (notifications c))]
               (inbound/submit! sys {:type :card/op :actor "operator" :labels [] :args {:card id :op "archive"}})

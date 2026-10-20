@@ -248,6 +248,13 @@
     (testing "a note is up to 8000 characters and may be empty"
       (is (re-find #"8000" (msg #(cards/added {} {:kind "note" :title "T" :text (apply str (repeat 8001 "x"))}))))
       (is (= "" (:text (cards/added {} {:kind "note" :title "T"})))))
+    (testing "characters are code points, so an emoji counts as one, not as its surrogate pair's two"
+      (let [emoji "\uD83D\uDE00"]
+        (is (some? (cards/added {} {:kind "note" :title (apply str (repeat 200 emoji))})))
+        (is (re-find #"at most 200" (msg #(cards/added {} {:kind "note" :title (apply str (repeat 201 emoji))}))))
+        (is (some? (cards/added {} {:kind "checklist" :title "T" :items [(apply str (repeat 150 emoji))]})))
+        (is (some? (cards/added {} {:kind "note" :title "T" :text (apply str (repeat 8000 emoji))})))
+        (is (re-find #"8000" (msg #(cards/added {} {:kind "note" :title "T" :text (apply str (repeat 8001 emoji))}))))))
     (testing "counts"
       (is (re-find #"at most 100 items" (msg #(cards/added {} {:kind "checklist" :title "T" :items (repeat 101 "i")}))))
       (is (re-find #"at most 40 rows" (msg #(cards/added {} {:kind "tracker" :title "T" :rows (repeat 41 "r")}))))

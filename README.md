@@ -157,7 +157,8 @@ There is one board, and every active card is on it, at most 30 at once.
 A card's id is the seq of the event that added it. Its items, rows and
 columns get small numbers of their own, counted per card from 1, which
 relay assigns and writes into the event. A title and every item, row and
-column is one line of 1 to 200 characters. A checklist has at most 100
+column is one line of 1 to 200 characters. relay counts characters as
+Unicode code points, so an emoji is one, in a note too. A checklist has at most 100
 items, a tracker 40 rows and 24 columns.
 
 Cards are private only. A public role is not offered the card tools, and
@@ -1254,7 +1255,9 @@ archived cards included so the client can drop them. A change made by
 another process (a role's wake, the command line) arrives this way.
 `_relay/cards/op` takes `{card, op, item, row, column, state, text,
 seen}` and answers `{"card": <wire form>, "changed": true|false}`, or a
-JSON-RPC error whose message is relay's refusal. An op from the client is
+JSON-RPC error whose message is relay's refusal. It refuses a parameter
+it does not know, naming it, so a typo such as `iten` or `sen` fails
+instead of passing as success; `sessionId` is accepted and ignored. An op from the client is
 yours, with no labels, whether or not relay acp was started with
 `--approvals`.
 

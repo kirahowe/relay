@@ -995,7 +995,8 @@ entity Card {
 
 value CardText {
     -- One line of 1 to card_line_length characters, except a note's
-    -- text, which may be empty and run to card_note_length.
+    -- text, which may be empty and run to card_note_length. Characters
+    -- are Unicode code points, so an emoji counts as one.
     text: String
     -- The labels and seq of the event that last wrote this text.
     labels: Set<Label>
@@ -3309,7 +3310,8 @@ rule RemoveDoc {
 -- event's seq as their rev. An op that changes nothing (ticking an item
 -- already done, writing the text already there) records nothing and says
 -- so. An op naming a card, item, row or column that does not exist is
--- refused, saying so.
+-- refused, saying so. So is an op with a parameter it does not know (a
+-- client's sessionId aside), so a misspelled seen cannot pass unchecked.
 --
 -- seen: an op that changes text may carry the rev the client last saw.
 -- It is refused when the text it changes was written after that rev, so

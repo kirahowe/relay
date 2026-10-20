@@ -258,9 +258,18 @@
   "What a _relay/cards/op asks for, as the :card/op command relay
   submits, or {:error why}. It is the operator's, with no labels."
   [params]
-  (let [{:strs [card]} params]
-    (if-not (integer? card)
+  (let [{:strs [card]} params
+        ;; A typo must not pass as success: a misspelled seen would turn
+        ;; off the stale-edit check. sessionId is what acp-tui sends.
+        known (into #{"card" "sessionId"} (map name) cards/op-fields)
+        unknown (sort (remove known (keys params)))]
+    (cond
+      (seq unknown)
+      {:error (str "_relay/cards/op has no parameter " (str/join ", " unknown) ". It takes card, "
+                   (str/join ", " (map name cards/op-fields)) ".")}
+      (not (integer? card))
       {:error "_relay/cards/op needs a card, by number."}
+      :else
       {:command {:type :card/op :actor core/operator :labels [] :public false
                  :args (into {:card card}
                              (keep (fn [k] (when (contains? params (name k)) [k (get params (name k))])))
