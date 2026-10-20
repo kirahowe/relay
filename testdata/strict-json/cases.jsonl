@@ -7,6 +7,7 @@
 {"name": "upper-case name is another member", "b64": "eyJqc29ucnBjIjoiMi4wIiwiTUVUSE9EIjoiX3JlbGF5L2NhcmRzL2NoYW5nZWQiLCJwYXJhbXMiOnt9fQ==", "expect": {"method": null}}
 {"name": "long s name is another member", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbcW/Ijp7fX0=", "expect": {"method": "session/update"}}
 {"name": "capitalised name with params a lax reader cannot type", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJNZXRob2QiOiJfcmVsYXkvY2FyZHMvY2hhbmdlZCIsInBhcmFtcyI6eyJzZXNzaW9uSWQiOjUsInJldiI6NywiY2FyZHMiOltdfX0=", "expect": {"method": "session/update"}}
+{"name": "capitalised names nested in params", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoic2Vzc2lvbi91cGRhdGUiLCJwYXJhbXMiOnsic2Vzc2lvbklkIjoiczEiLCJTZXNzaW9uSWQiOiJzMiIsInVwZGF0ZSI6eyJzZXNzaW9uVXBkYXRlIjoiYWdlbnRfbWVzc2FnZV9jaHVuayIsImNvbnRlbnQiOnsidHlwZSI6InRleHQiLCJUZXh0IjoieCIsInRleHQiOiJ5In19fX0=", "expect": {"method": "session/update"}}
 {"name": "duplicate top-level name", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoiX3JlbGF5L2NhcmRzL2NoYW5nZWQiLCJtZXRob2QiOiJzZXNzaW9uL3VwZGF0ZSIsInBhcmFtcyI6e319", "expect": "reject"}
 {"name": "duplicate with null", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoiX3JlbGF5L2NhcmRzL2NoYW5nZWQiLCJtZXRob2QiOm51bGx9", "expect": "reject"}
 {"name": "duplicate via escape", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoiYSIsIm1ldFx1MDA2OG9kIjoiYiJ9", "expect": "reject"}
