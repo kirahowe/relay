@@ -111,6 +111,17 @@
     (or (and (= "" ws) (number? a) (number? b))
         (= ::bad (json/parse-or (str (cheshire/generate-string a) ws (cheshire/generate-string b)) ::bad)))))
 
+;; The exponent is bounded by value, so leading zeros do not count
+;; (relay#58).
+(defspec an-exponent-passes-exactly-within-the-bound 300
+  (prop/for-all [n (gen/choose (* -3 json/max-exponent) (* 3 json/max-exponent))
+                 zeros (gen/choose 0 30)
+                 plus gen/boolean
+                 e (gen/elements ["e" "E"])]
+    (let [lit (str "1" e (cond (neg? n) "-" plus "+" :else "") (apply str (repeat zeros "0")) (abs n))
+          ok (map? (json/parse-or (str "{\"n\":" lit "}") nil))]
+      (= ok (<= (abs n) json/max-exponent)))))
+
 (deftest what-the-rule-refuses
   (doseq [[why s] [["nothing" ""] ["only whitespace" " \t"] ["a duplicate after unescaping" "{\"a\":1,\"\\u0061\":2}"]
                    ["a lone high surrogate" "[\"\\ud83d\"]"] ["a lone low surrogate" "[\"\\ude00\"]"]

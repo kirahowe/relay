@@ -12,6 +12,8 @@
     - no unpaired surrogate, escaped or not;
     - nesting at most 128 deep, the top value being level 1;
     - a number literal at most 1000 characters;
+    - a number's exponent between -9999 and 9999, by value, so leading
+      zeros in it are allowed as JSON allows them;
     - numbers exact: integers as Long or BigInt, others as BigDecimal.
 
   Member names are kept as written, so a lookup matches them exactly and
@@ -23,14 +25,15 @@
   babashka's cheshire has no way to keep a decimal exact. Each reads only
   RFC 8259 JSON, so once Jackson has passed a text they read it alike.
   The checks neither makes (surrogates, the length of a whole number
-  literal) are made here, on a fast path that skips them for a text that
+  literal, the exponent bound) are made here, on a fast path that skips them for a text that
   cannot break them.
 
   Pure: nothing here does I/O."
   (:refer-clojure :exclude [read])
   (:require [cheshire.core :as cheshire]
             [cheshire.factory :as factory]
-            [clojure.data.json :as data-json])
+            [clojure.data.json :as data-json]
+            [clojure.string :as str])
   (:import (java.nio ByteBuffer)
            (java.nio.charset CodingErrorAction StandardCharsets)))
 
@@ -41,6 +44,11 @@
 (def max-number-length
   "The most characters a number literal may have, sign and exponent included."
   1000)
+
+(def max-exponent
+  "The largest exponent a number may have, either way. Every reader of
+  the dialect enforces it, so none meets an exponent it cannot hold."
+  9999)
 
 (def ^:private checker
   (factory/make-json-factory
@@ -97,6 +105,36 @@
             (cond
               (not (.find m)) false
               (and (not= \" (.charAt s (.start m))) (> (- (.end m) (.start m)) max-number-length)) true
+              :else (recur)))))))
+
+(def ^:private big-exponent
+  ;; An exponent of five or more significant digits, which may be past
+  ;; max-exponent. Only a text with one anywhere is walked.
+  #"[eE][-+]?0*[1-9][0-9]{4}")
+
+(defn- exponent-in-bounds?
+  "Whether the exponent of the number literal n, if it has one, is within
+  max-exponent either way. Leading zeros do not count."
+  [^String n]
+  (let [i (max (.indexOf n "e") (.indexOf n "E"))]
+    (or (neg? i)
+        (let [digits (str/replace (subs n (inc i)) #"^[-+]?0*" "")]
+          (and (<= (count digits) 4)
+               (or (= "" digits) (<= (Long/parseLong digits) max-exponent)))))))
+
+(defn- exponent-too-big?
+  "Whether a number literal in s has an exponent past max-exponent. s has
+  passed Jackson, so outside strings every run of number characters is a
+  number literal, or the e that ends true or false."
+  [^String s]
+  (boolean
+   (and (re-find big-exponent s)
+        (let [m (re-matcher token s)]
+          (loop []
+            (cond
+              (not (.find m)) false
+              (and (not= \" (.charAt s (.start m)))
+                   (not (exponent-in-bounds? (subs s (.start m) (.end m))))) true
               :else (recur)))))))
 
 (def ^:private lone-surrogate
@@ -164,6 +202,8 @@
           (catch Throwable e (throw (ex-info (str "Not strict JSON: " (ex-message e)) {:type ::invalid} e))))
      (when (numbers-too-long? s)
        (throw (invalid (str "a number literal over " max-number-length " characters"))))
+     (when (exponent-too-big? s)
+       (throw (invalid (str "an exponent outside ±" max-exponent))))
      (when (lone-surrogate-in-text? s)
        (throw (invalid "an unpaired surrogate")))
      (let [v (try (data-json/read-str s :bigdec (not doubles?) :key-fn (if keywords? keyword identity))

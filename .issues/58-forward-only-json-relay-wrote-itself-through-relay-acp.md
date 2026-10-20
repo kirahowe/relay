@@ -241,7 +241,8 @@ test unrelated to these changes; left alone.
 - `parse-envelope` keywordizes the input by printing it and reading it
   back with the strict reader, so decimals in a tool's input stay exact.
 - Exponents past an int (`1e99999999999`) are refused: BigDecimal cannot
-  hold them. Fails closed.
+  hold them. Fails closed. Superseded by the exponent bound below, which
+  refuses them in all three readers.
 - Figures relay only sums never go through BigDecimal arithmetic that
   could throw: costs go through `double` at the edges
   (`core/wake-cost`, `acp/usage-update`, agentloop `cost-usd`) as
@@ -280,3 +281,39 @@ test unrelated to these changes; left alone.
   `relay.json`, but as text already decoded with U+FFFD for bad bytes.
   Go's encoder cannot emit invalid UTF-8, and none of these is passed
   on, so reading them as bytes was not worth the plumbing.
+
+## Exponent bound
+
+Codex finding 4 asked for a decision. The orchestrator decided: a
+number's exponent (the integer after `e` or `E`, sign included) must be
+between -9999 and 9999 inclusive, by value, so leading zeros are allowed
+as JSON allows them. The shared README says so, and the table has eight
+new cases: `1e9999`, `1E-9999` and `1e+0009999` pass; `1e10000`,
+`1e-10000`, `1e-2147483648` and a 30-digit exponent are refused; and
+`"1e10000"` inside a string passes. All three repos have the table
+byte for byte and enforce the bound in their strict readers, each with
+a property test that sweeps exponents to three times the bound with up
+to 30 leading zeros.
+
+Judgment calls:
+
+- The Go readers check the exponent of each number token they already
+  read for the length bound. The check strips the sign and leading
+  zeros and refuses more than four digits left, so no exponent is ever
+  converted to an int that could overflow.
+- relay checks it after Jackson has passed the text and before
+  data.json reads it, on the same fast path as the length check: only a
+  text with an exponent of five or more significant digits somewhere is
+  walked token by token, to skip ones inside strings. Once Jackson has
+  passed a text, every run of number characters outside a string is a
+  number literal or the `e` that ends `true` or `false`, which has no
+  digits and passes.
+- agentloop's tighter bound for model input (`Input`, 100-character
+  literals) uses the same scan, so it gets the exponent bound too. Model
+  output that breaks it would have been refused by relay downstream
+  anyway.
+- relay, agentloop and acp-tui docs (README, spec, DESIGN.md) list the
+  bound with the others.
+
+Checks: relay `bb test` passes (761 tests); agentloop `make test && make
+build` and acp-tui `make check && make build` pass.

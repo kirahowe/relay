@@ -3954,7 +3954,8 @@ surface ConversationBoundary {
         -- JSON rule: one object in valid UTF-8, no byte order mark,
         -- only whitespace after it, no member name twice at any depth,
         -- no unpaired surrogate, nesting at most 128, number literals at
-        -- most 1000 characters, names matched exactly, numbers exact.
+        -- most 1000 characters, exponents within -9999..9999 by value,
+        -- names matched exactly, numbers exact.
         -- A line that breaks it is passed on in neither direction; a
         -- permission request among such lines is refused when its id
         -- can be found. An agent message whose method starts with

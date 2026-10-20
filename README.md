@@ -1306,7 +1306,9 @@ line means the same to all of them or is not passed on. A line must be
 one JSON object in valid UTF-8 with no byte order mark and nothing but
 whitespace after it. No member name may appear twice in one object, at
 any depth. Unpaired surrogates are refused, nesting may go 128 levels
-deep, and a number literal may have at most 1000 characters. Numbers
+deep, a number literal may have at most 1000 characters, and an
+exponent must lie between -9999 and 9999 (by value, so leading zeros
+are fine). Numbers
 stay exact. relay passes a line that meets the rule on unchanged, apart
 from the previews and display text described above, and drops one that
 does not, in either direction. A dropped permission request is refused

@@ -36,3 +36,11 @@
 {"name": "invalid UTF-8 in string", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJzIjoiYf9iIn19", "expect": "reject"}
 {"name": "overlong UTF-8", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJzIjoiwK8ifX0=", "expect": "reject"}
 {"name": "encoded surrogate in UTF-8", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJzIjoi7aCAIn19", "expect": "reject"}
+{"name": "exponent 9999", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJuIjoxZTk5OTl9fQ==", "expect": {"method": "x"}}
+{"name": "exponent -9999 with capital E", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJuIjoxRS05OTk5fX0=", "expect": {"method": "x"}}
+{"name": "exponent 9999 with sign and leading zeros", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJuIjoxZSswMDA5OTk5fX0=", "expect": {"method": "x"}}
+{"name": "exponent 10000", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJuIjoxZTEwMDAwfX0=", "expect": "reject"}
+{"name": "exponent -10000", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJuIjoxZS0xMDAwMH19", "expect": "reject"}
+{"name": "exponent past an int", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJuIjoxZS0yMTQ3NDgzNjQ4fX0=", "expect": "reject"}
+{"name": "exponent of 30 digits", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJuIjoxZTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMX19", "expect": "reject"}
+{"name": "exponent text inside a string", "b64": "eyJqc29ucnBjIjoiMi4wIiwibWV0aG9kIjoieCIsInBhcmFtcyI6eyJzIjoiMWUxMDAwMCJ9fQ==", "expect": {"method": "x"}}
