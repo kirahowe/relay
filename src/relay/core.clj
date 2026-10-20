@@ -14,6 +14,7 @@
   memo that event 42 sent."
   (:require [clojure.string :as str]
             [clojure.walk]
+            [relay.cards :as cards]
             [relay.config :as config]
             [relay.reports :as reports]
             [relay.schedule :as schedule]
@@ -69,7 +70,7 @@
 (def empty-state
   {:roles {} :memos {} :routines {} :wakes {} :dead-letters {} :harnesses {}
    :notifications {} :guards {} :facts {} :notes {} :journals {} :docs {} :holds {}
-   :reports {} :ledger {} :trust-levels {}
+   :reports {} :ledger {} :trust-levels {} :cards {}
    ;; Every label any event has carried, which bounds what a session that
    ;; could read anything in relay may have seen.
    :seen-labels []
@@ -682,6 +683,39 @@
                   vec)
      :left-out (boolean (seq out))}))
 
+(defn card [state id] (get-in state [:cards id]))
+
+(defn card-labels
+  "What reading a card adds: private, and the labels of the text it shows
+  now (relay.cards/text-labels). Ticks and cell states add none."
+  [c]
+  (content-labels (cards/text-labels c)))
+
+(defn board
+  "The cards on the board, oldest first: the active ones, and with
+  `archived` the archived ones too."
+  [state archived]
+  (->> (vals (:cards state))
+       (filter #(or archived (cards/active? %)))
+       (sort-by :id)
+       vec))
+
+(defn prompt-cards
+  "The cards a wake's or a conversation's prompt lists for a role:
+  {:cards [{:id :title :kind :progress}], oldest first, :left-out}. Only
+  active cards whose title's labels, with private, are all among `base`,
+  the wake's labels, so the prompt never raises them; :left-out says
+  whether any other was left out. Counts are numbers and add no labels.
+  Nil for a public role, which has no board."
+  [state config role base]
+  (when-not (public-role? config role)
+    (let [{in true out false} (group-by #(within? (content-labels (get-in % [:title :labels])) base)
+                                        (board state false))]
+      {:cards (mapv (fn [c] {:id (:id c) :title (get-in c [:title :text]) :kind (:kind c)
+                             :progress (cards/progress c)})
+                    in)
+       :left-out (boolean (seq out))})))
+
 (defn carried-memo-labels
   "What a memo carried in a wake adds wherever its text is shown again:
   memo-labels, and for a run of a routine that is not public, the
@@ -1162,6 +1196,12 @@
 
 (defmethod evolve* "doc/removed" [state {:keys [data] :as event}]
   (add-doc-version state event (:path data) {:removed true}))
+
+(defmethod evolve* "card/added" [state event]
+  (update state :cards cards/add event))
+
+(defmethod evolve* "card/changed" [state event]
+  (update state :cards cards/change event))
 
 ;; --- decide
 
@@ -2884,6 +2924,36 @@
     (when (or (nil? v) (:removed v) (and (public-actor? tx) (not (doc-shown-to-public? state path v))))
       (reject! :not-found (str "There is no doc at " path ".")))
     (emit tx "doc/removed" {:path path})))
+
+;; cards
+;;
+;; Cards on the operator's board (relay.cards). They are private only: a
+;; public role is not offered the card tools, and a card command from a
+;; public role's session is refused, so a card is never on the public
+;; side. A card change never wakes a role and never notifies anyone; a
+;; role sees the new state when it next reads. The operator's own changes
+;; (the command line, a client's pane) carry no labels.
+
+(defn- card-keeper!
+  "Refuses a card command from anyone but the operator or a role that is
+  not public."
+  [{:keys [actor] :as tx}]
+  (when (public-actor? tx)
+    (reject! :forbidden (str actor " is a public role, and a public role has no board.")))
+  (when (= dispatcher actor)
+    (reject! :forbidden "Only the operator or a role keeps cards.")))
+
+(defmethod decide* :card/add [{:keys [state] :as tx} {:keys [args]}]
+  (card-keeper! tx)
+  (emit tx "card/added" (cards/added (:cards state) (select-keys args [:kind :title :items :rows :columns :text]))))
+
+(defmethod decide* :card/op [{:keys [state] :as tx} {{id :card :as args} :args}]
+  (card-keeper! tx)
+  ;; An op that changes nothing writes nothing; relay.cards says why.
+  (let [{:keys [op]} (cards/decide (:cards state) id (select-keys args cards/op-fields))]
+    (if op
+      (emit tx "card/changed" {:card id :op op})
+      tx)))
 
 ;; what the operator was shown
 ;;
