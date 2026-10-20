@@ -159,7 +159,8 @@ contract Tools {
         -- binds to the exact input.
 
     @invariant CallsComeInEnvelopes
-        -- A call reaches relay as exactly {input, labels, call_id}, the
+        -- A call reaches relay as exactly {input, labels, call_id}, read
+        -- by the strict JSON rule of relay acp (ConversationBoundary), the
         -- labels being the calling session's and known to relay, and
         -- its input fitting the tool's parameters. Anything else is
         -- refused before it runs and the model is told only that the
@@ -304,7 +305,8 @@ contract Tools {
     @invariant EnvelopeToolsAnswerInEnvelopes
         -- An external tool with the envelope protocol gets the call on
         -- stdin with the calling session's labels and its call id, and
-        -- must print exactly one result envelope with known labels,
+        -- must print exactly one result envelope, read by the strict
+        -- JSON rule (ConversationBoundary), with known labels,
         -- which are added to its static labels. Anything else, a
         -- failure or a timeout tells the model only that it failed.
 
@@ -3948,6 +3950,16 @@ surface ConversationBoundary {
         -- A display block's own text reaches the client inert (hidden
         -- characters escaped, links defanged, fenced), made from the
         -- display under _meta, which a capable client shows apart.
+        -- relay, agentloop and acp-tui read every line by one strict
+        -- JSON rule: one object in valid UTF-8, no byte order mark,
+        -- only whitespace after it, no member name twice at any depth,
+        -- no unpaired surrogate, nesting at most 128, number literals at
+        -- most 1000 characters, names matched exactly, numbers exact.
+        -- A line that breaks it is passed on in neither direction; a
+        -- permission request among such lines is refused when its id
+        -- can be found. An agent message whose method starts with
+        -- _relay/ never reaches the client. Every other line passes
+        -- unchanged.
 }
 
 surface NotificationBoundary {

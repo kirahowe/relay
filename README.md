@@ -242,8 +242,10 @@ With `:protocol :envelope` it speaks the same envelope protocol as `relay
 tool`: the call arrives on stdin as `{input, labels, call_id}`, the labels
 being the calling session's, and the tool prints exactly one `{content,
 is_error, labels}`. The labels it reports are added to its static
-`:labels`. Output that is not exactly one such object (a repeated key, a
-key in another case, a label relay does not know, anything else printed),
+`:labels`. Output that is not exactly one such object (JSON that breaks
+the strict rule described under ACP clients, such as a repeated key or
+bytes that are not UTF-8; a key in another case; a label relay does not
+know; anything else printed),
 a non-zero exit or a timeout tells the model only that the tool failed,
 and what it printed goes to relay's stderr. An envelope tool may give its input schema as
 `:parameters`, which relay checks before running it. cleanroom's `relay-tool`
@@ -1286,16 +1288,25 @@ open are listed, and a note has no `progress`. An element's `rev` is
 when its text was last written, which is what `seen` is checked against.
 
 Only relay speaks relay's methods to the client: relay acp drops any
-line from the agent whose method starts with `_relay/`, so an agent
-cannot fake a card update or a pane item. The check fails closed. relay
-also drops a line from the agent that is not one JSON value, and a line
-that gives a JSON-RPC field such as `method` twice or spells it another
-way that a Go client still reads as that field (`Method`, or `paramſ`,
-since Go folds case). A permission request among them is refused, so
-the agent is not left waiting. The same holds the other way: a client
-line that names one of relay's methods in another case, or spells a
-field two ways, never reaches the agent, and relay answers it with an
-error. Escapes such as `_relay\/cards` name the method they spell.
+message from the agent whose method starts with `_relay/`, so an agent
+cannot fake a card update or a pane item. Escapes such as
+`_relay\/cards` name the method they spell. Member names match exactly,
+so `Method` is just another member, which no component reads as the
+method.
+
+relay, agentloop and acp-tui read every line by one strict rule, so a
+line means the same to all of them or is not passed on. A line must be
+one JSON object in valid UTF-8 with no byte order mark and nothing but
+whitespace after it. No member name may appear twice in one object, at
+any depth. Unpaired surrogates are refused, nesting may go 128 levels
+deep, and a number literal may have at most 1000 characters. Numbers
+stay exact. relay passes a line that meets the rule on unchanged, apart
+from the previews and display text described above, and drops one that
+does not, in either direction. A dropped permission request is refused
+when relay can find its id, so the agent is not left waiting. A dropped
+client line gets an error answer when relay can find its id, unless
+that id is an open permission request's: then relay refuses the request
+to the agent.
 
 A message from
 the agent too long for relay to read whole (over 8 MB) never reaches the

@@ -81,6 +81,12 @@ The boundaries between the three components:
 ## Log
 
 - 2026-10-20: re-encoding plan stopped before any code; replaced by this.
+- 2026-10-20: relay's half landed: relay.json, the screen replaced, the
+  shared table and property tests, README and spec. bb test passes (754
+  tests); bb pentest passes the proxy and envelope scenarios (s5, consent-acp,
+  s6-acp-tui, s7-kill-conversation, s9, s16; 20 of 20); bb tck is
+  CONFORMANT (39 passed, 17 skipped as not advertised). The Codex loop is
+  still to run.
 
 ## relay's half: judgment calls
 
