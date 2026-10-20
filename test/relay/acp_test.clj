@@ -179,6 +179,42 @@
         (is (= "{\"after\":1}\n" seen) (str what ": only the next line reached the client")))
       (fs/delete-tree dir))))
 
+;; Regression (relay#58 review): the screen, the permission and display
+;; checks, the observer and the trace each read an agent line again, and
+;; the strict reader is slow enough that a large line waited seconds.
+(deftest relay-acp-reads-each-line-once-in-each-direction
+  (let [dir (fs/create-temp-dir {:prefix "relay-read-once"})
+        update-line (json/generate-string {:jsonrpc "2.0" :method "session/update"
+                                           :params {:sessionId "s1" :update {:sessionUpdate "agent_message_chunk"
+                                                                             :content {:type "text" :text "hi"}}}})
+        client-line (json/generate-string {:jsonrpc "2.0" :id 1 :method "session/prompt" :params {:sessionId "s1"}})
+        line-file (str dir "/line")
+        _ (spit line-file (str update-line "\n"))
+        reads (atom {})
+        ;; check! runs once each time the strict reader reads a text.
+        check @#'relay.json/check!
+        client-out (java.io.PipedOutputStream.)
+        client-in (java.io.PipedInputStream. client-out)
+        out (ByteArrayOutputStream.)]
+    (with-redefs [relay.json/check! (fn [s]
+                                      (swap! reads update s (fnil inc 0))
+                                      (check s))]
+      (let [run (future (dispatch/proxy! {:argv ["sh" "-c" (str "cat " line-file "; cat >/dev/null")]}
+                                         {:in client-in :out out :approvals true
+                                          :trace (str dir "/trace")}))]
+        (.write client-out (.getBytes (str client-line "\n") "UTF-8"))
+        (.flush client-out)
+        (loop [n 0] (when (and (< n 250) (not (and (str/includes? (.toString out "UTF-8") "\n")
+                                                         (get @reads client-line))))
+                      (Thread/sleep 20) (recur (inc n))))
+        (Thread/sleep 100)
+        (.close client-out)
+        (deref run 10000 nil)))
+    (is (= (str update-line "\n") (.toString out "UTF-8")) "the line passed unchanged")
+    (is (= {update-line 1 client-line 1} (select-keys @reads [update-line client-line]))
+        "each line was read once, however many checks asked about it")
+    (fs/delete-tree dir)))
+
 (deftest a-client-line-too-long-to-read-never-reaches-the-agent
   ;; Regression: a client line past the limit went on unread, so a huge
   ;; _relay/cards/op, the operator's card text with it, reached the agent.

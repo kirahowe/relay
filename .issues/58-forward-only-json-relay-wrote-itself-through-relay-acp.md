@@ -137,6 +137,26 @@ The boundaries between the three components:
   before. The reader's `:doubles?` option exists for such reads but no
   site needs it yet.
 
+- relay acp reads each line once per direction. The screen, the
+  permission and display checks, the observer and the trace all ask
+  `relay.acp/message` about the same line, and the strict reader runs
+  Jackson and then data.json, about 150 ms on a 6 MB line. `message`
+  keeps the last string it read on each thread and returns its answer
+  when asked about the same string object again; each direction is copied
+  on its own thread. Strings cannot change, so the answer cannot go
+  stale. Bytes are read every time. I chose this over passing the parsed
+  message through every function because it leaves their signatures
+  alone. Test: relay-acp-reads-each-line-once-in-each-direction (six
+  reads of the agent's line before the change). The surrogate checks also
+  got cheaper: the UTF-8 encoder's canEncode finds a raw lone surrogate,
+  and indexOf rules out a line with no `\u` escape before any regex
+  runs.
+- A re-encoded line (with-preview, with-inert-displays) loses the sign of
+  a negative zero: `-0` and `-0.0` come out as `0` and `0.0`, because
+  data.json reads them as Long 0 and BigDecimal 0.0. Only lines carrying
+  a preview or a display are re-encoded. Left alone: it is a
+  low-bandwidth difference, which the threat model puts out of scope.
+
 ### Reads left on cheshire, deliberately
 
 - `relay.log`: the event log is relay's own, written by relay; it is not

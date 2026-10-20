@@ -104,10 +104,22 @@
   ;; matches only a surrogate standing alone.
   #"[\x{D800}-\x{DFFF}]")
 
-(def ^:private maybe-surrogate
-  ;; A lone surrogate in the text, or an escape that may decode to half
-  ;; of a pair.
-  #"[\x{D800}-\x{DFFF}]|\\u[dD][89a-fA-F]")
+(def ^:private surrogate-escape
+  ;; An escape that may decode to half of a pair.
+  #"\\u[dD][89a-fA-F]")
+
+(defn- lone-surrogate-in-text?
+  "Whether s has a surrogate standing alone, not as half of a pair. The
+  encoder's check is a good deal faster than a regex over a large line."
+  [^String s]
+  (not (.canEncode (.newEncoder StandardCharsets/UTF_8) s)))
+
+(defn- maybe-escaped-surrogate?
+  "Whether s has an escape that may decode to half of a pair. Most lines
+  have no escape of the form at all, which indexOf rules out at once."
+  [^String s]
+  (and (not (neg? (.indexOf s "\\u")))
+       (boolean (re-find surrogate-escape s))))
 
 (defn- lone-surrogate? [v]
   (cond
@@ -150,9 +162,11 @@
           (catch Throwable e (throw (ex-info (str "Not strict JSON: " (ex-message e)) {:type ::invalid} e))))
      (when (numbers-too-long? s)
        (throw (invalid (str "a number literal over " max-number-length " characters"))))
+     (when (lone-surrogate-in-text? s)
+       (throw (invalid "an unpaired surrogate")))
      (let [v (try (data-json/read-str s :bigdec (not doubles?) :key-fn (if keywords? keyword identity))
                   (catch Throwable e (throw (ex-info (str "Not strict JSON: " (ex-message e)) {:type ::invalid} e))))]
-       (when (and (re-find maybe-surrogate s) (lone-surrogate? v))
+       (when (and (maybe-escaped-surrogate? s) (lone-surrogate? v))
          (throw (invalid "an unpaired surrogate")))
        v))))
 

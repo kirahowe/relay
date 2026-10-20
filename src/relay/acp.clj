@@ -70,13 +70,35 @@
   without a cost."
   {:requests {} :sessions [] :last nil :costs {} :unpriced false})
 
+(def ^:private last-message
+  "The last string line this thread read as a message, and what it read:
+  relay acp asks about one line many times (the screen, permissions,
+  displays, the observer, the trace), and the strict reader is slow
+  enough on a large line that reading it once matters. Kept per thread,
+  since each direction is copied on its own thread; it holds at most one
+  line per thread."
+  (ThreadLocal.))
+
 (defn message
   "A line as a message: the JSON object it is, read by relay's strict
   reader (relay.json), or nil when it is not one. Every reader of ACP in
   relay, agentloop and acp-tui reads by the same rule, so a line that
-  passes means the same to all of them."
+  passes means the same to all of them.
+
+  The same string asked about again on the same thread is not read again.
+  Strings cannot change, so the answer cannot go stale; bytes, which can,
+  are read every time."
   [line]
-  (when (or (string? line) (bytes? line)) (strict/object line)))
+  (cond
+    (string? line)
+    (let [[seen msg :as hit] (.get ^ThreadLocal last-message)]
+      (if (and hit (identical? seen line))
+        msg
+        (let [msg (strict/object line)]
+          (.set ^ThreadLocal last-message [line msg])
+          msg)))
+
+    (bytes? line) (strict/object line)))
 
 (defn relay-method?
   "Whether a message's method is one of relay's: its exact method member
