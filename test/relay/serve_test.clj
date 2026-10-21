@@ -376,3 +376,44 @@
       (.take ^java.util.concurrent.BlockingQueue q)
       (is (= :put (deref third 2000 :waiting)) "until there is room")
       (is (= 2 (.size ^java.util.concurrent.BlockingQueue q))))))
+
+;; --- Codex round 2
+
+(deftest ^:volley/serial serve-never-removes-what-is-not-its-socket
+  (with-service
+    (fn [service]
+      (stop-service! service)
+      (doseq [[what make!] [["a file" #(spit % "Kira's notes")] ["a directory" #(fs/create-dirs %)]]]
+        (testing what
+          (let [path (str (fs/parent *socket*) "/taken")
+                _ (make! path)
+                r (deref (p/process [support/relay-bin "serve" "--data" (data) "--socket" path "--run-dir" *run-dir*]
+                                    {:out :string :err :string})
+                         15000 :timeout)]
+            (is (= 1 (:exit r)) (pr-str r))
+            (is (str/includes? (str (:err r)) "not a socket"))
+            (if (= "a file" what)
+              (is (= "Kira's notes" (slurp path)) "left as it was")
+              (is (fs/directory? path)))
+            (fs/delete-tree path)))))))
+
+(deftest a-data-directory-is-known-by-its-real-path
+  (let [base (str (fs/create-temp-dir {:dir "/tmp" :prefix "rsreal"}))
+        data (str base "/data")
+        link (str base "/link")]
+    (try
+      (fs/create-dirs data)
+      (fs/create-sym-link link data)
+      (binding [serve/*run-dir* "/r"]
+        (is (= (serve/lock-path data) (serve/lock-path link)) "a link to it")
+        (is (= (serve/socket-path data nil) (serve/socket-path link nil)))
+        (is (= (serve/lock-path data) (serve/lock-path (str "/private" data))) "/tmp and /private/tmp on macOS"))
+      (finally (fs/delete-tree base)))))
+
+(deftest the-service-takes-only-so-many-connections
+  (let [eng (#'serve/engine nil :service false {:max-conns 2})
+        conn #(#'serve/add-connection! eng {:in (java.io.PipedInputStream. (java.io.PipedOutputStream.))
+                                            :out (java.io.ByteArrayOutputStream.) :origin :socket})]
+    (is (some? (conn)))
+    (is (some? (conn)))
+    (is (nil? (conn)) "a third is refused")))

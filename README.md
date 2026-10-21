@@ -1364,7 +1364,9 @@ turn finishes after you close acp-tui, and opening it again (or a client
 on another device) picks the conversation up with what it said so far.
 It listens on a Unix socket of the data directory's own, under
 `~/.relay/run/`, which only you can open. `relay acp`, and so `relay chat`,
-uses it whenever it runs. Only one service runs for a data directory.
+uses it whenever it runs. Only one service runs for a data directory,
+however you name the directory. The `--socket` and `--run-dir` options
+exist only for relay's own tests; a real service uses neither.
 
 A permission request waits while no client that may answer it is
 attached, and relay tells you once through your notifications that a

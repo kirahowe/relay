@@ -54,7 +54,7 @@ Every command needs the data directory, from --data <dir> or from the file
                                       the chat client (acp-tui unless relay.edn
                                       names another with :chat-client), with
                                       <role> in focus
-  relay acp [<role>] [--trace <file>] [--approvals] [--socket <path>]
+  relay acp [<role>] [--trace <file>] [--approvals]
                                       talk with the roles from an ACP client, which
                                       runs this as its agent command: through
                                       relay serve when it runs, else in this
@@ -63,12 +63,12 @@ Every command needs the data directory, from --data <dir> or from the file
                                       appends the traffic to <file> as JSON lines;
                                       --approvals lets the client answer held tool
                                       calls, which relay otherwise refuses
-  relay serve [--socket <path>] [--run-dir <dir>]
-                                      run the service that keeps conversations
+  relay serve                         run the service that keeps conversations
                                       going while no client is attached (launchd
                                       runs this; see setup/); its lock and
-                                      socket go in ~/.relay/run unless
-                                      --run-dir names another directory
+                                      socket are in ~/.relay/run. --socket and
+                                      --run-dir, here and for relay acp, are
+                                      for relay's own tests only
   relay tick [--pause-file <f>]       one dispatcher pass (launchd runs this); does
                                       nothing while the pause file exists, which
                                       bb deploy makes

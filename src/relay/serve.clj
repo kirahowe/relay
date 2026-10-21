@@ -39,16 +39,18 @@
 
 (def ^:dynamic *run-dir*
   "The directory the service's socket and lock go in. Bound in tests;
-  `--run-dir` names another for one command."
+  `--run-dir`, for tests only, names another for one command."
   nil)
 
 (defn run-dir [& [dir]]
   (or dir *run-dir* (str (fs/path (System/getProperty "user.home") ".relay" "run"))))
 
 (defn- data-key
-  "A short name for a data directory: a hash of its absolute path."
+  "A short name for a data directory: a hash of its real path, so a link
+  to it, or /tmp and /private/tmp on macOS, name the same one."
   [data-dir]
-  (subs (core/sha256 (str (fs/normalize (fs/absolutize data-dir)))) 0 16))
+  (let [real (try (str (fs/real-path data-dir)) (catch Exception _ (str (fs/normalize (fs/absolutize data-dir)))))]
+    (subs (core/sha256 real) 0 16)))
 
 (defn socket-path
   "The socket the service for a data directory listens on: `socket` when
@@ -128,8 +130,14 @@
   stopped reading."
   (* 64 1024 1024))
 
-(defn- engine [sys mode approvals & [{:keys [capacity] :or {capacity event-capacity}}]]
-  {:sys sys :mode mode :approvals approvals :q (LinkedBlockingQueue. (int capacity))
+(def max-connections
+  "How many clients may be connected at once. Each holds at most
+  relay.hub/default-max-pending requests and write-backlog of output, so
+  this bounds what the service keeps for its clients."
+  64)
+
+(defn- engine [sys mode approvals & [{:keys [capacity max-conns] :or {capacity event-capacity max-conns max-connections}}]]
+  {:sys sys :mode mode :approvals approvals :q (LinkedBlockingQueue. (int capacity)) :max-conns max-conns
    ;; What the loop thread itself raises (a connection it gave up on)
    ;; goes here, so the loop never waits on its own full queue.
    :own (LinkedBlockingQueue.) :loop-thread (atom nil)
@@ -270,9 +278,17 @@
 
 ;; --- connections
 
+(declare connection!)
+
 (defn- add-connection!
-  "Starts a connection's reader and writer. Lines it sends come to the hub
-  as :connection-line, and its end as :connection-closed, once."
+  "Starts a connection's reader and writer, or returns nil when the
+  service has as many as it takes. Lines it sends come to the hub as
+  :connection-line, and its end as :connection-closed, once."
+  [eng opts]
+  (when (< (count @(:conns eng)) (:max-conns eng))
+    (connection! eng opts)))
+
+(defn- connection!
   [eng {:keys [^java.io.InputStream in ^java.io.OutputStream out origin approvals role trace on-close]}]
   (let [cid (swap! (:next-conn eng) inc)
         q (LinkedBlockingQueue.)
@@ -327,6 +343,65 @@
       ch
       (do (.close ch) nil))))
 
+(defn- socket-in-the-way
+  "Why the socket path cannot be used, or nil. Only a socket that no
+  service answers on (one a service left when it died) is taken over;
+  anything else there, a file or a directory, is left alone."
+  [path]
+  (when (fs/exists? path {:nofollow-links true})
+    (let [mode (try (java.nio.file.Files/getAttribute (fs/path path) "unix:mode"
+                                                      (into-array java.nio.file.LinkOption [java.nio.file.LinkOption/NOFOLLOW_LINKS]))
+                    (catch Exception _ 0))]
+      (cond
+        (not= 0140000 (bit-and mode 0170000))
+        (str path " is there and is not a socket. relay leaves it alone; name another with --socket.")
+        (try (.close (SocketChannel/open (UnixDomainSocketAddress/of ^String path))) true
+             (catch Exception _ false))
+        (str "another service listens on " path ".")))))
+
+(defn- run-service!
+  "Listens on `path`, holding `lock`, until SIGTERM or SIGINT."
+  [sys path ^FileChannel lock ready]
+  (let [_ (when (fs/exists? path {:nofollow-links true}) (fs/delete path))
+        server (doto (ServerSocketChannel/open StandardProtocolFamily/UNIX)
+                 (.bind (UnixDomainSocketAddress/of ^String path)))
+        _ (fs/set-posix-file-permissions path "rw-------")
+        eng (engine sys :service false)
+        stop (promise)
+        quit (promise)]
+    (dispatch/reap-lost-wakes! sys)
+    (process! eng (roster-event eng))
+    (watch-log! eng quit)
+    (daemon "relay-hub" (fn [] (run-loop! eng (constantly false)) (deliver quit true)))
+    (daemon "relay-accept"
+            (fn []
+              (loop []
+                (when-let [ch (try (.accept server) (catch Exception _ nil))]
+                  (when-not (add-connection! eng {:in (Channels/newInputStream ^SocketChannel ch)
+                                                  :out (Channels/newOutputStream ^SocketChannel ch)
+                                                  :origin :socket :approvals false
+                                                  :on-close #(try (.close ^SocketChannel ch) (catch Exception _ nil))})
+                    (binding [*out* *err*] (println "relay serve turned a client away: it has as many as it takes."))
+                    (try (.close ^SocketChannel ch) (catch Exception _ nil)))
+                  (recur)))))
+    (println (str "relay serve: listening on " path))
+    (some-> ready (deliver path))
+    (dispatch/with-signals {"TERM" #(deliver stop :term) "INT" #(deliver stop :int) "HUP" (fn [])}
+      (fn []
+        @stop
+        (.close server)
+        ;; Every conversation ends, and its wake records the end.
+        (doseq [[_ c] @(:convs eng)] ((:stop! c)))
+        (let [deadline (+ (System/currentTimeMillis) dispatch/stop-grace-ms 10000)]
+          (while (and (seq @(:convs eng)) (< (System/currentTimeMillis) deadline))
+            (Thread/sleep 50)))
+        (doseq [[_ c] @(:conns eng)] ((:close! c)))
+        (enqueue! eng ::quit)
+        (deref quit 5000 nil)
+        (fs/delete-if-exists path)
+        (.close ^FileChannel lock)
+        0))))
+
 (defn serve!
   "Runs the relay service for the system's data directory until SIGTERM
   or SIGINT: listens on the socket, runs a conversation per role for its
@@ -337,51 +412,22 @@
   [sys {:keys [socket ready run-dir]}]
   (binding [*out* *err*]
     (let [path (socket-path (:data-dir sys) socket run-dir)
-          lock-file (lock-path (:data-dir sys) run-dir)]
-      (doseq [dir (distinct [(fs/parent path) (fs/parent lock-file)])]
-        (fs/create-dirs dir)
-        (fs/set-posix-file-permissions dir "rwx------"))
-      ;; Per data directory, whatever socket either service listens on.
-      (if-let [lock (lock! lock-file)]
-        (let [_ (fs/delete-if-exists path)
-              server (doto (ServerSocketChannel/open StandardProtocolFamily/UNIX)
-                       (.bind (UnixDomainSocketAddress/of ^String path)))
-              _ (fs/set-posix-file-permissions path "rw-------")
-              eng (engine sys :service false)
-              stop (promise)
-              quit (promise)]
-          (dispatch/reap-lost-wakes! sys)
-          (process! eng (roster-event eng))
-          (watch-log! eng quit)
-          (daemon "relay-hub" (fn [] (run-loop! eng (constantly false)) (deliver quit true)))
-          (daemon "relay-accept"
-                  (fn []
-                    (loop []
-                      (when-let [ch (try (.accept server) (catch Exception _ nil))]
-                        (add-connection! eng {:in (Channels/newInputStream ^SocketChannel ch)
-                                              :out (Channels/newOutputStream ^SocketChannel ch)
-                                              :origin :socket :approvals false
-                                              :on-close #(try (.close ^SocketChannel ch) (catch Exception _ nil))})
-                        (recur)))))
-          (println (str "relay serve: listening on " path))
-          (some-> ready (deliver path))
-          (dispatch/with-signals {"TERM" #(deliver stop :term) "INT" #(deliver stop :int) "HUP" (fn [])}
-            (fn []
-              @stop
-              (.close server)
-              ;; Every conversation ends, and its wake records the end.
-              (doseq [[_ c] @(:convs eng)] ((:stop! c)))
-              (let [deadline (+ (System/currentTimeMillis) dispatch/stop-grace-ms 10000)]
-                (while (and (seq @(:convs eng)) (< (System/currentTimeMillis) deadline))
-                  (Thread/sleep 50)))
-              (doseq [[_ c] @(:conns eng)] ((:close! c)))
-              (enqueue! eng ::quit)
-              (deref quit 5000 nil)
-              (fs/delete-if-exists path)
-              (.close ^FileChannel lock)
-              0)))
-        (do (println (str "relay serve is already running for " (:data-dir sys) " (" path ")."))
-            1)))))
+          lock-file (lock-path (:data-dir sys) run-dir)
+          rdir (fs/parent lock-file)]
+      ;; The run directory is relay's own and only the user's. A --socket
+      ;; elsewhere goes in a directory that must exist, and is left as it
+      ;; is.
+      (fs/create-dirs rdir)
+      (fs/set-posix-file-permissions rdir "rwx------")
+      (if-not (fs/directory? (fs/parent path))
+        (do (println (str "relay serve: " (fs/parent path) " is not a directory.")) 1)
+        ;; Per data directory, whatever socket either service listens on.
+        (if-let [lock (lock! lock-file)]
+          (if-let [why (socket-in-the-way path)]
+            (do (.close ^FileChannel lock) (println (str "relay serve: " why)) 1)
+            (run-service! sys path lock ready))
+          (do (println (str "relay serve is already running for " (:data-dir sys) " (" path ")."))
+              1))))))
 
 ;; --- relay acp
 
