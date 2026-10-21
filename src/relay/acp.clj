@@ -4,7 +4,7 @@
   reads the traffic line by line to learn what the conversation's wake
   should record: the sessions it used, and how its last turn ended.
 
-  Nothing here does I/O. relay.dispatch/acp! is the shell.
+  Nothing here does I/O. relay.dispatch/proxy! and relay.serve are the shell.
 
   A direction is :client (client to agent) or :agent (agent to client).
 

@@ -51,6 +51,12 @@
         (f dir sys))
       (finally (fs/delete-tree dir)))))
 
+(defn- conversation-running? [sys]
+  (let [deadline (+ (System/currentTimeMillis) 30000)]
+    (loop []
+      (or (some? (core/open-conversation (inbound/current-state sys) "clerk"))
+          (when (< (System/currentTimeMillis) deadline) (Thread/sleep 50) (recur))))))
+
 (defn- notifications [c]
   (filter #(= "_relay/cards/changed" (get % "method")) @(:messages c)))
 
@@ -77,7 +83,10 @@
       (let [id (add-card! sys)
             c (client/start! [support/relay-bin "acp" "clerk" "--data" (:data-dir sys)] {:dir dir})]
         (try
-          (is (client/await! c #(= "session/update" (get % "method")) 30000) "the agent is running")
+          ;; The hub passes a session/update only to a client attached to
+          ;; the session, and this agent opens none, so the log says when
+          ;; it runs.
+          (is (conversation-running? sys) "the agent is running")
           (testing "the agent's lines with relay's methods never reach the client"
             (is (not-any? #(str/includes? (str %) "FORGED") @(:lines c)))
             (is (not-any? #(= 77 (get % "id")) @(:messages c))))
@@ -198,7 +207,10 @@
     (fn [dir sys]
       (let [c (client/start! [support/relay-bin "acp" "clerk" "--data" (:data-dir sys)] {:dir dir})]
         (try
-          (is (client/await! c #(= "session/update" (get % "method")) 30000) "the agent is running")
+          ;; The hub passes a session/update only to a client attached to
+          ;; the session, and this agent opens none, so the log says when
+          ;; it runs.
+          (is (conversation-running? sys) "the agent is running")
           (Thread/sleep 300)
           (let [first-cards (client/request! c "_relay/cards" {})
                 ping (client/request! c "ping" {})

@@ -415,7 +415,7 @@ enum DeadLetterReason { never_closed | blocked | recipient_removed }
 enum NotificationKind {
     memo_for_operator | work_abandoned | runaway_guard_tripped
     | harness_needs_attention | harness_unreachable
-    | hold_opened | memo_quarantined | permission_refused | session_ended
+    | hold_opened | memo_quarantined | permission_refused | permission_waiting | session_ended
     | report_verified | report_verify_failed | trust_level_lowered
     | budget_reached | brief | tools_unavailable | shown
 }
@@ -2444,13 +2444,40 @@ rule AskTheClient {
     ensures: PermissionRecorded(wake: wake, call: call, tool: tool, input_sha256: input_sha256)
 
     @guidance
-        -- In a conversation agentloop asks the ACP client about a held
-        -- call. relay acp passes the request on only when it was started
-        -- with --approvals, as relay chat starts it for the operator's
-        -- terminal. The client's answer goes back only if it picks an
-        -- option the agent offered, or cancels; anything else, and a
-        -- request still open when the client goes, is a refusal. The
-        -- request and the answer are both recorded.
+        -- In a conversation agentloop asks its ACP client about a held
+        -- call. Its client is relay's hub (ConversationService), which
+        -- sends the request to every attached client started with
+        -- --approvals, as relay chat starts it for the operator's
+        -- terminal, each under an id of its own. The first answer goes
+        -- to the agent, and only if it picks an option the agent offered,
+        -- or cancels; anything else, and a request still open when the
+        -- conversation ends, is a refusal. Every other client it went to
+        -- is told it is settled, and an answer from one of them later is
+        -- dropped. A client that attaches while the request is open gets
+        -- it then. The request and the answer are both recorded.
+}
+
+rule TellTheOperatorAPermissionWaits {
+    when: PermissionUnattended(wake, call)
+
+    requires: wake.chat
+    requires: wake.status = running
+    requires: exists Permission{wake: wake, call: call, outcome: null}   -- black box: asked and not answered
+
+    ensures: Notification.created(
+        kind: permission_waiting,
+        title: wake.role.id + " is waiting for you in a conversation",
+        body: waiting_note(wake.role),   -- black box: open relay chat to answer it
+        about: wake.role,
+        created_at: now,
+        delivery: pending
+    )
+
+    @guidance
+        -- relay serve holds a conversation's permission request while no
+        -- client that may answer it is attached, and asks for this once
+        -- per request. The notification names the role only: the
+        -- request's text is the agent's.
 }
 
 rule RefuseForAClientWithoutApprovals {
@@ -4070,14 +4097,17 @@ surface ConversationBoundary {
         PermissionRequested(wake, call, tool, input_sha256, approvals)
         PaneTrustRequested(conversation, path, version, sha256)
         TurnReported(wake, stop_reason)
+        PermissionUnattended(wake, call)
 
     @guidance
-        -- Each session/prompt from the client asks for a turn
+        -- Each session/prompt from a client asks for a turn
         -- (TurnRequested, as the operator) before it reaches the agent.
-        -- One refused is answered with relay's reason as a JSON-RPC
-        -- error and goes no further. The agent's answer to a prompt that
-        -- started a turn reports the turn's end with its stopReason, or
-        -- error for an error, before the client sees the answer.
+        -- One refused because the role is busy waits, and is asked for
+        -- again whenever the log changes; one refused for another reason
+        -- is answered with relay's reason as a JSON-RPC error and goes no
+        -- further. The agent's answer to a prompt that started a turn
+        -- reports the turn's end with its stopReason, or error for an
+        -- error, before any client sees the answer.
         -- relay acp sees the agent's session/request_permission go by.
         -- When the call's tool has a preview command, relay runs it and
         -- adds its markdown to the request's toolCall.content, marked
@@ -4098,6 +4128,40 @@ surface ConversationBoundary {
         -- from the agent unless it answers a request of the client's that
         -- relay passed on and that the agent has not answered yet. Every
         -- other line passes unchanged.
+}
+
+surface ConversationService {
+    -- relay.hub, carried out by relay serve or, with no service running,
+    -- by relay acp in its own process.
+
+    @guidance
+        -- Clients are connections: relay acp's stdio, or the service's
+        -- Unix socket, which only the operator's user can open. A
+        -- connection through relay acp says first, in a _relay/connect
+        -- line relay acp writes itself, whether it may answer permission
+        -- requests and which role it is for; relay takes that line only
+        -- as a socket connection's first, never later and never on stdio.
+        -- A role has at most one live conversation (OpenConversation).
+        -- session/new for a role opens it, or attaches the connection to
+        -- the live one; session/load attaches by session; nothing ended
+        -- is reopened. An attaching connection gets the conversation's
+        -- updates so far, at most a bounded amount, with a notice when
+        -- older ones were dropped, then _relay/replayed, then every later
+        -- update, with no gap and no duplicate. Each prompt also reaches
+        -- the other attached connections as the operator's message.
+        -- Every request a connection sends is answered once; relay gives
+        -- each request it passes on an id of its own, so connections'
+        -- ids never meet. A turn keeps running when every connection has
+        -- gone. The service keeps a conversation until the operator ends
+        -- it (_relay/conversations/end) or the service stops; relay acp in
+        -- its own process ends its conversations when its connection
+        -- ends, and refuses a permission request nobody can answer, as
+        -- before. Stopping the service ends every conversation, a turn in
+        -- progress with it (EndTurn, ended), and records it; one a dead
+        -- service left is ended as lost (EndLostWakes) by the next.
+        -- _relay/roles gives every role's status (relay.roster, plus a
+        -- turn that waits shown as queued) and then the whole list again
+        -- whenever any of it changes.
 }
 
 surface NotificationBoundary {

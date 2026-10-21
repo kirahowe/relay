@@ -3,7 +3,8 @@
   requests on its stdin, and keeps every message the agent writes. It
   answers the agent's own requests: a permission request with ::permit,
   a function of the request, if given, else by cancelling it, and
-  anything else with method-not-found."
+  anything else with method-not-found. With ::manual it answers none,
+  leaving them to the test."
   (:require [babashka.process :as p]
             [cheshire.core :as json]
             [clojure.java.io :as io]))
@@ -33,7 +34,7 @@
   string keys, and :lines every raw stdout line."
   [argv opts]
   (let [permit (::permit opts)
-        proc (p/process (vec argv) (merge {:err :string} (dissoc opts ::permit)))
+        proc (p/process (vec argv) (merge {:err :string} (dissoc opts ::permit ::manual)))
         client {:proc proc
                 :writer (io/writer (:in proc))
                 :messages (atom [])
@@ -47,7 +48,7 @@
                       (swap! (:lines client) conj line)
                       (let [msg (try (json/parse-string line) (catch Exception _ nil))]
                         (swap! (:messages client) conj msg)
-                        (when (and (map? msg) (get msg "method") (contains? msg "id"))
+                        (when (and (map? msg) (get msg "method") (contains? msg "id") (not (::manual opts)))
                           (try (send! client (answer msg permit)) (catch java.io.IOException _ nil)))))
                     (catch java.io.IOException _ nil))))]
     (.setDaemon reader true)
@@ -113,13 +114,15 @@
     :timeout))
 
 (defn handshake!
-  "initialize then session/new. Returns the session id."
-  [client cwd]
+  "initialize then session/new, for `role` when given. Returns the session
+  id."
+  [client cwd & [role]]
   (let [init (request! client "initialize" {:protocolVersion 1
                                             :clientCapabilities {:fs {:readTextFile false
                                                                       :writeTextFile false}}})]
     (when-not (get init "result") (throw (ex-info "initialize failed" {:response init})))
-    (let [new (request! client "session/new" {:cwd cwd :mcpServers []})]
+    (let [new (request! client "session/new" (cond-> {:cwd cwd :mcpServers []}
+                                               role (assoc :_meta {"relay/role" role})))]
       (or (get-in new ["result" "sessionId"])
           (throw (ex-info "session/new failed" {:response new}))))))
 

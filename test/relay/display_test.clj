@@ -405,13 +405,19 @@
 ;; --- the pane in relay chat, with the real acp-tui on a pseudo-terminal
 
 (def acp-tui-bin
-  (let [f (fs/absolutize "../acp-tui/bin/acp-tui")] (when (fs/executable? f) (str (fs/normalize f)))))
+  "../acp-tui's build, when it can open a role's conversation (--open,
+  relay#65), which relay chat asks of it."
+  (let [f (fs/absolutize "../acp-tui/bin/acp-tui")]
+    (when (and (fs/executable? f)
+               (let [r (p/shell {:out :string :err :string :continue true} (str f) "--help")]
+                 (str/includes? (str (:out r) (:err r)) "--open")))
+      (str (fs/normalize f)))))
 
 (def drive-py (str (fs/absolutize "pentest/pty/drive.py")))
 
 (deftest the-pane-in-relay-chat-shows-a-display-and-trusts-it
   (if-not (and bin acp-tui-bin (fs/exists? "/usr/bin/python3"))
-    (println "SKIPPED: needs agentloop, ../acp-tui/bin/acp-tui and python3")
+    (println "SKIPPED: needs agentloop, ../acp-tui/bin/acp-tui with --open (relay#65) and python3")
     (with-world asks-venues
       (fn []
         (let [cfg (read-string (slurp (str (data) "/relay.edn")))

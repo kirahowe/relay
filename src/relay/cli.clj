@@ -20,6 +20,7 @@
             [relay.render :as render]
             [relay.reports :as reports]
             [relay.roster :as roster]
+            [relay.serve :as serve]
             [relay.setup :as setup]
             [relay.text :as text]
             [relay.tools :as tools]
@@ -49,15 +50,22 @@ Every command needs the data directory, from --data <dir> or from the file
   relay unroutine <role> <name>       remove a routine
   relay retry <role>                  requeue a role's dead-lettered memos
   relay wake <role> [--note <text>]   run a role now, ignoring retry delays
-  relay chat <role>                   talk with a role in this terminal, through
+  relay chat [<role>]                 talk with the roles in this terminal, through
                                       the chat client (acp-tui unless relay.edn
-                                      names another with :chat-client)
-  relay acp <role> [--trace <file>] [--approvals]
-                                      talk with a role from an ACP client, which
-                                      runs this as its agent command; --trace
+                                      names another with :chat-client), with
+                                      <role> in focus
+  relay acp [<role>] [--trace <file>] [--approvals] [--socket <path>]
+                                      talk with the roles from an ACP client, which
+                                      runs this as its agent command: through
+                                      relay serve when it runs, else in this
+                                      process; <role> is the role a session is
+                                      for when the client does not say; --trace
                                       appends the traffic to <file> as JSON lines;
                                       --approvals lets the client answer held tool
                                       calls, which relay otherwise refuses
+  relay serve [--socket <path>]       run the service that keeps conversations
+                                      going while no client is attached (launchd
+                                      runs this; see setup/)
   relay tick [--pause-file <f>]       one dispatcher pass (launchd runs this); does
                                       nothing while the pause file exists, which
                                       bb deploy makes
@@ -492,7 +500,7 @@ and --instructions marks the id public too.")
             :tail :long :data :string :search :string :as-of :string :known-at :string
             :version :long :wake :long :role :string :trace :string :untrusted :boolean :public :boolean :approvals :boolean
             :topic :string :from :string :to :string :why :string :text :string :end :boolean
-            :pause-file :string :since :string :until :string :out :string :agentloop :string
+            :pause-file :string :socket :string :since :string :until :string :out :string :agentloop :string
             :client-id :string :url :string
             :item [:string] :row [:string] :column [:string] :state :string :seen :long :archived :boolean}})
 
@@ -544,11 +552,10 @@ and --instructions marks the id public too.")
                                                :public (:public opts)})]
                {:exit (if (#{:ran :idle} (:result woke)) 0 1) :out (render/wake-result woke)})
       "chat" (let [[r] more]
-               (when-not r (fail! "usage: relay chat <role>"))
                (result (dispatch/chat! sys r {:data (when (:data opts) (str (fs/absolutize dir)))})))
       "acp" (let [[r] more]
-              (when-not r (fail! "usage: relay acp <role> [--trace <file>]"))
-              (result (dispatch/acp! sys r {:trace (:trace opts) :approvals (:approvals opts)})))
+              (result (serve/acp! sys r {:trace (:trace opts) :approvals (:approvals opts) :socket (:socket opts)})))
+      "serve" (result (serve/serve! sys {:socket (:socket opts)}))
       "tick" (do (dispatch/tick! sys) (result 0))
       "verify" (let [id (some-> (first more) parse-long)]
                  (when-not id (fail! "usage: relay verify <report>"))

@@ -64,8 +64,8 @@
    ;; A last resort against a role stuck in a loop, far above ordinary use.
    :runaway-wakes 30
    :runaway-window-minutes 60
-   ;; The ACP client `relay chat` runs, given `-- relay acp <role>` after
-   ;; these arguments.
+   ;; The ACP client `relay chat` runs, given `[--open <role>] -- relay
+   ;; acp --approvals` after these arguments.
    :chat-client ["acp-tui"]
    :tools {}
    :mcp-servers {}

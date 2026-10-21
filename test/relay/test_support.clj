@@ -5,7 +5,8 @@
   agentloop on PATH, which may be the live install."
   (:require [babashka.fs :as fs]
             [relay.cli :as cli]
-            [relay.connect :as connect]))
+            [relay.connect :as connect]
+            [relay.serve :as serve]))
 
 (def relay-bin (str (fs/absolutize "bin/relay")))
 
@@ -40,6 +41,9 @@
   (alter-var-root #'cli/*config-file*
                   (constantly (str (fs/path (fs/create-temp-dir {:prefix "relay-test-home"})
                                             "no-config.edn"))))
+  ;; Nor the service's sockets in the user's home.
+  (alter-var-root #'serve/*run-dir*
+                  (constantly (str (fs/create-temp-dir {:dir "/tmp" :prefix "relay-run"}))))
   (alter-var-root #'cli/*pause-file*
                   (constantly (str (fs/path (fs/create-temp-dir {:prefix "relay-test-pause"}) "paused"))))
   ;; No test may touch the login keychain or open a browser: one that

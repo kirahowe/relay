@@ -65,7 +65,7 @@
     (is (= {"relay/hub" 1} (get-in a ["result" "_meta"])))
     (is (true? (get-in a ["result" "agentCapabilities" "loadSession"])))
     (is (= {} (get-in a ["result" "agentCapabilities" "sessionCapabilities" "list"])))
-    (is (= {"name" "relay" "title" "relay"} (get-in a ["result" "agentInfo"])))))
+    (is (= {"name" "relay" "title" "relay" "version" "1"} (get-in a ["result" "agentInfo"])))))
 
 (deftest relay-connect-counts-only-as-the-first-line-of-a-socket
   (let [h (opened (fresh) 1)
@@ -173,7 +173,18 @@
     (is (= {} (get (first (writes fx 1)) "result")))
     (is (empty? (get-in h [:conns 1 :attached])))
     (is (get-in h [:convs "clerk"]) "the conversation goes on")
-    (is (not-any? #(= :stop (:effect %)) fx))))
+    (is (not-any? #(= :stop (:effect %)) fx)))
+  (testing "as ACP asks, it cancels a turn the closing client is running; another's goes on"
+    (let [[h fx] (say (live) 1 (req 30 "session/prompt" {:sessionId "s1" :prompt []}))
+          h (submit-ok h fx)
+          [_ fx] (say h 1 (req 9 "session/close" {:sessionId "s1"}))]
+      (is (= ["session/cancel"] (map #(get (parse %) "method") (sends fx "clerk")))))
+    (let [h (opened (live) 2)
+          [h] (say h 2 (req 1 "session/load" {:sessionId "s1"}))
+          [h fx] (say h 2 (req 30 "session/prompt" {:sessionId "s1" :prompt []}))
+          h (submit-ok h fx)
+          [_ fx] (say h 1 (req 9 "session/close" {:sessionId "s1"}))]
+      (is (empty? (sends fx "clerk"))))))
 
 ;; --- turns
 

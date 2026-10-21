@@ -613,8 +613,9 @@
 
 (defn- fake-tui!
   "A stand-in for acp-tui: it writes its argv to argv.json, runs the agent
-  command after `--`, opens a session, sends one prompt, writes what it saw
-  to seen.json and quits. Returns its path."
+  command after `--`, opens a session for the role --open names, sends
+  one prompt, writes what it saw to seen.json and quits. Returns its
+  path."
   []
   (let [path (str *dir* "/fake-tui")]
     (spit path (str "#!/usr/bin/env bb\n"
@@ -625,7 +626,8 @@
                           (let [~'args *command-line-args*
                                 ~'_ (spit ~(str *dir* "/argv.json") (~'json/generate-string ~'args))
                                 ~'c (~'client/start! (rest (drop-while #(not= "--" %) ~'args)) {:err :inherit})
-                                ~'sid (~'client/handshake! ~'c ~*dir*)
+                                ~'role (second (drop-while #(not= "--open" %) ~'args))
+                                ~'sid (~'client/handshake! ~'c ~*dir* ~'role)
                                 ~'resp (~'client/request! ~'c "session/prompt" (~'client/prompt-params ~'sid "hello relay"))]
                             (spit ~(str *dir* "/seen.json")
                                   (~'json/generate-string {:session ~'sid :stop (get-in ~'resp ["result" "stopReason"])
@@ -650,8 +652,8 @@
               argv (json/parse-string (slurp (str *dir* "/argv.json")))
               seen (json/parse-string (slurp (str *dir* "/seen.json")) true)]
           (is (= 0 exit) (str out err))
-          (testing "the client gets relay acp for the role, with the data directory"
-            (is (= ["--" relay-bin "acp" "clerk" "--approvals" "--data" (str (fs/absolutize (data)))] argv)
+          (testing "the client opens the role, with relay acp for every role and the data directory"
+            (is (= ["--open" "clerk" "--" relay-bin "acp" "--approvals" "--data" (str (fs/absolutize (data)))] argv)
                 "and lets it answer permission requests, since it is the operator's terminal"))
           (testing "the conversation went through"
             (is (= "end_turn" (:stop seen)) (pr-str seen))
@@ -677,13 +679,20 @@
             (Thread/sleep 50)
             (recur))))))
 
-(def acp-tui (some-> (fs/which "acp-tui") str))
+(def acp-tui
+  "acp-tui on PATH, when it can open a role's conversation (--open,
+  relay#65), which relay chat asks of it."
+  (when-let [bin (some-> (fs/which "acp-tui") str)]
+    (when (str/includes? (str (:out (p/shell {:out :string :err :string :continue true} bin "--help"))
+                              (:err (p/shell {:out :string :err :string :continue true} bin "--help")))
+                         "--open")
+      bin)))
 
 (deftest chat-with-the-real-acp-tui-on-a-pty
   ;; script(1) gives relay chat a pseudo-terminal, as a person's terminal
   ;; would; the keys go in through its stdin.
   (if-not (and bin acp-tui (fs/which "script"))
-    (println "SKIPPED: needs agentloop, acp-tui and script(1)")
+    (println "SKIPPED: needs agentloop, an acp-tui with --open (relay#65) and script(1)")
     (with-world {} (fn [body] {:text (str "You said: " (str/includes? (pr-str body) "hello relay"))})
       (fn []
         (let [proc (p/process ["script" "-q" "/dev/null" relay-bin "chat" "clerk" "--data" (data)]

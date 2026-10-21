@@ -435,12 +435,13 @@
 (def chat-gives-the-client-relay-acp-as-its-agent
   (prop/for-all [client (gen/not-empty (gen/vector gen-arg 1 4))
                  relay gen-arg
-                 role gen-arg
+                 role (gen/one-of [(gen/return nil) gen-arg])
                  data (gen/one-of [(gen/return nil) gen-arg])]
     (let [argv (dispatch/chat-argv client relay role data)
           [before [_ & agent]] (split-with #(not= "--" %) argv)]
-      (and (= client before)
-           (= (concat [relay "acp" role "--approvals"] (when data ["--data" data])) agent)))))
+      ;; The role is the client's to open first; relay acp serves every role.
+      (and (= (concat client (when role ["--open" role])) before)
+           (= (concat [relay "acp" "--approvals"] (when data ["--data" data])) agent)))))
 
 (deftest chat-runs-the-client-with-relay-acp-after-the-double-dash
   (let [result (tc/quick-check 300 chat-gives-the-client-relay-acp-as-its-agent)]

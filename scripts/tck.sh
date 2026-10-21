@@ -25,12 +25,14 @@ if [ -z "$TCK_REF" ] || [ -z "$ALLOWED_SKIPS" ]; then
 	echo "tck: could not read TCK_REF and ALLOWED_SKIPS from $agentloop_tck" >&2
 	exit 1
 fi
-# relay asks agentloop for new sessions only, so a conversation never
-# reopens an earlier one: load, resume and list are not advertised.
+# relay's hub loads and lists only live conversations, and never resumes
+# one that ended: resume is not advertised.
 ALLOWED_SKIPS="$ALLOWED_SKIPS
-ACP-LIST-001 ACP-LIST-002
-ACP-LOAD-001 ACP-LOAD-002 ACP-LOAD-003
 ACP-RESUME-001 ACP-RESUME-002"
+# A role has one live conversation, and session/new for a role that has
+# one attaches to it (relay#62, #64), so two session/new calls get the
+# same sessionId. relay means this; it is reported, not counted.
+ALLOWED_FAILS="ACP-SESSION-002"
 
 # The sibling checkout's build, never the agentloop on PATH, which may be
 # the live install.
@@ -84,6 +86,7 @@ echo "You are under test." | bin/relay add clerk --title Clerk --data "$data" >/
 
 mkdir -p "$work/agent-cwd"
 status=0
+leftover=0
 uvx --from "git+https://github.com/agentclientprotocol/acp-tck@$TCK_REF" acp-tck \
 	--agent-cwd "$work/agent-cwd" \
 	--cancel-prompt "MOCK-SLOW: keep busy until cancelled" \
@@ -92,22 +95,26 @@ uvx --from "git+https://github.com/agentclientprotocol/acp-tck@$TCK_REF" acp-tck
 
 # relay must have ended every conversation the kit opened itself: none
 # left running, and none reaped because its relay process died first.
-running=$(bin/relay status --data "$data" | grep -c '\[running\]' || true)
+running=$(bin/relay status --data "$data" | grep -cE '\[(working|conversation open|in a conversation turn)\]' || true)
 reaped=$(bin/relay log --json --data "$data" | grep -c '"lost-wakes":\[[0-9]' || true)
 if [ "$running" != 0 ] || [ "$reaped" != 0 ]; then
 	echo "tck: problem: $running conversation(s) left running, $reaped reaped" >&2
-	status=1
+	leftover=1
 fi
 
-python3 -I - out/tck.json "$ALLOWED_SKIPS" "$status" <<'PY'
+python3 -I - out/tck.json "$ALLOWED_SKIPS" "$status" "$ALLOWED_FAILS" "$leftover" <<'PY'
 import json, sys
 report = json.load(open(sys.argv[1]))
 allowed = set(sys.argv[2].split())
-counts, bad = {}, []
+allowed_fails = set(sys.argv[4].split())
+counts, bad, excused = {}, [], []
 for r in report["requirements"]:
     st = r["status"]
     counts[st] = counts.get(st, 0) + 1
-    if st == "FAIL" or st == "NOT_TESTED" and r["tier"] == "MANDATORY":
+    if st == "FAIL" and r["id"] in allowed_fails:
+        print(f"tck: fails by design {r['id']}")
+        excused.append(r["id"])
+    elif st == "FAIL" or st == "NOT_TESTED" and r["tier"] == "MANDATORY":
         bad.append(f"{r['id']} {st}")
     elif st == "SKIPPED":
         if r["id"] in allowed:
@@ -119,5 +126,6 @@ print("tck:", ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
 print("tck: verdict", "CONFORMANT" if report["verdict"]["conformant"] else "NOT CONFORMANT")
 for b in bad:
     print("tck: problem:", b)
-sys.exit(1 if bad or sys.argv[3] != "0" else 0)
+# The kit exits non-zero for any failure, the excused ones included.
+sys.exit(1 if bad or sys.argv[5] != "0" or (sys.argv[3] != "0" and not excused) else 0)
 PY

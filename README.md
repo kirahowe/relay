@@ -1116,12 +1116,14 @@ records each day's brief, sent or empty, as a `brief/composed` event.
 
 ### relay chat
 
-`relay chat <role>` needs [acp-tui](https://github.com/kirahowe/acp-tui),
+`relay chat [<role>]` needs [acp-tui](https://github.com/kirahowe/acp-tui),
 a terminal client for ACP agents. Build it with `make -C ../acp-tui build`
 and put `bin/acp-tui` on your PATH. relay runs it as
-`acp-tui -- relay acp <role>`, adding `--data <dir>` when you gave
-`relay chat` one, so a chat is an ordinary ACP conversation: `relay acp`
-opens it, records its turns and records its sessions.
+`acp-tui [--open <role>] -- relay acp --approvals`, adding `--data <dir>`
+when you gave `relay chat` one. acp-tui shows every role, with `<role>`
+in focus, and each role's conversation. When relay serve runs (see
+[The relay service](#the-relay-service)), conversations live in it and
+keep going after acp-tui closes; otherwise they end with it.
 
 To use another client, or acp-tui somewhere other than PATH, set
 `:chat-client` in `relay.edn` to the command and any arguments that come
@@ -1131,8 +1133,9 @@ before `--`:
 :chat-client ["/opt/acp-tui/bin/acp-tui" "--agent-log" "/tmp/relay-agent.log"]
 ```
 
-The client gets `--` and then the agent command as its last arguments. If
-relay cannot find the client, it says so on stderr and exits 1.
+The client gets `--open <role>` when you named one, then `--` and the
+agent command as its last arguments. If relay cannot find the client, it
+says so on stderr and exits 1.
 
 acp-tui has a workspace pane. It lists, newest first, what the role
 showed you, the calls it wants to make with relay's preview of each, and
@@ -1151,35 +1154,59 @@ conversations and answer permission requests for you.
 
 ### ACP clients
 
-`relay acp <role>` speaks the [Agent Client Protocol](https://agentclientprotocol.com)
+`relay acp [<role>]` speaks the [Agent Client Protocol](https://agentclientprotocol.com)
 on stdin and stdout, so an editor or any other ACP client can run it as
-its agent command. relay starts the role's agentloop and passes bytes
-between the client and agentloop unchanged. A role keeps one
-conversation open at a time, and the conversation holds the role only
-while a turn runs: from the client's `session/prompt` until the agent
-answers it. Between turns the dispatcher may wake the role for its memos.
-A prompt sent while such a wake works is answered with an error saying
-the role is busy with scheduled work, and the agent never sees it; send
-it again once the wake is done. The wake records the ACP sessions the
-client used. Their
-logs are kept in `<data>/runs/<role>/conversations-labelled/` (for a
-public role, `conversations-public/`), apart from the role's wake
-sessions.
+its agent command. When relay serve runs for the data directory, `relay
+acp` is a bridge to it: it copies bytes between the client and the
+service's socket. Otherwise it runs the same code in its own process, and
+the conversations it opens end when the client goes.
 
-Every conversation starts empty. A client can open new sessions and
-close them, but cannot load, resume or list earlier ones, so no
-conversation takes on another's history or labels. What a role should
-carry from one conversation to the next goes in its notes, facts and
-journal, as it does between wakes.
+Each role has at most one live conversation, a chat wake running the
+role's agentloop behind relay's proxy. `session/new` opens the role's
+conversation, or attaches the client to it when it is already live: the
+answer then carries `_meta {"relay/attached": true}`, and what the
+conversation has said so far follows. The role is the one in the
+request's `_meta` (`relay/role`), else the `<role>` relay acp was given.
+`session/load` attaches to a live conversation and `session/list` lists
+them; nothing that has ended is ever reopened. Several clients may be
+attached at once, and each sees everything, including the prompts the
+others send. `session/close` detaches a client (and cancels a turn it
+started); the conversation goes on.
+
+A conversation holds its role only while a turn runs: from a
+`session/prompt` until the agent answers it. Between turns the dispatcher
+may wake the role for its memos. A prompt sent while such a wake works
+waits until the wake is done and then runs; `session/cancel` drops it.
+The wake records the ACP sessions the conversation used. Their logs are
+kept in `<data>/runs/<role>/conversations-labelled/` (for a public role,
+`conversations-public/`), apart from the role's wake sessions.
+
+Every conversation starts empty, and when it ends it stays ended. What a
+role should carry from one conversation to the next goes in its notes,
+facts and journal, as it does between wakes.
 
 To set up a client, give it the command `relay` with the arguments
 `acp <role> --data <dir>`, or leave out `--data` when
 `~/.config/relay/config.edn` names the data directory. The client needs
 no environment variables and no API key, since the key comes from
-`:api-key-command` as usual. relay ignores the client's working directory
-and MCP servers, because a role has only relay's tools. If the role
+`:api-key-command` as usual. relay ignores the client's MCP servers,
+because a role has only relay's tools. Without a service, if the role
 already has a conversation open, relay writes the reason to stderr and
 exits 1 before sending anything.
+
+relay adds some methods of its own, which a client that knows them can
+use; `initialize` says relay offers them with `_meta {"relay/hub": 1}`.
+`_relay/roles` gives every role with what it is doing (working, held
+calls, its conversation's turn and unread reply) and then sends
+`_relay/roles/changed` whenever that changes. `_relay/seen` says the
+operator has read a conversation through a turn,
+`_relay/conversations/end` ends a conversation, and `_relay/replayed`
+marks where a replay ends and live updates begin. A permission request
+goes to every attached client that may answer one (`--approvals`); the
+first answer goes to the agent, and the others get
+`_relay/permission/settled`. The pane's methods (`_relay/items`,
+`_relay/trust`, `_relay/cards` and the rest) are as before, for the
+conversation the request's `sessionId` names.
 
 `--trace <file>` appends every line in both directions to `<file>`, one
 JSON object per line, with `from` set to `client` or `agent`. The file
@@ -1329,6 +1356,42 @@ find, drops it either way, records that, and tells the operator. A
 message from the client that long never reaches the agent either, since
 it could be one of relay's methods: relay drops it and answers with an
 error when it can find the message's id.
+
+### The relay service
+
+`relay serve` keeps conversations going while no client is attached: a
+turn finishes after you close acp-tui, and opening it again (or a client
+on another device) picks the conversation up with what it said so far.
+It listens on a Unix socket of the data directory's own, under
+`~/.relay/run/`, which only you can open. `relay acp`, and so `relay chat`,
+uses it whenever it runs. Only one service runs for a data directory.
+
+A permission request waits while no client that may answer it is
+attached, and relay tells you once through your notifications that a
+conversation is waiting for you. A conversation ends when you end it
+(acp-tui does it with `_relay/conversations/end`) or when the service
+stops. Stopping it (SIGTERM, or launchd unloading it) ends each
+conversation and records it; a turn in progress ends there. If the
+service dies without that, the next one ends the conversations it left,
+as lost, when it starts.
+
+Install it as a launchd job, the same way as the tick:
+
+```sh
+sed -e "s|@BB@|$(command -v bb)|" -e "s|@RELAY@|$PWD|" \
+    -e "s|@DATA@|$data|" -e "s|@HOME@|$HOME|" \
+    -e "s|@LOGS@|$HOME/Library/Logs/relay|" \
+    setup/launchd/relay.serve.plist > ~/Library/LaunchAgents/relay.serve.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/relay.serve.plist
+```
+
+A deploy waits for every running wake, and a conversation the service
+holds is one, so stop the service before `bb deploy`
+(`launchctl bootout gui/$(id -u)/relay.serve`) and start it again after
+(`launchctl bootstrap` as above). That ends every live conversation; the
+roles remember what their notes, facts and journals hold, as after any
+conversation. The service runs the code it started with until it is
+restarted, so it must be restarted after a deploy in any case.
 
 ## Development
 

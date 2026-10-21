@@ -21,8 +21,10 @@
        "print qq({\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s1\",\"update\":"
        "{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"ALIVE\"}}}}\\n);\n"
        "while (my $l = <STDIN>) {\n"
-       "  next unless $l =~ /\"method\":\"session\\/prompt\"/;\n"
        "  my ($id) = $l =~ /\"id\":(\\d+)/;\n"
+       "  if ($l =~ /\"method\":\"initialize\"/) { print qq({\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":1}}\\n); next; }\n"
+       "  if ($l =~ /\"method\":\"session\\/new\"/) { print qq({\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"sessionId\":\"s1\"}}\\n); next; }\n"
+       "  next unless $l =~ /\"method\":\"session\\/prompt\"/;\n"
        "  print qq({\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s1\",\"update\":"
        "{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"GOT $id\"}}}}\\n);\n"
        "  if ($l =~ /FAIL/) { print qq({\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":{\"code\":-32603,\"message\":\"boom\"}}\\n); }\n"
@@ -52,36 +54,24 @@
 (defn- turn-events [sys]
   (filter #(str/starts-with? (:type %) "conversation/turn") (log/read-events (:data-dir sys))))
 
-(defn- got? [c id]
-  (some #(= (str "GOT " id) (get-in % ["params" "update" "content" "text"])) @(:messages c)))
-
-(deftest what-relay-reads-of-a-prompt-and-its-answer
-  (is (= {:id 4 :key [:number "4"] :session "s1"}
-         (workspace/prompt-request "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"session/prompt\",\"params\":{\"sessionId\":\"s1\"}}")))
-  (is (= {:id {} :key nil :session nil}
-         (workspace/prompt-request "{\"jsonrpc\":\"2.0\",\"id\":{},\"method\":\"session/prompt\",\"params\":[]}")))
-  (is (nil? (workspace/prompt-request "{\"jsonrpc\":\"2.0\",\"method\":\"session/prompt\",\"params\":{}}"))
-      "a notification is no request")
-  (is (nil? (workspace/prompt-request "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"session/cancel\"}")))
+(deftest what-relay-reads-of-an-answer-to-a-prompt
   (is (= ["end_turn" "error" "other"]
          (map workspace/stop-reason ["{\"jsonrpc\":\"2.0\",\"id\":4,\"result\":{\"stopReason\":\"end_turn\"}}"
                                      "{\"jsonrpc\":\"2.0\",\"id\":4,\"error\":{\"code\":1,\"message\":\"m\"}}"
-                                     "{\"jsonrpc\":\"2.0\",\"id\":4,\"result\":{}}"])))
-  (testing "only an answer to a prompt that was passed on ends a turn, once"
-    (let [conv (workspace/prompt-passed workspace/conversation [:number "4"])
-          [conv a] (workspace/prompt-answered conv [:number "5"])
-          [conv b] (workspace/prompt-answered conv [:number "4"])
-          [conv c] (workspace/prompt-answered conv [:number "4"])]
-      (is (= [false true false] [a b c]))
-      (is (= {} (:prompts conv))))))
+                                     "{\"jsonrpc\":\"2.0\",\"id\":4,\"result\":{}}"]))))
 
-(deftest a-prompt-is-a-turn-and-waits-for-scheduled-work
+(defn- gots [c]
+  (count (filter #(str/starts-with? (str (get-in % ["params" "update" "content" "text"])) "GOT ") @(:messages c))))
+
+(deftest a-prompt-is-a-turn-and-queues-behind-scheduled-work
   (with-relay
     (fn [dir sys]
       (let [c (client/start! [support/relay-bin "acp" "clerk" "--data" (:data-dir sys)] {:dir dir})
             state #(inbound/current-state sys)]
         (try
-          (is (client/await! c #(= "session/update" (get % "method")) 30000) "the agent is running")
+          (is (= "s1" (client/handshake! c dir)))
+          (is (client/await! c #(= "ALIVE" (get-in % ["params" "update" "content" "text"])) 10000)
+              "what the agent said before the session opened is replayed")
           (let [chat (:id (core/open-conversation (state) "clerk"))]
             (testing "an idle conversation leaves its role free"
               (is (not (core/busy? (state) "clerk"))))
@@ -92,30 +82,28 @@
                         ["conversation/turn-ended" {:wake chat :role "clerk" :turn 1 :stop-reason "end_turn"}]]
                        (map (juxt :type :data) (turn-events sys))))
                 (is (= ["operator" "dispatcher"] (map :actor (turn-events sys))))))
-            (testing "while a wake of the role works, a prompt is refused and never reaches the agent"
+            (testing "while a wake of the role works, a prompt waits and does not reach the agent"
               (let [started (inbound/submit! sys {:type :wake/start :actor "operator"
                                                   :args (merge {:role "clerk" :note "Busy."} (dispatch/current-process))})
                     wake (:seq (first started))
-                    id (inc @(:next-id c))
-                    r (client/request! c "session/prompt" (prompt "Are you there?"))]
-                (is (= id (get r "id")))
-                (is (= -32000 (get-in r ["error" "code"])) (pr-str r))
-                (is (str/includes? (get-in r ["error" "message"]) "busy with scheduled work"))
-                (Thread/sleep 300)
-                (is (not (got? c id)) "the agent never saw it")
+                    seen (gots c)
+                    id (client/request-async! c "session/prompt" (prompt "Are you there?"))]
+                (Thread/sleep 1000)
+                (is (nil? (client/response c id 10)) "no answer yet")
+                (is (= seen (gots c)) "the agent never saw it")
                 (is (= 2 (count (turn-events sys))) "and no turn started")
-                (testing "and once the wake ends, the next one runs"
+                (testing "and once the wake ends, it runs"
                   (inbound/submit! sys {:type :wake/end :actor "dispatcher" :args {:wake wake :outcome "ran" :said ""}})
-                  (let [r (client/request! c "session/prompt" (prompt "Now?"))]
+                  (let [r (client/response c id 10000)]
                     (is (= "end_turn" (get-in r ["result" "stopReason"])) (pr-str r))
                     (is (= 2 (get-in (last (turn-events sys)) [:data :turn])))))))
             (testing "an error from the agent ends the turn too"
               (let [r (client/request! c "session/prompt" (prompt "FAIL"))]
                 (is (= -32603 (get-in r ["error" "code"])) (pr-str r))
                 (is (= {:turn 3 :stop-reason "error"} (select-keys (:data (last (turn-events sys))) [:turn :stop-reason])))))
-            (testing "a prompt with no session the log can keep is refused"
-              (let [r (client/request! c "session/prompt" {:prompt [{:type "text" :text "x"}]})]
-                (is (= -32000 (get-in r ["error" "code"])) (pr-str r))))
+            (testing "a prompt for a session that is not live is refused"
+              (let [r (client/request! c "session/prompt" {:sessionId "nope" :prompt [{:type "text" :text "x"}]})]
+                (is (= -32602 (get-in r ["error" "code"])) (pr-str r))))
             (client/close-input! c)
             (is (= 0 (client/wait! c 20000)))
             (is (not (core/open? (state) "clerk")) "the conversation ended")

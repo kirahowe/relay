@@ -324,8 +324,7 @@
   (let [{:keys [status session prompt asking blocked queue wake]} (get-in h [:convs role])]
     (if (and (= :running status) session (nil? prompt) (not asking) (not blocked) (seq queue))
       (-> h (assoc-in [:convs role :asking] true)
-          (submit {:type :conversation/turn-start :actor core/operator :args {:wake wake :session session}}
-                  {:kind :turn-start :role role}))
+          (submit (workspace/turn-start-command wake session) {:kind :turn-start :role role}))
       h)))
 
 (defn- mirror
@@ -386,16 +385,20 @@
 
 (defn- attached-conv
   "The conversation a connection's request is about: the one its
-  sessionId names, when the connection is attached to it, or with no
-  sessionId the only one it is attached to. [role nil] or [nil why]."
+  sessionId names, when the connection is attached to it; with no
+  sessionId the only one it is attached to, or else its own role's (the
+  role of relay acp <role>), even before it has a session. [role nil] or
+  [nil why]."
   [h cid msg]
   (let [s (session-of msg)
         role (conversation-of h s)
-        mine (get-in h [:conns cid :attached] #{})]
+        mine (get-in h [:conns cid :attached] #{})
+        own (get-in h [:conns cid :role])]
     (cond
       (and s role (contains? mine role)) [role nil]
       s [nil (str "There is no live conversation " s " on this connection.")]
       (= 1 (count mine)) [(first mine) nil]
+      (and (empty? mine) own (get-in h [:convs own :wake]) (not= :ending (get-in h [:convs own :status]))) [own nil]
       :else [nil "Name the conversation with sessionId."])))
 
 (defn- new-session [h cid id msg]
@@ -430,19 +433,31 @@
       (refuse h cid id -32602 (str "There is no live conversation " (pr-str s)
                                    ". relay does not reopen a conversation that has ended.")))))
 
-(defn- list-sessions [h cid id]
+(defn- list-sessions [h cid id msg]
+  (let [cwd (get (params-of msg) "cwd")]
   (answer h cid id
           {"sessions" (vec (for [{:keys [id title conversation]} (:roster h)
                                  :let [c (get-in h [:convs id])]
-                                 :when (and (:session c) (not= :ending (:status c)))]
+                                 :when (and (:session c) (not= :ending (:status c))
+                                            ;; ACP's filter by working directory.
+                                            (or (not (string? cwd)) (= cwd (:cwd c))))]
                              (cond-> {"sessionId" (:session c) "cwd" (or (:cwd c) "/") "title" title
                                       "_meta" {"relay/role" id}}
-                               (:last-activity conversation) (assoc "updatedAt" (str (:last-activity conversation))))))}))
+                               (:last-activity conversation) (assoc "updatedAt" (str (:last-activity conversation))))))})))
 
-(defn- detach [h cid role]
-  (let [mine (filter #(= cid (:conn %)) (get-in h [:convs role :queue]))]
+(defn- detach
+  "Detaches a connection from a conversation. Its queued prompts are
+  cancelled; with `cancel?` (session/close, which in ACP cancels the
+  session's work), so is a turn it is running, while turns other
+  connections started go on."
+  [h cid role & [cancel?]]
+  (let [mine (filter #(= cid (:conn %)) (get-in h [:convs role :queue]))
+        running (get-in h [:convs role :prompt])]
     (as-> h h
       (reduce (fn [h {:keys [id]}] (answer h cid id {"stopReason" "cancelled"})) h mine)
+      (if (and cancel? (= cid (:conn running)))
+        (send-conv h role (workspace/notification-line "session/cancel" {"sessionId" (get-in h [:convs role :session])}))
+        h)
       (update-in h [:convs role :queue] (fn [q] (vec (remove #(= cid (:conn %)) q))))
       (update-in h [:conns cid :attached] disj role)
       (update-in h [:conns cid :cards] (fnil disj #{}) role)
@@ -519,7 +534,7 @@
    "agentCapabilities" {"loadSession" true
                         "promptCapabilities" {"embeddedContext" true}
                         "sessionCapabilities" {"list" {} "close" {}}}
-   "agentInfo" {"name" "relay" "title" "relay"}
+   "agentInfo" {"name" "relay" "title" "relay" "version" "1"}
    "authMethods" []
    "_meta" {"relay/hub" 1}})
 
@@ -531,9 +546,9 @@
       "authenticate" (answer h cid id {})
       "session/new" (new-session h cid id msg)
       "session/load" (load-session h cid id msg)
-      "session/list" (list-sessions h cid id)
+      "session/list" (list-sessions h cid id msg)
       "session/close" (let [[role why] (attached-conv h cid msg)]
-                        (if role (-> h (detach cid role) (answer cid id {})) (refuse h cid id -32602 why)))
+                        (if role (-> h (detach cid role true) (answer cid id {})) (refuse h cid id -32602 why)))
       "session/prompt" (prompt h cid id msg)
       "_relay/roles" (let [now (roles-wire h)]
                        (-> h (assoc-in [:conns cid :roles] now) (answer cid id {"roles" now})))
@@ -542,7 +557,9 @@
       (cond
         (workspace/methods method) (forward h cid id msg)
         (str/starts-with? method "_relay/") (refuse h cid id -32601 (str "relay has no method " method "."))
-        (session-of msg) (forward h cid id msg)
+        ;; Anything else goes to the conversation it is about, as a
+        ;; plain ACP client would expect of relay acp <role>.
+        (first (attached-conv h cid msg)) (forward h cid id msg)
         :else (refuse h cid id -32601 (str "relay has no method " method "."))))))
 
 (defn- client-notification [h cid msg first?]
@@ -701,8 +718,9 @@
         (send-conv h role (workspace/error-line (get msg "id") -32601 (str "relay's clients do not take " method "."))))
       (= "session/update" method)
       (reduce #(write %1 %2 line) (remember h role line) (attached h role))
+      ;; To the connections that asked for the board through it.
       (= "_relay/cards/changed" method)
-      (reduce #(write %1 %2 line) h (filter #(contains? (get-in h [:conns % :cards]) role) (attached h role)))
+      (reduce #(write %1 %2 line) h (sort (keep (fn [[cid c]] (when (contains? (:cards c) role) cid)) (:conns h))))
       (string? method)
       (reduce #(write %1 %2 line) h (attached h role))
       (contains? msg "id")
