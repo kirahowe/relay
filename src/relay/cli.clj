@@ -37,7 +37,7 @@ Every command needs the data directory, from --data <dir> or from the file
   relay inbox                         memos waiting for the operator
   relay memo <to> -s <subject>        send a memo; body from -m or stdin
   relay close <memo> -m <outcome>     close a memo
-  relay roles                         the registry
+  relay roles                         the registry, and what each role is doing
   relay add <id> [--title <t>] [--reports-to <id>] [--harness <h>] [--model <m>]
                                       add a role; its instructions on stdin
   relay update <id> [--title <t>] [--harness <h>] [--model <m>] [--instructions]

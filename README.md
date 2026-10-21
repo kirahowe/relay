@@ -1121,7 +1121,7 @@ a terminal client for ACP agents. Build it with `make -C ../acp-tui build`
 and put `bin/acp-tui` on your PATH. relay runs it as
 `acp-tui -- relay acp <role>`, adding `--data <dir>` when you gave
 `relay chat` one, so a chat is an ordinary ACP conversation: `relay acp`
-opens it, holds the role and records its sessions.
+opens it, records its turns and records its sessions.
 
 To use another client, or acp-tui somewhere other than PATH, set
 `:chat-client` in `relay.edn` to the command and any arguments that come
@@ -1154,9 +1154,14 @@ conversations and answer permission requests for you.
 `relay acp <role>` speaks the [Agent Client Protocol](https://agentclientprotocol.com)
 on stdin and stdout, so an editor or any other ACP client can run it as
 its agent command. relay starts the role's agentloop and passes bytes
-between the client and agentloop unchanged. A connection holds the role
-like a wake: no other wake of that role runs until the client
-disconnects, and the wake records the ACP sessions the client used. Their
+between the client and agentloop unchanged. A role keeps one
+conversation open at a time, and the conversation holds the role only
+while a turn runs: from the client's `session/prompt` until the agent
+answers it. Between turns the dispatcher may wake the role for its memos.
+A prompt sent while such a wake works is answered with an error saying
+the role is busy with scheduled work, and the agent never sees it; send
+it again once the wake is done. The wake records the ACP sessions the
+client used. Their
 logs are kept in `<data>/runs/<role>/conversations-labelled/` (for a
 public role, `conversations-public/`), apart from the role's wake
 sessions.
@@ -1172,9 +1177,9 @@ To set up a client, give it the command `relay` with the arguments
 `~/.config/relay/config.edn` names the data directory. The client needs
 no environment variables and no API key, since the key comes from
 `:api-key-command` as usual. relay ignores the client's working directory
-and MCP servers, because a role has only relay's tools. If the role is
-busy, relay writes the reason to stderr and exits 1 before sending
-anything.
+and MCP servers, because a role has only relay's tools. If the role
+already has a conversation open, relay writes the reason to stderr and
+exits 1 before sending anything.
 
 `--trace <file>` appends every line in both directions to `<file>`, one
 JSON object per line, with `from` set to `client` or `agent`. The file

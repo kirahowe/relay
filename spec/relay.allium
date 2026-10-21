@@ -597,7 +597,17 @@ entity Role {
     harness: Harness
     -- The tools it is offered, by name.
     offered_tools: Set<Tool>
-    is_running: running_wakes.count > 0
+    -- A role works in one wake at a time, dispatched or asked for by
+    -- hand, and keeps one conversation open at a time. A conversation
+    -- holds the role only while a turn of it runs.
+    working_wakes: running_wakes where not chat
+    open_conversations: running_wakes where chat
+    -- No other turn of the role's may start: a wake works, or a turn of
+    -- its conversation runs. The dispatcher wakes only a role that is
+    -- not busy.
+    is_busy: working_wakes.count > 0 or (open_conversations where turn = running).count > 0
+    -- Any wake of the role runs, an idle conversation included.
+    is_open: running_wakes.count > 0
     has_work: waiting_memos.count > 0 or ready_session != null
     is_waiting_on_tools: tools_unavailable_session != null
         and (tools_need_fresh or tools_retry_at = null or tools_retry_at > now)
@@ -713,9 +723,23 @@ entity Wake {
     -- The process running the wake, to tell whether it is still there.
     pid: Integer?
     pid_start: Timestamp?
-    -- True for a conversation with the operator. It holds the role like a
-    -- wake but carries no memos.
+    -- True for a conversation with the operator. It carries no memos,
+    -- and holds the role only while a turn of it runs.
     chat: Boolean
+    -- For a conversation: whether a turn runs now, how many turns have
+    -- started, the last that ended, the last the operator has seen, the
+    -- ACP session the last turn ran in, and when a turn last started or
+    -- ended (when it opened, before its first turn).
+    turn: idle | running
+    turns: Integer
+    turns_ended: Integer
+    seen: Integer
+    turn_session: String?
+    last_activity: Timestamp
+    -- How the last turn ended: end_turn, max_tokens, max_turn_requests,
+    -- refusal or cancelled (ACP's), error, ended (the conversation
+    -- ended during it) or other.
+    stop_reason: String?
     status: running | ended
     ended_at: Timestamp when status = ended
     outcome: HarnessOutcome when status = ended
@@ -1333,7 +1357,7 @@ rule RemoveRole {
     requires: caller.is_operator or caller.may_add
     requires: role.status = active
     requires: caller.role != role
-    requires: not role.is_running
+    requires: not role.is_open
 
     ensures: role.status = removed
 
@@ -1348,8 +1372,9 @@ rule RemoveRole {
             MemoDeadLettered(memo: memo, reason: recipient_removed)
 
     @guidance
-        -- A role that is running now cannot be removed; remove it once
-        -- it stops. A removed role can no longer act, and its id is
+        -- A role that is running now cannot be removed, and neither can
+        -- one with a conversation open between turns; remove it once it
+        -- stops. A removed role can no longer act, and its id is
         -- never given out again. If the removed role was the dead letter
         -- handler, its own dead letters go to the operator.
 }
@@ -1977,7 +2002,7 @@ rule RetireOneOffRoutine {
 rule WakeOnTick {
     when: DispatcherTicks(lost_wakes)
 
-    for role in Roles where status = active and has_work and not is_running and not is_paused and not is_running_away:
+    for role in Roles where status = active and has_work and not is_busy and not is_paused and not is_running_away:
         ensures: DispatchedWakeSpawned(role: role)
 
     @guidance
@@ -1997,7 +2022,7 @@ rule StartDispatchedWake {
     -- there, so anything that changed since the tick refuses the wake.
     requires: not role.tools_need_fresh
     requires: role.status = active
-    requires: not role.is_running
+    requires: not role.is_busy
     requires: not role.is_paused
     requires: not role.is_running_away
     requires: role.ready_session = null
@@ -2030,7 +2055,7 @@ rule ResumeHeldSession {
 
     requires: not role.tools_need_fresh
     requires: role.status = active
-    requires: not role.is_running
+    requires: not role.is_busy
     requires: not role.is_paused
     requires: not role.is_running_away
     requires: role.ready_session != null
@@ -2066,7 +2091,7 @@ rule StartRequestedWake {
     requires: not role.tools_need_fresh
     requires: caller.is_operator or caller.is_dispatcher
     requires: role.status = active
-    requires: not role.is_running
+    requires: not role.is_busy
     requires: role.ready_session = null
     requires: role.deliverable_memos.count > 0 or (note != null and note != "")
 
@@ -2099,7 +2124,7 @@ rule OpenConversation {
     requires: not role.tools_need_fresh
     requires: caller.is_operator
     requires: role.status = active
-    requires: not role.is_running
+    requires: role.open_conversations.count = 0
 
     ensures: Wake.created(
         role: role,
@@ -2110,14 +2135,22 @@ rule OpenConversation {
         pid_start: pid_start,
         chat: true,
         started_at: now,
-        status: running
+        status: running,
+        turn: idle,
+        turns: 0,
+        turns_ended: 0,
+        seen: 0,
+        last_activity: now
     )
 
     @guidance
-        -- A conversation with the operator holds the role like a wake,
-        -- so no wake runs alongside it, but it carries no memos: what
-        -- the role does with them there is up to the conversation, and
-        -- nothing counts against them when it ends. It does not resume
+        -- A role keeps one conversation open at a time. A conversation
+        -- holds the role only while a turn of it runs (StartTurn), so a
+        -- conversation left open for days does not keep the dispatcher
+        -- from the role's memos. It may open while a wake of the role
+        -- works; its first turn waits for the wake to end. It carries
+        -- no memos: what the role does with them there is up to the
+        -- conversation, and nothing counts against them when it ends. It does not resume
         -- an interrupted wake and leaves it to be resumed later. It
         -- may open while a call of the role's waits for the operator,
         -- since it runs in a session of its own.
@@ -2131,6 +2164,75 @@ rule OpenConversation {
         -- weekday, in the operator's time zone (a public role's too: the
         -- zone is not private), and points the role at the clock tool for
         -- the time after that and for date arithmetic.
+}
+
+rule StartTurn {
+    when: TurnRequested(caller, wake, session)
+
+    requires: caller.is_operator
+    requires: wake.chat
+    requires: wake.status = running
+    requires: wake.turn = idle
+    -- black box: an ACP session id, 1 to 128 letters, digits and . _ : -
+    requires: is_session_id(session)
+    requires: wake.role.working_wakes.count = 0
+
+    ensures:
+        wake.turn = running
+        wake.turns = wake.turns + 1
+        wake.turn_session = session
+        wake.last_activity = now
+
+    @guidance
+        -- Each prompt the operator's client sends is a turn. relay acp
+        -- asks for it before the prompt reaches the agent; refused
+        -- because a wake of the role works, the prompt is answered with
+        -- an error saying the role is busy with scheduled work, and the
+        -- agent never sees it. The role takes one turn at a time: no
+        -- turn starts while a wake works, and no wake starts while a
+        -- turn runs.
+}
+
+rule EndTurn {
+    when: TurnReported(wake, stop_reason)
+
+    requires: wake.chat
+    requires: wake.status = running
+    requires: wake.turn = running
+
+    ensures:
+        wake.turn = idle
+        wake.turns_ended = wake.turns
+        wake.stop_reason = stop_reason   -- black box: one of the reasons a turn can end, else other
+        wake.last_activity = now
+
+    @guidance
+        -- Only the dispatcher ends a turn, when the agent answers the
+        -- prompt, and relay records it before the client sees the
+        -- answer, so the client's next prompt finds the turn over.
+        -- Telling relay of a turn that is not running records nothing
+        -- and is not refused. A stop reason relay does not know is kept
+        -- as other, so none of an agent's own text reaches the log.
+}
+
+rule SeeConversation {
+    when: ConversationSeen(caller, wake, turn)
+
+    requires: caller.is_operator
+    requires: wake.chat
+    requires: turn >= 1 and turn <= wake.turns
+
+    ensures: wake.seen = if turn > wake.seen: turn else: wake.seen
+
+    @guidance
+        -- The operator has seen the conversation through that turn. A
+        -- conversation has a reply the operator has not seen when a turn
+        -- ended after the last one seen (turns_ended > seen). relay's
+        -- roster (relay.roster) gives every client each active role with
+        -- its title and labels, whether a wake of it works, its holds,
+        -- and its open conversation's turn, turns, unread reply and
+        -- unanswered permission requests. It is read from the state
+        -- alone, and relay roles shows it.
 }
 
 rule RunWake {
@@ -2155,7 +2257,7 @@ rule RunWake {
         -- wake that resumes another continues that wake's session where
         -- the harness can and is told it was cut short. A conversation
         -- has no prompt and does not run headless: it runs over ACP, and
-        -- the client sends each turn. A wake carrying decided holds says
+        -- the client sends each turn (StartTurn). A wake carrying decided holds says
         -- what the operator decided and hands the decisions to the
         -- harness with the session to resume.
 }
@@ -2180,6 +2282,10 @@ rule EndWake {
         wake.usage = usage
         wake.cost_usd = cost_usd
         wake.tools_error = if outcome = needs_attention and not wake.chat: tools_error else: null
+        -- A conversation that ends during a turn ends the turn first,
+        -- with the stop reason ended.
+        wake.turn = idle
+        wake.turns_ended = wake.turns
 
     @guidance
         -- Only the dispatcher ends wakes. Wakes end by the harness
@@ -2593,7 +2699,7 @@ rule StartAfresh {
 
     requires: caller.is_operator
     requires: role.status = active
-    requires: not role.is_running
+    requires: not role.is_open
     requires: session != null
     -- What the operator was shown: the session, and the tool and digest
     -- it accepts. Anything changed since refuses the command.
@@ -2777,7 +2883,7 @@ rule EndLostWakes {
 rule TripRunawayGuard {
     when: DispatcherTicks(lost_wakes)
 
-    for role in Roles where status = active and has_work and not is_running and is_running_away:
+    for role in Roles where status = active and has_work and not is_busy and is_running_away:
         requires:
             role.guard_reported_at = null
             or role.guard_reported_at + config.runaway_window <= now
@@ -3709,9 +3815,27 @@ invariant ADecisionGoesBackToItsOwnRole {
 }
 
 invariant OneWakeAtATime {
-    -- A conversation counts as a wake here: it holds the role too.
     for role in Roles:
-        role.running_wakes.count <= 1
+        role.working_wakes.count <= 1
+}
+
+invariant OneConversationPerRole {
+    for role in Roles:
+        role.open_conversations.count <= 1
+}
+
+invariant OneTurnAtATime {
+    -- A conversation holds its role while a turn runs, so no wake works
+    -- alongside a running turn.
+    for role in Roles:
+        role.working_wakes.count = 0 or (role.open_conversations where turn = running).count = 0
+}
+
+invariant TurnsCountUp {
+    for wake in Wakes where chat:
+        wake.seen <= wake.turns
+            and wake.turns_ended = (if wake.turn = running: wake.turns - 1 else: wake.turns)
+            and (wake.turn = idle or wake.status = running)
 }
 
 invariant AWakeOnlyCarriesItsOwnRolesMemos {
@@ -3846,6 +3970,10 @@ surface Inbound {
             when caller.is_operator or caller.is_dispatcher
         ConversationRequested(caller, role, note?, pid, pid_start)
             when caller.is_operator
+        TurnRequested(caller, wake, session)
+            when caller.is_operator
+        ConversationSeen(caller, wake, turn)
+            when caller.is_operator
         FactAddRequested(caller, topic?, text, valid_from?, valid_to?)
         FactSupersedeRequested(caller, fact, topic?, text, valid_from?, valid_to?)
         FactCorrectRequested(caller, fact, why, topic?, text?, valid_from?, valid_to?)
@@ -3941,8 +4069,15 @@ surface ConversationBoundary {
     provides:
         PermissionRequested(wake, call, tool, input_sha256, approvals)
         PaneTrustRequested(conversation, path, version, sha256)
+        TurnReported(wake, stop_reason)
 
     @guidance
+        -- Each session/prompt from the client asks for a turn
+        -- (TurnRequested, as the operator) before it reaches the agent.
+        -- One refused is answered with relay's reason as a JSON-RPC
+        -- error and goes no further. The agent's answer to a prompt that
+        -- started a turn reports the turn's end with its stopReason, or
+        -- error for an error, before the client sees the answer.
         -- relay acp sees the agent's session/request_permission go by.
         -- When the call's tool has a preview command, relay runs it and
         -- adds its markdown to the request's toolCall.content, marked
