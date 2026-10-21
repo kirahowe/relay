@@ -27,12 +27,6 @@
 | [36](36-clean-up-after-an-interrupted-deploy-and-leave-no-check.md) | Clean up after an interrupted deploy, and leave no check dirs in TMPDIR | bug | P3 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
 
-### In progress
-
-| ID | Title | Type | Priority |
-| --- | --- | --- | --- |
-| [63](63-track-conversations-and-each-role-s-status-in-relay-s-core.md) | Track conversations and each role's status in relay's core | feature | P2 |
-
 ### Review
 
 | ID | Title | Type | Priority |
@@ -41,6 +35,7 @@
 | [55](55-show-the-board-in-the-acp-tui-workspace-pane.md) | Show the board in the acp-tui workspace pane | feature | P1 |
 | [58](58-forward-only-json-relay-wrote-itself-through-relay-acp.md) | Read JSON with one strict dialect across relay, agentloop and acp-tui | bug | P1 |
 | [52](52-show-large-numbers-in-a-permission-request-exactly-in-acp.md) | Show large numbers in a permission request exactly in acp-tui | bug | P2 |
+| [63](63-track-conversations-and-each-role-s-status-in-relay-s-core.md) | Track conversations and each role's status in relay's core | feature | P2 |
 
 ### Blocked
 
