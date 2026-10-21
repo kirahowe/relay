@@ -297,6 +297,73 @@ After the fixes: `bb test --agentloop ../agentloop/bin/agentloop` with
 acp-tui-convs' bin on PATH, 825 tests, all pass; `bb tck` 43 pass, 12
 skipped, ACP-SESSION-002 failing by design.
 
+## Codex round 3
+
+Five in-scope findings, fixed structurally in nponvvzz so the classes go
+away rather than the instances. Rounds 1 to 3 kept finding edge cases in
+the same two places: request bookkeeping spread over several maps, and
+board delivery split between the hub and each proxy.
+
+A. One request table (findings 1 and 4). Every client request the hub
+   takes is one record (connection and id, conversation, upstream id,
+   state) from the moment it is taken until it is answered; every lookup
+   is a query on it, and :pending, :out, :waiting, :queue, :prompt,
+   :enders and the connections' permission-id maps are gone. Answers go
+   through `reply`, which is the only thing that frees an id, so a
+   malformed line carrying an outstanding id gets no answer and frees
+   nothing. A record whose connection went away stays, an orphan, until
+   its answer comes and is then dropped. Records are bounded per
+   conversation (256, orphans included) and per connection (256), so
+   reconnecting cannot get past the bound. Tests: hub-test
+   `an-id-stays-reserved-while-its-request-is-outstanding`,
+   `orphans-are-bounded-per-conversation-across-reconnects`; the
+   simulator now reuses outstanding ids and sends unreadable lines with
+   them (`:reuse`, `:garble`), checks every reuse is refused and no
+   answer is given twice, and the property
+   `requests-stay-bounded-however-clients-come-and-go` (bound 4, agents
+   holding answers back, clients leaving requests behind) checks the
+   bound after every action. Breaking either fix makes them fail.
+B. Cancel is per session (finding 2): session/cancel from any attached
+   connection answers every waiting prompt cancelled, each to its own
+   connection, and cancels the running turn. Test: hub-test
+   `cancel-drops-every-waiting-prompt-in-the-session`.
+C. The board is the hub's (finding 3). The hub holds the core state
+   (`:log-changed` now carries it), which connections subscribe, and the
+   rev of each card it sent each one; on every log change it sends each
+   subscriber the cards it lacks (relay.workspace's pure functions).
+   `_relay/cards` and `_relay/cards/op` are answered by the hub and update
+   only that subscriber's record; an op's result comes back with the
+   state after it. The proxy's board watcher, its remembered revs and its
+   `:watch` hook are gone, and `_relay/cards*` no longer need a sessionId
+   (one is still accepted). Tests: hub-test
+   `the-board-is-the-hub-s-and-each-subscriber-gets-what-it-lacks` (the
+   changer leaving before its answer, a second client subscribing before
+   the hub read a change, nothing sent twice); cards-acp-test still
+   passes end to end. The watcher-race test went with the watcher; the
+   hub test covers the same race.
+D. Log writes the hub depends on (finding 5): every submit whose outcome
+   matters has a continuation in :tags. A turn end the log refused is
+   tried again on every log change and on a :tick the shell sends every
+   5 s; until it is recorded no other turn of the role starts, and the
+   operator is told once, on stderr (a :warn effect) and through core's
+   new `:conversation/turn-unrecorded` notification. A turn start the log
+   refused refuses the prompt. An unattended-permission notice that could
+   not be recorded is asked for again. Tests: hub-test
+   `a-turn-end-relay-could-not-record-is-tried-until-it-is`,
+   `a-turn-relay-could-not-record-does-not-run`; serve-test
+   `a-turn-end-the-log-refused-is-recorded-once-it-can-be` (inbound/submit!
+   throwing, then recovering, through the real engine).
+
+Also found while doing C: the log watcher took its first stamp after the
+caller read the state, so a write in between could be missed for good;
+it now reads the state on its first look.
+
+hub.clj went from 944 to 1059 lines: the board and the turn-end
+continuations moved in, while the request bookkeeping shrank to one
+table. `bb test --agentloop ../agentloop/bin/agentloop` with
+acp-tui-convs' bin on PATH: 831 tests, all pass. `bb tck`: 43 pass, 12
+skipped, ACP-SESSION-002 failing by design.
+
 ## Notes
 
 - No env vars for wiring. The socket path comes from config.
