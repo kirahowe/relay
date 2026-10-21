@@ -1,0 +1,11 @@
+{:id 61
+ :title "Fork acp-go-sdk and decode with encoding/json/v2"
+ :status :ready
+ :type :feature
+ :priority :p2
+ :created "2026-10-21"
+ :updated "2026-10-21"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "61-fork-acp-go-sdk-and-decode-with-encoding-json-v2.md"}
