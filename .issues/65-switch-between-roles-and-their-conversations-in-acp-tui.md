@@ -132,3 +132,18 @@ All answered in section 4 of the brief (2026-10-21) and now implemented.
   client does not use it.
 - The pane standing beside the conversation in hub mode.
 - Per-conversation drafts surviving a restart.
+
+## Hub view parity with the inline view
+
+- **Workspace pane beside the conversation (supersedes the earlier note
+  that it always covers it).** In hub mode the pane now stands beside the
+  conversation when the area left of the sidebar is 119 columns or wider
+  (a 160-column screen), as in the single-session view, so a display with
+  its `untrusted` mark is in front of the operator without ctrl+x. Narrower,
+  ctrl+x covers the conversation as before. Found by relay's
+  `the-pane-in-relay-chat-shows-a-display-and-trusts-it`, which now passes.
+- The conversation uses the inline view's own per-entry renderer
+  (`entriesAs`), so entries cannot drift. A test holds one of every entry
+  kind and checks every line the inline view prints at the same width also
+  appears in the hub view, and that the session's labels and defanged URLs
+  show.
