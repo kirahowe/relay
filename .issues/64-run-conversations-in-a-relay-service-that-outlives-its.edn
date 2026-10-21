@@ -1,6 +1,6 @@
 {:id 64
  :title "Run conversations in a relay service that outlives its clients"
- :status :in-progress
+ :status :review
  :type :feature
  :priority :p2
  :created "2026-10-21"
