@@ -1,6 +1,6 @@
 {:id 63
  :title "Track conversations and each role's status in relay's core"
- :status :ready
+ :status :in-progress
  :type :feature
  :priority :p2
  :created "2026-10-21"
