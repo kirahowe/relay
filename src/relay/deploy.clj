@@ -239,7 +239,10 @@
 (defn busy-wakes
   "The wakes in `state` that are running, as {:id :role :chat}. `alive?`
   says whether a wake's process is still there: a wake whose process has
-  gone is for the next tick to end, and does not hold a deploy up."
+  gone is for the next tick to end, and does not hold a deploy up. An
+  open conversation holds a deploy up even between turns: its relay acp
+  runs the code from before the deploy, which could not read an event the
+  new code writes."
   [state alive?]
   (vec (for [w (sort-by :id (vals (:wakes state)))
              :when (and (= :running (:status w)) (alive? w))]

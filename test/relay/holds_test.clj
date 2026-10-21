@@ -146,7 +146,7 @@
                   {:outcome "ran" :session "s" :held [{:id "a" :name "post" :input {}}]}
                   {:outcome "ran" :session "s" :held "nonsense" :labels ["bogus"]}]]
       (let [w (run w "dispatcher" :wake/end (assoc args :wake (:id wake)))]
-        (is (not (core/running? (:state w) "clerk")) (pr-str args))
+        (is (not (core/open? (:state w) "clerk")) (pr-str args))
         (is (empty? (core/open-holds (:state w))) (pr-str args))))))
 
 (deftest removing-a-role-denies-its-open-holds

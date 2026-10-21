@@ -36,7 +36,7 @@
   call held."
   [w role]
   (let [w (ct/run w "operator" :wake/start {:role role :note "go"})
-        wake (core/running-wake (:state w) role)]
+        wake (core/working-wake (:state w) role)]
     (if-not wake
       w
       (ct/run w "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :session (str "h" (:id wake)) :said ""
@@ -160,6 +160,24 @@
     (is (= {:role "clerk" :wakes 1 :memos-left-open 1 :cost-usd 0.5M :cost-per-wake 0.5M :unpriced 0}
            (select-keys (first roles) [:role :wakes :memos-left-open :cost-usd :cost-per-wake :unpriced])))))
 
+(deftest a-conversation-ending-mid-wake-leaves-the-wake-its-work
+  ;; relay#63: the walk kept one running wake per role, so a conversation
+  ;; that ended while a wake of its role worked made the wake's later
+  ;; closes and journal entry count for nothing.
+  (let [w (-> (seeded) (ct/run "operator" :memo/send {:to "clerk" :subject "s" :body "b"})
+              (ct/run "dispatcher" :wake/start {:role "clerk"})
+              (ct/run "operator" :wake/start {:role "clerk" :chat true}))
+        wake (core/working-wake (:state w) "clerk")
+        chat (core/open-conversation (:state w) "clerk")
+        w (-> w (ct/run "dispatcher" :wake/end {:wake (:id chat) :outcome "ran"})
+              (ct/run "clerk" :memo/close {:memo (first (:memos wake)) :outcome "done"})
+              (ct/run "clerk" :journal/write {:owner "clerk" :text "did it"})
+              (ct/run "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :said ""}))
+        facts {(:id wake) {:calls 2 :refused 0 :failed 0 :refused-tools [] :failed-tools []}}
+        r (report w all facts)]
+    (is (empty? (:health r)) (pr-str (:health r)))
+    (is (= 1 (:memos-closed (first (filter #(= "clerk" (:role %)) (:roles r))))))))
+
 (deftest a-wake-that-did-its-job-passes-every-check
   (let [w (-> (seeded) (ct/run "operator" :memo/send {:to "clerk" :subject "s" :body "b"})
               (ct/run "dispatcher" :wake/start {:role "clerk"}))
@@ -251,8 +269,8 @@
             (ct/run w "operator" :wake/flag {:wake (or (nth-or ids n) n) :value value :note "n"}))
     :permission (let [[r answer?] args
                       w (ct/run w "operator" :wake/start {:role r :chat true})
-                      chat (core/running-wake (:state w) r)]
-                  (if-not (:chat chat)
+                      chat (core/open-conversation (:state w) r)]
+                  (if-not chat
                     w
                     (cond-> (ct/run w "dispatcher" :permission/asked {:wake (:id chat) :session "s" :call "c"
                                                                       :tool "post" :input-sha256 "x"})

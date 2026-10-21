@@ -225,9 +225,9 @@
         pid (.pid ^Process (:proc dead))]
     (inbound/submit! *sys* {:type :wake/start :actor "dispatcher"
                             :args {:role "clerk" :pid pid :pid-start "1970-01-01T00:00:00Z"}})
-    (is (core/running? (state) "clerk"))
+    (is (core/open? (state) "clerk"))
     (dispatch/tick! *sys* {:spawn! (fn [& _])})
-    (is (not (core/running? (state) "clerk")))
+    (is (not (core/open? (state) "clerk")))
     (is (= 1 (:attempts (core/memo (state) id))))))
 
 (deftest a-live-wake-is-not-reaped
@@ -235,7 +235,7 @@
   (inbound/submit! *sys* {:type :wake/start :actor "dispatcher"
                           :args (merge {:role "clerk"} (dispatch/current-process))})
   (dispatch/tick! *sys* {:spawn! (fn [& _])})
-  (is (core/running? (state) "clerk")))
+  (is (core/open? (state) "clerk")))
 
 (deftest the-tick-wakes-roles-in-their-own-processes
   (let [a (memo! "clerk" "One")
@@ -390,14 +390,14 @@
         seen (atom nil)
         report (dispatch/with-conversation! *sys* "clerk"
                  (fn [request]
-                   (reset! seen {:request request :running (core/running? (state) "clerk")})
+                   (reset! seen {:request request :running (core/open? (state) "clerk")})
                    {:exit 0 :sessions ["s-1"]}))
         [wake] (chat-wakes)]
     (is (= {:exit 0 :sessions ["s-1"]} report))
     (is (:running @seen) "the conversation holds the role while it runs")
     (is (= [:ended "ran" 0 ["s-1"] "Conversation ended."]
            ((juxt :status :outcome :exit :sessions :said) wake)))
-    (is (not (core/running? (state) "clerk")))
+    (is (not (core/open? (state) "clerk")))
     (is (zero? (:attempts (core/memo (state) id))))
     (testing "the request has no prompt, says it is a conversation, and keeps its sessions apart"
       (let [{:keys [request]} @seen]
@@ -417,7 +417,7 @@
         [wake] (chat-wakes)]
     (is (= "the line dropped" (ex-message e)))
     (is (= [:ended true "the line dropped"] ((juxt :status :crashed :said) wake)))
-    (is (not (core/running? (state) "clerk")))))
+    (is (not (core/open? (state) "clerk")))))
 
 (deftest a-conversation-with-no-such-harness-ends-before-it-runs-anything
   ;; The role names a harness that relay.edn has since lost.
@@ -617,4 +617,4 @@
         wake (get-in (state) [:wakes (:wake result)])]
     (is (= [:ended "ran" true] ((juxt :status :outcome :crashed) wake)))
     (is (str/includes? (:said wake) "\"bogus\""))
-    (is (not (core/running? (state) "clerk")))))
+    (is (not (core/open? (state) "clerk")))))

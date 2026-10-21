@@ -74,6 +74,13 @@
 (defn- role-line-labels [state id]
   (core/union (core/role-labels state id) (core/id-labels state (:reports-to (core/role state id)))))
 
+(defn- activity
+  "What a role is doing, after its line: working through its memos, in
+  a conversation with the operator, or both."
+  [working conversation]
+  (str (when working "  [working]")
+       (when conversation (if (core/in-turn? conversation) "  [in a conversation turn]" "  [conversation open]"))))
+
 (defn- role-status [state zone now id]
   (let [{:keys [title reports-to]} (core/role state id)
         id-ls (core/id-labels state id)]
@@ -81,7 +88,7 @@
      [(text/for-operator (role-line-labels state id)
                          (format "  %-20s %s%s%s" id title
                                  (if reports-to (str ", reports to " reports-to) "")
-                                 (if (core/running? state id) "  [running]" "")))]
+                                 (activity (core/working-wake state id) (core/open-conversation state id))))]
      (for [{:keys [name schedule labels]} (core/active-routines state id)]
        (text/for-operator (core/union labels id-ls) (format "    routine %-18s %s" name schedule)))
      (map #(text/for-operator (core/union (:labels %) id-ls) (open-memo zone %)) (core/unread-memos state id))
@@ -184,11 +191,26 @@
                                         ;; Its id is what relay flag takes.
                                         (if chat ", conversation" ""))))))))
 
-(defn roles [state]
-  (for [id (core/active-role-ids state)
-        :let [{:keys [title reports-to]} (core/role state id)]]
-    (text/for-operator (role-line-labels state id)
-                       (str id ": " title (when reports-to (str ", reports to " reports-to))))))
+(defn- plural [n one many] (str n " " (if (= 1 n) one many)))
+
+(defn roles
+  "The roster (relay.roster) as `relay roles` shows it: a line for each
+  role, with whom it reports to and what it is doing. A line carries the
+  labels of the role's id and title and of the id it reports to."
+  [state roster]
+  (for [{:keys [id title labels working? holds conversation]} roster
+        :let [reports-to (:reports-to (core/role state id))
+              {:keys [turn turns unread? approvals]} conversation]]
+    (text/for-operator (core/union labels (core/id-labels state reports-to))
+                       (str id ": " title (when reports-to (str ", reports to " reports-to))
+                            (when working? "  [working]")
+                            (when (pos? holds) (str "  [" (plural holds "call" "calls") " held]"))
+                            (when conversation
+                              (str "  [conversation: " (if (= :running turn) "turn running" "idle")
+                                   ", " (plural turns "turn" "turns")
+                                   (when unread? ", unread")
+                                   (when (pos? approvals) (str ", " (plural approvals "approval" "approvals") " waiting"))
+                                   "]"))))))
 
 (defn routines
   "The routines of the given owners, or of every active role."

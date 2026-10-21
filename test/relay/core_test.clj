@@ -405,18 +405,132 @@
       (is (= :invalid (:rejected (run w "dispatcher" :wake/end {:wake wake-id :outcome "ran"
                                                                  :sessions ["s"]})))))))
 
-(deftest a-conversation-holds-the-role-but-carries-no-memos
+(deftest a-conversation-carries-no-memos
   (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "a" :body "b"}))
         id (last-memo-id w)
         w (run w "operator" :wake/start {:role "clerk" :chat true})
-        chat (core/running-wake (:state w) "clerk")]
+        chat (core/open-conversation (:state w) "clerk")]
     (is (= [] (:memos chat)))
-    (is (= :busy (:rejected (run w "dispatcher" :wake/start {:role "clerk" :dispatched true}))))
     (is (= :forbidden (:rejected (run (seed) "dispatcher" :wake/start {:role "clerk" :chat true}))))
     (let [w (run w "dispatcher" :wake/end {:wake (:id chat) :outcome "unreachable"})]
       (is (zero? (:attempts (core/memo (:state w) id))))
       (is (nil? (:interrupted-wake (core/role (:state w) "clerk")))
           "a conversation cut short is not resumed by the next wake"))))
+
+(defn- turn-start [w chat & [session]]
+  (run w "operator" :conversation/turn-start {:wake chat :session (or session "s1")}))
+
+(defn- turn-end [w chat & [reason]]
+  (run w "dispatcher" :conversation/turn-end {:wake chat :stop-reason (or reason "end_turn")}))
+
+(deftest a-conversation-holds-its-role-only-during-a-turn
+  (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "a" :body "b"})
+              (run "operator" :wake/start {:role "clerk" :chat true}))
+        chat (:id (core/open-conversation (:state w) "clerk"))]
+    (testing "an idle conversation leaves the role to the dispatcher"
+      (is (not (core/busy? (:state w) "clerk")))
+      (is (core/open? (:state w) "clerk"))
+      (is (= ["clerk"] (core/roles-to-wake (:state w) cfg (:now w))))
+      (let [w (run w "dispatcher" :wake/start {:role "clerk" :dispatched true})]
+        (is (nil? (:rejected w)))
+        (is (= 1 (count (:memos (core/working-wake (:state w) "clerk")))))
+        (testing "and a turn waits for the wake"
+          (let [w' (turn-start w chat)]
+            (is (= :busy (:rejected w')))
+            (is (str/includes? (:rejected-message w') "busy with scheduled work"))))))
+    (testing "a running turn holds the role"
+      (let [w (turn-start w chat)]
+        (is (nil? (:rejected w)))
+        (is (core/busy? (:state w) "clerk"))
+        (is (empty? (core/roles-to-wake (:state w) cfg (:now w))))
+        (is (= :busy (:rejected (run w "dispatcher" :wake/start {:role "clerk" :dispatched true}))))
+        (is (= :busy (:rejected (run w "operator" :wake/start {:role "clerk" :note "go"}))))
+        (testing "until it ends"
+          (let [w (turn-end w chat)]
+            (is (not (core/busy? (:state w) "clerk")))
+            (is (nil? (:rejected (run w "dispatcher" :wake/start {:role "clerk" :dispatched true}))))))))
+    (testing "an open conversation still keeps the role from being removed or started afresh"
+      (is (= :busy (:rejected (run w "operator" :role/remove {:id "clerk"}))))
+      (is (= :busy (:rejected (run w "operator" :role/fresh {:role "clerk" :expect {}})))))))
+
+(deftest a-conversation-may-open-while-a-wake-works-but-only-one-at-a-time
+  (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "a" :body "b"})
+              (run "dispatcher" :wake/start {:role "clerk" :dispatched true}))
+        w (run w "operator" :wake/start {:role "clerk" :chat true})]
+    (is (nil? (:rejected w)))
+    (is (core/working-wake (:state w) "clerk"))
+    (is (core/open-conversation (:state w) "clerk"))
+    (is (= (:id (core/working-wake (:state w) "clerk")) (:id (core/running-wake (:state w) "clerk")))
+        "a role's call is taken to come from the wake that works")
+    (is (= :busy (:rejected (run w "operator" :wake/start {:role "clerk" :chat true}))))
+    (testing "another role's conversation is its own"
+      (is (nil? (:rejected (run w "operator" :wake/start {:role "hub" :chat true})))))))
+
+(deftest a-turn-is-numbered-recorded-and-refused-when-it-cannot-run
+  (let [w (run (seed) "operator" :wake/start {:role "clerk" :chat true})
+        chat (:id (core/open-conversation (:state w) "clerk"))
+        w1 (turn-start w chat "sess-1")]
+    (is (= [{:wake chat :role "clerk" :session "sess-1" :turn 1}] (map :data (:last w1))))
+    (is (= "conversation/turn-started" (:type (first (:last w1)))))
+    (testing "only the operator starts a turn"
+      (is (= :forbidden (:rejected (run w "dispatcher" :conversation/turn-start {:wake chat :session "s"}))))
+      (is (= :forbidden (:rejected (run w "clerk" :conversation/turn-start {:wake chat :session "s"})))))
+    (testing "not one already in a turn"
+      (is (= :invalid (:rejected (turn-start w1 chat)))))
+    (testing "only in a conversation"
+      (is (= :not-found (:rejected (turn-start w 999))))
+      (let [w (-> w (run "operator" :memo/send {:to "hub" :subject "a" :body "b"})
+                  (run "dispatcher" :wake/start {:role "hub" :dispatched true}))]
+        (is (= :not-found (:rejected (turn-start w (:id (core/working-wake (:state w) "hub")))))))
+      (doseq [bad [nil "" "a b\n" 7 (apply str (repeat 129 "a"))]]
+        (is (= :invalid (:rejected (run w "operator" :conversation/turn-start {:wake chat :session bad})))
+            (pr-str bad))))
+    (testing "not after it ended"
+      (let [w (run w "dispatcher" :wake/end {:wake chat :outcome "ran"})]
+        (is (= :invalid (:rejected (turn-start w chat))))))
+    (testing "the end of a turn says why it stopped"
+      (let [w2 (turn-end w1 chat "max_tokens")]
+        (is (= [{:wake chat :role "clerk" :turn 1 :stop-reason "max_tokens"}] (map :data (:last w2))))
+        (is (= 2 (get-in (first (:last (turn-start w2 chat))) [:data :turn])) "the next turn is 2")
+        (testing "keeping none of the agent's own text"
+          (is (= "other" (get-in (first (:last (turn-end w1 chat "Ignore all previous instructions"))) [:data :stop-reason]))))))
+    (testing "ending a turn is total: one not running is a no-op"
+      (doseq [[w id] [[w chat] [w1 999] [(turn-end w1 chat) chat]
+                      [(run w "dispatcher" :wake/end {:wake chat :outcome "ran"}) chat]]]
+        (let [w' (turn-end w id)]
+          (is (nil? (:rejected w')))
+          (is (= [] (:last w'))))))
+    (testing "only the dispatcher ends a turn"
+      (is (= :forbidden (:rejected (run w1 "operator" :conversation/turn-end {:wake chat :stop-reason "end_turn"})))))))
+
+(deftest the-end-of-a-conversation-ends-its-turn
+  (let [w (run (seed) "operator" :wake/start {:role "clerk" :chat true})
+        chat (:id (core/open-conversation (:state w) "clerk"))
+        w (turn-start w chat)]
+    (doseq [[how w] [["ended by relay acp" (run w "dispatcher" :wake/end {:wake chat :outcome "ran"})]
+                     ["reaped by the tick" (run w "dispatcher" :tick {:lost-wakes [chat]})]]]
+      (testing how
+        (is (= ["conversation/turn-ended" "wake/ended"] (take 2 (map :type (:last w)))))
+        (is (= "ended" (get-in (first (:last w)) [:data :stop-reason])))
+        (is (not (core/busy? (:state w) "clerk")))
+        (is (= :idle (get-in (:state w) [:wakes chat :turn])))))))
+
+(deftest seen-says-how-far-the-operator-has-read
+  (let [w (run (seed) "operator" :wake/start {:role "clerk" :chat true})
+        chat (:id (core/open-conversation (:state w) "clerk"))
+        seen #(run %1 "operator" :conversation/seen {:wake chat :turn %2})
+        w (-> w (turn-start chat) (turn-end chat) (turn-start chat) (turn-end chat))]
+    (is (= :invalid (:rejected (seen w 3))) "no turn 3 yet")
+    (is (= :invalid (:rejected (seen w 0))))
+    (is (= :invalid (:rejected (seen w "2"))))
+    (is (= :forbidden (:rejected (run w "dispatcher" :conversation/seen {:wake chat :turn 1}))))
+    (is (= :not-found (:rejected (run w "operator" :conversation/seen {:wake 999 :turn 1}))))
+    (let [w (seen w 2)]
+      (is (= [{:wake chat :role "clerk" :turn 2}] (map :data (:last w))))
+      (is (= 2 (get-in (:state w) [:wakes chat :seen])))
+      (testing "seeing an earlier turn again records nothing"
+        (is (= [] (:last (seen w 1))))
+        (is (= [] (:last (seen w 2))))))))
 
 (deftest one-wake-at-a-time
   (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "a" :body "b"})
@@ -429,7 +543,7 @@
               (run "dispatcher" :wake/start {:role "clerk"}))
         wake-id (:id (core/running-wake (:state w) "clerk"))
         w (run w "dispatcher" :tick {:lost-wakes [wake-id]})]
-    (is (not (core/running? (:state w) "clerk")))
+    (is (not (core/open? (:state w) "clerk")))
     (is (true? (:crashed (get-in (:state w) [:wakes wake-id]))))
     (is (= 1 (:attempts (first (memos-to w "clerk")))))))
 
@@ -440,7 +554,7 @@
         wake-id (:id (core/running-wake (:state w) "clerk"))
         w (run w "dispatcher" :tick {:lost-wakes [wake-id]})
         wake (get-in (:state w) [:wakes wake-id])]
-    (is (not (core/running? (:state w) "clerk")))
+    (is (not (core/open? (:state w) "clerk")))
     (is (= [:ended "ran" false false core/conversation-gone]
            ((juxt :status :outcome :crashed :cut-short :said) wake)))
     (is (nil? (:interrupted-wake (core/role (:state w) "clerk"))) "nothing is left to resume")))
@@ -531,6 +645,9 @@
     ;; ends one: with whatever its proxy reported, through
     ;; conversation-end-args. Everything else can happen in between.
     [2 (gen/tuple (gen/return :chat-open) (gen/elements role-pool))]
+    [4 (gen/tuple (gen/return :turn-start) gen/nat (gen/elements ["s1" "s1" "s2" nil]))]
+    [4 (gen/tuple (gen/return :turn-end) gen/nat (gen/elements ["end_turn" "cancelled" "error" "made up" nil]))]
+    [2 (gen/tuple (gen/return :seen) gen/nat (gen/elements [0 1 2 3 "1"]))]
     [3 (gen/tuple (gen/return :chat-close) gen/nat
                   (gen/one-of [(gen/return nil) (gen/elements [0 1 137 "x"])])
                   (gen/one-of [(gen/return nil) (gen/vector (gen/elements ["s1" "s2" "" nil 3]) 0 3)])
@@ -562,6 +679,9 @@
                   (gen/elements ["new" "seen" "applied" "passed" "won"]))]]))
 
 (defn- nth-or [coll n] (when (seq coll) (nth coll (mod n (count coll)))))
+
+(defn- open-chats [w]
+  (vec (sort-by :id (filter #(and (:chat %) (= :running (:status %))) (vals (:wakes (:state w)))))))
 
 (defn- step [w [kind & args]]
   (let [ids (sort (keys (:memos (:state w))))]
@@ -598,18 +718,33 @@
                                 id)]
               (cond-> w' (seq misrecorded) (assoc :problem [:lost-wake-misrecorded misrecorded])))
       :start-only (run w "dispatcher" :wake/start {:role (first args) :dispatched true})
+      ;; A turn of an open conversation, as relay acp starts one for a
+      ;; prompt and ends one when the agent answers it, and what the
+      ;; operator has seen of it.
+      :turn-start (let [[n session] args
+                        chat (nth-or (open-chats w) n)
+                        w' (run w "operator" :conversation/turn-start {:wake (or (:id chat) n) :session session})]
+                    ;; Refused only for a reason the rules give.
+                    (cond-> w'
+                      (and chat (:rejected w') (not (or (core/in-turn? chat) (not (string? session))
+                                                        (core/working-wake (:state w) (:role chat)))))
+                      (assoc :problem [:turn-refused (:rejected-message w')])))
+      :turn-end (let [[n reason] args
+                      chat (nth-or (open-chats w) n)]
+                  (run w "dispatcher" :conversation/turn-end {:wake (or (:id chat) n) :stop-reason reason}))
+      :seen (let [[n turn] args
+                  chat (nth-or (open-chats w) n)]
+              (run w "operator" :conversation/seen {:wake (or (:id chat) n) :turn turn}))
       :chat (let [[r outcome sessions] args
                   w (run w "operator" :wake/start {:role r :chat true})
-                  chat (core/running-wake (:state w) r)]
-              (if (and chat (:chat chat))
+                  chat (core/open-conversation (:state w) r)]
+              (if chat
                 (run w "dispatcher" :wake/end (cond-> {:wake (:id chat) :outcome outcome}
                                                 sessions (assoc :sessions sessions)))
                 w))
       :chat-open (run w "operator" :wake/start {:role (first args) :chat true})
       :chat-close (let [[n exit sessions said] args
-                        chat (nth-or (sort-by :id (filter #(and (:chat %) (= :running (:status %)))
-                                                          (vals (:wakes (:state w)))))
-                                     n)]
+                        chat (nth-or (open-chats w) n)]
                     (if chat
                       (let [w' (run w "dispatcher" :wake/end
                                     (dispatch/conversation-end-args
@@ -648,11 +783,11 @@
                     f (fn [p] {:title (str "Job " p) :url (str "https://jobs.example.org/" p) :organization "Example"
                                :kind "job" :summary "s" :deadline "2031-01-01"
                                :evidence [{:url (str "https://jobs.example.org/" p) :quote "q"}]})]
-                (if (and (= "courier" actor) (not (core/running? (:state w) actor)))
+                (if (and (= "courier" actor) (not (core/working-wake (:state w) actor)))
                   ;; In a wake of its own, as a role's calls are made.
                   (let [w (-> w (run "operator" :memo/send {:to actor :subject "go" :body "b"} true)
                               (run "dispatcher" :wake/start {:role actor}))
-                        wake (core/running-wake (:state w) actor)]
+                        wake (core/working-wake (:state w) actor)]
                     ;; A role waiting on relay fresh is not woken, so it
                     ;; submits nothing.
                     (if-not wake
@@ -694,7 +829,7 @@
                (reduce (fn [w _]
                          (let [w (-> (run w "operator" :memo/send {:to r :subject "burst" :body "b"})
                                      (run "dispatcher" :wake/start {:role r}))
-                               wake-row (core/running-wake (:state w) r)]
+                               wake-row (core/working-wake (:state w) r)]
                            (cond-> w
                              wake-row (run "dispatcher" :wake/end {:wake (:id wake-row) :outcome "ran"})
                              true (advance 61)
@@ -702,7 +837,7 @@
                        w (range n)))
       :wake (let [[r dispatched outcome closes resets? cut-short tool d1 d2] args
                   w (run w "dispatcher" :wake/start {:role r :dispatched dispatched})
-                  wake-row (core/running-wake (:state w) r)]
+                  wake-row (core/working-wake (:state w) r)]
               (if-not wake-row
                 w
                 (as-> w w
@@ -735,6 +870,12 @@
 
 (defn- cfg-mcp-tool? [tool] (config/mcp-tool? (get-in cfg [:tools tool])))
 
+(defn- new-event?
+  "Whether an event of a world's last batch was written after `before`: a
+  step that writes nothing leaves the batch before it in place."
+  [before e]
+  (>= (:seq e) (:next-seq (:state before))))
+
 (defn- check-step
   "The spec's invariants, checked between one world and the next. Returns a
   vector of the ones broken."
@@ -745,9 +886,31 @@
         batch (:last after)
         problems (transient [])
         fail! #(conj! problems %)]
-    ;; One wake at a time per role.
-    (doseq [[r ws] (group-by :role (filter #(= :running (:status %)) wakes))]
-      (when (> (count ws) 1) (fail! [:two-wakes r])))
+    ;; A role works in one wake at a time and keeps one conversation open
+    ;; at a time, and takes one turn at a time: no conversation turn runs
+    ;; while a wake works.
+    (doseq [[r ws] (group-by :role (filter #(= :running (:status %)) wakes))
+            :let [{chats true working false} (group-by (comp boolean :chat) ws)]]
+      (when (> (count working) 1) (fail! [:two-wakes r]))
+      (when (> (count chats) 1) (fail! [:two-conversations r]))
+      (when (and (seq working) (some core/in-turn? chats)) (fail! [:turn-while-working r])))
+    ;; A turn starts only while no wake of its role works, and a wake starts
+    ;; only while no turn of its role runs.
+    (doseq [e batch :when (and (= "conversation/turn-started" (:type e)) (new-event? before e))]
+      (when (core/working-wake (:state before) (get-in e [:data :role])) (fail! [:turn-over-a-wake (:seq e)])))
+    (doseq [e batch :when (and (= "wake/started" (:type e)) (not (get-in e [:data :chat])) (new-event? before e))]
+      (when (core/busy? (:state before) (get-in e [:data :role])) (fail! [:wake-over-a-turn (:seq e)])))
+    ;; Turns count up from one, each ends before the next starts, and only a
+    ;; running conversation is in one. What the operator saw is a turn
+    ;; that started.
+    (doseq [w wakes :when (:chat w)
+            :let [{:keys [turns turns-ended seen]} w]]
+      (when-not (<= 0 seen turns) (fail! [:seen-past-the-turns (:id w)]))
+      (when-not (if (core/in-turn? w) (= turns-ended (dec turns)) (= turns-ended turns))
+        (fail! [:turns-out-of-step (:id w) turns turns-ended]))
+      (when (and (core/in-turn? w) (not= :running (:status w))) (fail! [:turn-outlived-its-conversation (:id w)])))
+    (doseq [e batch :when (= "conversation/turn-ended" (:type e))]
+      (when-not (core/stop-reasons (get-in e [:data :stop-reason])) (fail! [:unknown-stop-reason e])))
     ;; A wake carries only its own role's memos.
     (doseq [{:keys [role memos]} wakes, m memos]
       (when (not= role (:to (core/memo s m))) (fail! [:foreign-memo role m])))
@@ -814,9 +977,10 @@
     ;; A conversation carries no memos and no attempt is counted against one.
     (doseq [w wakes :when (:chat w)]
       (when (seq (:memos w)) (fail! [:chat-with-memos (:id w)])))
-    ;; A running conversation holds its role, and ending it is never refused.
-    (doseq [w wakes :when (and (:chat w) (= :running (:status w)))]
-      (when-not (= (:id w) (:id (core/running-wake s (:role w)))) (fail! [:chat-not-holding (:id w)])))
+    ;; A conversation holds its role while a turn runs, and ending it is
+    ;; never refused.
+    (doseq [w wakes :when (and (:chat w) (core/in-turn? w))]
+      (when-not (core/busy? s (:role w)) (fail! [:turn-not-holding (:id w)])))
     (when-let [p (:problem after)] (fail! p))
     ;; A tool whose definition changed under a session is never taken
     ;; without the operator: while the role waits for relay fresh, no wake

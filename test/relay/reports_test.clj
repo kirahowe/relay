@@ -479,7 +479,7 @@
                                              quotes))))))
 
 (defn- submitted [w report]
-  (let [w (-> (if (core/running? (:state w) "scout") w (in-wake w "scout"))
+  (let [w (-> (if (core/open? (:state w) "scout") w (in-wake w "scout"))
               (run "scout" :report/submit report {:labels ["contaminated"]}))]
     [w (:seq (first (:last w)))]))
 

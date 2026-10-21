@@ -11,7 +11,8 @@
             [relay.config :as config]
             [relay.core :as core]
             [relay.log :as log]
-            [relay.render :as render])
+            [relay.render :as render]
+            [relay.roster :as roster])
   (:import (java.time Instant ZoneId)))
 
 (def utc (ZoneId/of "UTC"))
@@ -73,7 +74,7 @@
           recent (rest (drop-while #(not= "Recent wakes" %) lines))]
       (and (= "Roles" (first lines))
            (= (sort ids) (sort (map #(second (re-find #"^  (\S+)" %)) headers)))
-           (= (min woken (count ids)) (count (filter #(str/includes? % "[running]") headers)))
+           (= (min woken (count ids)) (count (filter #(str/includes? % "[conversation open]") headers)))
            (<= (count recent) 5)
            (some #{"Operator's inbox: 0 open"} lines)))))
 
@@ -128,7 +129,25 @@
     (is (= 2 (count (render/routines state utc nil))))
     (is (= [(format "%-16s %-18s %s (since %s)" "b" "weekly" "weekly mon 09:00" "2026-10-15 12:00")]
            (render/routines state utc ["b"])))
-    (is (= ["a: A" "b: B"] (render/roles state)))))
+    (is (= ["a: A" "b: B"] (render/roles state (roster/roster state cfg t0))))))
+
+(deftest relay-roles-shows-what-each-role-is-doing
+  (let [as (fn [state actor type args]
+             (first (core/run-command state {:type type :actor actor :args args} {:now t0 :config cfg})))
+        state (-> core/empty-state
+                  (cmd :role/add {:id "a" :title "A" :instructions "x"})
+                  (cmd :role/add {:id "b" :title "B" :instructions "x" :reports-to "a"})
+                  (cmd :memo/send {:to "a" :subject "s" :body "b"})
+                  (as "dispatcher" :wake/start {:role "a" :dispatched true})
+                  (cmd :wake/start {:role "b" :chat true}))
+        chat (:id (core/open-conversation state "b"))
+        state (-> state
+                  (cmd :conversation/turn-start {:wake chat :session "s1"})
+                  (as "dispatcher" :conversation/turn-end {:wake chat :stop-reason "end_turn"})
+                  (cmd :conversation/turn-start {:wake chat :session "s1"}))]
+    (is (= ["a: A  [working]"
+            "b: B, reports to a  [conversation: turn running, 2 turns, unread]"]
+           (render/roles state (roster/roster state cfg t0))))))
 
 (deftest a-wake-and-a-doc-say-what-happened
   (is (= ["idle {}"] (render/wake-result {:result :idle})))

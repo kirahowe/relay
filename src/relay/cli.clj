@@ -19,6 +19,7 @@
             [relay.pause :as pause]
             [relay.render :as render]
             [relay.reports :as reports]
+            [relay.roster :as roster]
             [relay.setup :as setup]
             [relay.text :as text]
             [relay.tools :as tools]
@@ -513,7 +514,7 @@ and --instructions marks the id public too.")
       "close" (let [[id] more]
                 (submit! sys :memo/close {:memo (some-> id parse-long) :outcome (:message opts)})
                 (result 0 (str "Closed memo " id)))
-      "roles" (lines (render/roles (state)))
+      "roles" (lines (let [s (state)] (render/roles s (roster/roster s (:config sys) ((:clock sys))))))
       "add" (let [[id] more]
               (submit! sys :role/add {:id id :title (:title opts) :reports-to (:reports-to opts)
                                       :harness (:harness opts) :model (:model opts)

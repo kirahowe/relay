@@ -118,12 +118,50 @@
 
 (defn memo [state id] (get-in state [:memos id]))
 
-(defn running-wake [state role-id]
+;; A role runs at most one wake that works through its memos (dispatched,
+;; or asked for by hand) and keeps at most one conversation open with the
+;; operator. A conversation holds the role only while a turn of it runs,
+;; so the two may be open at once, but the role still takes one turn at a
+;; time: no turn starts while a wake works, and no wake starts while a
+;; turn runs.
+
+(defn- running-wakes [state role-id]
   (->> (vals (:wakes state))
        (filter #(and (= role-id (:role %)) (= :running (:status %))))
-       first))
+       (sort-by :id)))
 
-(defn running? [state role-id] (some? (running-wake state role-id)))
+(defn working-wake
+  "The role's running wake that is not a conversation, or nil."
+  [state role-id]
+  (first (remove :chat (running-wakes state role-id))))
+
+(defn open-conversation
+  "The role's open conversation, a running wake with :chat, or nil."
+  [state role-id]
+  (first (filter :chat (running-wakes state role-id))))
+
+(defn in-turn?
+  "Whether a turn of a conversation runs now."
+  [wake]
+  (= :running (:turn wake)))
+
+(defn busy?
+  "Whether no other turn of the role's may start: a wake of it works, or
+  a turn of its conversation runs. The dispatcher wakes only a role that
+  is not busy."
+  [state role-id]
+  (boolean (or (working-wake state role-id) (in-turn? (open-conversation state role-id)))))
+
+(defn open?
+  "Whether the role has any running wake, an idle conversation included."
+  [state role-id]
+  (boolean (seq (running-wakes state role-id))))
+
+(defn running-wake
+  "The wake a role's call is taken to come from when it names none: its
+  working wake, else its open conversation, else nil."
+  [state role-id]
+  (or (working-wake state role-id) (open-conversation state role-id)))
 
 (defn unread-memos
   "Open memos to someone, oldest first."
@@ -252,11 +290,11 @@
   (set (mapcat #(get-in state [:wakes % :memos]) (held-wakes state role-id))))
 
 (defn kept-memo-ids
-  "The memos a role's running wake may not touch: those kept by a held
-  session other than the one it carries on. All of them when it is not
-  running."
+  "The memos a role's working wake may not touch: those kept by a held
+  session other than the one it carries on. All of them when no wake
+  works, as in a conversation, which carries no held session on."
   [state role-id]
-  (let [running (running-wake state role-id)]
+  (let [running (working-wake state role-id)]
     (set (mapcat #(get-in state [:wakes % :memos])
                  (disj (held-wakes state role-id) (:resumes running))))))
 
@@ -279,7 +317,7 @@
 
 (defn roles-to-wake
   "The roles the dispatcher should wake now: with a memo waiting or a held
-  session whose calls are all decided, not already running, their harness
+  session whose calls are all decided, not busy (busy?), their harness
   not paused, and not stopped by the runaway guard. A call held for the
   operator keeps only its own session's memos waiting. A public role whose
   own text holds private is never woken (unwakeable-public-role?)."
@@ -288,7 +326,7 @@
              :when (and (or (seq (waiting-memos state config id now)) (resumable-held-session state id)
                             ;; Woken to end them, so their memos go on.
                             (seq (sessions-from-before-public state config id)))
-                        (not (running? state id))
+                        (not (busy? state id))
                         (not (paused-until state (harness-of state config id) now))
                         (not (waiting-on-tools? state id now))
                         (not (running-away? state id config now))
@@ -971,6 +1009,9 @@
                                           :pid-start pid-start :started-at (inst at)
                                           :status :running :chat (boolean chat)
                                           :resolves (vec resolves)})
+      ;; A conversation's turns: none yet, none ended and none seen.
+      chat (update-in [:wakes seq] assoc :turn :idle :turns 0 :turns-ended 0 :seen 0
+                      :last-activity (inst at))
       ;; A conversation leaves an interrupted wake to be resumed later, and
       ;; so does carrying on a held session: only the wake that carries
       ;; it on, or a wake that carries on no held session, clears it.
@@ -1078,6 +1119,19 @@
       asked (update-in [:permissions (:id asked)] assoc :outcome (:outcome data) :by (:by data)))))
 
 (defmethod evolve* "conversation/line-dropped" [state _] state)
+
+(defmethod evolve* "conversation/turn-started" [state {:keys [at data]}]
+  (let [{:keys [wake session turn]} data]
+    (update-in state [:wakes wake] assoc :turn :running :turns turn :turn-session session
+               :last-activity (inst at))))
+
+(defmethod evolve* "conversation/turn-ended" [state {:keys [at data]}]
+  (let [{:keys [wake turn stop-reason]} data]
+    (update-in state [:wakes wake] assoc :turn :idle :turns-ended turn :stop-reason stop-reason
+               :last-activity (inst at))))
+
+(defmethod evolve* "conversation/seen" [state {:keys [data]}]
+  (assoc-in state [:wakes (:wake data) :seen] (:turn data)))
 
 (defmethod evolve* "hold/session-ended" [state {:keys [data]}]
   (let [{:keys [role session]} data
@@ -1473,7 +1527,8 @@
   (authorize-registry! tx)
   (active-role! state id)
   (when (= id actor) (reject! :forbidden "A role may not remove itself."))
-  (when (running? state id) (reject! :busy (str id " is running now; remove it once it stops.") (id-labels state id)))
+  ;; An idle conversation still runs in its own process, so it counts.
+  (when (open? state id) (reject! :busy (str id " is running now; remove it once it stops.") (id-labels state id)))
   (as-> tx tx
     (reduce (fn [tx {:keys [name]}] (emit tx "routine/removed" {:owner id :name name}))
             tx (active-routines state id))
@@ -1663,10 +1718,10 @@
         (reject! :runaway (str role-id " has been stopped by the runaway guard.")))
       (when (waiting-on-tools? state role-id now)
         (reject! :paused (str role-id "'s tools could not be set up."))))
-    ;; A conversation with the operator holds the role like a wake, so no
-    ;; wake runs alongside it, but it carries no memos: what the role does
-    ;; with them there is up to the conversation, and nothing counts against
-    ;; them when it ends.
+    ;; A conversation with the operator holds the role only while a turn
+    ;; of it runs, and carries no memos: what the role does with them
+    ;; there is up to the conversation, and nothing counts against them
+    ;; when it ends.
     (when (and chat (not= operator actor))
       (reject! :forbidden "Only the operator can open a conversation."))
     (let [;; A held session whose calls are all decided is carried on
@@ -1718,10 +1773,16 @@
   (when-not (#{dispatcher operator} actor)
     (reject! :forbidden "Only the operator or the dispatcher wakes a role."))
   (active-role! (:state tx) role-id)
-  (when (running? (:state tx) role-id)
-    (reject! :busy (str role-id " is already running.") (id-labels (:state tx) role-id)))
   (when (and chat (not= operator actor))
     (reject! :forbidden "Only the operator can open a conversation."))
+  ;; A role keeps one conversation open at a time. It may open while a
+  ;; wake works: its first turn waits for the wake to end. A wake starts
+  ;; while a conversation is open, but not while a turn of it runs.
+  (if chat
+    (when (open-conversation (:state tx) role-id)
+      (reject! :busy (str role-id " already has a conversation open.") (id-labels (:state tx) role-id)))
+    (when (busy? (:state tx) role-id)
+      (reject! :busy (str role-id " is already running.") (id-labels (:state tx) role-id))))
   (start-wake (cond-> tx (public-role? config role-id) (end-sessions-from-before-public role-id))
               command))
 
@@ -2057,6 +2118,20 @@
                    "\n\nOr trust one you have read with relay trust doc <path>.")
               :role (:role wake)))))
 
+(def stop-reasons
+  "How a conversation's turn can end: ACP's stop reasons, \"error\" when
+  the agent answered the prompt with an error, \"ended\" when the
+  conversation ended during the turn, and \"other\", which anything
+  else is kept as, so the log holds none of an agent's own text here."
+  #{"end_turn" "max_tokens" "max_turn_requests" "refusal" "cancelled" "error" "ended" "other"})
+
+(defn- end-turn
+  "Ends the turn running in a conversation."
+  [{:keys [state] :as tx} wake-id stop-reason]
+  (let [{:keys [role turns]} (get-in state [:wakes wake-id])]
+    (emit tx "conversation/turn-ended" {:wake wake-id :role role :turn turns
+                                        :stop-reason (if (stop-reasons stop-reason) stop-reason "other")})))
+
 (defn- end-wake [{:keys [state config] :as tx} wake-id {:keys [outcome exit crashed cut-short session sessions said
                                                               transcript resets-at held labels usage cost-usd
                                                               tools-error pins shown]
@@ -2086,6 +2161,8 @@
       (when-not (:chat wake)
         (reject! "Only a conversation records a list of sessions.")))
     (as-> tx tx
+      ;; A conversation that ends during a turn ends the turn first.
+      (if (in-turn? wake) (end-turn tx wake-id "ended") tx)
       (emit tx "wake/ended" (cond-> {:wake wake-id :outcome outcome :exit exit :crashed (boolean crashed)
                                      :cut-short (boolean cut-short) :session session :said said
                                      :transcript transcript}
@@ -2303,6 +2380,48 @@
                      (when (and permission (not refused)) "and relay could not tell which, so it went unanswered."))
                 :role role :labels (id-labels state role)))))
 
+(def ^:private session-pattern
+  "An ACP session id as relay keeps it: agentloop's are UUIDs."
+  #"[A-Za-z0-9._:-]{1,128}")
+
+(defn- conversation!
+  "The conversation with this id, or a refusal."
+  [state wake-id]
+  (let [w (get-in state [:wakes wake-id])]
+    (when-not (:chat w) (reject! :not-found (str "There is no conversation " (pr-str wake-id) ".")))
+    w))
+
+(defmethod decide* :conversation/turn-start [{:keys [state] :as tx} {{:keys [wake session]} :args}]
+  ;; The operator sends each turn, from whichever client.
+  (operator-only! tx "starts a turn of a conversation")
+  (let [{:keys [role turns] :as w} (conversation! state wake)]
+    (when-not (= :running (:status w)) (reject! :invalid (str "Conversation " wake " has ended.")))
+    (when (in-turn? w) (reject! :invalid (str "A turn of conversation " wake " is running already.")))
+    (when-not (and (string? session) (re-matches session-pattern session))
+      (reject! :invalid "A turn needs the ACP session it runs in."))
+    ;; The role takes one turn at a time: this one waits for the wake.
+    (when (working-wake state role)
+      (reject! :busy (str role " is busy with scheduled work. Send this again once it is done.")
+               (id-labels state role)))
+    (emit tx "conversation/turn-started" {:wake wake :role role :session session :turn (inc turns)})))
+
+(defmethod decide* :conversation/turn-end [{:keys [state] :as tx} {{:keys [wake stop-reason]} :args}]
+  ;; Total: whatever ends a turn may be told twice, or after the wake.
+  (dispatcher-only! tx)
+  (let [w (get-in state [:wakes wake])]
+    (if (and (:chat w) (= :running (:status w)) (in-turn? w))
+      (end-turn tx wake stop-reason)
+      tx)))
+
+(defmethod decide* :conversation/seen [{:keys [state] :as tx} {{:keys [wake turn]} :args}]
+  (operator-only! tx "says what they have seen of a conversation")
+  (let [{:keys [role turns seen]} (conversation! state wake)]
+    (when-not (and (integer? turn) (<= 1 turn (or turns 0)))
+      (reject! :invalid (str "Conversation " wake " has no turn " (pr-str turn) ".")))
+    (if (> turn (or seen 0))
+      (emit tx "conversation/seen" {:wake wake :role role :turn turn})
+      tx)))
+
 (defmethod decide* :labels/enable [{:keys [state] :as tx} _]
   ;; Marks where labels begin, the first time this relay opens a log
   ;; written before it kept them.
@@ -2449,7 +2568,8 @@
   ;; so only the operator does it, and only for what they saw.
   (operator-only! tx "starts a role's session afresh")
   (active-role! state role-id)
-  (when (running? state role-id)
+  ;; An idle conversation's session would go on with the old definition.
+  (when (open? state role-id)
     (reject! :busy (str role-id " is running.") (id-labels state role-id)))
   (let [{:keys [session tool got] :as now} (fresh-expectation state role-id)
         accept? (and tool got (config/mcp-tool? (get-in (:config tx) [:tools tool])))]
@@ -2518,7 +2638,7 @@
             (let [reported (get-in (:state tx) [:guards id])
                   window (Duration/ofMinutes (:runaway-window-minutes config))]
               (if (and (seq (waiting-memos state config id now))
-                       (not (running? state id))
+                       (not (busy? state id))
                        (running-away? state id config now)
                        (or (nil? reported) (not (after? (.plus ^Instant reported window) now))))
                 (notify tx "runaway-guard-tripped" (str id " was stopped by the runaway guard")

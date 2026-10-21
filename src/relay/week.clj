@@ -143,9 +143,12 @@
       (assoc acc :waiting now))))
 
 (defn- wake-of
-  "The wake a role is running now, by its id, from the walk's own record."
+  "The wake a role's own event is taken to come from, by its id, from the
+  walk's own record: the wake it is working in, else its open
+  conversation. Both may run at once."
   [acc role]
-  (get-in acc [:running role]))
+  (let [running (get-in acc [:running role])]
+    (or (:wake running) (:chat running))))
 
 (defn- bump [acc wake k]
   (if wake (update-in acc [:wakes wake k] (fnil inc 0)) acc))
@@ -156,10 +159,10 @@
   (let [at (core/inst (:at event))
         memo-to #(get-in after [:memos % :to])]
     (-> (case type
-          "wake/started" (-> acc (assoc-in [:running (:role data)] seq)
+          "wake/started" (-> acc (assoc-in [:running (:role data) (if (:chat data) :chat :wake)] seq)
                              (assoc-in [:wakes seq :start] seq))
-          "wake/ended" (let [role (get-in after [:wakes (:wake data) :role])]
-                         (-> acc (update :running dissoc role)
+          "wake/ended" (let [{:keys [role chat]} (get-in after [:wakes (:wake data)])]
+                         (-> acc (update-in [:running role] dissoc (if chat :chat :wake))
                              (assoc-in [:wakes (:wake data) :tools-unavailable] (some? (:tools-error data)))))
           "hold/opened" (arise acc "hold" seq (:role data) at)
           "hold/resolved" (settle acc "hold" (:hold data)

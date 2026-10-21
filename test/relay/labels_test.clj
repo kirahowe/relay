@@ -345,7 +345,7 @@
                                                          :instructions (str "Check " b)})
           :journal (run-public w labels :journal/write {:owner public-role :text (str "Today " b)})
           ;; A public note on a wake carries nothing private into it.
-          :wake (if (core/running? s public-role)
+          :wake (if (core/open? s public-role)
                   w
                   (let [w (run-public w labels :wake/start {:role public-role :note (str "Look at " a)})
                         wake (core/running-wake (:state w) public-role)]
