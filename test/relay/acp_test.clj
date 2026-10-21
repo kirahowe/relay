@@ -527,7 +527,7 @@
     (is (= 1 (count wakes)))
     (is (= :ended (:status wake)) (pr-str wake))
     (is (= [session] (:sessions wake)))
-    (is (not (core/running? (state) "clerk")) "the role is free again"))
+    (is (not (core/open? (state) "clerk")) "the role is free again"))
   (is (not (alive? agentloop)) "agentloop is gone")
   (testing "the session file is still there, every line whole"
     (is (fs/exists? (session-file session)))
@@ -582,14 +582,16 @@
               (is (= [:ended "ran" false false] ((juxt :status :outcome :crashed :cut-short) wake))
                   (pr-str wake))
               (is (= core/conversation-gone (:said wake))))
-            (is (not (core/running? (state) "clerk")) "the role is free again")))))))
+            (is (not (core/open? (state) "clerk")) "the role is free again")))))))
 
-(deftest a-busy-role-is-refused-before-any-traffic
+(deftest a-role-with-a-conversation-open-is-refused-before-any-traffic
+  ;; A wake that works no longer keeps a conversation from opening
+  ;; (relay#63; relay.turns-acp-test), but a second conversation is refused.
   (when bin
     (with-world {} slow-model
       (fn []
         (inbound/submit! *sys* {:type :wake/start :actor "operator"
-                                :args (merge {:role "clerk" :note "Busy."} (dispatch/current-process))})
+                                :args (merge {:role "clerk" :chat true} (dispatch/current-process))})
         (let [{:keys [exit out err]} @(p/process [relay-bin "acp" "clerk" "--data" (data)]
                                                  {:in "" :out :string :err :string :dir *dir*})]
           (is (= 1 exit))

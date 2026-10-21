@@ -32,9 +32,10 @@
 
 (def conversation
   "Nothing learned yet: the displays kept, in the order they came, the
-  permission requests passed on, by [session call], and the rev of every
-  card the client was last sent, nil until it subscribes to the board."
-  {:displays [] :proposals {} :cards nil})
+  permission requests passed on, by [session call], the rev of every
+  card the client was last sent, nil until it subscribes to the board,
+  and the prompts whose turns run, by id key."
+  {:displays [] :proposals {} :cards nil :prompts {}})
 
 (defn shown
   "The conversation once a session's displays are kept: each {:session
@@ -160,6 +161,60 @@
 
 (defn error-line [id code message]
   (strict/generate {"jsonrpc" "2.0" "id" id "error" {"code" code "message" message}}))
+
+;; --- turns
+;;
+;; A conversation holds its role only while a turn runs (relay#63), so
+;; each prompt the client sends is a turn relay records: started before
+;; the prompt reaches the agent, and ended when the agent answers it. A
+;; prompt that cannot start a turn (a wake of the role works, say) is
+;; answered with relay's reason and goes no further. The conversation
+;; keeps the id keys of the prompts whose turns run, under :prompts.
+
+(defn prompt-request
+  "A client's line as a session/prompt request: {:id :key :session}, the
+  key being the id's (relay.acp/id-key), nil when the id can be no
+  request's. Nil for any other line."
+  [line]
+  (let [msg (acp/message line)]
+    (when (and (map? msg) (= "session/prompt" (get msg "method")) (contains? msg "id"))
+      (let [params (get msg "params")]
+        {:id (get msg "id") :key (acp/id-key (get msg "id"))
+         :session (when (map? params) (get params "sessionId"))}))))
+
+(defn turn-start-command
+  "The command that starts a turn of conversation `wake` for a prompt: the
+  operator's, since the client is theirs."
+  [wake {:keys [session]}]
+  {:type :conversation/turn-start :actor core/operator :args {:wake wake :session session}})
+
+(defn prompt-passed
+  "The conversation once the prompt with id key k went to the agent."
+  [conv k]
+  (assoc-in conv [:prompts k] true))
+
+(defn prompt-answered
+  "[conv' ended?]: whether an agent's response with id key k answers a
+  prompt whose turn runs, which ends that turn, and the conversation
+  after it."
+  [conv k]
+  (if (get-in conv [:prompts k])
+    [(update conv :prompts dissoc k) true]
+    [conv false]))
+
+(defn stop-reason
+  "Why an agent's answer to a prompt says its turn stopped: the result's
+  stopReason, or \"error\" for an error. relay.core keeps only the
+  reasons it knows."
+  [line]
+  (let [msg (acp/message line)
+        r (get-in msg ["result" "stopReason"])]
+    (cond (contains? msg "error") "error"
+          (string? r) r
+          :else "other")))
+
+(defn turn-end-command [wake stop-reason]
+  {:type :conversation/turn-end :actor core/dispatcher :args {:wake wake :stop-reason stop-reason}})
 
 ;; --- items
 

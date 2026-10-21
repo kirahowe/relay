@@ -432,8 +432,8 @@
 
 (defn with-conversation!
   "Opens a conversation with a role and calls (f request) with its harness
-  request. The conversation holds the role like a wake, so no wake runs
-  alongside it, and carries no memos. f returns a report for
+  request. The conversation holds the role only while a turn of it runs
+  (relay.core/busy?), and carries no memos. f returns a report for
   conversation-end-args, and the wake always ends with it. When f throws,
   the wake ends saying why and the exception goes on to the caller.
   Returns f's report."
@@ -662,7 +662,9 @@
   agent line that carries a display, before the line is passed on.
   (watch send! done) runs on a thread of its own from the start, with
   `send!` writing one line to the client, until the promise `done` is
-  delivered as the proxy ends.
+  delivered as the proxy ends. (on-response line k) is called for each
+  agent response that answers a request of the client's, k being its id
+  key, before the client can read it.
 
   Only relay speaks relay's methods to the client: an agent line whose
   method starts with _relay/ is dropped, so an agent cannot fake a card
@@ -676,9 +678,10 @@
   on-permission gets the request as read from that line, so its :preview
   is the text the client was shown, and the record as :preview-record."
   [{:keys [argv dir env]} {:keys [in out trace stop grace-ms approvals on-permission on-oversized line-limit
-                                  extension on-display preview watch]
+                                  extension on-display preview watch on-response]
                            :or {grace-ms stop-grace-ms on-permission (fn [& _]) on-oversized (fn [_])
-                                line-limit line-limit extension (fn [_]) on-display (fn [_]) preview (fn [_] nil)}}]
+                                line-limit line-limit extension (fn [_]) on-display (fn [_]) preview (fn [_] nil)
+                                on-response (fn [_ _])}}]
   (let [proc (p/process (vec argv) (cond-> {:err :inherit} dir (assoc :dir (str dir)) env (assoc :env env)))
         ^Process jp (:proc proc)
         ^java.io.OutputStream agent-in (:in proc)
@@ -716,8 +719,10 @@
         owed (atom {})
         owed? (fn [line]
                 (if-let [{k :key} (workspace/agent-response line)]
-                  (let [[before] (swap-vals! owed #(first (workspace/settle % k)))]
-                    (second (workspace/settle before k)))
+                  (let [[before] (swap-vals! owed #(first (workspace/settle % k)))
+                        pass? (second (workspace/settle before k))]
+                    (when pass? (on-response line k))
+                    pass?)
                   true))
         from-agent (fn [line]
                      (let [drop? (workspace/drop-agent-line? line)
@@ -1026,12 +1031,45 @@
              (binding [*out* *err*] (println "relay could not look at the board:" (ex-message e)))
              stamp)))))))
 
+(defn- turn-gate
+  "acp!'s gate on the client's prompts: each one starts a turn of the
+  conversation before the agent sees it. A prompt that cannot (the role
+  is busy with scheduled work, or a turn runs already) is answered with
+  why, and never reaches the agent. Returns a hook in the shape of
+  proxy!'s :extension, nil for every other line."
+  [sys conv wake-id]
+  (fn [line]
+    (when-let [{:keys [id key] :as prompt} (workspace/prompt-request line)]
+      (if (nil? key)
+        (workspace/error-line id -32600 "relay does not pass on a prompt whose id it cannot match to an answer.")
+        (try
+          (inbound/submit! sys (workspace/turn-start-command wake-id prompt))
+          (swap! conv workspace/prompt-passed key)
+          nil
+          (catch Exception e
+            (workspace/error-line id -32000 (or (ex-message e) (str (class e))))))))))
+
+(defn- turn-ender
+  "acp!'s :on-response hook: the agent's answer to a prompt ends its turn,
+  recorded before the client reads the answer, so the client's next
+  prompt finds the turn over. A record that fails is dropped: the wake's
+  end ends the turn in any case."
+  [sys conv wake-id]
+  (fn [line k]
+    (let [[before] (swap-vals! conv #(first (workspace/prompt-answered % k)))]
+      (when (second (workspace/prompt-answered before k))
+        (try (inbound/submit! sys (workspace/turn-end-command wake-id (workspace/stop-reason line)))
+             (catch Exception e
+               (binding [*out* *err*] (println "relay could not record the end of a turn:" (ex-message e)))))))))
+
 (defn acp!
   "Opens a conversation with a role for an ACP client on stdin and stdout,
   running the role's ACP agent behind a pass-through proxy (proxy!). relay
   itself never writes to stdout: when the conversation cannot start (the
-  role is busy, say), it says why on stderr and returns 1 before any
-  traffic. SIGINT and SIGHUP are ignored, as for chat; SIGTERM closes the
+  role has one open already, say), it says why on stderr and returns 1
+  before any traffic. Each prompt runs as a turn of the conversation
+  (turn-gate): one sent while a wake of the role works is answered with
+  an error saying so, and the client may send it again later. SIGINT and SIGHUP are ignored, as for chat; SIGTERM closes the
   agent's stdin and kills it if it has not gone after a few seconds.
   Returns the agent's exit code.
 
@@ -1060,7 +1098,10 @@
                                                                (apply record kind req (when answer [answer])))
                                               :preview (permission-previewer sys)
                                               :on-oversized (oversize-recorder sys (:wake-id request))
-                                              :extension (extension-handler sys conv approvals)
+                                              :extension (let [gate (turn-gate sys conv (:wake-id request))
+                                                               ext (extension-handler sys conv approvals)]
+                                                           (fn [line] (or (gate line) (ext line))))
+                                              :on-response (turn-ender sys conv (:wake-id request))
                                               :watch (board-watcher sys conv)
                                               :on-display (fn [session] (keep-session-displays! sys request conv session))})]
                          ;; Whatever a display line missed is kept now,
