@@ -532,6 +532,24 @@
         (is (= [] (:last (seen w 1))))
         (is (= [] (:last (seen w 2))))))))
 
+(deftest an-unattended-permission-request-tells-the-operator
+  (let [w (run (seed) "operator" :wake/start {:role "clerk" :chat true})
+        chat (:id (core/open-conversation (:state w) "clerk"))
+        w (run w "dispatcher" :permission/asked {:wake chat :session "s" :call "c1" :tool "post" :input-sha256 "x"})
+        ask #(run %1 "dispatcher" :permission/unattended {:wake chat :call %2})
+        w' (ask w "c1")
+        [n] (:last w')]
+    (is (= "notification/created" (:type n)))
+    (is (= {:kind "permission-waiting" :role "clerk" :wake chat} (select-keys (:data n) [:kind :role :wake])))
+    (is (not (str/includes? (get-in n [:data :body]) "post")) "the request's own text is the agent's")
+    (testing "only for a request still open, in a running conversation, and only from the dispatcher"
+      (is (= [] (:last (ask w "c2"))))
+      (is (= [] (:last (ask (run w "dispatcher" :permission/answered {:wake chat :session "s" :call "c1"
+                                                                      :outcome "allow_once" :by "client"})
+                            "c1"))))
+      (is (= [] (:last (ask (run w "dispatcher" :wake/end {:wake chat :outcome "ran"}) "c1"))))
+      (is (= :forbidden (:rejected (run w "operator" :permission/unattended {:wake chat :call "c1"})))))))
+
 (deftest one-wake-at-a-time
   (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "a" :body "b"})
               (run "dispatcher" :wake/start {:role "clerk"}))]

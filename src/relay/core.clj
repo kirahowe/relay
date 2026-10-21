@@ -2367,6 +2367,20 @@
               (get refusal-reasons why "relay refused the call.")
               :role role :labels (union (id-labels state role) (permission-labels tx role labels))))))
 
+(defmethod decide* :permission/unattended [{:keys [state] :as tx} {{:keys [wake call]} :args}]
+  ;; relay serve holds a conversation's permission request while no
+  ;; client that may answer it is attached, and asks for this once. The
+  ;; notification names only the role: the request's text is the agent's.
+  (dispatcher-only! tx)
+  (let [{:keys [role chat status]} (get-in state [:wakes wake])
+        open? (some #(and (= wake (:wake %)) (= call (:call %)) (nil? (:outcome %))) (vals (:permissions state)))]
+    (if (and chat (= :running status) open?)
+      (notify tx "permission-waiting" (str role " is waiting for you in a conversation")
+              (str role " asked to use a tool in its conversation, and no client that can answer is attached."
+                   " Open relay chat " role " to answer it. The conversation waits until you do.")
+              :role role :wake wake :labels (id-labels state role))
+      tx)))
+
 (defmethod decide* :conversation/line-dropped [{:keys [state] :as tx} {{:keys [wake size permission refused]} :args}]
   (dispatcher-only! tx)
   (let [role (get-in state [:wakes wake :role])]

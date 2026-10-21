@@ -1,0 +1,403 @@
+(ns relay.hub-sim
+  "A simulated world around the hub, for its properties: connections that
+  send what the generated actions say, a fake agent per conversation
+  (behind which the proxy's refusals are taken as answers), and a fake
+  relay that refuses a turn while a role is busy. The world records what
+  each side saw, and `problems` lists every broken invariant from
+  section 3 of the design brief."
+  (:require [cheshire.core :as json]
+            [clojure.test.check.generators :as gen]
+            [relay.acp :as acp]
+            [relay.hub :as hub]))
+
+(def roles ["clerk" "hub"])
+(def roster (vec (for [r roles] {:id r :title r :labels [] :working? false :holds 0 :conversation nil})))
+
+(def observer
+  "In service runs, a connection that attaches to every conversation as
+  it opens, never prompts and never leaves: its updates are the
+  conversation's whole history."
+  0)
+
+(defn- jl [m] (json/generate-string m))
+(defn- parse [l] (try (json/parse-string l) (catch Exception _ nil)))
+
+(defn world [mode]
+  {:mode mode :h (first (hub/step (hub/hub {:mode mode}) {:event :log-changed :roster roster}))
+   :conns {} :next-conn 1 :agents {} :busy #{} :running #{} :next-wake 1 :next-text 0
+   :problems [] :sent-prompts {}})
+
+(defn- problem [w p] (update w :problems conj p))
+
+;; --- the effects, carried out
+
+(declare run-events)
+
+(defn- conn-write [w cid line]
+  (let [c (get-in w [:conns cid])
+        msg (parse line)]
+    (if-not (:open c)
+      w
+      (as-> w w
+        (update-in w [:conns cid :received] conj line)
+        ;; A response: to one of its own requests, and only once.
+        (if (and (contains? msg "id") (not (contains? msg "method")))
+          (let [id (get msg "id")]
+            (cond-> (update-in w [:conns cid :responses id] (fnil inc 0))
+              (not (contains? (get-in w [:conns cid :requests]) id)) (problem [:response-to-nothing cid id])
+              (pos? (get-in w [:conns cid :responses id] 0)) (problem [:two-responses cid id])))
+          w)
+        ;; A permission request: under an id never used for another.
+        (if (= "session/request_permission" (get msg "method"))
+          (let [k (acp/id-key (get msg "id"))
+                call (get-in msg ["params" "toolCall" "toolCallId"])
+                was (get-in w [:conns cid :perm-ids k])]
+            (cond-> (assoc-in w [:conns cid :perm-ids k] call)
+              (and was (not= was call)) (problem [:perm-id-reused cid k])))
+          w)
+        (if (= "_relay/permission/settled" (get msg "method"))
+          (let [call (get-in msg ["params" "toolCallId"])]
+            (cond-> (update-in w [:conns cid :settled call] (fnil inc 0))
+              (pos? (get-in w [:conns cid :settled call] 0)) (problem [:settled-twice cid call])))
+          w)
+        ;; What it sees of each session, in order.
+        (if (= "session/update" (get msg "method"))
+          (update-in w [:conns cid :updates (get-in msg ["params" "sessionId"])] (fnil conj []) line)
+          w)))))
+
+(defn- agent-of [w role] (get-in w [:agents role]))
+
+(defn- agent-says [w role m] (update w :pending conj {:event :agent-line :role role :line (jl m)}))
+
+(defn- agent-gets [w role line]
+  (let [msg (parse line)
+        a (agent-of w role)]
+    (cond
+      (nil? a) w
+      ;; A line the proxy cannot read, with a permission request's id: the
+      ;; proxy refuses the request.
+      (nil? msg)
+      (let [id (acp/line-id line)]
+        (if (contains? (:perms a) id)
+          (-> w (update-in [:agents role :perms] disj id) (update-in [:agents role :answers id] (fnil inc 0))
+              (cond-> (pos? (get-in a [:answers id] 0)) (problem [:perm-answered-twice role id])))
+          (problem w [:unreadable-to-agent role line])))
+      (and (contains? msg "method") (contains? msg "id"))
+      (let [id (get msg "id")
+            w (cond-> (update-in w [:agents role :ids] (fnil conj #{}) id)
+                (contains? (:ids a) id) (problem [:hub-id-reused role id]))]
+        (case (get msg "method")
+          "initialize" (agent-says w role {:jsonrpc "2.0" :id id :result {:protocolVersion 1}})
+          "session/new" (agent-says w role {:jsonrpc "2.0" :id id :result {:sessionId (:session a)}})
+          "session/prompt"
+          (if (pos? (get-in w [:turns-ok role] 0))
+            (-> w (update-in [:turns-ok role] dec) (update-in [:agents role :prompts] (fnil conj []) id))
+            (problem w [:prompt-without-a-turn role id]))
+          (agent-says w role {:jsonrpc "2.0" :id id :result {}})))
+      (contains? msg "method")
+      (if (and (= "session/cancel" (get msg "method")) (seq (:prompts a)))
+        (-> w (update-in [:agents role :prompts] (comp vec rest))
+            (agent-says role {:jsonrpc "2.0" :id (first (:prompts a)) :result {:stopReason "cancelled"}}))
+        w)
+      :else
+      (let [id (get msg "id")]
+        (if (contains? (:perms a) id)
+          (cond-> (-> w (update-in [:agents role :perms] disj id) (update-in [:agents role :answers id] (fnil inc 0)))
+            (pos? (get-in a [:answers id] 0)) (problem [:perm-answered-twice role id]))
+          (problem w [:answer-to-nothing role id]))))))
+
+(defn- relay-decides [w {:keys [tag command]}]
+  (let [{:keys [type args]} command
+        role (some (fn [[r a]] (when (= (:wake args) (:wake a)) r)) (:agents w))
+        result (case type
+                 :conversation/turn-start (cond (contains? (:busy w) role) {:rejection :busy}
+                                                (contains? (:running w) role) {:rejection :invalid :message "in a turn"}
+                                                :else {:ok true})
+                 {:ok true})
+        w (cond-> w
+            (and (= type :conversation/turn-start) (:ok result))
+            (-> (update :running conj role) (update-in [:turns-ok role] (fnil inc 0)))
+            (= type :conversation/turn-end) (update :running disj role)
+            (= type :permission/unattended) (update :unattended (fnil conj []) (:call args)))]
+    (update w :pending #(into [(merge {:event :submit-result :tag tag} result)] %))))
+
+(defn- carry-out [w {:keys [effect] :as f}]
+  (case effect
+    :write (conn-write w (:conn f) (:line f))
+    :send (agent-gets w (:role f) (:line f))
+    :submit (relay-decides w f)
+    :start (let [role (:role f)
+                 wake (:next-wake w)
+                 w (cond-> (-> w (update :next-wake inc)
+                               (assoc-in [:agents role] {:wake wake :session (str "s-" role "-" wake) :prompts [] :perms #{}}))
+                     (= :service (:mode w)) (assoc-in [:conns observer :requests (str "o" wake)] {:method "session/new"}))]
+             (update w :pending #(into (vec (concat (when (= :service (:mode w))
+                                                      [{:event :connection-line :conn observer
+                                                        :line (jl {:jsonrpc "2.0" :id (str "o" wake) :method "session/new"
+                                                                   :params {:_meta {"relay/role" role}}})}])
+                                                    [{:event :conversation-started :role role :wake wake}]))
+                                       %)))
+    :stop (update w :pending #(into [{:event :conversation-gone :role (:role f)}] %))))
+
+(defn- gone [w role]
+  (-> w (update :agents dissoc role) (update :running disj role) (update :turns-ok dissoc role)))
+
+(defn run-events
+  "Steps the hub through the events and everything they lead to, depth
+  first, as the shell does."
+  [w events]
+  (loop [w (update w :pending (fnil into []) events)]
+    (if-let [[e & more] (seq (:pending w))]
+      (let [w (assoc w :pending (vec more))
+            before (:h w)
+            [h fx] (hub/step (:h w) e)
+            w (assoc w :h h)
+            w (cond-> w (= :conversation-gone (:event e)) (gone (:role e)))
+            w (reduce carry-out w fx)
+            w (if (= :conversation-gone (:event e))
+                ;; Ending a conversation answers everything owed about it.
+                (let [session (get-in before [:convs (:role e) :session])]
+                  (reduce (fn [w [cid c]]
+                            (reduce (fn [w [id {:keys [session-id role]}]]
+                                      (if (and (:open c) (zero? (get-in w [:conns cid :responses id] 0))
+                                               (or (and session session-id (= session session-id)) (= role (:role e))))
+                                        (problem w [:owed-after-end cid id])
+                                        w))
+                                    w (get-in w [:conns cid :requests])))
+                          w (:conns w)))
+                w)]
+        (recur w))
+      (dissoc w :pending))))
+
+;; --- connections
+
+(defn- open-conn [w cid opts]
+  (-> w (assoc-in [:conns cid] {:open true :next-id 1 :requests {} :responses {} :received [] :updates {} :segments {}})
+      (run-events [(merge {:event :connection-opened :conn cid} opts)])))
+
+(defn- conn-sends
+  "Connection cid sends a request (when method has :request), recorded so
+  its answer can be checked."
+  [w cid method params & {:keys [role]}]
+  (let [id (get-in w [:conns cid :next-id])
+        session (get params :sessionId)]
+    (-> w (update-in [:conns cid :next-id] inc)
+        (assoc-in [:conns cid :requests id] {:method method :session-id session :role role})
+        (run-events [{:event :connection-line :conn cid :line (jl {:jsonrpc "2.0" :id id :method method :params params})}]))))
+
+(defn- conn-notes [w cid method params]
+  (run-events w [{:event :connection-line :conn cid :line (jl {:jsonrpc "2.0" :method method :params params})}]))
+
+(defn- live-sessions [w] (vec (sort (keep :session (vals (get-in w [:h :convs]))))))
+
+(defn- attached-sessions [w cid]
+  (vec (sort (keep #(get-in w [:h :convs % :session]) (get-in w [:h :conns cid :attached])))))
+
+(defn- nth-or [coll n] (when (seq coll) (nth coll (mod n (count coll)))))
+
+(defn- end-segment
+  "Checks what a connection saw of a session since it attached: with its
+  own prompts' text taken out, exactly the observer's history so far,
+  with no gap and no duplicate."
+  [w cid session]
+  (if-let [start (get-in w [:conns cid :segments session])]
+    (let [own (get-in w [:own cid] #{})
+          strip (fn [ls] (vec (remove #(own (get-in (parse %) ["params" "update" "content" "text"])) ls)))
+          seen (strip (subvec (get-in w [:conns cid :updates session] []) start))
+          history (strip (get-in w [:conns observer :updates session] []))]
+      (cond-> (update-in w [:conns cid :segments] dissoc session)
+        (and (= :service (:mode w)) (not= seen history)) (problem [:replay-gap cid session (count seen) (count history)])))
+    w))
+
+(defn- start-segment [w cid session]
+  (assoc-in w [:conns cid :segments session] (count (get-in w [:conns cid :updates session] []))))
+
+(defn- end-segments-of-gone
+  "Segments of sessions no longer live end where the conversation did."
+  [w]
+  (let [live (set (live-sessions w))]
+    (reduce (fn [w [cid c]]
+              (reduce (fn [w s] (if (live s) w (update-in w [:conns cid :segments] dissoc s)))
+                      w (keys (:segments c))))
+            w (:conns w))))
+
+(defn- perms-sent [w]
+  (into {} (for [[role c] (get-in w [:h :convs]) [pkey p] (:perms c)] [[role pkey] p])))
+
+(defn- told-of-settling
+  "Each permission request that was settled by an action: every other
+  connection it was sent to, still open, was told, once."
+  [before after acting]
+  (let [now (perms-sent after)]
+    (reduce (fn [w [k {:keys [sent call]}]]
+              (if (contains? now k)
+                w
+                (reduce (fn [w cid]
+                          (let [was (get-in before [:conns cid :settled call] 0)
+                                is (get-in w [:conns cid :settled call] 0)]
+                            (if (and (get-in w [:conns cid :open]) (not= cid acting) (not= (inc was) is)
+                                     (contains? (get-in w [:h :conns cid :attached]) (first k)))
+                              (problem w [:not-told-settled cid call])
+                              w)))
+                        w (keys sent))))
+            after (perms-sent before))))
+
+(declare act*)
+
+(defn act
+  "Carries out one generated action, and checks that settling a
+  permission request told everyone it was sent to."
+  [w [kind a :as action]]
+  (let [cids (vec (sort (keep (fn [[cid c]] (when (and (:open c) (not= observer cid)) cid)) (:conns w))))
+        acting (when (#{:answer :stray} kind) (nth-or cids (or a 0)))]
+    (told-of-settling w (act* w action) acting)))
+
+(defn- act*
+  [w [kind a b]]
+  (let [cids (vec (sort (keep (fn [[cid c]] (when (and (:open c) (not= observer cid)) cid)) (:conns w))))
+        cid (nth-or cids (if (integer? a) a 0))
+        w (case kind
+            :open (if (and (= :embedded (:mode w)) (seq (:conns w)))
+                    w
+                    (let [cid (:next-conn w)]
+                      (-> (update w :next-conn inc)
+                          (open-conn cid {:origin (if (= :embedded (:mode w)) :stdio :socket)
+                                          :approvals (boolean a) :role (nth-or roles (or b 0))}))))
+            :close (if cid
+                     (-> (reduce #(end-segment %1 cid %2) w (attached-sessions w cid))
+                         (assoc-in [:conns cid :open] false)
+                         (run-events [{:event :connection-closed :conn cid}]))
+                     w)
+            :initialize (if cid (conn-sends w cid "initialize" {:protocolVersion 1}) w)
+            :new (if cid
+                   (let [role (nth-or roles b)
+                         s (get-in w [:h :convs role :session])
+                         w (if s (-> w (end-segment cid s) (start-segment cid s)) w)
+                         w (conn-sends w cid "session/new" {:cwd "/" :_meta {"relay/role" role}} :role role)
+                         s' (get-in w [:h :convs role :session])]
+                     (if (and s' (not s) (contains? (get-in w [:h :conns cid :attached]) role))
+                       (start-segment w cid s')
+                       w))
+                   w)
+            :load (if cid
+                    (let [s (or (nth-or (live-sessions w) b) "nope")
+                          w (if (some #{s} (attached-sessions w cid)) (end-segment w cid s) w)
+                          w (start-segment w cid s)]
+                      (conn-sends w cid "session/load" {:sessionId s}))
+                    w)
+            :prompt (if-let [s (and cid (nth-or (attached-sessions w cid) b))]
+                      (let [text (str "p" (:next-text w))]
+                        (-> w (update :next-text inc) (update-in [:own cid] (fnil conj #{}) text)
+                            (conn-sends cid "session/prompt" {:sessionId s :prompt [{:type "text" :text text}]})))
+                      w)
+            :cancel (if-let [s (and cid (nth-or (attached-sessions w cid) b))]
+                      (conn-notes w cid "session/cancel" {:sessionId s})
+                      w)
+            :detach (if-let [s (and cid (nth-or (attached-sessions w cid) b))]
+                      (-> w (end-segment cid s) (conn-sends cid "session/close" {:sessionId s}))
+                      w)
+            :roles (if cid (conn-sends w cid "_relay/roles" {}) w)
+            :end (if-let [s (and cid (nth-or (attached-sessions w cid) b))]
+                   (conn-sends w cid "_relay/conversations/end" {:sessionId s})
+                   w)
+            :items (if-let [s (and cid (nth-or (attached-sessions w cid) b))]
+                     (conn-sends w cid "_relay/items" {:sessionId s})
+                     w)
+            :answer (if-let [[k call] (and cid (nth-or (vec (sort-by str (get-in w [:conns cid :perm-ids]))) b))]
+                      (let [id (second k)
+                            m (case (mod (or b 0) 4)
+                                0 {:jsonrpc "2.0" :id id :result {:outcome {:outcome "selected" :optionId "a"}}}
+                                1 {:jsonrpc "2.0" :id id :result {:outcome {:outcome "selected" :optionId "zzz"}}}
+                                2 {:jsonrpc "2.0" :id id :result {:outcome {:outcome "cancelled"}}}
+                                3 nil)]
+                        (run-events w [{:event :connection-line :conn cid
+                                        :line (if m (jl m) (str "{\"jsonrpc\":\"2.0\",\"id\":" (json/generate-string id) ",\"result\":"))}]))
+                      w)
+            :stray (if cid (run-events w [{:event :connection-line :conn cid :line (jl {:jsonrpc "2.0" :id 99999 :result {}})}]) w)
+            :update (if-let [{:keys [session]} (agent-of w (nth-or roles a))]
+                      (let [text (str "u" (:next-text w))]
+                        (-> w (update :next-text inc)
+                            (agent-says (nth-or roles a) {:jsonrpc "2.0" :method "session/update"
+                                                          :params {:sessionId session
+                                                                   :update {:sessionUpdate "agent_message_chunk"
+                                                                            :content {:type "text" :text text}}}})
+                            (run-events [])))
+                      w)
+            :perm (let [role (nth-or roles a)]
+                    (if-let [{:keys [session]} (and (get-in w [:h :convs role :session]) (agent-of w role))]
+                      (let [id (+ 5000 (:next-text w))]
+                        (-> w (update :next-text inc) (update-in [:agents role :perms] conj id)
+                            (agent-says role {:jsonrpc "2.0" :id id :method "session/request_permission"
+                                              :params {:sessionId session :toolCall {:toolCallId (str "c" id)}
+                                                       :options [{:optionId "a" :kind "allow_once"}
+                                                                 {:optionId "r" :kind "reject_once"}]}})
+                            (run-events [])))
+                      w))
+            :reply (let [role (nth-or roles a)]
+                     (if-let [id (first (:prompts (agent-of w role)))]
+                       (-> w (update-in [:agents role :prompts] (comp vec rest))
+                           (agent-says role {:jsonrpc "2.0" :id id :result {:stopReason "end_turn"}})
+                           (run-events []))
+                       w))
+            :busy (-> w (update :busy (if b conj disj) (nth-or roles a))
+                      (run-events [{:event :log-changed :roster roster}]))
+            :die (let [role (nth-or roles a)]
+                   (if (agent-of w role) (run-events w [{:event :conversation-gone :role role}]) w)))]
+    (end-segments-of-gone w)))
+
+(def gen-action
+  (gen/frequency
+   [[2 (gen/tuple (gen/return :open) gen/boolean gen/nat)]
+    [1 (gen/tuple (gen/return :close) gen/nat)]
+    [2 (gen/tuple (gen/return :initialize) gen/nat)]
+    [4 (gen/tuple (gen/return :new) gen/nat gen/nat)]
+    [2 (gen/tuple (gen/return :load) gen/nat gen/nat)]
+    [5 (gen/tuple (gen/return :prompt) gen/nat gen/nat)]
+    [1 (gen/tuple (gen/return :cancel) gen/nat gen/nat)]
+    [1 (gen/tuple (gen/return :detach) gen/nat gen/nat)]
+    [1 (gen/tuple (gen/return :roles) gen/nat)]
+    [1 (gen/tuple (gen/return :end) gen/nat gen/nat)]
+    [1 (gen/tuple (gen/return :items) gen/nat gen/nat)]
+    [4 (gen/tuple (gen/return :answer) gen/nat gen/nat)]
+    [1 (gen/tuple (gen/return :stray) gen/nat)]
+    [5 (gen/tuple (gen/return :update) gen/nat)]
+    [3 (gen/tuple (gen/return :perm) gen/nat)]
+    [5 (gen/tuple (gen/return :reply) gen/nat)]
+    [3 (gen/tuple (gen/return :busy) gen/nat gen/boolean)]
+    [1 (gen/tuple (gen/return :die) gen/nat)]]))
+
+(defn start [mode]
+  (cond-> (world mode)
+    (= :service mode) (open-conn observer {:origin :socket :approvals false})))
+
+(defn drain
+  "Lets everything finish: the roles are free, each agent answers its
+  prompts, and then every conversation ends."
+  [w]
+  (let [w (-> (assoc w :busy #{}) (run-events [{:event :log-changed :roster roster}]))
+        w (loop [w w n 0]
+            (let [waiting (for [r roles :when (seq (:prompts (agent-of w r)))] r)]
+              (if (or (empty? waiting) (> n 200))
+                w
+                (recur (reduce #(act* %1 [:reply (.indexOf ^java.util.List roles %2)]) w waiting) (inc n)))))
+        ;; No prompt waits once its role is free.
+        w (reduce (fn [w [role c]]
+                    (cond-> w
+                      (or (seq (:queue c)) (:prompt c)) (problem [:prompt-still-waiting role (count (:queue c))])))
+                  w (get-in w [:h :convs]))
+        w (reduce (fn [w [cid c]] (reduce #(end-segment %1 cid %2) w (attached-sessions w cid))) w (:conns w))]
+    (reduce (fn [w role] (run-events w [{:event :conversation-gone :role role}]))
+            w (sort (keys (get-in w [:h :convs]))))))
+
+(defn final-problems
+  "What is wrong once everything has finished: an open connection's
+  request left unanswered, or a permission request settled without the
+  others being told."
+  [w]
+  (concat
+   (:problems w)
+   (for [[cid c] (:conns w)
+         :when (:open c)
+         [id _] (:requests c)
+         :when (not= 1 (get-in c [:responses id] 0))]
+     [:unanswered cid id])))
