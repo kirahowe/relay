@@ -4146,7 +4146,9 @@ surface ConversationService {
         -- the live one; session/load attaches by session; nothing ended
         -- is reopened. An attaching connection gets the conversation's
         -- updates so far, at most a bounded amount, with a notice when
-        -- older ones were dropped, then _relay/replayed, then every later
+        -- older ones were dropped, the session's latest labels (and usage)
+        -- before any of them whatever was dropped, so no text is shown
+        -- with fewer labels than it carries, then _relay/replayed, then every later
         -- update, with no gap and no duplicate. Each prompt also reaches
         -- the other attached connections as the operator's message.
         -- Every request a connection sends is answered once; relay gives

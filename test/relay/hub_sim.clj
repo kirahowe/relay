@@ -22,8 +22,9 @@
 (defn- jl [m] (json/generate-string m))
 (defn- parse [l] (try (json/parse-string l) (catch Exception _ nil)))
 
-(defn world [mode]
-  {:mode mode :h (first (hub/step (hub/hub {:mode mode}) {:event :log-changed :roster roster}))
+(defn world [mode & [cap]]
+  {:mode mode :cap cap
+   :h (first (hub/step (hub/hub (cond-> {:mode mode} cap (assoc :replay-cap cap))) {:event :log-changed :roster roster}))
    :conns {} :next-conn 1 :agents {} :busy #{} :running #{} :next-wake 1 :next-text 0
    :problems [] :sent-prompts {}})
 
@@ -206,17 +207,30 @@
   own prompts' text taken out, exactly the observer's history so far,
   with no gap and no duplicate."
   [w cid session]
-  (if-let [start (get-in w [:conns cid :segments session])]
+  (if-let [{:keys [start labels]} (get-in w [:conns cid :segments session])]
     (let [own (get-in w [:own cid] #{})
-          strip (fn [ls] (vec (remove #(own (get-in (parse %) ["params" "update" "content" "text"])) ls)))
-          seen (strip (subvec (get-in w [:conns cid :updates session] []) start))
+          ;; Its own prompts, and the labels a replay starts with (relay's,
+          ;; with no title, unlike the agent's), which the observer may
+          ;; not have had where this connection did.
+          strip (fn [ls] (vec (remove #(let [u (get-in (parse %) ["params" "update"])]
+                                         (or (own (get-in u ["content" "text"]))
+                                             (and (= "session_info_update" (get u "sessionUpdate")) (nil? (get u "title")))))
+                                      ls)))
+          seen (subvec (get-in w [:conns cid :updates session] []) start)
+          first-labels (some #(get-in (parse %) ["params" "update" "_meta" "agentloop/labels"]) seen)
+          seen (strip seen)
           history (strip (get-in w [:conns observer :updates session] []))]
       (cond-> (update-in w [:conns cid :segments] dissoc session)
-        (and (= :service (:mode w)) (not= seen history)) (problem [:replay-gap cid session (count seen) (count history)])))
+        ;; The labels a late attacher sees first are the latest the agent
+        ;; sent, however much of the history the cap dropped.
+        (and labels (not= labels first-labels)) (problem [:replay-labels cid session labels first-labels])
+        (and (= :service (:mode w)) (nil? (:cap w)) (not= seen history))
+        (problem [:replay-gap cid session (count seen) (count history)])))
     w))
 
 (defn- start-segment [w cid session]
-  (assoc-in w [:conns cid :segments session] (count (get-in w [:conns cid :updates session] []))))
+  (assoc-in w [:conns cid :segments session] {:start (count (get-in w [:conns cid :updates session] []))
+                                              :labels (get-in w [:labels session])}))
 
 (defn- end-segments-of-gone
   "Segments of sessions no longer live end where the conversation did."
@@ -329,6 +343,17 @@
                                                                             :content {:type "text" :text text}}}})
                             (run-events [])))
                       w)
+            :labels (if-let [{:keys [session]} (agent-of w (nth-or roles a))]
+                      (let [ls (nth-or [[] ["private"] ["contaminated"] ["contaminated" "private"]] b)]
+                        (-> w (assoc-in [:labels session] ls)
+                            (agent-says (nth-or roles a) {:jsonrpc "2.0" :method "session/update"
+                                                          :params {:sessionId session
+                                                                   :update {:sessionUpdate "session_info_update"
+                                                                            :title (str "t" (:next-text w))
+                                                                            :_meta {"agentloop/labels" ls}}}})
+                            (update :next-text inc)
+                            (run-events [])))
+                      w)
             :perm (let [role (nth-or roles a)]
                     (if-let [{:keys [session]} (and (get-in w [:h :convs role :session]) (agent-of w role))]
                       (let [id (+ 5000 (:next-text w))]
@@ -378,10 +403,11 @@
     [3 (gen/tuple (gen/return :busy) gen/nat gen/boolean)]
     [1 (gen/tuple (gen/return :die) gen/nat)]
     [2 (gen/tuple (gen/return :slow) gen/nat gen/boolean)]
+    [3 (gen/tuple (gen/return :labels) gen/nat gen/nat)]
     [3 (gen/tuple (gen/return :release) gen/nat)]]))
 
-(defn start [mode]
-  (cond-> (world mode)
+(defn start [mode & [cap]]
+  (cond-> (world mode cap)
     (= :service mode) (open-conn observer {:origin :socket :approvals false})))
 
 (defn drain

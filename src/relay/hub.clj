@@ -160,12 +160,47 @@
               "content" {"type" "text" "text" truncated-notice}
               "_meta" {"relay/notice" "replay-truncated"}}}))
 
+;; The session-level state a client needs to read the rest of a replay,
+;; kept outside the capped buffer so dropping old updates cannot lose it:
+;; the session's latest labels, which tell a client what the text after
+;; them may hold (and so which links to defang), and its latest usage.
+;; agentloop sends its labels in the _meta of a tool_call,
+;; tool_call_update, usage_update, session_info_update or permission
+;; request; a replay starts with them as the session_info_update agentloop
+;; sends when only the labels change.
+
+(def ^:private labels-key "agentloop/labels")
+
+(defn- labels-in
+  "The labels an agent's message carries for its session, or nil."
+  [msg]
+  (let [meta (or (get-in msg ["params" "update" "_meta"]) (get-in msg ["params" "toolCall" "_meta"]))
+        ls (when (map? meta) (get meta labels-key))]
+    (when (and (sequential? ls) (every? string? ls)) (vec ls))))
+
+(defn- keep-state
+  "Notes the session-level state an agent's message carries."
+  [h role msg line]
+  (let [ls (labels-in msg)]
+    (cond-> h
+      ls (assoc-in [:convs role :labels] ls)
+      (= "usage_update" (get-in msg ["params" "update" "sessionUpdate"]))
+      (assoc-in [:convs role :usage] line))))
+
+(defn- labels-line [session labels]
+  (workspace/notification-line "session/update"
+                               {"sessionId" session
+                                "update" {"sessionUpdate" "session_info_update" "_meta" {labels-key labels}}}))
+
 (defn- replay
   "Writes a conversation's replay to a connection: the notice when its
-  oldest updates were dropped, every update kept, and _relay/replayed."
+  oldest updates were dropped, the session's latest labels and usage,
+  every update kept, and _relay/replayed."
   [h cid role]
-  (let [{:keys [session replay]} (get-in h [:convs role])
+  (let [{:keys [session replay labels usage]} (get-in h [:convs role])
         h (if (:dropped replay) (write h cid (notice-line session)) h)
+        h (if labels (write h cid (labels-line session labels)) h)
+        h (if usage (write h cid usage) h)
         h (reduce #(write %1 cid %2) h (:entries replay))]
     (write h cid (workspace/notification-line "_relay/replayed" {"sessionId" session}))))
 
@@ -671,7 +706,8 @@
 (defn- permission-request [h role msg]
   (let [pkey (acp/id-key (get msg "id"))
         call (get-in msg ["params" "toolCall" "toolCallId"])
-        h (assoc-in h [:convs role :perms pkey] {:msg msg :call call :sent {}})
+        h (-> h (keep-state role msg nil)
+              (assoc-in [:convs role :perms pkey] {:msg msg :call call :sent {}}))
         approvers (approving h role)]
     (if (seq approvers)
       (reduce #(send-perm %1 role pkey %2) h approvers)
@@ -729,7 +765,7 @@
         (permission-request h role msg)
         (send-conv h role (workspace/error-line (get msg "id") -32601 (str "relay's clients do not take " method "."))))
       (= "session/update" method)
-      (reduce #(write %1 %2 line) (remember h role line) (attached h role))
+      (reduce #(write %1 %2 line) (-> h (keep-state role msg line) (remember role line)) (attached h role))
       ;; To the connections that asked for the board through it.
       (= "_relay/cards/changed" method)
       (reduce #(write %1 %2 line) h (sort (keep (fn [[cid c]] (when (contains? (:cards c) role) cid)) (:conns h))))

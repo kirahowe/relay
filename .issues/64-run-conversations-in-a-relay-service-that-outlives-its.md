@@ -205,6 +205,38 @@ the fix.
 `bb tck` after the fixes: 43 pass, 12 skipped as not advertised,
 ACP-SESSION-002 failing by design, as before.
 
+## Codex round 1 (acp-tui finding 4)
+
+The bounded replay could drop the update that carried the session's
+labels (agentloop's session_info_update with `_meta` agentloop/labels, or
+any tool_call, tool_call_update, usage_update or permission request that
+carries them) and keep the agent text after it. A client attaching then
+showed that text as clean, with its links live.
+
+Fix: the hub keeps, per conversation and outside the capped buffer, the
+latest labels any agent message carried, and every replay starts with
+them, after the truncation notice and before any other entry, as the
+session_info_update agentloop sends when only the labels change. It
+keeps the latest usage_update the same way.
+
+Decided from acp-tui's wire (internal/wire): the session-level state it
+reads is the labels (from those five places) and usage (context window
+and cost). Usage is display state rather than needed to read the rest
+safely, but it is cheap to keep and a replay that dropped it showed no
+usage at all. The rest of a session_info_update (title) and config or
+mode updates are not read by acp-tui, so they are not kept. The latest
+labels, not the labels in force where the kept history begins, start the
+replay: agentloop's labels only grow within a session, so earlier text
+is shown with at least the labels it carried, the safe side.
+
+Tests: hub-test
+`a-replay-starts-with-the-latest-labels-even-when-the-cap-dropped-them`
+(also a permission request's labels) and the property
+`a-late-attacher-starts-with-the-latest-labels` (the simulator's agents
+now send label updates, and a 400-character cap drops them); the
+service and embedded properties check it too. All fail on the hub before
+the fix.
+
 ## Notes
 
 - No env vars for wiring. The socket path comes from config.

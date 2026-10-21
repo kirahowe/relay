@@ -403,6 +403,13 @@
     (let [problems (run-world :service actions)]
       (or (empty? problems) (do (println "problems:" (take 5 problems)) false)))))
 
+(defspec a-late-attacher-starts-with-the-latest-labels 300
+  ;; With a cap small enough to drop the update that carried them.
+  (prop/for-all [actions (gen/vector sim/gen-action 1 80)]
+    (let [w (sim/drain (reduce sim/act (sim/start :service 400) actions))
+          problems (filter #(= :replay-labels (first %)) (sim/final-problems w))]
+      (or (empty? problems) (do (println "problems:" (take 5 problems)) false)))))
+
 (defspec the-hub-keeps-its-promises-embedded 200
   (prop/for-all [actions (gen/vector sim/gen-action 1 60)]
     (let [problems (run-world :embedded (cons [:open true 0] actions))]
@@ -474,3 +481,31 @@
         h (submit-ok h fx)
         [_ fx] (say h 2 (note "session/cancel" {:sessionId "s1"}))]
     (is (= ["session/cancel"] (map #(get (parse %) "method") (sends fx "clerk"))))))
+
+;; --- Codex round 1 (acp-tui finding 4)
+
+(deftest a-replay-starts-with-the-latest-labels-even-when-the-cap-dropped-them
+  ;; The update that carried the session's labels was dropped with the
+  ;; oldest history, so a client attaching rendered later text as clean
+  ;; and left its links live.
+  (let [h (assoc (live) :replay-cap 300)
+        [h] (agent h "clerk" (note "session/update" {:sessionId "s1" :update {:sessionUpdate "tool_call_update" :toolCallId "t1"
+                                                                              :_meta {"agentloop/labels" ["contaminated"]}}}))
+        [h] (agent h "clerk" (note "session/update" {:sessionId "s1" :update {:sessionUpdate "usage_update" :used 5 :size 100}}))
+        upd #(note "session/update" {:sessionId "s1" :update {:sessionUpdate "agent_message_chunk"
+                                                              :content {:type "text" :text (str "https://example.com/" %)}}})
+        h (reduce (fn [h i] (first (agent h "clerk" (upd i)))) h (range 20))
+        [_ fx] (say (opened h 2) 2 (req 1 "session/load" {:sessionId "s1"}))
+        [notice labels usage & more] (writes fx 2)]
+    (is (= hub/truncated-notice (get-in notice ["params" "update" "content" "text"])))
+    (is (= {"sessionUpdate" "session_info_update" "_meta" {"agentloop/labels" ["contaminated"]}}
+           (get-in labels ["params" "update"]))
+        "the labels come first, before any text they cover")
+    (is (= "usage_update" (get-in usage ["params" "update" "sessionUpdate"])) "and the latest usage")
+    (is (not-any? #(= "tool_call_update" (get-in % ["params" "update" "sessionUpdate"])) more) "the old update itself was dropped"))
+  (testing "a permission request's labels count too"
+    (let [[h] (agent (live) "clerk" (line {:jsonrpc "2.0" :id 900 :method "session/request_permission"
+                                          :params {:sessionId "s1" :toolCall {:toolCallId "c1" :_meta {"agentloop/labels" ["private"]}}
+                                                   :options []}}))
+          [_ fx] (say (opened h 2) 2 (req 1 "session/load" {:sessionId "s1"}))]
+      (is (= ["private"] (get-in (first (writes fx 2)) ["params" "update" "_meta" "agentloop/labels"]))))))
