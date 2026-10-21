@@ -147,3 +147,50 @@ All answered in section 4 of the brief (2026-10-21) and now implemented.
   kind and checks every line the inline view prints at the same width also
   appears in the hub view, and that the session's labels and defanged URLs
   show.
+
+## Codex round 1
+
+All fixes are in `lxsoqzvqvoqu` (acp-tui workspace `acp-tui-convs`). Tests are
+in `internal/core/hub_test.go` (core), `internal/render/hub_test.go`
+(render) and `internal/ui/hub_e2e_test.go` (end to end).
+
+1. **Uncovering re-arms the permission delay.** Structural: `ReduceHub`
+   compares what is on screen (`Hub.onScreen`: the focused conversation, not
+   behind the list, help or end question) before and after every event, and
+   `settle` re-arms a request that has come into view. Test
+   `TestHubEveryUncoveringArmsRequestsAgain` (list, end question, help; `y`
+   1 ms after uncovering answers nothing, 700 ms later it does).
+2. **Trust confirmation on blur.** `settle` sends `core.Blurred` to the
+   conversation that left the screen, which drops an unsent `Pane.Trust`
+   (one already sent stays). Test `TestHubTrustConfirmationDoesNotSurviveLeavingTheScreen`
+   (switch, list, help, end question).
+3. **Role titles.** Sidebar, list rows, headers, the end question and the
+   empty-conversation line go through `roleName` (`EscapeLabel`, then defang
+   when the role is contaminated); the role's labels show as `p`/`c` marks,
+   in words on the list screen and as badges in the header. A role named only
+   on the command line is escaped and defanged. Test
+   `TestHubRoleTitlesFollowTheirLabels`.
+4. **Replay labels.** No code change needed: a labels update at the start of
+   a replay applies before the entries after it. Test
+   `TestHubReplayLabelsApplyBeforeTheEntriesThatFollow`.
+5. **Loaded-from-roster is listed.** `ensureAttached` and `attached` set
+   `InRoster` when the roster lists the session. Test
+   `TestHubLoadedFromTheRosterCountsAsListed`.
+6. **End question holds its session.** `Hub.EndSession`; `settle` drops the
+   question if the focused conversation is another, and `ConfirmEnd` checks
+   it again. Test `TestHubEndQuestionIsAboutOneSession`.
+7. **Pastes.** `pasted` no longer refuses a Shared conversation for having
+   its transcript open; pastes under the help or the end question go
+   nowhere. Tests `TestHubPastesWorkInAConversation` (bracketed, untrusted
+   attachment, ctrl+y) and e2e `TestHubPasteBecomesAnUntrustedPlaceholder`.
+8. **`_relay/seen` gating.** Requires `Conv.Loaded` (set by
+   `_relay/replayed`, or by one of our own turns ending, since a fresh
+   conversation has no replay), no help, end question or pane focus, and the
+   end of the conversation. Test
+   `TestHubSeenWaitsForEverythingThatCoversTheConversation` plus the updated
+   once-only test.
+9. **Text area width.** `render.HubInputWidth` gives the width of the box
+   `HubView` draws, and the shell sets the text area to it after every event.
+   Tests `TestHubInputWidthIsTheBoxDrawn` and e2e
+   `TestHubLongDraftIsAllVisibleWithThePaneBeside` (160 columns; fails with
+   the old width).
