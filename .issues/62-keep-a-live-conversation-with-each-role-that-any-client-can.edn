@@ -1,0 +1,11 @@
+{:id 62
+ :title "Keep a live conversation with each role that any client can switch to"
+ :status :inbox
+ :type :feature
+ :priority :p2
+ :created "2026-10-21"
+ :updated "2026-10-21"
+ :tags #{"conversations"}
+ :blocked-by #{}
+ :related #{}
+ :details "62-keep-a-live-conversation-with-each-role-that-any-client-can.md"}

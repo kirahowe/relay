@@ -9,6 +9,7 @@
 | --- | --- | --- | --- |
 | [48](48-judge-remote-tool-definitions-with-a-decision-model.md) | Judge remote tool definitions with a decision model | feature | P2 |
 | [49](49-haiku-leaves-the-memo-or-journal-undone-before-an-act-call.md) | Haiku leaves the memo or journal undone before an act call | bug | P2 |
+| [62](62-keep-a-live-conversation-with-each-role-that-any-client-can.md) | Keep a live conversation with each role that any client can switch to | feature | P2 |
 | [56](56-serve-the-board-over-http-and-sse-on-the-tailnet-for-a-web.edn) | Serve the board over HTTP and SSE on the tailnet for a web client | feature | P3 |
 | [59](59-keep-large-integers-exact-in-mcp-structured-results.md) | Keep large integers exact in MCP structured results | bug | P3 |
 | [60](60-let-relay-acp-start-agentloop-with-a-relative-data-path.edn) | Let relay acp start agentloop with a relative --data path | bug | P3 |
@@ -23,6 +24,7 @@
 | [53](53-let-the-personal-agent-move-and-rename-my-files.md) | Let the personal agent move and rename my files | feature | P2 |
 | [57](57-make-hidden-characters-visible-in-card-text-that-roles-and.md) | Make hidden characters visible in card text that roles and resolve get | bug | P2 |
 | [61](61-fork-acp-go-sdk-and-decode-with-encoding-json-v2.md) | Fork acp-go-sdk and decode with encoding/json/v2 | feature | P2 |
+| [63](63-track-conversations-and-each-role-s-status-in-relay-s-core.md) | Track conversations and each role's status in relay's core | feature | P2 |
 | [36](36-clean-up-after-an-interrupted-deploy-and-leave-no-check.md) | Clean up after an interrupted deploy, and leave no check dirs in TMPDIR | bug | P3 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
 
@@ -40,7 +42,10 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [17](17-set-up-the-job-search-role.md) | Set up the job search role | feature | P2 |
+| [64](64-run-conversations-in-a-relay-service-that-outlives-its.md) | Run conversations in a relay service that outlives its clients | feature | P2 |
+| [65](65-switch-between-roles-and-their-conversations-in-acp-tui.md) | Switch between roles and their conversations in acp-tui | feature | P2 |
 | [18](18-set-up-the-grant-search-role.md) | Set up the grant search role | feature | P3 |
+| [66](66-reach-the-relay-service-from-the-phone-over-the-tailnet.md) | Reach the relay service from the phone over the tailnet | feature | P3 |
 
 ## Done
 

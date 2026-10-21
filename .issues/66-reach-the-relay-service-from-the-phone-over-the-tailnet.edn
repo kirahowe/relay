@@ -1,0 +1,11 @@
+{:id 66
+ :title "Reach the relay service from the phone over the tailnet"
+ :status :blocked
+ :type :feature
+ :priority :p3
+ :created "2026-10-21"
+ :updated "2026-10-21"
+ :tags #{"conversations"}
+ :blocked-by #{64}
+ :related #{"relay#56"}
+ :details "66-reach-the-relay-service-from-the-phone-over-the-tailnet.md"}

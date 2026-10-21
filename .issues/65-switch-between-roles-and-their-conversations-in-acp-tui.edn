@@ -1,0 +1,11 @@
+{:id 65
+ :title "Switch between roles and their conversations in acp-tui"
+ :status :blocked
+ :type :feature
+ :priority :p2
+ :created "2026-10-21"
+ :updated "2026-10-21"
+ :tags #{"conversations"}
+ :blocked-by #{64}
+ :related #{}
+ :details "65-switch-between-roles-and-their-conversations-in-acp-tui.md"}
