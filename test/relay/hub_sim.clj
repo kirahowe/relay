@@ -364,6 +364,11 @@
                                                                  {:optionId "r" :kind "reject_once"}]}})
                             (run-events [])))
                       w))
+            :agent-cancel (let [role (nth-or roles a)]
+                            (if-let [id (first (sort (:perms (agent-of w role))))]
+                              (-> w (agent-says role {:jsonrpc "2.0" :method "$/cancel_request" :params {:requestId id}})
+                                  (run-events []))
+                              w))
             :reply (let [role (nth-or roles a)]
                      (if-let [id (first (:prompts (agent-of w role)))]
                        (-> w (update-in [:agents role :prompts] (comp vec rest))
@@ -404,6 +409,7 @@
     [1 (gen/tuple (gen/return :die) gen/nat)]
     [2 (gen/tuple (gen/return :slow) gen/nat gen/boolean)]
     [3 (gen/tuple (gen/return :labels) gen/nat gen/nat)]
+    [2 (gen/tuple (gen/return :agent-cancel) gen/nat)]
     [3 (gen/tuple (gen/return :release) gen/nat)]]))
 
 (defn start [mode & [cap]]

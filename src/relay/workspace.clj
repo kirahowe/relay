@@ -110,9 +110,8 @@
   an answer to once relay passes it on, or nil. A request is a message
   with an id and a method that is a non-empty string."
   [line]
-  (let [msg (acp/message line)
-        m (get msg "method")]
-    (when (and (map? msg) (contains? msg "id") (string? m) (not= "" m))
+  (let [msg (acp/message line)]
+    (when (= :request (acp/kind msg))
       (acp/id-key (get msg "id")))))
 
 (defn agent-response
@@ -121,9 +120,8 @@
   SDK reads a missing, null or empty method alike). k is the id's key,
   nil when it can be no request's. Nil for any other line."
   [line]
-  (let [msg (acp/message line)
-        m (get msg "method")]
-    (when (and (map? msg) (contains? msg "id") (not (and (string? m) (not= "" m))))
+  (let [msg (acp/message line)]
+    (when (= :response (acp/kind msg))
       {:key (acp/id-key (get msg "id"))})))
 
 (defn owe

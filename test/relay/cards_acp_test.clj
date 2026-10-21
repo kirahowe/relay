@@ -189,7 +189,8 @@
        "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"ALIVE\"}}}}'\n"
        "while IFS= read -r line; do\n"
        "  case \"$line\" in *'\"method\":\"slow\"'*)\n"
-       "    (sleep 1; printf '{\"jsonrpc\":\"2.0\",\"id\":50,\"result\":{\"rev\":999,\"cards\":[{\"id\":66,\"text\":\"LATEANSWER\"}]}}\\n') & ;;\n"
+       "    sid=$(printf '%s' \"$line\" | sed 's/.*\"id\":\\([0-9]*\\).*/\\1/')\n"
+       "    (sleep 1; printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"rev\":999,\"cards\":[{\"id\":66,\"text\":\"LATEANSWER\"}]}}\\n' \"$sid\") & ;;\n"
        "  esac\n"
        "  case \"$line\" in *'\"method\":\"ping\"'*)\n"
        "    id=$(printf '%s' \"$line\" | sed 's/.*\"id\":\\([0-9]*\\).*/\\1/')\n"
@@ -225,16 +226,20 @@
             (testing "a request the client sent the agent gets the agent's answer, once"
               (is (= {"pong" 1} (get ping "result")) (pr-str ping))
               (is (= 1 (count (filter #(= 2 (get % "id")) @(:messages c)))))))
-          (testing "a client that reuses the id of a request the agent has not answered gets relay's answer only"
-            ;; Codex on the fix: the debt under id 50 outlived the client's
-            ;; giving up on it, so the agent's late answer passed as the
-            ;; answer to _relay/cards under the same id.
+          (testing "a client that reuses the id of a request still outstanding is refused, and relay's own method never gets the agent's answer"
+            ;; Codex on #58: the debt under id 50 outlived the client's giving
+            ;; up on it, so the agent's late answer passed as the answer to
+            ;; _relay/cards under the same id. Codex round 2 on #64: the hub
+            ;; remapped both, and the agent (which answers the id it was
+            ;; sent) still answered the second under 50. An id in use is
+            ;; refused now.
             (#'client/send! c {:jsonrpc "2.0" :id 50 :method "slow" :params {}})
             (#'client/send! c {:jsonrpc "2.0" :id 50 :method "_relay/cards" :params {}})
             (Thread/sleep 2000)
             (let [answers (filter #(= 50 (get % "id")) @(:messages c))]
-              (is (= [[]] (mapv #(get-in % ["result" "cards"]) answers)) (pr-str answers))
-              (is (not-any? #(str/includes? (str %) "LATEANSWER") @(:lines c)))))
+              (is (= [-32600] (keep #(get-in % ["error" "code"]) answers)) (pr-str answers))
+              (is (= [[{"id" 66 "text" "LATEANSWER"}]] (keep #(get-in % ["result" "cards"]) answers))
+                  "the one answer is slow's own, once")))
           (client/close-input! c)
           (client/wait! c 20000)
           (finally (client/sever! c)))))

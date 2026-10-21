@@ -337,14 +337,16 @@
         [h fx] (say h 2 (req 31 "_relay/items" {:sessionId "s1"}))
         [h] (agent h "clerk" (permission 900))
         [h fx] (say h 2 (req 40 "_relay/conversations/end" {:sessionId "s1"}))]
-    (is (= [:send :stop] (map :effect fx)) "the turn is cancelled, then the conversation stopped")
+    (is (= :send (:effect (first fx))) "the turn is cancelled first")
+    (is (= :stop (:effect (last fx))) "then the conversation stopped")
+    (is (= 2 (count (filter #(= "_relay/permission/settled" (get % "method")) (concat (writes fx 1) (writes fx 2)))))
+        "its permission request is settled with the turn")
     (let [[h fx] (run h {:event :conversation-gone :role "clerk"})]
       (is (= [{"jsonrpc" "2.0" "id" 30 "error" {"code" -32000 "message" "The conversation ended."}}]
              (filter #(= 30 (get % "id")) (writes fx 1))))
       (is (= #{31 40} (set (keep #(get % "id") (writes fx 2)))))
       (is (= -32000 (get-in (first (filter #(= 31 (get % "id")) (writes fx 2))) ["error" "code"]))
           "a request the agent never answered fails")
-      (is (= 2 (count (filter #(= "_relay/permission/settled" (get % "method")) (concat (writes fx 1) (writes fx 2))))))
       (is (nil? (get-in h [:convs "clerk"])))
       (is (every? empty? (map :attached (vals (:conns h))))))))
 
@@ -509,3 +511,94 @@
                                                    :options []}}))
           [_ fx] (say (opened h 2) 2 (req 1 "session/load" {:sessionId "s1"}))]
       (is (= ["private"] (get-in (first (writes fx 2)) ["params" "update" "_meta" "agentloop/labels"]))))))
+
+;; --- Codex round 2
+
+(deftest a-request-id-still-outstanding-cannot-be-reused
+  ;; The agent's late answer to the first went out as the answer to the
+  ;; second, here one relay answers itself.
+  (let [[h fx] (say (live) 1 (req 77 "slow" {:sessionId "s1"}))
+        [sent] (map parse (sends fx "clerk"))
+        [h fx] (say h 1 (req 77 "_relay/cards" {:sessionId "s1"}))]
+    (is (= [{"jsonrpc" "2.0" "id" 77 "error" {"code" -32600 "message" "Request id 77 is already in use on this connection."}}]
+           (writes fx 1)))
+    (is (empty? (sends fx "clerk")) "nothing goes on")
+    (let [[h fx] (agent h "clerk" (res (get sent "id") {:late true}))]
+      (is (= [{"jsonrpc" "2.0" "id" 77 "result" {"late" true}}] (writes fx 1)) "the first is answered, once")
+      (testing "and once answered, the id is free again"
+        (let [[_ fx] (say h 1 (req 77 "_relay/cards" {:sessionId "s1"}))]
+          (is (= ["_relay/cards"] (map #(get (parse %) "method") (sends fx "clerk")))))))))
+
+(deftest a-turn-that-ends-retires-its-permission-requests
+  (let [h (opened (live) 2 :approvals true)
+        [h] (say h 2 (req 1 "session/load" {:sessionId "s1"}))
+        [h fx] (say h 1 (req 30 "session/prompt" {:sessionId "s1" :prompt []}))
+        h (submit-ok h fx)
+        prompt-id (get-in h [:convs "clerk" :prompt :hub-id])
+        [h fx] (agent h "clerk" (permission 900))
+        p2 (first (writes fx 2))]
+    (testing "the agent cancelling its request: each client is told under its own id, and it is settled"
+      (let [[h' fx] (agent h "clerk" (note "$/cancel_request" {:requestId 900}))]
+        (is (= [{"jsonrpc" "2.0" "method" "$/cancel_request" "params" {"requestId" (get p2 "id")}}
+                {"jsonrpc" "2.0" "method" "_relay/permission/settled" "params" {"sessionId" "s1" "toolCallId" "c1" "outcome" "cancelled"}}]
+               (writes fx 2)))
+        (is (= [{"jsonrpc" "2.0" "id" 900 "result" {"outcome" {"outcome" "cancelled"}}}] (map parse (sends fx "clerk")))
+            "and the proxy's record of it is closed")
+        (is (empty? (get-in h' [:convs "clerk" :perms])))))
+    (testing "the turn ending, however: no client is asked about it again"
+      (let [[h fx] (agent h "clerk" (res prompt-id {:stopReason "cancelled"}))]
+        (is (some #(= "_relay/permission/settled" (get % "method")) (writes fx 2)))
+        (is (empty? (get-in h [:convs "clerk" :perms])))
+        (let [[_ fx] (say (opened h 3 :approvals true) 3 (req 1 "session/load" {:sessionId "s1"}))]
+          (is (not-any? #(= "session/request_permission" (get % "method")) (writes fx 3))))))
+    (testing "cancelling the turn answers its requests cancelled, as ACP asks of a client"
+      (let [[_ fx] (say h 1 (note "session/cancel" {:sessionId "s1"}))]
+        (is (= ["session/cancel" nil] (map #(get (parse %) "method") (sends fx "clerk"))))
+        (is (= {"outcome" {"outcome" "cancelled"}} (get (parse (second (sends fx "clerk"))) "result")))))))
+
+(deftest a-client-cancelling-its-own-request-is-passed-on-under-relay-s-id
+  (let [[h fx] (say (live) 1 (req 77 "slow" {:sessionId "s1"}))
+        [sent] (map parse (sends fx "clerk"))
+        [_ fx] (say h 1 (note "$/cancel_request" {:requestId 77}))]
+    (is (= [{"jsonrpc" "2.0" "method" "$/cancel_request" "params" {"requestId" (get sent "id")}}]
+           (map parse (sends fx "clerk"))))))
+
+(deftest waiting-for-a-session-is-bounded
+  (let [h (-> (fresh) (opened 1))
+        [h] (say h 1 (req 1 "session/new" {:_meta {"relay/role" "clerk"}}))
+        [h fx] (say h 1 (req 2 "session/new" {:_meta {"relay/role" "clerk"}}))]
+    (is (= -32600 (get-in (first (writes fx 1)) ["error" "code"])) "one waiter per connection and role")
+    (is (= 1 (count (get-in h [:convs "clerk" :waiting])))))
+  (testing "and a connection has only so many requests outstanding"
+    (let [h (-> (live) (assoc :max-pending 3))
+          h (reduce (fn [h i] (first (say h 1 (req (+ 100 i) "slow" {:sessionId "s1"})))) h (range 3))
+          [_ fx] (say h 1 (req 200 "slow" {:sessionId "s1"}))]
+      (is (= -32000 (get-in (first (writes fx 1)) ["error" "code"])))
+      (is (empty? (sends fx "clerk"))))))
+
+(deftest a-response-with-an-empty-method-is-a-response
+  ;; The proxy took it for one and the hub for a request, so the turn
+  ;; never ended.
+  (let [[h fx] (say (live) 1 (req 30 "session/prompt" {:sessionId "s1" :prompt []}))
+        h (submit-ok h fx)
+        id (get-in h [:convs "clerk" :prompt :hub-id])
+        [h fx] (agent h "clerk" (line {:jsonrpc "2.0" :id id :method "" :result {:stopReason "end_turn"}}))]
+    (is (= :conversation/turn-end (get-in (first (submits fx)) [:command :type])))
+    (is (= 30 (get (first (writes fx 1)) "id")))
+    (is (nil? (get-in h [:convs "clerk" :prompt])))))
+
+(deftest a-card-changed-by-one-client-reaches-the-others
+  ;; The proxy remembers what its conversation's subscribers were sent, so
+  ;; it does not send the card a client changed back to it; the other
+  ;; subscribers through that conversation must still get it.
+  (let [h (opened (live) 2)
+        [h] (say h 2 (req 1 "session/load" {:sessionId "s1"}))
+        [h] (say h 1 (req 5 "_relay/cards" {:sessionId "s1"}))
+        [h] (say h 2 (req 6 "_relay/cards" {:sessionId "s1"}))
+        [h fx] (say h 1 (req 7 "_relay/cards/op" {:sessionId "s1" :card 3 :op "tick" :item 1}))
+        [sent] (map parse (sends fx "clerk"))
+        card {:id 3 :rev 12 :items []}
+        [_ fx] (agent h "clerk" (res (get sent "id") {:card card :changed true}))]
+    (is (= 7 (get (first (writes fx 1)) "id")))
+    (is (= [{"jsonrpc" "2.0" "method" "_relay/cards/changed" "params" {"rev" 12 "cards" [{"id" 3 "rev" 12 "items" []}]}}]
+           (writes fx 2)))))

@@ -101,6 +101,20 @@
   [x]
   (:message (line x)))
 
+(defn kind
+  "What a message is, as every reader of ACP in relay takes it: :request
+  (an id and a method), :notification (a method and no id), :response
+  (an id and no method), or nil. A method is a non-empty string: the ACP
+  SDK reads a missing, null or empty method alike, so a message with an
+  id and an empty method is a response. The proxy and the hub both
+  classify by this, so they never disagree about a line."
+  [msg]
+  (when (map? msg)
+    (let [m (get msg "method")
+          method? (and (string? m) (not= "" m))]
+      (cond method? (if (contains? msg "id") :request :notification)
+            (contains? msg "id") :response))))
+
 (defn- text-of
   "A line's text, without reading it as JSON: for a Line its text, else
   the string."
@@ -135,7 +149,7 @@
 
 (defn- client-said [obs msg]
   (let [{id "id" method "method" params "params"} msg]
-    (if (and (string? method) (contains? msg "id"))
+    (if (= :request (kind msg))
       (assoc-in obs [:requests id]
                 (cond-> {:method method}
                   (#{"session/load" "session/resume"} method)
@@ -158,7 +172,7 @@
 
 (defn- agent-answered [obs msg]
   (let [{id "id" result "result" error "error"} msg
-        request (when (and (contains? msg "id") (not (contains? msg "method")))
+        request (when (= :response (kind msg))
                   (get-in obs [:requests id]))]
     (if-not request
       obs
@@ -342,8 +356,7 @@
   id, and no method), whichever request it claims to answer."
   [line]
   (let [msg (message line)]
-    (and (map? msg) (contains? msg "id") (not (contains? msg "method"))
-         (or (contains? msg "result") (contains? msg "error")))))
+    (and (= :response (kind msg)) (or (contains? msg "result") (contains? msg "error")))))
 
 (defn- option-of-kind [{:keys [options]} kind]
   (some #(when (= kind (get % "kind")) (get % "optionId")) options))
@@ -375,7 +388,7 @@
   cancels; anything else counts as a refusal."
   [req line]
   (let [msg (message line)]
-    (when (and (map? msg) (not (contains? msg "method")) (contains? msg "id")
+    (when (and (= :response (kind msg))
                ;; By value, as the client and agentloop match ids: 1 and 1.0 are one.
                (some? (id-key (:id req))) (= (id-key (:id req)) (id-key (get msg "id"))))
       (let [outcome (get-in msg ["result" "outcome"])
