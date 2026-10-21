@@ -45,7 +45,18 @@
        "    update(\"PERMITTED $opt\"); print qq({\"jsonrpc\":\"2.0\",\"id\":$pending,\"result\":{\"stopReason\":\"end_turn\"}}\\n); undef $pending; next; }\n"
        "}\n"))
 
+(def deaf-agent-script
+  "An agent that answers initialize and session/new and then never reads
+  its stdin again."
+  (str "#!/usr/bin/perl\n"
+       "$| = 1;\n"
+       "for (1..2) { my $l = <STDIN>; my ($id) = $l =~ /\"id\":(\\d+)/;\n"
+       "  if ($l =~ /initialize/) { print qq({\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":1}}\\n); }\n"
+       "  else { print qq({\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"sessionId\":\"s1\"}}\\n); } }\n"
+       "sleep 600;\n"))
+
 (def ^:dynamic *dir* nil)
+(def ^:dynamic *run-dir* nil)
 (def ^:dynamic *sys* nil)
 (def ^:dynamic *socket* nil)
 
@@ -60,7 +71,8 @@
           (when (< (System/currentTimeMillis) deadline) (Thread/sleep 50) (recur))))))
 
 (defn- start-service! []
-  (let [proc (p/process [support/relay-bin "serve" "--data" (data) "--socket" *socket*] {:out :string :err :string})]
+  (let [proc (p/process [support/relay-bin "serve" "--data" (data) "--socket" *socket* "--run-dir" *run-dir*]
+                        {:out :string :err :string})]
     (is (wait-for #(and (fs/exists? *socket*)
                         (try (.close (java.nio.channels.SocketChannel/open
                                       (java.net.UnixDomainSocketAddress/of ^String *socket*)))
@@ -78,13 +90,13 @@
 
 (defn- with-service
   "Runs (f service) with a data directory, the clerk and hub roles, and a
-  service on a socket of its own."
-  [f]
+  service on a socket of its own, its agent the given script."
+  [f & [script]]
   (let [dir (str (fs/create-temp-dir {:prefix "relay-serve"}))
         sockdir (str (fs/create-temp-dir {:dir "/tmp" :prefix "rs"}))
         data (str dir "/data")
         agent (str dir "/agent.pl")]
-    (spit agent agent-script)
+    (spit agent (or script agent-script))
     (fs/set-posix-file-permissions agent "rwx------")
     (log/init! data)
     (spit (str data "/relay.edn")
@@ -94,7 +106,7 @@
     (let [sys (inbound/system data)]
       (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "clerk" :title "Clerk" :instructions "x"}})
       (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "hub" :title "Hub" :instructions "x"}})
-      (binding [*dir* dir *sys* sys *socket* (str sockdir "/s.sock")]
+      (binding [*dir* dir *sys* sys *socket* (str sockdir "/s.sock") *run-dir* (str sockdir "/run")]
         (let [service (start-service!)]
           (try (f service)
                (finally
@@ -303,9 +315,33 @@
 (deftest ^:volley/serial one-service-per-data-directory
   (with-service
     (fn [_]
-      (let [r @(p/process [support/relay-bin "serve" "--data" (data) "--socket" *socket*] {:out :string :err :string})]
-        (is (= 1 (:exit r)))
-        (is (str/includes? (:err r) "already running"))))))
+      (doseq [socket [*socket* (str (fs/parent *socket*) "/other.sock")]]
+        (testing (str "on " socket)
+          (let [proc (p/process [support/relay-bin "serve" "--data" (data) "--socket" socket "--run-dir" *run-dir*]
+                                {:out :string :err :string})
+                r (deref proc 15000 :timeout)]
+            (when (= :timeout r) (.destroy ^Process (:proc proc)) (deref proc 15000 nil))
+            (is (not= :timeout r) "it refuses at once")
+            (is (= 1 (:exit r)))
+            (is (str/includes? (str (:err r)) "already running"))))))))
+
+(deftest ^:volley/serial ending-a-conversation-stops-an-agent-that-stopped-reading
+  ;; Codex round 1: stopping only queued an end of input behind a prompt
+  ;; the agent would never read, so the end hung and the role stayed taken.
+  (with-service
+    (fn [_]
+      (let [a (connect! :role "clerk")]
+        (try
+          (new-session! a "clerk")
+          (client/request-async! a "session/prompt" (prompt (apply str (repeat (* 1024 1024) "x"))))
+          (Thread/sleep 500)
+          (let [t0 (System/currentTimeMillis)
+                r (client/request! a "_relay/conversations/end" {:sessionId "s1"} 30000)]
+            (is (= {} (get r "result")) (pr-str r))
+            (is (< (- (System/currentTimeMillis) t0) (+ dispatch/stop-grace-ms 10000)) "within the grace and a margin")
+            (is (nil? (core/open-conversation (state) "clerk")) "the wake has ended"))
+          (finally (done! a)))))
+    deaf-agent-script))
 
 (deftest the-socket-path-is-short-and-the-data-directory-s-own
   (binding [serve/*run-dir* "/Users/someone/.relay/run"]
@@ -314,3 +350,29 @@
       (is (not= a (serve/socket-path "/Users/someone/other" nil)))
       (is (< (count a) 104))
       (is (= "/tmp/x.sock" (serve/socket-path "/d" "/tmp/x.sock"))))))
+
+;; --- bounds (Codex round 1)
+
+(deftest a-sender-gives-up-past-its-backlog
+  (let [q (java.util.concurrent.LinkedBlockingQueue.)
+        over (atom 0)
+        {:keys [send! taken!]} (#'serve/bounded-sender q 100 #(swap! over inc))]
+    (send! (apply str (repeat 60 "a")))
+    (is (zero? @over))
+    (taken! 61)
+    (send! (apply str (repeat 60 "b")))
+    (is (zero? @over) "what was taken no longer counts")
+    (send! (apply str (repeat 60 "c")))
+    (is (= 1 @over) "past the backlog it gives up")
+    (is (= 2 (.size q)) "and queues nothing more")))
+
+(deftest the-event-queue-holds-producers-back
+  (let [eng (#'serve/engine nil :service false {:capacity 2})
+        q (:q eng)]
+    (#'serve/enqueue! eng 1)
+    (#'serve/enqueue! eng 2)
+    (let [third (future (#'serve/enqueue! eng 3) :put)]
+      (is (= :waiting (deref third 300 :waiting)) "a full queue makes the producer wait")
+      (.take ^java.util.concurrent.BlockingQueue q)
+      (is (= :put (deref third 2000 :waiting)) "until there is room")
+      (is (= 2 (.size ^java.util.concurrent.BlockingQueue q))))))

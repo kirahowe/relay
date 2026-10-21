@@ -691,7 +691,10 @@
                 (when trace (trace direction line))))
         stopper (spawn (fn []
                          (when-not (= ::done @stop)
-                           (try (.close agent-in) (catch java.io.IOException _ nil))
+                           ;; Closed on a thread of its own: a write the
+                           ;; agent is not reading holds the stream, and
+                           ;; must not hold up the kill.
+                           (spawn #(try (.close agent-in) (catch java.io.IOException _ nil)))
                            (when-not (.waitFor jp grace-ms java.util.concurrent.TimeUnit/MILLISECONDS)
                              (let [h (java.lang.ProcessHandle/of (.pid jp))
                                    family (concat (some-> (.orElse h nil) .descendants .iterator iterator-seq)

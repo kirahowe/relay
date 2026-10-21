@@ -63,9 +63,12 @@ Every command needs the data directory, from --data <dir> or from the file
                                       appends the traffic to <file> as JSON lines;
                                       --approvals lets the client answer held tool
                                       calls, which relay otherwise refuses
-  relay serve [--socket <path>]       run the service that keeps conversations
+  relay serve [--socket <path>] [--run-dir <dir>]
+                                      run the service that keeps conversations
                                       going while no client is attached (launchd
-                                      runs this; see setup/)
+                                      runs this; see setup/); its lock and
+                                      socket go in ~/.relay/run unless
+                                      --run-dir names another directory
   relay tick [--pause-file <f>]       one dispatcher pass (launchd runs this); does
                                       nothing while the pause file exists, which
                                       bb deploy makes
@@ -500,7 +503,7 @@ and --instructions marks the id public too.")
             :tail :long :data :string :search :string :as-of :string :known-at :string
             :version :long :wake :long :role :string :trace :string :untrusted :boolean :public :boolean :approvals :boolean
             :topic :string :from :string :to :string :why :string :text :string :end :boolean
-            :pause-file :string :socket :string :since :string :until :string :out :string :agentloop :string
+            :pause-file :string :socket :string :run-dir :string :since :string :until :string :out :string :agentloop :string
             :client-id :string :url :string
             :item [:string] :row [:string] :column [:string] :state :string :seen :long :archived :boolean}})
 
@@ -554,8 +557,9 @@ and --instructions marks the id public too.")
       "chat" (let [[r] more]
                (result (dispatch/chat! sys r {:data (when (:data opts) (str (fs/absolutize dir)))})))
       "acp" (let [[r] more]
-              (result (serve/acp! sys r {:trace (:trace opts) :approvals (:approvals opts) :socket (:socket opts)})))
-      "serve" (result (serve/serve! sys {:socket (:socket opts)}))
+              (result (serve/acp! sys r {:trace (:trace opts) :approvals (:approvals opts) :socket (:socket opts)
+                                         :run-dir (:run-dir opts)})))
+      "serve" (result (serve/serve! sys {:socket (:socket opts) :run-dir (:run-dir opts)}))
       "tick" (do (dispatch/tick! sys) (result 0))
       "verify" (let [id (some-> (first more) parse-long)]
                  (when-not id (fail! "usage: relay verify <report>"))

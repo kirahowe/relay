@@ -20,7 +20,8 @@
   user's home (*run-dir*), named by a hash of the absolute data
   directory, so its path stays short (macOS takes about 104 bytes). The
   directory is the user's alone and so is the socket. `--socket` names
-  another. A lock beside the socket keeps a second service off it."
+  another. A lock in the run directory, named the same way, keeps a
+  second service off the data directory whatever socket it would use."
   (:require [babashka.fs :as fs]
             [relay.acp :as acp]
             [relay.core :as core]
@@ -37,28 +38,43 @@
 ;; --- where the socket is
 
 (def ^:dynamic *run-dir*
-  "The directory the service's socket and lock go in. Bound in tests."
+  "The directory the service's socket and lock go in. Bound in tests;
+  `--run-dir` names another for one command."
   nil)
 
-(defn run-dir []
-  (or *run-dir* (str (fs/path (System/getProperty "user.home") ".relay" "run"))))
+(defn run-dir [& [dir]]
+  (or dir *run-dir* (str (fs/path (System/getProperty "user.home") ".relay" "run"))))
+
+(defn- data-key
+  "A short name for a data directory: a hash of its absolute path."
+  [data-dir]
+  (subs (core/sha256 (str (fs/normalize (fs/absolutize data-dir)))) 0 16))
 
 (defn socket-path
   "The socket the service for a data directory listens on: `socket` when
-  given, else one named by a hash of the absolute data directory."
-  [data-dir socket]
-  (str (fs/absolutize
-        (or socket (fs/path (run-dir) (str (subs (core/sha256 (str (fs/normalize (fs/absolutize data-dir)))) 0 16)
-                                           ".sock"))))))
+  given, else one named by the data directory's hash in the run
+  directory."
+  [data-dir socket & [dir]]
+  (str (fs/absolutize (or socket (fs/path (run-dir dir) (str (data-key data-dir) ".sock"))))))
+
+(defn lock-path
+  "The lock that keeps a second service off a data directory, whatever
+  socket either listens on."
+  [data-dir & [dir]]
+  (str (fs/absolutize (fs/path (run-dir dir) (str (data-key data-dir) ".lock")))))
 
 ;; --- streams
+
+(defn- line-bytes ^bytes [line] (.getBytes (str line "\n") java.nio.charset.StandardCharsets/UTF_8))
 
 (defn- daemon [name f]
   (doto (Thread. ^Runnable f ^String name) (.setDaemon true) (.start)))
 
 (defn- queue-input-stream
-  "An input stream of the byte arrays put on q, ending at ::eof."
-  [^LinkedBlockingQueue q]
+  "An input stream of the lines put on q, each with its newline, ending at
+  ::eof. Calls (on-taken n) with the length of each line it takes, as
+  bounded-sender counts it."
+  [^LinkedBlockingQueue q on-taken]
   (let [cur (atom nil) pos (atom 0) done (atom false)
         fill! (fn [] (loop []
                        (cond @done false
@@ -66,7 +82,7 @@
                              :else (let [x (.take q)]
                                      (if (= ::eof x)
                                        (do (reset! done true) false)
-                                       (do (reset! cur x) (reset! pos 0) (recur)))))))]
+                                       (do (on-taken (inc (count x))) (reset! cur (line-bytes x)) (reset! pos 0) (recur)))))))]
     (proxy [java.io.InputStream] []
       (read
         ([] (if (fill!)
@@ -98,16 +114,48 @@
         ([^bytes b off len] (take! (java.util.Arrays/copyOfRange b (int off) (int (+ off len))))))
       (flush []))))
 
-(defn- line-bytes ^bytes [line] (.getBytes (str line "\n") java.nio.charset.StandardCharsets/UTF_8))
-
 ;; --- the engine: the hub and its loop
 
-(defn- engine [sys mode approvals]
-  {:sys sys :mode mode :approvals approvals :q (LinkedBlockingQueue.)
+(def event-capacity
+  "How many events may wait for the hub. Past it whoever produces one (a
+  client's reader, a conversation's proxy, the log watcher) waits, so
+  nothing reads faster than the hub keeps up."
+  1024)
+
+(def write-backlog
+  "How many characters may wait to be written to one connection, or to
+  one conversation's agent, before relay gives up on a reader that has
+  stopped reading."
+  (* 64 1024 1024))
+
+(defn- engine [sys mode approvals & [{:keys [capacity] :or {capacity event-capacity}}]]
+  {:sys sys :mode mode :approvals approvals :q (LinkedBlockingQueue. (int capacity))
+   ;; What the loop thread itself raises (a connection it gave up on)
+   ;; goes here, so the loop never waits on its own full queue.
+   :own (LinkedBlockingQueue.) :loop-thread (atom nil)
    :hub (atom (hub/hub {:mode mode})) :conns (atom {}) :convs (atom {}) :next-conn (atom 0)
    :closed-any (atom false)})
 
-(defn- enqueue! [eng e] (.put ^LinkedBlockingQueue (:q eng) e))
+(defn- enqueue!
+  "Puts an event on the hub's queue, waiting while it is full."
+  [eng e]
+  (if (= (Thread/currentThread) @(:loop-thread eng))
+    (.add ^LinkedBlockingQueue (:own eng) e)
+    (.put ^LinkedBlockingQueue (:q eng) e)))
+
+(defn- bounded-sender
+  "A sender of lines onto q that gives up, calling (over!) once and
+  queueing nothing more, when more than `limit` characters wait unread.
+  (taken! n) says n bytes were read."
+  [^LinkedBlockingQueue q limit over!]
+  (let [backlog (atom 0)
+        gave-up (atom false)]
+    {:send! (fn [line]
+              (when-not @gave-up
+                (if (> (swap! backlog + (inc (count line))) limit)
+                  (when (compare-and-set! gave-up false true) (over!))
+                  (.put q line))))
+     :taken! (fn [n] (swap! backlog - n))}))
 
 (defn- roster-event [{:keys [sys]}]
   {:event :log-changed
@@ -150,10 +198,13 @@
         (process! eng follow)))))
 
 (defn- run-loop!
-  "Takes events until `done?` says the hub is done, or ::quit."
+  "Takes events until `done?` says the hub is done, or ::quit, its own
+  first."
   [eng done?]
+  (reset! (:loop-thread eng) (Thread/currentThread))
   (loop []
-    (let [e (.take ^LinkedBlockingQueue (:q eng))]
+    (let [e (or (.poll ^LinkedBlockingQueue (:own eng))
+                (.take ^LinkedBlockingQueue (:q eng)))]
       (when-not (= ::quit e)
         (try (process! eng e)
              (catch Exception ex
@@ -187,12 +238,20 @@
   (let [q (LinkedBlockingQueue.)
         result (promise)
         ran (atom false)
+        ;; The proxy's own stop: it closes the agent's stdin and kills the
+        ;; agent after the grace, whatever is still queued for it.
+        stop (promise)
+        stop! (fn [] (deliver stop :stopped) (.put q ::eof))
+        {:keys [send! taken!]} (bounded-sender q write-backlog
+                                               #(do (binding [*out* *err*]
+                                                      (println (str "relay stopped " role "'s conversation: its agent stopped reading.")))
+                                                    (stop!)))
         out (line-output-stream #(enqueue! eng {:event :agent-line :role role :line %}))]
-    (swap! (:convs eng) assoc role {:send! #(.put q (line-bytes %)) :stop! #(.put q ::eof)})
+    (swap! (:convs eng) assoc role {:send! send! :stop! stop!})
     (daemon (str "relay-conversation-" role)
             (fn []
               (let [r (try (dispatch/run-conversation!
-                            sys role {:in (queue-input-stream q) :out out
+                            sys role {:in (queue-input-stream q taken!) :out out :stop stop
                                       ;; A service lets the hub decide who may answer.
                                       :approvals (or (= :service mode) (boolean approvals))
                                       :on-started (fn [wake]
@@ -211,30 +270,22 @@
 
 ;; --- connections
 
-(def write-backlog
-  "How many characters may wait to be written to one connection before
-  relay gives up on it as a client that has stopped reading."
-  (* 64 1024 1024))
-
 (defn- add-connection!
   "Starts a connection's reader and writer. Lines it sends come to the hub
   as :connection-line, and its end as :connection-closed, once."
   [eng {:keys [^java.io.InputStream in ^java.io.OutputStream out origin approvals role trace on-close]}]
   (let [cid (swap! (:next-conn eng) inc)
         q (LinkedBlockingQueue.)
-        backlog (atom 0)
         closed (atom false)
         close! (fn []
                  (when (compare-and-set! closed false true)
                    (.put q ::eof)
                    (enqueue! eng {:event :connection-closed :conn cid})
                    (when on-close (on-close))))
-        send! (fn [line]
-                (when-not @closed
-                  (if (> (swap! backlog + (count line)) write-backlog)
-                    (do (binding [*out* *err*] (println "relay closed a connection that stopped reading."))
-                        (close!))
-                    (.put q line))))]
+        {:keys [send! taken!]} (bounded-sender q write-backlog
+                                               #(do (binding [*out* *err*] (println "relay closed a connection that stopped reading."))
+                                                    (close!)))
+        send! (fn [line] (when-not @closed (send! line)))]
     (swap! (:conns eng) assoc cid {:send! send! :close! close!})
     (enqueue! eng {:event :connection-opened :conn cid :origin origin :approvals approvals :role role})
     (daemon (str "relay-connection-writer-" cid)
@@ -242,7 +293,7 @@
               (loop []
                 (let [x (.take q)]
                   (when-not (= ::eof x)
-                    (swap! backlog - (count x))
+                    (taken! (inc (count x)))
                     (when trace (trace :agent x))
                     (if (try (.write out (line-bytes x)) (.flush out) true
                              (catch java.io.IOException _ false))
@@ -283,13 +334,15 @@
   way out every conversation ends and is recorded. Conversations a
   service before it left running (it crashed, say) are ended first, as
   lost. Returns an exit code."
-  [sys {:keys [socket ready]}]
+  [sys {:keys [socket ready run-dir]}]
   (binding [*out* *err*]
-    (let [path (socket-path (:data-dir sys) socket)
-          dir (fs/parent path)]
-      (fs/create-dirs dir)
-      (fs/set-posix-file-permissions dir "rwx------")
-      (if-let [lock (lock! (str path ".lock"))]
+    (let [path (socket-path (:data-dir sys) socket run-dir)
+          lock-file (lock-path (:data-dir sys) run-dir)]
+      (doseq [dir (distinct [(fs/parent path) (fs/parent lock-file)])]
+        (fs/create-dirs dir)
+        (fs/set-posix-file-permissions dir "rwx------"))
+      ;; Per data directory, whatever socket either service listens on.
+      (if-let [lock (lock! lock-file)]
         (let [_ (fs/delete-if-exists path)
               server (doto (ServerSocketChannel/open StandardProtocolFamily/UNIX)
                        (.bind (UnixDomainSocketAddress/of ^String path)))
@@ -391,13 +444,13 @@
   Options: :approvals lets the client answer permission requests; :trace
   a file to append both directions of the traffic to; :socket the
   service's socket."
-  [sys role {:keys [trace in out socket] :or {in System/in out System/out} :as opts}]
+  [sys role {:keys [trace in out socket run-dir] :or {in System/in out System/out} :as opts}]
   (binding [*out* *err*]
     (try
       ;; Before anything opens, so a refused file costs nothing.
       (when trace (dispatch/private-trace-file! trace))
       (let [opts (assoc opts :in in :out out)
-            path (socket-path (:data-dir sys) socket)
+            path (socket-path (:data-dir sys) socket run-dir)
             ch (when (fs/exists? path)
                  (try (SocketChannel/open (UnixDomainSocketAddress/of ^String path)) (catch Exception _ nil)))]
         (if ch
