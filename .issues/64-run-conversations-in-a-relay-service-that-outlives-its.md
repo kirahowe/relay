@@ -237,6 +237,66 @@ now send label updates, and a 400-character cap drops them); the
 service and embedded properties check it too. All fail on the hub before
 the fix.
 
+## Codex round 2
+
+Eight in-scope findings. Each fix has a test that failed before it.
+
+1. The truncated replay lost the session's labels. Fixed in puolpqoy;
+   see "Codex round 1 (acp-tui finding 4)" above.
+2. serve deleted whatever was at the socket path. Fix uwwtpvsp: it takes
+   over only a socket that no service answers on, refuses a file or a
+   directory without touching it, and chmods only its own run directory
+   (it used to chmod the --socket's parent too). Test: serve-test
+   `serve-never-removes-what-is-not-its-socket`.
+3. A client could reuse an outstanding request id, so the agent's late
+   answer to the first answered the second. Fix zloktxvr: the hub tracks
+   each connection's outstanding ids, refuses a reused one (-32600), and
+   every answer to a client goes through `respond`, which frees its id;
+   answers are still looked up by the hub's upstream id. Tests: hub-test
+   `a-request-id-still-outstanding-cannot-be-reused`; cards-acp-test's
+   fake agent now answers the id it was sent, so the regression test
+   really exercises remapping.
+4. The agent's `$/cancel_request` was forwarded with its own id, and a
+   cancelled turn's permission requests stayed open. Fix zloktxvr: it goes
+   to each client under that client's id and the request is settled; a
+   client's `$/cancel_request` goes to the agent under relay's id; when a
+   turn ends, is cancelled, or the conversation is ended, its permission
+   requests are answered cancelled (as ACP asks of a client), which
+   closes the proxy's record, and every client is told they are settled.
+   Tests: hub-test `a-turn-that-ends-retires-its-permission-requests`,
+   `a-client-cancelling-its-own-request-is-passed-on-under-relay-s-id`;
+   the simulator's agents now cancel requests too.
+5. session/new waiters were unbounded. Fix zloktxvr: one waiter per
+   connection and role (-32600), and at most 256 requests outstanding per
+   connection (-32000), which bounds every list the hub keeps for a
+   client (waiters, enders, forwarded requests); uwwtpvsp caps the service
+   at 64 connections. Tests: hub-test `waiting-for-a-session-is-bounded`,
+   serve-test `the-service-takes-only-so-many-connections`.
+6. An agent response with `"method": ""` was a response to the proxy and
+   a request to the hub. Fix zloktxvr: `relay.acp/kind` is the one
+   classification (request, notification, response), used by the proxy's
+   readers (workspace/client-request-key, agent-response, acp/stray-answer?,
+   answer-of, the observer) and the hub. Test: hub-test
+   `a-response-with-an-empty-method-is-a-response`.
+7. A card one client changed never reached another client subscribed
+   through the same conversation. Fix zloktxvr: the hub turns a
+   successful `_relay/cards/op` answer into `_relay/cards/changed` for
+   the other subscribers through that conversation. Chosen over
+   per-connection rev tracking in the hub so the proxy's per-conversation
+   record stays the one source of what its subscribers were sent: the
+   others had been sent everything the conversation had, so the op's card
+   is exactly what they lack. Test: hub-test
+   `a-card-changed-by-one-client-reaches-the-others`.
+8. The lock and socket hashed the path as written. Fix uwwtpvsp: they
+   hash the real path. `--socket` and `--run-dir` are documented as for
+   relay's own tests in the CLI help and README. Test: serve-test
+   `a-data-directory-is-known-by-its-real-path` (a symlink, and /tmp vs
+   /private/tmp).
+
+After the fixes: `bb test --agentloop ../agentloop/bin/agentloop` with
+acp-tui-convs' bin on PATH, 825 tests, all pass; `bb tck` 43 pass, 12
+skipped, ACP-SESSION-002 failing by design.
+
 ## Notes
 
 - No env vars for wiring. The socket path comes from config.
