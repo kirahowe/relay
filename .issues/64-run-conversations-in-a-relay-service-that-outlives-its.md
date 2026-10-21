@@ -72,9 +72,9 @@ service, the bridge, docs).
 - [x] README, resources/AGENTS.md, spec updated. bb test passes.
   - Receipt: yxqurkpz (README: relay chat, ACP clients, The relay service;
     spec: ConversationService, TellTheOperatorAPermissionWaits,
-    AskTheClient; AGENTS.md). `bb test --agentloop <agentloop main build>`:
-    807 tests, 805 pass; the two that do not run need an acp-tui with
-    `--open` (relay#65) and say so. `bb tck` with that agentloop: 43 pass,
+    AskTheClient; AGENTS.md). After Codex round 1, `bb test --agentloop
+    ../agentloop/bin/agentloop` with acp-tui-convs' bin on PATH: 814
+    tests, all pass, the two acp-tui pty tests included. `bb tck`: 43 pass,
     12 skipped as not advertised, and ACP-SESSION-002 fails by design (see
     below).
 
@@ -124,18 +124,21 @@ service, the bridge, docs).
   (session notices, say) reach agentloop as before.
 - `relay acp <role>` with no service opens the role's conversation before
   any traffic, so a refusal still exits 1 with nothing on stdout.
-- The socket is `~/.relay/run/<first 16 hex of sha256(absolute data dir)>.sock`;
-  tests bind relay.serve/*run-dir* away from home. The lock is a file
-  beside the socket, so the one-service rule holds per socket path; a
-  service started with another `--socket` is not stopped by it. --socket
-  exists for tests.
+- The socket is `~/.relay/run/<first 16 hex of sha256(absolute data dir)>.sock`,
+  and the lock `~/.relay/run/<same>.lock`, whatever `--socket` says, so
+  one service runs per data directory (changed in Codex round 1; it was
+  per socket). `--socket` and `--run-dir` exist for tests;
+  relay.serve/*run-dir* is bound away from home in-process.
 - `--trace` in relay acp now records what the client and relay said to
   each other (in either mode), not relay and agentloop: that is what the
   client saw, and the trace test's counts still hold.
 - The replay keeps the last 4 MB of updates per conversation.
-- A prompt waits in a queue per conversation; more than one may wait, and
-  they run in order. A prompt is mirrored to the others when it starts,
-  so the replay keeps it before its reply.
+- A session takes one prompt at a time: a prompt while one runs or waits
+  is refused (Codex round 1). A waiting prompt is mirrored to the others
+  when it starts, so the replay keeps it before its reply.
+- session/cancel from any attached connection cancels the running turn,
+  whoever started it, and drops that connection's waiting prompt: one
+  person on several devices, and acp-tui's ctrl-c relies on it.
 - `agentInfo.version` is "1" and session/list filters by cwd, for the ACP
   kit (ACP-INIT-004, ACP-LIST-002).
 - ACP-SESSION-002 (two session/new calls get different ids) fails by
@@ -144,9 +147,8 @@ service, the bridge, docs).
   than counting it. Kira may prefer to see the kit's verdict as is.
 - relay chat runs `acp-tui [--open <role>] -- relay acp --approvals`. The
   two tests that drive a real acp-tui skip unless that acp-tui has
-  `--open` (relay#65). A build of acp-tui-convs as of this work answered
-  initialize and then sent nothing in a pty, so the full path through
-  acp-tui is not yet checked.
+  `--open` (relay#65); with acp-tui-convs' build on PATH and at
+  ../acp-tui they run and pass.
 - Deploy: unchanged, as asked. It waits for every running wake, and a
   service's conversations are running wakes, so the README says to stop
   the service before `bb deploy` and start it after, which ends the live
@@ -158,6 +160,50 @@ service, the bridge, docs).
 - Commit tossnmsx also carries a change to
   `.issues/65-...md` that was in this working copy, not mine; moving it
   out was refused by the permission system, so it is left as it is.
+
+## Codex round 1
+
+Six in-scope findings, all fixed, each with a test that failed before
+the fix.
+
+1. The replay cap used subvec, which kept every dropped update. Fix
+   uryxmzzt: the buffer is a PersistentQueue. Test: hub-test
+   `the-replay-keeps-only-what-it-shows`.
+2. Stopping a conversation queued only an end of input, so an agent that
+   stopped reading during a large prompt was never killed and
+   `_relay/conversations/end` hung. Fix lnywpzmz: stop delivers the
+   proxy's own stop, and the proxy closes stdin on its own thread, so a
+   blocked write cannot hold up the kill. Test: serve-test
+   `ending-a-conversation-stops-an-agent-that-stopped-reading` (1 MiB
+   prompt to an agent that stops reading; ends within grace + margin).
+3. session/new waiters were matched by position: a creator that left
+   cost the next waiter its answer, and an agent that died while creating
+   answered the creator twice. Fix uryxmzzt: the creator leaves the
+   waiting list when its request goes to the agent, and is answered only
+   under that id. Tests: hub-test
+   `a-session-new-waiting-for-creation-is-answered-once-whoever-leaves`;
+   the simulator's agents can now hold back initialize and session/new
+   (:slow, :release), so leaving and dying during creation are in the
+   properties.
+4. session/cancel with a queued prompt left the running turn going. Fix
+   uryxmzzt: cancel drops the connection's waiting prompt and cancels the
+   running turn, whichever attached connection started it. Tests: hub-test
+   `one-prompt-at-a-time-per-session`,
+   `cancel-from-any-attached-client-stops-the-running-turn`.
+5. No bounds on the event queue, conversation input or queued prompts.
+   Fixes: one prompt per session, others refused (uryxmzzt; hub-test
+   `one-prompt-at-a-time-per-session`, a thousand retries keep nothing);
+   conversation input bounded at 64 MB unread, past which relay stops the
+   conversation, the same sender as connections' output (lnywpzmz;
+   serve-test `a-sender-gives-up-past-its-backlog`); the event queue holds
+   1024 and producers wait, with the loop's own events on a side queue
+   (lnywpzmz; serve-test `the-event-queue-holds-producers-back`).
+6. The lock was per socket. Fix lnywpzmz: per data directory under the
+   run directory. Test: serve-test `one-service-per-data-directory` (a
+   second service on another --socket refuses).
+
+`bb tck` after the fixes: 43 pass, 12 skipped as not advertised,
+ACP-SESSION-002 failing by design, as before.
 
 ## Notes
 
