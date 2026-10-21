@@ -6,6 +6,7 @@
   each side saw, and `problems` lists every broken invariant from
   section 3 of the design brief."
   (:require [cheshire.core :as json]
+            [clojure.string :as str]
             [clojure.test.check.generators :as gen]
             [relay.acp :as acp]
             [relay.hub :as hub]))
@@ -22,9 +23,12 @@
 (defn- jl [m] (json/generate-string m))
 (defn- parse [l] (try (json/parse-string l) (catch Exception _ nil)))
 
-(defn world [mode & [cap]]
+(defn world [mode & [cap max-per-conversation]]
   {:mode mode :cap cap
-   :h (first (hub/step (hub/hub (cond-> {:mode mode} cap (assoc :replay-cap cap))) {:event :log-changed :roster roster}))
+   :h (first (hub/step (hub/hub (cond-> {:mode mode}
+                                  cap (assoc :replay-cap cap)
+                                  max-per-conversation (assoc :max-per-conversation max-per-conversation)))
+                       {:event :log-changed :roster roster}))
    :conns {} :next-conn 1 :agents {} :busy #{} :running #{} :next-wake 1 :next-text 0
    :problems [] :sent-prompts {}})
 
@@ -41,12 +45,17 @@
       w
       (as-> w w
         (update-in w [:conns cid :received] conj line)
-        ;; A response: to one of its own requests, and only once.
+        ;; A response: to one of its own requests, and only once. A
+        ;; request that reused an id still outstanding gets its refusal,
+        ;; which is not the first's answer.
         (if (and (contains? msg "id") (not (contains? msg "method")))
           (let [id (get msg "id")]
-            (cond-> (update-in w [:conns cid :responses id] (fnil inc 0))
-              (not (contains? (get-in w [:conns cid :requests]) id)) (problem [:response-to-nothing cid id])
-              (pos? (get-in w [:conns cid :responses id] 0)) (problem [:two-responses cid id])))
+            (if (and (pos? (get-in w [:conns cid :reuses id] 0))
+                     (str/includes? (str (get-in msg ["error" "message"])) "already in use"))
+              (update-in w [:conns cid :reuses id] dec)
+              (cond-> (update-in w [:conns cid :responses id] (fnil inc 0))
+                (not (contains? (get-in w [:conns cid :requests]) id)) (problem [:response-to-nothing cid id])
+                (pos? (get-in w [:conns cid :responses id] 0)) (problem [:two-responses cid id]))))
           w)
         ;; A permission request: under an id never used for another.
         (if (= "session/request_permission" (get msg "method"))
@@ -100,7 +109,10 @@
           (if (pos? (get-in w [:turns-ok role] 0))
             (-> w (update-in [:turns-ok role] dec) (update-in [:agents role :prompts] (fnil conj []) id))
             (problem w [:prompt-without-a-turn role id]))
-          (agent-says w role {:jsonrpc "2.0" :id id :result {}})))
+          ;; A slow agent keeps a client's other requests waiting too.
+          (if (contains? (:slow w) role)
+            (update-in w [:agents role :deferred] (fnil conj []) {:jsonrpc "2.0" :id id :result {}})
+            (agent-says w role {:jsonrpc "2.0" :id id :result {}}))))
       (contains? msg "method")
       (if (and (= "session/cancel" (get msg "method")) (seq (:prompts a)))
         (-> w (update-in [:agents role :prompts] (comp vec rest))
@@ -202,6 +214,11 @@
 
 (defn- nth-or [coll n] (when (seq coll) (nth coll (mod n (count coll)))))
 
+(defn- outstanding
+  "A connection's requests not yet answered, by id."
+  [w cid]
+  (vec (sort (for [[id _] (get-in w [:conns cid :requests]) :when (zero? (get-in w [:conns cid :responses id] 0))] id))))
+
 (defn- end-segment
   "Checks what a connection saw of a session since it attached: with its
   own prompts' text taken out, exactly the observer's history so far,
@@ -270,7 +287,14 @@
   [w [kind a :as action]]
   (let [cids (vec (sort (keep (fn [[cid c]] (when (and (:open c) (not= observer cid)) cid)) (:conns w))))
         acting (when (#{:answer :stray} kind) (nth-or cids (or a 0)))]
-    (told-of-settling w (act* w action) acting)))
+    (let [w' (told-of-settling w (act* w action) acting)
+          bound (get-in w' [:h :max-per-conversation])]
+      ;; Requests waiting on a conversation, orphans included, stay within
+      ;; its bound however clients come and go.
+      (reduce (fn [w role]
+                (let [n (count (filter #(= role (:role %)) (vals (get-in w [:h :requests]))))]
+                  (cond-> w (> n bound) (problem [:over-the-bound role n]))))
+              w' roles))))
 
 (defn- act*
   [w [kind a b]]
@@ -332,6 +356,17 @@
                                 3 nil)]
                         (run-events w [{:event :connection-line :conn cid
                                         :line (if m (jl m) (str "{\"jsonrpc\":\"2.0\",\"id\":" (json/generate-string id) ",\"result\":"))}]))
+                      w)
+            ;; Reusing an id whose request is outstanding, and a line that
+            ;; cannot be read carrying one: neither may answer for it.
+            :reuse (if-let [id (and cid (nth-or (outstanding w cid) b))]
+                     (-> w (update-in [:conns cid :reuses id] (fnil inc 0))
+                         (run-events [{:event :connection-line :conn cid
+                                       :line (jl {:jsonrpc "2.0" :id id :method "slow" :params {}})}]))
+                     w)
+            :garble (if-let [id (and cid (nth-or (outstanding w cid) b))]
+                      (run-events w [{:event :connection-line :conn cid
+                                      :line (str "{\"jsonrpc\":\"2.0\",\"id\":" (json/generate-string id) ",\"method\":")}])
                       w)
             :stray (if cid (run-events w [{:event :connection-line :conn cid :line (jl {:jsonrpc "2.0" :id 99999 :result {}})}]) w)
             :update (if-let [{:keys [session]} (agent-of w (nth-or roles a))]
@@ -410,10 +445,12 @@
     [2 (gen/tuple (gen/return :slow) gen/nat gen/boolean)]
     [3 (gen/tuple (gen/return :labels) gen/nat gen/nat)]
     [2 (gen/tuple (gen/return :agent-cancel) gen/nat)]
+    [2 (gen/tuple (gen/return :reuse) gen/nat gen/nat)]
+    [1 (gen/tuple (gen/return :garble) gen/nat gen/nat)]
     [3 (gen/tuple (gen/return :release) gen/nat)]]))
 
-(defn start [mode & [cap]]
-  (cond-> (world mode cap)
+(defn start [mode & [cap max-per-conversation]]
+  (cond-> (world mode cap max-per-conversation)
     (= :service mode) (open-conn observer {:origin :socket :approvals false})))
 
 (defn drain
@@ -434,7 +471,8 @@
         ;; No prompt waits once its role is free.
         w (reduce (fn [w [role c]]
                     (cond-> w
-                      (or (seq (:queue c)) (:prompt c)) (problem [:prompt-still-waiting role (count (:queue c))])))
+                      (or (seq (hub/queued (:h w) role)) (hub/running (:h w) role))
+                      (problem [:prompt-still-waiting role])))
                   w (get-in w [:h :convs]))
         w (reduce (fn [w [cid c]] (reduce #(end-segment %1 cid %2) w (attached-sessions w cid))) w (:conns w))]
     (reduce (fn [w role] (run-events w [{:event :conversation-gone :role role}]))
@@ -447,6 +485,7 @@
   [w]
   (concat
    (:problems w)
+   (for [[cid c] (:conns w) [id n] (:reuses c) :when (pos? n)] [:reuse-not-refused cid id])
    (for [[cid c] (:conns w)
          :when (:open c)
          [id _] (:requests c)

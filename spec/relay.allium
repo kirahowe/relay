@@ -4161,6 +4161,18 @@ surface ConversationService {
         -- before. Stopping the service ends every conversation, a turn in
         -- progress with it (EndTurn, ended), and records it; one a dead
         -- service left is ended as lost (EndLostWakes) by the next.
+        -- Every request relay has taken and not yet answered is one
+        -- record, from the moment it is taken to its answer; its id stays
+        -- the connection's while the record lives, and one left by a
+        -- connection that went away stays until its answer comes. A
+        -- conversation takes a bounded number of them, orphans included,
+        -- and a connection a bounded number too. session/cancel cancels
+        -- for the session, whichever attached connection sends it: every
+        -- waiting prompt and the running turn. The board is relay's: it
+        -- sends each subscribed connection the cards that changed since
+        -- what it was last sent. An end of a turn relay could not record
+        -- is tried again until it is; until then no other turn of the role
+        -- starts, and the operator is told once.
         -- _relay/roles gives every role's status (relay.roster, plus a
         -- turn that waits shown as queued) and then the whole list again
         -- whenever any of it changes.

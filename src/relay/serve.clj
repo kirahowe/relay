@@ -166,14 +166,17 @@
      :taken! (fn [n] (swap! backlog - n))}))
 
 (defn- roster-event [{:keys [sys]}]
-  {:event :log-changed
-   :roster (roster/roster (inbound/current-state sys) (:config sys) ((:clock sys)))})
+  (let [state (inbound/current-state sys)]
+    {:event :log-changed :state state
+     :roster (roster/roster state (:config sys) ((:clock sys)))}))
 
 (defn- submit-result
-  "Carries out a submit: the result as the hub takes it."
-  [sys command]
-  (try (inbound/submit! sys command)
-       {:ok true}
+  "Carries out a submit: the result as the hub takes it, with the state
+  after it when asked."
+  [sys command with-state]
+  (try (let [events (inbound/submit! sys command)]
+         (cond-> {:ok true :changed (boolean (seq events))}
+           with-state (assoc :state (inbound/current-state sys))))
        (catch clojure.lang.ExceptionInfo e
          {:rejection (or (core/rejection e) :error) :message (ex-message e)})
        (catch Exception e
@@ -187,7 +190,8 @@
   (case effect
     :write (do (when-let [c (get @(:conns eng) (:conn f))] ((:send! c) (:line f))) nil)
     :send (do (when-let [c (get @(:convs eng) (:role f))] ((:send! c) (:line f))) nil)
-    :submit (merge {:event :submit-result :tag (:tag f)} (submit-result (:sys eng) (:command f)))
+    :submit (merge {:event :submit-result :tag (:tag f)} (submit-result (:sys eng) (:command f) (:with-state f)))
+    :warn (do (binding [*out* *err*] (println (:text f))) nil)
     :start (do (start-conversation! eng (:role f) nil) nil)
     :stop (do (when-let [c (get @(:convs eng) (:role f))] ((:stop! c))) nil)))
 
@@ -219,20 +223,33 @@
                (binding [*out* *err*] (println "relay's hub failed on an event:" (ex-message ex)))))
         (when-not (done?) (recur))))))
 
+(def tick-ms
+  "How often the hub is told time has passed, so it tries again what it
+  could not record."
+  5000)
+
 (defn- watch-log!
-  "Feeds the hub the roster whenever the log changes, about four times a
-  second, until `stop` is delivered."
+  "Feeds the hub the state and roster whenever the log changes, about
+  four times a second, and a :tick every tick-ms, until `stop` is
+  delivered."
   [eng stop]
   (daemon "relay-log-watcher"
           (fn []
-            (loop [stamp (dispatch/log-stamp (:data-dir (:sys eng)))]
+            ;; No stamp to start with, so its first look reads the state:
+            ;; whatever was written since the caller last read it is not
+            ;; missed.
+            (loop [stamp nil last-tick (System/currentTimeMillis)]
               (when (= ::waiting (deref stop 250 ::waiting))
-                (recur (try (let [now (dispatch/log-stamp (:data-dir (:sys eng)))]
-                              (when (not= now stamp) (enqueue! eng (roster-event eng)))
-                              now)
-                            (catch Exception e
-                              (binding [*out* *err*] (println "relay could not read the log:" (ex-message e)))
-                              stamp))))))))
+                (let [now-ms (System/currentTimeMillis)
+                      tick? (>= (- now-ms last-tick) tick-ms)]
+                  (when tick? (enqueue! eng {:event :tick}))
+                  (recur (try (let [now (dispatch/log-stamp (:data-dir (:sys eng)))]
+                                (when (not= now stamp) (enqueue! eng (roster-event eng)))
+                                now)
+                              (catch Exception e
+                                (binding [*out* *err*] (println "relay could not read the log:" (ex-message e)))
+                                stamp))
+                         (if tick? now-ms last-tick))))))))
 
 ;; --- conversations
 

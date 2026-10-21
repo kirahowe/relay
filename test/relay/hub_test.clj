@@ -7,6 +7,8 @@
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
+            [relay.core :as core]
+            [relay.core-test :as ct]
             [relay.hub :as hub]
             [relay.hub-sim :as sim])
   (:import (java.time Instant)))
@@ -231,7 +233,7 @@
         [h] (run h {:event :submit-result :tag (:tag (first (submits fx))) :rejection :busy})
         [h fx] (say h 1 (note "session/cancel" {:sessionId "s1"}))]
     (is (= [{"jsonrpc" "2.0" "id" 30 "result" {"stopReason" "cancelled"}}] (writes fx 1)))
-    (is (empty? (get-in h [:convs "clerk" :queue]))))
+    (is (empty? (hub/queued h "clerk"))))
   (let [[h fx] (say (live) 1 (req 30 "session/prompt" {:sessionId "s1" :prompt []}))
         h (submit-ok h fx)
         [_ fx] (say h 1 (note "session/cancel" {:sessionId "s1"}))]
@@ -372,11 +374,9 @@
       (let [[_ fx] (say h 2 (req 51 "_relay/trust" {:sessionId "s1" :path "a.md"}))]
         (is (empty? (sends fx "clerk")))
         (is (= -32000 (get-in (first (writes fx 2)) ["error" "code"])))))
-    (testing "a board change goes only to clients that asked for the board through it"
-      (let [[h] (say h 1 (req 52 "_relay/cards" {:sessionId "s1"}))
-            [_ fx] (agent h "clerk" (note "_relay/cards/changed" {:rev 3 :cards []}))]
-        (is (= 1 (count (writes fx 1))))
-        (is (empty? (writes fx 2)))))
+    (testing "the board is the hub's: a proxy's word about it goes nowhere"
+      (let [[_ fx] (agent h "clerk" (note "_relay/cards/changed" {:rev 3 :cards []}))]
+        (is (empty? fx))))
     (testing "an unknown method of relay's is refused"
       (is (= -32601 (get-in (first (writes (second (say h 2 (req 53 "_relay/nope" {}))) 2)) ["error" "code"]))))))
 
@@ -410,6 +410,13 @@
   (prop/for-all [actions (gen/vector sim/gen-action 1 80)]
     (let [w (sim/drain (reduce sim/act (sim/start :service 400) actions))
           problems (filter #(= :replay-labels (first %)) (sim/final-problems w))]
+      (or (empty? problems) (do (println "problems:" (take 5 problems)) false)))))
+
+(defspec requests-stay-bounded-however-clients-come-and-go 300
+  ;; A small bound, agents that hold answers back, and clients that leave
+  ;; requests behind.
+  (prop/for-all [actions (gen/vector sim/gen-action 1 100)]
+    (let [problems (sim/final-problems (sim/drain (reduce sim/act (sim/start :service nil 4) actions)))]
       (or (empty? problems) (do (println "problems:" (take 5 problems)) false)))))
 
 (defspec the-hub-keeps-its-promises-embedded 200
@@ -459,20 +466,20 @@
     (testing "a second prompt while one runs is refused"
       (let [[h fx] (say h 1 (req 31 "session/prompt" {:sessionId "s1" :prompt []}))]
         (is (= -32000 (get-in (first (writes fx 1)) ["error" "code"])))
-        (is (empty? (get-in h [:convs "clerk" :queue])))
+        (is (empty? (hub/queued h "clerk")))
         (testing "and cancel stops the running turn"
           (let [[_ fx] (say h 1 (note "session/cancel" {:sessionId "s1"}))]
             (is (= ["session/cancel"] (map #(get (parse %) "method") (sends fx "clerk"))))))))
     (testing "a thousand retries keep nothing"
       (let [h (reduce (fn [h i] (first (say h 1 (req (+ 100 i) "session/prompt" {:sessionId "s1" :prompt []})))) h (range 1000))]
-        (is (empty? (get-in h [:convs "clerk" :queue]))))))
+        (is (empty? (hub/queued h "clerk"))))))
   (testing "a queued prompt holds the session too"
     (let [[h fx] (say (live) 1 (req 30 "session/prompt" {:sessionId "s1" :prompt []}))
           [h] (run h {:event :submit-result :tag (:tag (first (submits fx))) :rejection :busy})
           [h fx] (say (opened h 2) 2 (req 1 "session/load" {:sessionId "s1"}))
           [h fx] (say h 2 (req 2 "session/prompt" {:sessionId "s1" :prompt []}))]
       (is (= -32000 (get-in (first (filter #(= 2 (get % "id")) (writes fx 2))) ["error" "code"])))
-      (is (= 1 (count (get-in h [:convs "clerk" :queue])))))))
+      (is (= 1 (count (hub/queued h "clerk")))))))
 
 (deftest cancel-from-any-attached-client-stops-the-running-turn
   ;; One person on several devices: ctrl-c on one stops a turn the other
@@ -526,15 +533,15 @@
     (let [[h fx] (agent h "clerk" (res (get sent "id") {:late true}))]
       (is (= [{"jsonrpc" "2.0" "id" 77 "result" {"late" true}}] (writes fx 1)) "the first is answered, once")
       (testing "and once answered, the id is free again"
-        (let [[_ fx] (say h 1 (req 77 "_relay/cards" {:sessionId "s1"}))]
-          (is (= ["_relay/cards"] (map #(get (parse %) "method") (sends fx "clerk")))))))))
+        (let [[_ fx] (say h 1 (req 77 "slow" {:sessionId "s1"}))]
+          (is (= ["slow"] (map #(get (parse %) "method") (sends fx "clerk")))))))))
 
 (deftest a-turn-that-ends-retires-its-permission-requests
   (let [h (opened (live) 2 :approvals true)
         [h] (say h 2 (req 1 "session/load" {:sessionId "s1"}))
         [h fx] (say h 1 (req 30 "session/prompt" {:sessionId "s1" :prompt []}))
         h (submit-ok h fx)
-        prompt-id (get-in h [:convs "clerk" :prompt :hub-id])
+        prompt-id (:up (second (hub/running h "clerk")))
         [h fx] (agent h "clerk" (permission 900))
         p2 (first (writes fx 2))]
     (testing "the agent cancelling its request: each client is told under its own id, and it is settled"
@@ -568,7 +575,7 @@
         [h] (say h 1 (req 1 "session/new" {:_meta {"relay/role" "clerk"}}))
         [h fx] (say h 1 (req 2 "session/new" {:_meta {"relay/role" "clerk"}}))]
     (is (= -32600 (get-in (first (writes fx 1)) ["error" "code"])) "one waiter per connection and role")
-    (is (= 1 (count (get-in h [:convs "clerk" :waiting])))))
+    (is (= 1 (count (filter #(= :waiting (:state %)) (vals (:requests h)))))))
   (testing "and a connection has only so many requests outstanding"
     (let [h (-> (live) (assoc :max-pending 3))
           h (reduce (fn [h i] (first (say h 1 (req (+ 100 i) "slow" {:sessionId "s1"})))) h (range 3))
@@ -581,24 +588,131 @@
   ;; never ended.
   (let [[h fx] (say (live) 1 (req 30 "session/prompt" {:sessionId "s1" :prompt []}))
         h (submit-ok h fx)
-        id (get-in h [:convs "clerk" :prompt :hub-id])
+        id (:up (second (hub/running h "clerk")))
         [h fx] (agent h "clerk" (line {:jsonrpc "2.0" :id id :method "" :result {:stopReason "end_turn"}}))]
     (is (= :conversation/turn-end (get-in (first (submits fx)) [:command :type])))
     (is (= 30 (get (first (writes fx 1)) "id")))
-    (is (nil? (get-in h [:convs "clerk" :prompt])))))
+    (is (nil? (hub/running h "clerk")))))
 
-(deftest a-card-changed-by-one-client-reaches-the-others
-  ;; The proxy remembers what its conversation's subscribers were sent, so
-  ;; it does not send the card a client changed back to it; the other
-  ;; subscribers through that conversation must still get it.
+(defn- board-states
+  "A core state with one card on the board, and the state after it is
+  ticked."
+  []
+  (let [cmd (fn [state actor type args]
+              (first (core/run-command state {:type type :actor actor :labels [] :args args} {:now t0 :config ct/cfg})))
+        s0 (-> core/empty-state
+               (cmd "operator" :role/add {:id "clerk" :instructions "x"})
+               (cmd "operator" :card/add {:kind "checklist" :title "Taxes" :items ["Find the T4" "File"]}))
+        id (first (keys (:cards s0)))]
+    [s0 (cmd s0 "operator" :card/op {:card id :op "tick" :item 1}) id]))
+
+(defn- board-items [msg] (mapv #(get % "done") (get-in msg ["params" "cards" 0 "items"])))
+
+(deftest the-board-is-the-hub-s-and-each-subscriber-gets-what-it-lacks
+  (let [[s0 s1 card] (board-states)
+        subscribed (fn []
+                     (let [h (-> (live) (assoc :state s0) (opened 2))
+                           [h] (say h 1 (req 5 "_relay/cards" {}))
+                           [h] (say h 2 (req 6 "_relay/cards" {}))]
+                       h))]
+    (testing "a card one client changes reaches the other; the changer gets it in its answer"
+      (let [[h fx] (say (subscribed) 1 (req 7 "_relay/cards/op" {:card card :op "tick" :item 1}))
+            [{:keys [tag]}] (submits fx)
+            [_ fx] (run h {:event :submit-result :tag tag :ok true :changed true :state s1})]
+        (is (= [7] (keep #(get % "id") (writes fx 1))))
+        (is (empty? (filter #(= "_relay/cards/changed" (get % "method")) (writes fx 1))))
+        (is (= [[true false]] (map board-items (writes fx 2))))))
+    (testing "the changer leaving before the answer comes loses the others nothing"
+      (let [[h fx] (say (subscribed) 1 (req 7 "_relay/cards/op" {:card card :op "tick" :item 1}))
+            [{:keys [tag]}] (submits fx)
+            [h] (run h {:event :connection-closed :conn 1})
+            [_ fx] (run h {:event :submit-result :tag tag :ok true :changed true :state s1})]
+        (is (= [[true false]] (map board-items (writes fx 2))))))
+    (testing "a second client subscribing takes nothing from the first"
+      (let [h (-> (live) (assoc :state s0))
+            [h] (say h 1 (req 5 "_relay/cards" {}))
+            ;; Another process ticks the card; the second client subscribes
+            ;; before the hub has read the change.
+            h (opened h 2)
+            [h] (say h 2 (req 6 "_relay/cards" {}))
+            [_ fx] (run h {:event :log-changed :roster roster :state s1})]
+        (is (= [[true false]] (map board-items (writes fx 1))))
+        (is (= [[true false]] (map board-items (writes fx 2))))))
+    (testing "and what was sent is not sent again"
+      (let [h (-> (subscribed) (assoc :state s0))
+            [h] (run h {:event :log-changed :roster roster :state s1})
+            [_ fx] (run h {:event :log-changed :roster roster :state s1})]
+        (is (empty? fx))))))
+
+;; --- Codex round 3
+
+(deftest an-id-stays-reserved-while-its-request-is-outstanding
+  ;; A malformed line carrying the id freed it, so a later request could
+  ;; take the id and get the agent's late answer to the first.
+  (let [[h fx] (say (live) 1 (req 77 "slow" {:sessionId "s1"}))
+        [sent] (map parse (sends fx "clerk"))
+        [h fx] (say h 1 "{\"jsonrpc\":\"2.0\",\"id\":77,\"method\":\"x\",")]
+    (is (empty? (writes fx 1)) "no answer under an id whose request is outstanding")
+    (let [[h fx] (say h 1 (req 77 "_relay/cards" {}))]
+      (is (= -32600 (get-in (first (writes fx 1)) ["error" "code"])) "still reserved")
+      (let [[_ fx] (agent h "clerk" (res (get sent "id") {:late true}))]
+        (is (= [{"jsonrpc" "2.0" "id" 77 "result" {"late" true}}] (writes fx 1)))))))
+
+(deftest orphans-are-bounded-per-conversation-across-reconnects
+  ;; Requests a client left behind stay until the agent answers, and count
+  ;; against the conversation, so reconnecting cannot get past the bound.
+  (let [h (assoc (live) :max-per-conversation 5)
+        h (reduce (fn [h cid]
+                    (let [h (opened h cid)
+                          [h] (say h cid (req 1 "session/load" {:sessionId "s1"}))
+                          [h] (say h cid (req 2 "slow" {:sessionId "s1"}))]
+                      (first (run h {:event :connection-closed :conn cid}))))
+                  h (range 10 20))]
+    (is (<= (count (:requests h)) 5))
+    (let [h (opened h 30)
+          [h] (say h 30 (req 1 "session/load" {:sessionId "s1"}))
+          [_ fx] (say h 30 (req 2 "slow" {:sessionId "s1"}))]
+      (is (= -32000 (get-in (first (writes fx 30)) ["error" "code"])) "past the bound, refused")
+      (is (empty? (sends fx "clerk"))))))
+
+(deftest cancel-drops-every-waiting-prompt-in-the-session
   (let [h (opened (live) 2)
         [h] (say h 2 (req 1 "session/load" {:sessionId "s1"}))
-        [h] (say h 1 (req 5 "_relay/cards" {:sessionId "s1"}))
-        [h] (say h 2 (req 6 "_relay/cards" {:sessionId "s1"}))
-        [h fx] (say h 1 (req 7 "_relay/cards/op" {:sessionId "s1" :card 3 :op "tick" :item 1}))
-        [sent] (map parse (sends fx "clerk"))
-        card {:id 3 :rev 12 :items []}
-        [_ fx] (agent h "clerk" (res (get sent "id") {:card card :changed true}))]
-    (is (= 7 (get (first (writes fx 1)) "id")))
-    (is (= [{"jsonrpc" "2.0" "method" "_relay/cards/changed" "params" {"rev" 12 "cards" [{"id" 3 "rev" 12 "items" []}]}}]
-           (writes fx 2)))))
+        [h fx] (say h 1 (req 30 "session/prompt" {:sessionId "s1" :prompt []}))
+        [h] (run h {:event :submit-result :tag (:tag (first (submits fx))) :rejection :busy})
+        [h fx] (say h 2 (note "session/cancel" {:sessionId "s1"}))]
+    (is (= [{"jsonrpc" "2.0" "id" 30 "result" {"stopReason" "cancelled"}}] (writes fx 1))
+        "the other device's waiting prompt is cancelled, answered to its own client")
+    (is (empty? (hub/queued h "clerk")))
+    (let [[_ fx] (run h {:event :log-changed :roster roster})]
+      (is (empty? (sends fx "clerk")) "and it never runs"))))
+
+(deftest a-turn-end-relay-could-not-record-is-tried-until-it-is
+  (let [[h fx] (say (live) 1 (req 30 "session/prompt" {:sessionId "s1" :prompt []}))
+        h (submit-ok h fx)
+        up (:up (second (hub/running h "clerk")))
+        [h fx] (agent h "clerk" (res up {:stopReason "end_turn"}))
+        [{:keys [tag]}] (submits fx)
+        [h fx] (run h {:event :submit-result :tag tag :rejection :error :message "No space left on device"})]
+    (is (= 1 (count (filter #(= :warn (:effect %)) fx))) "the operator is told on stderr")
+    (is (= [:conversation/turn-unrecorded] (map #(get-in % [:command :type]) (submits fx))) "and through notify")
+    (testing "the role stays busy: no other turn starts"
+      (let [[h fx] (say h 1 (req 31 "session/prompt" {:sessionId "s1" :prompt []}))]
+        (is (empty? (filter #(= :conversation/turn-start (get-in % [:command :type])) (submits fx))))
+        (testing "it is tried again when time passes, told only once more never"
+          (let [[h fx] (run h {:event :tick})
+                [{:keys [tag]}] (submits fx)
+                _ (is (= :conversation/turn-end (get-in (first (submits fx)) [:command :type])))
+                [h fx] (run h {:event :submit-result :tag tag :rejection :error :message "still full"})
+                _ (is (empty? (filter #(= :warn (:effect %)) fx)) "not told twice")
+                [h fx] (run h {:event :log-changed :roster roster})
+                [{:keys [tag]}] (submits fx)
+                [_ fx] (run h {:event :submit-result :tag tag :ok true})]
+            (is (= [:conversation/turn-start] (map #(get-in % [:command :type]) (submits fx)))
+                "once recorded, the waiting prompt gets its turn")))))))
+
+(deftest a-turn-relay-could-not-record-does-not-run
+  (let [[h fx] (say (live) 1 (req 30 "session/prompt" {:sessionId "s1" :prompt []}))
+        [_ fx] (run h {:event :submit-result :tag (:tag (first (submits fx))) :rejection :error :message "No space left on device"})]
+    (is (empty? (sends fx "clerk")))
+    (is (= "No space left on device" (get-in (first (writes fx 1)) ["error" "message"])))))

@@ -2381,6 +2381,18 @@
               :role role :wake wake :labels (id-labels state role))
       tx)))
 
+(defmethod decide* :conversation/turn-unrecorded [{:keys [state] :as tx} {{:keys [wake]} :args}]
+  ;; relay serve could not record the end of a conversation's turn, so the
+  ;; role stays busy until it can; it keeps trying and asks for this once.
+  (dispatcher-only! tx)
+  (let [{:keys [role chat]} (get-in state [:wakes wake])]
+    (if chat
+      (notify tx "turn-unrecorded" (str "relay could not record the end of " role "'s turn")
+              (str "relay keeps trying. Until it can, " role " stays busy: no wake of it and no other turn"
+                   " starts. A full disk or a log relay cannot write to would do this.")
+              :role role :wake wake :labels (id-labels state role))
+      tx)))
+
 (defmethod decide* :conversation/line-dropped [{:keys [state] :as tx} {{:keys [wake size permission refused]} :args}]
   (dispatcher-only! tx)
   (let [role (get-in state [:wakes wake :role])]

@@ -11,6 +11,8 @@
             [relay.acp-client :as client]
             [relay.core :as core]
             [relay.dispatch :as dispatch]
+            [relay.hub :as hub]
+            [relay.hub-test :as ht]
             [relay.inbound :as inbound]
             [relay.log :as log]
             [relay.serve :as serve]
@@ -417,3 +419,31 @@
     (is (some? (conn)))
     (is (some? (conn)))
     (is (nil? (conn)) "a third is refused")))
+
+;; --- Codex round 3
+
+(deftest a-turn-end-the-log-refused-is-recorded-once-it-can-be
+  ;; The shell carries out the hub's submits: one that throws (a full disk)
+  ;; comes back as a failure, the hub keeps the role busy and says so, and
+  ;; a later tick records it.
+  (let [[h fx] (ht/say (ht/live) 1 (ht/req 30 "session/prompt" {:sessionId "s1" :prompt []}))
+        h (ht/submit-ok h fx)
+        up (:up (second (hub/running h "clerk")))
+        eng (#'serve/engine nil :service false)
+        replies (atom [])
+        submitted (atom [])
+        err (java.io.StringWriter.)]
+    (reset! (:hub eng) h)
+    (reset! (:conns eng) {1 {:send! #(swap! replies conj %)}})
+    (binding [*err* err]
+      (with-redefs [inbound/submit! (fn [_ cmd] (swap! submitted conj (:type cmd))
+                                      (throw (java.io.IOException. "No space left on device")))]
+        (#'serve/process! eng {:event :agent-line :role "clerk" :line (ht/res up {:stopReason "end_turn"})})))
+    (is (str/includes? (str err) "could not record the end of clerk's turn") (str err))
+    (is (= [:conversation/turn-end :conversation/turn-unrecorded] @submitted))
+    (is (get-in @(:hub eng) [:convs "clerk" :turn-end-due]) "still busy")
+    (reset! submitted [])
+    (with-redefs [inbound/submit! (fn [_ cmd] (swap! submitted conj (:type cmd)) [])]
+      (#'serve/process! eng {:event :tick}))
+    (is (= [:conversation/turn-end] @submitted) "tried again")
+    (is (nil? (get-in @(:hub eng) [:convs "clerk" :turn-end-due])) "and recorded")))

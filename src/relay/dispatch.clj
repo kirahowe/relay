@@ -660,9 +660,6 @@
   function it returns is called with the writer to the client, to write
   the answer itself; :none drops the line; nil passes it on. (on-display session) is called for an
   agent line that carries a display, before the line is passed on.
-  (watch send! done) runs on a thread of its own from the start, with
-  `send!` writing one line to the client, until the promise `done` is
-  delivered as the proxy ends.
 
   Only relay speaks relay's methods to the client: an agent line whose
   method starts with _relay/ is dropped, so an agent cannot fake a card
@@ -676,7 +673,7 @@
   on-permission gets the request as read from that line, so its :preview
   is the text the client was shown, and the record as :preview-record."
   [{:keys [argv dir env]} {:keys [in out trace stop grace-ms approvals on-permission on-oversized line-limit
-                                  extension on-display preview watch]
+                                  extension on-display preview]
                            :or {grace-ms stop-grace-ms on-permission (fn [& _]) on-oversized (fn [_])
                                 line-limit line-limit extension (fn [_]) on-display (fn [_]) preview (fn [_] nil)}}]
   (let [proc (p/process (vec argv) (cond-> {:err :inherit} dir (assoc :dir (str dir)) env (assoc :env env)))
@@ -816,8 +813,6 @@
                              (println "relay dropped a message from the client too long to read (over 8 MB)."))
                            (when-let [id (acp/line-id prefix)]
                              (to-client! (workspace/error-line id -32600 "relay does not pass on a message over 8 MB."))))
-        watch-done (promise)
-        watcher (when watch (spawn (fn [] (watch to-client! watch-done))))
         to-agent (spawn (fn []
                           ;; Line by line, so a refusal relay writes to the agent
                           ;; never lands inside one of the client's messages.
@@ -865,8 +860,6 @@
     ;; The agent's stdout ends with it, unless something it started holds
     ;; the pipe open; that cannot keep relay waiting for long.
     (deref to-client 5000 nil)
-    (deliver watch-done true)
-    (when watcher (deref watcher 5000 nil))
     (deliver stop ::done)
     (deref stopper 1000 nil)
     {:exit exit :observed @observed}))
@@ -957,40 +950,9 @@
                     (workspace/result-line id {"trusted" true
                                                "labels" (vec (:labels (core/trusted-version (inbound/current-state sys)
                                                                                             "doc" (get params "path"))))}))))
-            ;; The board's answers are written holding the conversation,
-            ;; as the watcher's notifications are, so the client never
-            ;; gets an older card after a newer one.
-            "_relay/cards"
-            (fn [send!]
-              (locking conv
-                (let [state (inbound/current-state sys)]
-                  (swap! conv workspace/subscribed state)
-                  (send! (workspace/result-line id (workspace/cards-answer state params))))))
-            "_relay/cards/op"
-            (let [{:keys [command error]} (workspace/card-op-command params)]
-              (if error
-                (workspace/error-line id -32602 error)
-                (fn [send!]
-                  (locking conv
-                    (send! (try
-                             (let [events (inbound/submit! sys command)
-                                   state (inbound/current-state sys)
-                                   card-id (get params "card")]
-                               ;; The client gets this card in the answer, so
-                               ;; the watcher need not send it again.
-                               (when (:cards @conv)
-                                 (swap! conv assoc-in [:cards card-id] (:rev (core/card state card-id))))
-                               (workspace/result-line id (workspace/card-op-answer state card-id (seq events))))
-                             (catch Exception e
-                               (workspace/error-line id -32000 (or (ex-message e) (str (class e)))))))))))
             (workspace/error-line id -32601 (str "relay has no method " method ".")))
           (catch Exception e
             (workspace/error-line id -32000 (or (ex-message e) (str (class e))))))))))
-
-(def board-poll-ms
-  "How often relay acp looks at the log for card changes to send a
-  subscribed client."
-  1000)
 
 (defn log-stamp
   "The last segment of the log, its size and when it was modified: what
@@ -999,43 +961,14 @@
   (when-let [f (last (log/segments data-dir))]
     [(str f) (fs/size f) (str (fs/last-modified-time f))]))
 
-(defn- board-watcher
-  "proxy!'s :watch hook for a conversation: about once a second, while
-  the client is subscribed to the board, looks at the log, and when it
-  has changed (another process may have written), sends
-  _relay/cards/changed with every card whose rev the client has not been
-  sent. Never throws: a look that fails is tried again at the next.
-
-  The stamp is taken holding the conversation, before the state is read,
-  and kept only while subscribed. Taken outside, a write landing between
-  _relay/cards reading the state and subscribing could be stamped as
-  seen, and its card would wait for some later write."
-  [sys conv]
-  (fn [send! done]
-    (loop [stamp nil]
-      (when (= ::waiting (deref done board-poll-ms ::waiting))
-        (recur
-         (try
-           (when (:cards @conv)
-             (locking conv
-               (let [now (log-stamp (:data-dir sys))]
-                 (when (not= now stamp)
-                   (let [state (inbound/current-state sys)]
-                     (when-let [params (workspace/cards-changed state @conv)]
-                       (send! (workspace/notification-line "_relay/cards/changed" params)))
-                     (swap! conv workspace/subscribed state)))
-                 now)))
-           (catch Exception e
-             (binding [*out* *err*] (println "relay could not look at the board:" (ex-message e)))
-             stamp)))))))
-
 (defn run-conversation!
   "Runs a conversation with a role: opens its chat wake, runs the role's
   ACP agent behind relay's proxy (proxy!) with `in` and `out` as the
   proxy's client side, and ends the wake when the agent stops. Every
   screen stays the proxy's: permission requests (passed on with their
   previews when :approvals, else refused), displays, the pane's methods,
-  the board watcher, oversized lines and answers the agent does not owe.
+  oversized lines and answers the agent does not owe. The board is
+  relay.hub's.
 
   (on-started wake-id) is called once the wake has started and before
   the agent runs. Throws, having started nothing, when the conversation
@@ -1058,7 +991,6 @@
                                :preview (permission-previewer sys)
                                :on-oversized (oversize-recorder sys (:wake-id request))
                                :extension (extension-handler sys conv approvals)
-                               :watch (board-watcher sys conv)
                                :on-display (fn [session] (keep-session-displays! sys request conv session))})]
           ;; Whatever a display line missed is kept now, while the
           ;; conversation still holds its wake.

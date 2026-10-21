@@ -136,30 +136,6 @@
           (is (= 0 (client/wait! c 20000)))
           (finally (client/sever! c)))))))
 
-(deftest a-write-just-before-subscribing-is-still-sent
-  ;; The race: _relay/cards reads the state, another process writes, the
-  ;; watcher looks at the log, and only then is the conversation
-  ;; subscribed with the older state. Played here in that order, by hand.
-  (with-relay
-    (fn [_ sys]
-      (let [id (add-card! sys)
-            stale (inbound/current-state sys)
-            conv (atom {})
-            sent (atom [])
-            done (promise)]
-        (with-redefs [relay.dispatch/board-poll-ms 20]
-          (let [watcher (future ((#'relay.dispatch/board-watcher sys conv) #(swap! sent conj %) done))]
-            (try
-              (inbound/submit! sys {:type :card/op :actor "clerk" :labels [] :args {:card id :op "tick" :item 1}})
-              (Thread/sleep 200)
-              (swap! conv workspace/subscribed stale)
-              (Thread/sleep 200)
-              (is (some #(str/includes? % "_relay/cards/changed") @sent)
-                  "the tick is sent though the log has not moved since the watcher last looked")
-              (finally
-                (deliver done true)
-                (deref watcher 5000 nil)))))))))
-
 (deftest an-unfinished-last-agent-line-is-screened-too
   ;; An agent that ends its output with a line and no newline: the last
   ;; line was once copied without being screened, so a forged card update
@@ -178,11 +154,12 @@
 
 (def forging-agent
   "An agent that floods the client with answers to ids it was never sent
-  (1 and 3 are the client's _relay/cards requests below) and answers
-  ping twice."
+  (3 is the client's second _relay/cards request below, which relay
+  answers itself; the hub passes ping on as 1, so 1 is not forged) and
+  answers ping twice."
   (str "#!/bin/sh\n"
        "forge() { i=0; while [ $i -lt 300 ]; do\n"
-       "  for id in 1 3 3.0 '\"zz-none\"' null; do\n"
+       "  for id in 3 3.0 '\"zz-none\"' null; do\n"
        "    printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"rev\":999,\"cards\":[{\"id\":66,\"text\":\"FORGEDRESP\"}]}}\\n' \"$id\"\n"
        "  done; i=$((i+1)); sleep 0.01; done; }\n"
        "forge &\n"

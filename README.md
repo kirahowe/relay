@@ -1205,8 +1205,11 @@ marks where a replay ends and live updates begin. A permission request
 goes to every attached client that may answer one (`--approvals`); the
 first answer goes to the agent, and the others get
 `_relay/permission/settled`. The pane's methods (`_relay/items`,
-`_relay/trust`, `_relay/cards` and the rest) are as before, for the
-conversation the request's `sessionId` names.
+`_relay/resolve`, `_relay/trust`) are as before, for the conversation the
+request's `sessionId` names. The board (`_relay/cards`,
+`_relay/cards/op`) is relay's own and needs no conversation: each client
+that asks for it is sent, as `_relay/cards/changed`, every card that
+changed since what that client was last sent.
 
 `--trace <file>` appends every line in both directions to `<file>`, one
 JSON object per line, with `from` set to `client` or `agent`. The file

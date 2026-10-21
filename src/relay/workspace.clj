@@ -11,7 +11,9 @@
                      _relay/cards/changed notifications
     _relay/cards/op  change a card, as the operator
 
-  relay acp answers them itself; agentloop never sees them. A conversation
+  relay answers them itself, and agentloop never sees them: the board's in
+  relay.hub, which knows what each client was sent, the rest in each
+  conversation's proxy (relay.dispatch). A conversation
   keeps what it learns from the traffic in a value, `conversation`: the
   displays it kept and the permission requests it passed on. Everything
   here is pure; relay.dispatch is the shell.
@@ -31,10 +33,9 @@
 ;; --- what a conversation has learned
 
 (def conversation
-  "Nothing learned yet: the displays kept, in the order they came, the
-  permission requests passed on, by [session call], and the rev of every
-  card the client was last sent, nil until it subscribes to the board."
-  {:displays [] :proposals {} :cards nil})
+  "Nothing learned yet: the displays kept, in the order they came, and
+  the permission requests passed on, by [session call]."
+  {:displays [] :proposals {}})
 
 (defn shown
   "The conversation once a session's displays are kept: each {:session
@@ -73,7 +74,11 @@
 
 ;; --- the requests
 
-(def methods #{"_relay/items" "_relay/resolve" "_relay/trust" "_relay/cards" "_relay/cards/op"})
+(def methods
+  "The pane's methods a conversation's proxy answers. The board's
+  (_relay/cards, _relay/cards/op) are relay.hub's, which knows what each
+  client was sent."
+  #{"_relay/items" "_relay/resolve" "_relay/trust"})
 
 (defn extension-request
   "A client's line as one of relay's extension methods: {:id :method
@@ -282,8 +287,8 @@
   (dec (:next-seq state)))
 
 (defn subscribed
-  "The conversation once the client has been sent every card as it is in
-  `state`, so it is told of each change from here on."
+  "A subscriber's record ({:cards revs}) once it has been sent every card
+  as it is in `state`, so it is told of each change from here on."
   [conv state]
   (assoc conv :cards (cards/revs (:cards state))))
 
@@ -295,8 +300,8 @@
    "cards" (mapv card-wire (core/board state (true? archived)))})
 
 (defn cards-changed
-  "The _relay/cards/changed notification's params for a subscribed
-  conversation: every card whose rev is not the one the client was last
+  "The _relay/cards/changed notification's params for a subscriber's
+  record: every card whose rev is not the one the client was last
   sent, archived ones included, so the client can drop them. Nil when
   nothing changed or the client has not subscribed."
   [state conv]
