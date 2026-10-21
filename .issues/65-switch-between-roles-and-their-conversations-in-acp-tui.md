@@ -194,3 +194,89 @@ in `internal/core/hub_test.go` (core), `internal/render/hub_test.go`
    Tests `TestHubInputWidthIsTheBoxDrawn` and e2e
    `TestHubLongDraftIsAllVisibleWithThePaneBeside` (160 columns; fails with
    the old width).
+
+## Codex round 2
+
+All four are in the acp-tui commit "Bound permission requests, scope trusted
+pastes, keep first pastes". Tests in `internal/core/hub_test.go`,
+`internal/render/hub_test.go`, `internal/ui/hub_e2e_test.go`.
+
+1. **Trusted paste armed past a dropped paste.** Fixed at the source in
+   `ReduceHub`: every event except a paste (and events that only report what
+   happened elsewhere: ticks, agent events, roster, replay markers) cancels
+   an armed trust everywhere; a paste that goes nowhere (help, list, end
+   question, no role) clears it; ctrl+y under an overlay does not arm; and
+   `settle` clears it on any change of what is on screen, including a
+   roster-driven one. Tests `TestHubTrustedPasteIsForTheNextPasteOnly`
+   (agent events do not spend it; help, list, end question, a key, a move,
+   last role, typing, a roster-caused change all cancel it). Sibling
+   checked: single-session mode already spends the trust on any paste that
+   goes nowhere; its ctrl+y is documented to persist across keys, so I left
+   it.
+2. **Unbounded request title.** `permissionBox` caps the title at 3 rows
+   and each option at 2 (ellipsis on the last row); the hint shortens when
+   the full wording does not fit. `v` now puts the whole heading (name and
+   title) in the transcript (`Permission.Heading`), defanged when the
+   session is contaminated. If the role's name, the box and the status line
+   cannot all fit, both `HubView` and the inline `View` return a frame that
+   says "Window too small to show this request" (with the role's name in hub
+   mode), and the shell tells the core with `core.Viewport`; while
+   `TooSmall` is set, `PermissionQuick` and `PermissionConfirm` do nothing
+   (cancel still works). Single-session mode had the same unbounded title
+   and now has the same bound and the same inert keys. Tests
+   `TestHubLongRequestTitleKeepsTheRoleAndTheOptionsOnScreen` (40x16 and
+   others fit; 40x8, 40x5, 20x6, 40x2 say too small),
+   `TestInlineLongRequestTitleIsBounded`, `TestHubTooSmallWindowMakesApprovalInert`,
+   and e2e `TestHubTooSmallWindowCannotApprove`.
+3. **Scroll keys while a request waits.** pgup/pgdown are handled before the
+   request's keys; only the approval keys are the request's. Test e2e
+   `TestHubPageKeysScrollWhileARequestWaits` (ten page ups move the view and
+   answer nothing).
+4. **Paste into a role with no conversation.** The paste is reduced into a
+   `core.Blank` for that role (placeholder inserted into the draft,
+   untrusted-attachment rules), and the first message that starts the
+   conversation adopts it, so it goes as an attachment. A paste never starts
+   a conversation. Test `TestHubPasteToARoleWithNoConversationIsKept`.
+
+## Codex round 3
+
+All five are in the acp-tui commit "Trust a paste after the fact; fix the
+layout rules Codex found".
+
+1. **Trusted paste, redesigned.** Armed trust is gone (`State.TrustNext`,
+   `ToggleTrustedPaste`, the hub's `cancelsTrust`/`clearTrust` and every
+   disarm path). A paste is untrusted on arrival. `core.TrustPaste{Draft}`
+   (ctrl+y; the shell passes the input's text) marks the latest paste whose
+   untrusted placeholder is still in the draft as `Trusted` and emits
+   `ReplaceInput`, so the placeholder reads `[pasted N lines · trusted #k]`.
+   With none, `State.Message` shows "no untrusted paste in the input to
+   trust" on the status line for six seconds (in a role with no conversation
+   it goes to the hub notice). At send, what the placeholder says decides:
+   `untrusted` goes as an attachment even if the paste was marked, `trusted`
+   goes as plain text with a transcript note. Same code in hub and
+   single-session mode. README and the `?` help rows updated. Tests:
+   `TestTrustPasteMarksTheLatestUntrustedPasteInTheInput`, the rewritten
+   paste property test, `TestDroppedPasteLeavesNothing`,
+   `TestHubPastesAreAlwaysUntrustedOnArrival`,
+   `TestHubTrustPasteWithNothingToTrustSaysSo` (both modes), and e2e
+   `TestTrustedPaste`, `TestPasteAfterCtrlYIsUntrusted`,
+   `TestHubCtrlYTrustsTheLatestPasteInTheInput`.
+2. **One layout rule.** `core.RequestFits(rows, fixed, spare)` with
+   `core.MinTranscriptRows = 3`; `HubView` decides `TooSmall` by it (name,
+   box and status plus 3 rows of conversation), the inline view by the same
+   function with no spare rows (its full text goes to scrollback), and the
+   core's inert approval keys follow what render says. Test
+   `TestHubApprovalIsLiveOnlyWhereTheWholeRequestCanBeRead`: over a sweep of
+   sizes, wherever approval is live, scrolling after `v` brings every line
+   of the request on screen; 34x12 and 40x16 are now "too small".
+3. **Blank pastes adopted by any path.** `adoptBlanks` runs after every hub
+   event and gives each role that has a conversation its waiting pastes
+   (message, roster attach, `--open`, load). Test
+   `TestHubBlankPastesAreAdoptedWhenTheRoleGainsAConversationByAnyPath`
+   (roster path).
+4. **Page keys.** pgup/pgdown go to the pane when it has the focus, to the
+   conversation otherwise (a pending request included). Test
+   `TestPageKeysGoToThePaneWhenItHasTheFocus`.
+5. **Role list scrolls.** Both the sidebar and the narrow list keep the
+   selected role (cursor, or the one in focus) in view. Test
+   `TestHubListScrollsToTheSelectedRole` (four roles at 39x7).
