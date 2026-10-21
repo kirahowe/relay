@@ -141,14 +141,15 @@
 
 (defn- remember
   "Adds a session/update line to a conversation's replay buffer, dropping
-  the oldest past the cap."
+  the oldest past the cap. The buffer is a queue, so what it drops is
+  gone: a subvec would keep its whole backing vector."
   [h role line]
   (let [cap (:replay-cap h)]
     (update-in h [:convs role :replay]
-               (fn [{:keys [entries size dropped] :or {entries [] size 0 dropped false}}]
+               (fn [{:keys [entries size dropped] :or {entries clojure.lang.PersistentQueue/EMPTY size 0 dropped false}}]
                  (loop [entries (conj entries line) size (+ size (count line)) dropped dropped]
                    (if (and (> size cap) (seq entries))
-                     (recur (subvec entries 1) (- size (count (first entries))) true)
+                     (recur (pop entries) (- size (count (peek entries))) true)
                      {:entries entries :size size :dropped dropped}))))))
 
 (defn- notice-line [session]
@@ -288,13 +289,16 @@
             (conv-request role {"jsonrpc" "2.0" "method" "initialize"
                                 "params" (or cinit {"protocolVersion" 1 "clientCapabilities" {}})}
                           {:kind :init})))
+      ;; The connection asking is taken off the waiting list: its answer
+      ;; is owed under the request's id alone, so nothing else answers it.
       (= :done init)
       (-> h (assoc-in [:convs role :creating] true)
+          (update-in [:convs role :waiting] (comp vec rest))
           (conv-request role {"jsonrpc" "2.0" "method" "session/new"
                               "params" (let [p (:params first-waiter)
                                              m (let [m (get p "_meta")] (when (map? m) (not-empty (dissoc m "relay/role"))))]
                                          (if m (assoc p "_meta" m) (dissoc p "_meta")))}
-                        {:kind :new :conn (:conn first-waiter) :id (:id first-waiter)}))
+                        {:kind :new :conn (:conn first-waiter) :id (:id first-waiter) :params (:params first-waiter)}))
       :else h)))
 
 (defn- answer-waiters
@@ -463,24 +467,35 @@
       (update-in h [:conns cid :cards] (fnil disj #{}) role)
       (drop-from-perms h cid [role]))))
 
-(defn- prompt [h cid id msg]
-  (let [[role why] (attached-conv h cid msg)]
-    (if-not role
-      (refuse h cid id -32602 why)
-      (-> h (update-in [:convs role :queue] conj {:conn cid :id id :params (params-of msg)})
-          (pump role)))))
+(defn- prompt
+  "A prompt waits for its turn, one per session: as ACP has it, a session
+  takes one prompt at a time, so another while one runs or waits is
+  refused, and nothing piles up."
+  [h cid id msg]
+  (let [[role why] (attached-conv h cid msg)
+        {:keys [prompt queue asking]} (get-in h [:convs role])]
+    (cond
+      (not role) (refuse h cid id -32602 why)
+      (or prompt asking (seq queue))
+      (refuse h cid id -32000 "A prompt is already running or waiting in this conversation. Send this once it is done, or cancel it.")
+      :else (-> h (update-in [:convs role :queue] conj {:conn cid :id id :params (params-of msg)})
+                (pump role)))))
 
-(defn- cancel [h cid msg]
+(defn- cancel
+  "session/cancel drops the connection's queued prompt (answered
+  cancelled) and cancels a running turn, whichever attached connection
+  started it: it is one person on several devices, and ctrl-c on one must
+  stop what another started."
+  [h cid msg]
   (let [[role] (attached-conv h cid msg)]
     (if-not role
       h
       (let [mine (filter #(= cid (:conn %)) (get-in h [:convs role :queue]))]
-        (if (seq mine)
-          (as-> h h
-            (reduce (fn [h {:keys [id]}] (answer h cid id {"stopReason" "cancelled"})) h mine)
-            (update-in h [:convs role :queue] (fn [q] (vec (remove #(= cid (:conn %)) q)))))
+        (as-> h h
+          (reduce (fn [h {:keys [id]}] (answer h cid id {"stopReason" "cancelled"})) h mine)
+          (update-in h [:convs role :queue] (fn [q] (vec (remove #(= cid (:conn %)) q))))
           (if (get-in h [:convs role :prompt])
-            (send-conv h role (strict/generate msg))
+            (send-conv h role (workspace/notification-line "session/cancel" {"sessionId" (get-in h [:convs role :session])}))
             h))))))
 
 (defn- seen [h cid id msg]
@@ -677,17 +692,14 @@
       :new (let [session (get-in msg ["result" "sessionId"])
                  h (assoc-in h [:convs role :creating] false)]
              (if (and ok? (string? session))
-               (let [params (:params (first (get-in h [:convs role :waiting])))
-                     h (-> h (update-in [:convs role] assoc :session session
-                                        :cwd (let [c (get params "cwd")] (when (string? c) c)))
-                           (update-in [:convs role :waiting] (comp vec rest)))]
+               (let [h (update-in h [:convs role] assoc :session session
+                                  :cwd (let [c (get (:params origin) "cwd")] (when (string? c) c)))]
                  (as-> h h
                    (if (live? h) (-> h (write conn (with-id msg id)) (replay conn role) (attach conn role)) h)
                    (answer-waiters h role)
                    (pump h role)))
                (as-> h h
                  (if (live? h) (write h conn (with-id msg id)) h)
-                 (update-in h [:convs role :waiting] (comp vec rest))
                  (create-session h role))))
       :prompt (as-> h h
                 ;; Recorded before the client reads the answer, so its next

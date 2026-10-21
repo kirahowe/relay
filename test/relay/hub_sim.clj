@@ -87,8 +87,14 @@
             w (cond-> (update-in w [:agents role :ids] (fnil conj #{}) id)
                 (contains? (:ids a) id) (problem [:hub-id-reused role id]))]
         (case (get msg "method")
-          "initialize" (agent-says w role {:jsonrpc "2.0" :id id :result {:protocolVersion 1}})
-          "session/new" (agent-says w role {:jsonrpc "2.0" :id id :result {:sessionId (:session a)}})
+          ;; A slow agent holds these back until released, so clients
+          ;; come and go, and agents die, while a session is created.
+          "initialize" (if (contains? (:slow w) role)
+                         (update-in w [:agents role :deferred] (fnil conj []) {:jsonrpc "2.0" :id id :result {:protocolVersion 1}})
+                         (agent-says w role {:jsonrpc "2.0" :id id :result {:protocolVersion 1}}))
+          "session/new" (if (contains? (:slow w) role)
+                          (update-in w [:agents role :deferred] (fnil conj []) {:jsonrpc "2.0" :id id :result {:sessionId (:session a)}})
+                          (agent-says w role {:jsonrpc "2.0" :id id :result {:sessionId (:session a)}}))
           "session/prompt"
           (if (pos? (get-in w [:turns-ok role] 0))
             (-> w (update-in [:turns-ok role] dec) (update-in [:agents role :prompts] (fnil conj []) id))
@@ -339,6 +345,12 @@
                            (agent-says role {:jsonrpc "2.0" :id id :result {:stopReason "end_turn"}})
                            (run-events []))
                        w))
+            :slow (update w :slow (fnil (if b conj disj) #{}) (nth-or roles a))
+            :release (let [role (nth-or roles a)]
+                       (if-let [d (seq (:deferred (agent-of w role)))]
+                         (-> (reduce #(agent-says %1 role %2) (assoc-in w [:agents role :deferred] []) d)
+                             (run-events []))
+                         w))
             :busy (-> w (update :busy (if b conj disj) (nth-or roles a))
                       (run-events [{:event :log-changed :roster roster}]))
             :die (let [role (nth-or roles a)]
@@ -364,7 +376,9 @@
     [3 (gen/tuple (gen/return :perm) gen/nat)]
     [5 (gen/tuple (gen/return :reply) gen/nat)]
     [3 (gen/tuple (gen/return :busy) gen/nat gen/boolean)]
-    [1 (gen/tuple (gen/return :die) gen/nat)]]))
+    [1 (gen/tuple (gen/return :die) gen/nat)]
+    [2 (gen/tuple (gen/return :slow) gen/nat gen/boolean)]
+    [3 (gen/tuple (gen/return :release) gen/nat)]]))
 
 (defn start [mode]
   (cond-> (world mode)
@@ -374,7 +388,12 @@
   "Lets everything finish: the roles are free, each agent answers its
   prompts, and then every conversation ends."
   [w]
-  (let [w (-> (assoc w :busy #{}) (run-events [{:event :log-changed :roster roster}]))
+  (let [w (-> (assoc w :busy #{} :slow #{}) (run-events [{:event :log-changed :roster roster}]))
+        w (loop [w w n 0]
+            (let [held (for [r roles :when (seq (:deferred (agent-of w r)))] r)]
+              (if (or (empty? held) (> n 20))
+                w
+                (recur (reduce #(act* %1 [:release (.indexOf ^java.util.List roles %2)]) w held) (inc n)))))
         w (loop [w w n 0]
             (let [waiting (for [r roles :when (seq (:prompts (agent-of w r)))] r)]
               (if (or (empty? waiting) (> n 200))

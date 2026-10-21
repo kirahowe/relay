@@ -334,7 +334,7 @@
         [h] (say h 2 (req 1 "session/load" {:sessionId "s1"}))
         [h fx] (say h 1 (req 30 "session/prompt" {:sessionId "s1" :prompt []}))
         h (submit-ok h fx)
-        [h fx] (say h 2 (req 31 "session/prompt" {:sessionId "s1" :prompt []}))
+        [h fx] (say h 2 (req 31 "_relay/items" {:sessionId "s1"}))
         [h] (agent h "clerk" (permission 900))
         [h fx] (say h 2 (req 40 "_relay/conversations/end" {:sessionId "s1"}))]
     (is (= [:send :stop] (map :effect fx)) "the turn is cancelled, then the conversation stopped")
@@ -342,7 +342,8 @@
       (is (= [{"jsonrpc" "2.0" "id" 30 "error" {"code" -32000 "message" "The conversation ended."}}]
              (filter #(= 30 (get % "id")) (writes fx 1))))
       (is (= #{31 40} (set (keep #(get % "id") (writes fx 2)))))
-      (is (= {"stopReason" "cancelled"} (get (first (filter #(= 31 (get % "id")) (writes fx 2))) "result")))
+      (is (= -32000 (get-in (first (filter #(= 31 (get % "id")) (writes fx 2))) ["error" "code"]))
+          "a request the agent never answered fails")
       (is (= 2 (count (filter #(= "_relay/permission/settled" (get % "method")) (concat (writes fx 1) (writes fx 2))))))
       (is (nil? (get-in h [:convs "clerk"])))
       (is (every? empty? (map :attached (vals (:conns h))))))))
@@ -406,3 +407,70 @@
   (prop/for-all [actions (gen/vector sim/gen-action 1 60)]
     (let [problems (run-world :embedded (cons [:open true 0] actions))]
       (or (empty? problems) (do (println "problems:" (take 5 problems)) false)))))
+
+;; --- Codex round 1 (relay#64)
+
+(deftest the-replay-keeps-only-what-it-shows
+  ;; A subvec kept its whole backing vector, so every dropped update
+  ;; stayed in memory. The buffer must hold only the entries it keeps.
+  (let [h (assoc (live) :replay-cap 200)
+        upd #(note "session/update" {:sessionId "s1" :update {:sessionUpdate "agent_message_chunk"
+                                                              :content {:type "text" :text (str "chunk " %)}}})
+        h (reduce (fn [h i] (first (agent h "clerk" (upd i)))) h (range 1000))
+        {:keys [entries size]} (get-in h [:convs "clerk" :replay])]
+    (is (instance? clojure.lang.PersistentQueue entries) "a queue releases what it drops; a subvec does not")
+    (is (<= size 200))
+    (is (= size (reduce + (map count entries))) "the count covers every retained entry")
+    (is (= 1 (count entries)))))
+
+(deftest a-session-new-waiting-for-creation-is-answered-once-whoever-leaves
+  (testing "the creator leaves while another waits: the other is answered and attached"
+    (let [h (-> (fresh) (opened 1) (opened 2))
+          [h] (say h 1 (req 1 "session/new" {:cwd "/a" :_meta {"relay/role" "clerk"}}))
+          [h] (run h {:event :conversation-started :role "clerk" :wake 7})
+          [h fx] (agent h "clerk" (res 1 {:protocolVersion 1}))
+          [new] (map parse (sends fx "clerk"))
+          _ (is (= "session/new" (get new "method")) "the agent is asked for the session")
+          [h] (say h 2 (req 7 "session/new" {:cwd "/b" :_meta {"relay/role" "clerk"}}))
+          [h] (run h {:event :connection-closed :conn 1})
+          [h fx] (agent h "clerk" (res (get new "id") {:sessionId "s1"}))]
+      (is (= [7] (keep #(get % "id") (writes fx 2))) "the waiter is answered, once")
+      (is (contains? (get-in h [:conns 2 :attached]) "clerk"))))
+  (testing "the agent exits while creating: the creator is answered once"
+    (let [h (opened (fresh) 1)
+          [h] (say h 1 (req 1 "session/new" {:_meta {"relay/role" "clerk"}}))
+          [h] (run h {:event :conversation-started :role "clerk" :wake 7})
+          [h] (agent h "clerk" (res 1 {:protocolVersion 1}))
+          [_ fx] (run h {:event :conversation-gone :role "clerk"})]
+      (is (= [1] (keep #(get % "id") (writes fx 1)))))))
+
+(deftest one-prompt-at-a-time-per-session
+  (let [[h fx] (say (live) 1 (req 30 "session/prompt" {:sessionId "s1" :prompt []}))
+        h (submit-ok h fx)]
+    (testing "a second prompt while one runs is refused"
+      (let [[h fx] (say h 1 (req 31 "session/prompt" {:sessionId "s1" :prompt []}))]
+        (is (= -32000 (get-in (first (writes fx 1)) ["error" "code"])))
+        (is (empty? (get-in h [:convs "clerk" :queue])))
+        (testing "and cancel stops the running turn"
+          (let [[_ fx] (say h 1 (note "session/cancel" {:sessionId "s1"}))]
+            (is (= ["session/cancel"] (map #(get (parse %) "method") (sends fx "clerk"))))))))
+    (testing "a thousand retries keep nothing"
+      (let [h (reduce (fn [h i] (first (say h 1 (req (+ 100 i) "session/prompt" {:sessionId "s1" :prompt []})))) h (range 1000))]
+        (is (empty? (get-in h [:convs "clerk" :queue]))))))
+  (testing "a queued prompt holds the session too"
+    (let [[h fx] (say (live) 1 (req 30 "session/prompt" {:sessionId "s1" :prompt []}))
+          [h] (run h {:event :submit-result :tag (:tag (first (submits fx))) :rejection :busy})
+          [h fx] (say (opened h 2) 2 (req 1 "session/load" {:sessionId "s1"}))
+          [h fx] (say h 2 (req 2 "session/prompt" {:sessionId "s1" :prompt []}))]
+      (is (= -32000 (get-in (first (filter #(= 2 (get % "id")) (writes fx 2))) ["error" "code"])))
+      (is (= 1 (count (get-in h [:convs "clerk" :queue])))))))
+
+(deftest cancel-from-any-attached-client-stops-the-running-turn
+  ;; One person on several devices: ctrl-c on one stops a turn the other
+  ;; started.
+  (let [h (opened (live) 2)
+        [h] (say h 2 (req 1 "session/load" {:sessionId "s1"}))
+        [h fx] (say h 1 (req 30 "session/prompt" {:sessionId "s1" :prompt []}))
+        h (submit-ok h fx)
+        [_ fx] (say h 2 (note "session/cancel" {:sessionId "s1"}))]
+    (is (= ["session/cancel"] (map #(get (parse %) "method") (sends fx "clerk"))))))
