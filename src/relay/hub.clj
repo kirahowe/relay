@@ -40,7 +40,12 @@
   change sends each subscriber what it lacks.
 
   Events, maps with :event:
-    :connection-opened  {:conn :origin (:socket | :stdio) :approvals :role}
+    :connection-opened  {:conn :origin (:socket | :stdio | :websocket)
+                         :approvals :role :default-role}
+                                            :role is the connection's own
+                                            (relay acp <role>); :default-role
+                                            only names the role a session/new
+                                            without one goes to
     :connection-line    {:conn :line}       a line the client sent
     :connection-closed  {:conn}
     :conversation-started {:role :wake}     the role's chat wake runs
@@ -640,7 +645,7 @@
   (let [cid (:conn (record h rid))
         params (params-of msg)
         meta-role (let [m (get params "_meta")] (when (map? m) (get m "relay/role")))
-        role (or meta-role (get-in h [:conns cid :role]))
+        role (or meta-role (get-in h [:conns cid :role]) (get-in h [:conns cid :default-role]))
         c (get-in h [:convs role])]
     (cond
       (not (string? role))
@@ -1063,7 +1068,8 @@
         h (case event
             :connection-opened
             (assoc-in h [:conns (:conn e)] {:origin (:origin e) :approvals (true? (:approvals e))
-                                            :role (:role e) :attached #{} :lines 0})
+                                            :role (:role e) :default-role (:default-role e)
+                                            :attached #{} :lines 0})
             :connection-line (if (get-in h [:conns (:conn e)]) (client-line h (:conn e) (:line e)) h)
             :connection-closed (if (get-in h [:conns (:conn e)]) (close-connection h (:conn e)) h)
             :conversation-started

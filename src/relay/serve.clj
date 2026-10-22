@@ -29,7 +29,10 @@
             [relay.hub :as hub]
             [relay.inbound :as inbound]
             [relay.roster :as roster]
-            [relay.workspace :as workspace])
+            [relay.websocket :as ws]
+            [relay.workspace :as workspace]
+            [babashka.process :as p]
+            [clojure.string :as str])
   (:import (java.net UnixDomainSocketAddress StandardProtocolFamily)
            (java.nio.channels Channels FileChannel ServerSocketChannel SocketChannel)
            (java.nio.file OpenOption StandardOpenOption)
@@ -297,18 +300,16 @@
 
 ;; --- connections
 
-(declare connection!)
-
-(defn- add-connection!
-  "Starts a connection's reader and writer, or returns nil when the
-  service has as many as it takes. Lines it sends come to the hub as
-  :connection-line, and its end as :connection-closed, once."
-  [eng opts]
-  (when (< (count @(:conns eng)) (:max-conns eng))
-    (connection! eng opts)))
-
-(defn- connection!
-  [eng {:keys [^java.io.InputStream in ^java.io.OutputStream out origin approvals role trace on-close]}]
+(defn- open-connection!
+  "Opens a connection to the hub over any transport, or returns nil when
+  the service has as many as it takes. (write! line) writes one line to
+  the client, blocking while it does not read, and returns false once it
+  cannot; (close-transport!) ends the transport. What waits to be
+  written is bounded by write-backlog, past which the connection is
+  closed. Returns {:cid :line! :close!}: (line! text) gives the hub a
+  line the client sent, and the connection's end reaches the hub as
+  :connection-closed, once."
+  [eng {:keys [write! close-transport! origin approvals role default-role trace]}]
   (let [cid (swap! (:next-conn eng) inc)
         q (LinkedBlockingQueue.)
         closed (atom false)
@@ -316,32 +317,51 @@
                  (when (compare-and-set! closed false true)
                    (.put q ::eof)
                    (enqueue! eng {:event :connection-closed :conn cid})
-                   (when on-close (on-close))))
+                   (when close-transport! (close-transport!))))
         {:keys [send! taken!]} (bounded-sender q write-backlog
                                                #(do (binding [*out* *err*] (println "relay closed a connection that stopped reading."))
                                                     (close!)))
-        send! (fn [line] (when-not @closed (send! line)))]
-    (swap! (:conns eng) assoc cid {:send! send! :close! close!})
-    (enqueue! eng {:event :connection-opened :conn cid :origin origin :approvals approvals :role role})
-    (daemon (str "relay-connection-writer-" cid)
-            (fn []
-              (loop []
-                (let [x (.take q)]
-                  (when-not (= ::eof x)
-                    (taken! (inc (count x)))
-                    (when trace (trace :agent x))
-                    (if (try (.write out (line-bytes x)) (.flush out) true
-                             (catch java.io.IOException _ false))
-                      (recur)
-                      (close!)))))
-              (swap! (:conns eng) dissoc cid)))
+        send! (fn [line] (when-not @closed (send! line)))
+        ;; Taken under the cap in one step, so two listeners never both
+        ;; take the last place.
+        [before after] (swap-vals! (:conns eng) #(if (< (count %) (:max-conns eng))
+                                                   (assoc % cid {:send! send! :close! close!})
+                                                   %))]
+    (when (and (not (contains? before cid)) (contains? after cid))
+      (enqueue! eng {:event :connection-opened :conn cid :origin origin :approvals approvals :role role
+                     :default-role default-role})
+      (daemon (str "relay-connection-writer-" cid)
+              (fn []
+                (loop []
+                  (let [x (.take q)]
+                    (when-not (= ::eof x)
+                      (taken! (inc (count x)))
+                      (when trace (trace :agent x))
+                      (if (write! x)
+                        (recur)
+                        (close!)))))
+                (swap! (:conns eng) dissoc cid)))
+      {:cid cid
+       :send! send!
+       :close! close!
+       :line! (fn [text]
+                (when trace (trace :client text))
+                (enqueue! eng {:event :connection-line :conn cid :line text}))})))
+
+(defn- add-connection!
+  "A connection on a pair of streams, each line a message: the Unix
+  socket's and stdio's. Returns its id, or nil when the service has as
+  many as it takes."
+  [eng {:keys [^java.io.InputStream in ^java.io.OutputStream out on-close] :as opts}]
+  (when-let [{:keys [cid send! close! line!]}
+             (open-connection! eng (assoc opts
+                                          :write! (fn [x] (try (.write out (line-bytes x)) (.flush out) true
+                                                               (catch java.io.IOException _ false)))
+                                          :close-transport! on-close))]
     (daemon (str "relay-connection-reader-" cid)
             (fn []
               (dispatch/pump! in (java.io.OutputStream/nullOutputStream) (fn [_]) (fn [])
-                              {:screen (fn [line]
-                                         (when trace (trace :client line))
-                                         (enqueue! eng {:event :connection-line :conn cid :line (:text line)})
-                                         nil)
+                              {:screen (fn [line] (line! (:text line)) nil)
                                ;; A line too long to read whole goes nowhere; a
                                ;; request whose id relay can find is told why.
                                :on-oversized (fn [{:keys [prefix]}]
@@ -349,6 +369,106 @@
                                                  (send! (workspace/error-line id -32600 "relay does not pass on a message over 8 MB."))))})
               (close!)))
     cid))
+
+;; --- the WebSocket listener
+
+(def handshake-timeout-ms
+  "How long a client may take to send its request before the upgrade."
+  10000)
+
+(defn- websocket-connection!
+  "Serves one TCP connection to the WebSocket listener: the request, the
+  decision (relay.websocket/decide) and, on an upgrade, a hub connection
+  whose lines are text messages."
+  [eng ^java.net.Socket sock settings]
+  (let [in (java.io.BufferedInputStream. (.getInputStream sock))
+        out (java.io.BufferedOutputStream. (.getOutputStream sock))
+        shut! #(try (.close sock) (catch Exception _ nil))
+        upgraded (promise)]
+    ;; However slowly the request comes, it has this long in all.
+    (daemon "relay-websocket-handshake-timer"
+            #(when-not (deref upgraded handshake-timeout-ms nil) (shut!)))
+    (try
+      (.setSoTimeout sock (int handshake-timeout-ms))
+      (let [decision (ws/decide (some-> (ws/read-head in) ws/parse-head) settings)
+            ;; Refused before the upgrade when it has no place: the client
+            ;; gets a bare 503, as it would from any full server.
+            decision (if (and (:upgrade decision) (>= (count @(:conns eng)) (:max-conns eng)))
+                       {:status 503}
+                       decision)]
+        (ws/write-frame! out (ws/response-bytes decision))
+        (if-not (:upgrade decision)
+          (do (deliver upgraded false) (shut!))
+          (do
+            (deliver upgraded true)
+            (some-> (:on-upgraded settings) (apply []))
+            (.setSoTimeout sock 0)
+            (.setKeepAlive sock true)
+            (if-let [{:keys [close! line!]}
+                     (open-connection! eng {:origin :websocket :approvals true
+                                            :default-role (:default-role settings)
+                                            :write! (fn [x] (try (ws/write-frame! out (ws/text-frame x)) true
+                                                                 (catch java.io.IOException _ false)))
+                                            :close-transport! shut!})]
+              (loop []
+                (let [m (ws/read-message in dispatch/line-limit
+                                         #(try (ws/write-frame! out (ws/frame-bytes :pong %))
+                                               (catch java.io.IOException _ nil)))]
+                  (if-let [text (:text m)]
+                    (do (line! text) (recur))
+                    (do
+                      ;; The close frame is sent on a thread of its own: a
+                      ;; client that stopped reading could hold it up forever.
+                      (when-let [code (:close m)]
+                        (let [sent (promise)]
+                          (daemon "relay-websocket-close"
+                                  #(do (try (ws/write-frame! out (ws/close-frame code)) (catch Exception _ nil))
+                                       (deliver sent true)))
+                          (deref sent 1000 nil)))
+                      (close!)))))
+              (do (binding [*out* *err*] (println "relay serve turned a client away: it has as many as it takes."))
+                  (shut!))))))
+      (catch Exception _ (shut!)))))
+
+(defn- websocket-listener!
+  "Listens for WebSocket clients on 127.0.0.1 at the port, each served on
+  a thread of its own. At most max-connections requests are read before
+  the upgrade at once; past that a new one is closed unread. Returns the
+  server socket; closing it stops the listener."
+  [eng {:keys [port] :as settings}]
+  (let [server (java.net.ServerSocket. (int port) 50 (java.net.InetAddress/getByName "127.0.0.1"))
+        handshakes (java.util.concurrent.Semaphore. (int (:max-conns eng)))]
+    (daemon "relay-websocket-accept"
+            (fn []
+              (loop []
+                (when-let [sock (try (.accept server) (catch Exception _ nil))]
+                  (if (.tryAcquire handshakes)
+                    (daemon "relay-websocket-connection"
+                            #(let [released (atom false)
+                                   release! (fn [] (when (compare-and-set! released false true) (.release handshakes)))]
+                               (try (websocket-connection! eng sock (assoc settings :on-upgraded release!))
+                                    (finally (release!)))))
+                    (try (.close ^java.net.Socket sock) (catch Exception _ nil)))
+                  (recur)))))
+    server))
+
+(defn websocket-settings
+  "The WebSocket listener's settings, from relay.edn's :serve :websocket
+  and the token its :token-command prints, or nil with why on stderr:
+  there is no listener without both. The token is read once, here."
+  [config]
+  (when-let [{:keys [token-command] :as ws} (get-in config [:serve :websocket])]
+    (let [{:keys [exit out err]} (try (apply p/shell {:out :string :err :string :continue true :in ""} token-command)
+                                      (catch Exception e {:exit -1 :err (ex-message e)}))
+          token (some-> out str/trim)]
+      (cond
+        (not (zero? exit))
+        (do (println (str "relay serve: no WebSocket listener: its :token-command exited " exit
+                          (when-not (str/blank? err) (str ": " (str/trim err)))))
+            nil)
+        (str/blank? token)
+        (do (println "relay serve: no WebSocket listener: its :token-command printed no token.") nil)
+        :else (-> ws (dissoc :token-command) (assoc :token token))))))
 
 ;; --- relay serve
 
@@ -378,9 +498,24 @@
              (catch Exception _ false))
         (str "another service listens on " path ".")))))
 
+(defn- listen-websocket!
+  "Starts the WebSocket listener when there are settings for it, saying
+  on stderr where it listens or why it could not. Returns its server
+  socket, or nil."
+  [eng settings]
+  (when settings
+    (try (let [server (websocket-listener! eng settings)]
+           (println (str "relay serve: WebSocket listening on 127.0.0.1:" (.getLocalPort ^java.net.ServerSocket server)))
+           server)
+         (catch Exception e
+           (println (str "relay serve: no WebSocket listener: 127.0.0.1:" (:port settings) ": "
+                         (or (ex-message e) (str (class e)))))
+           nil))))
+
 (defn- run-service!
-  "Listens on `path`, holding `lock`, until SIGTERM or SIGINT."
-  [sys path ^FileChannel lock ready]
+  "Listens on `path`, holding `lock`, and on the WebSocket listener when
+  there are settings for it, until SIGTERM or SIGINT."
+  [sys path ^FileChannel lock ready websocket]
   (let [_ (when (fs/exists? path {:nofollow-links true}) (fs/delete path))
         server (doto (ServerSocketChannel/open StandardProtocolFamily/UNIX)
                  (.bind (UnixDomainSocketAddress/of ^String path)))
@@ -404,22 +539,24 @@
                     (try (.close ^SocketChannel ch) (catch Exception _ nil)))
                   (recur)))))
     (println (str "relay serve: listening on " path))
-    (some-> ready (deliver path))
-    (dispatch/with-signals {"TERM" #(deliver stop :term) "INT" #(deliver stop :int) "HUP" (fn [])}
-      (fn []
-        @stop
-        (.close server)
-        ;; Every conversation ends, and its wake records the end.
-        (doseq [[_ c] @(:convs eng)] ((:stop! c)))
-        (let [deadline (+ (System/currentTimeMillis) dispatch/stop-grace-ms 10000)]
-          (while (and (seq @(:convs eng)) (< (System/currentTimeMillis) deadline))
-            (Thread/sleep 50)))
-        (doseq [[_ c] @(:conns eng)] ((:close! c)))
-        (enqueue! eng ::quit)
-        (deref quit 5000 nil)
-        (fs/delete-if-exists path)
-        (.close ^FileChannel lock)
-        0))))
+    (let [wserver (listen-websocket! eng websocket)]
+      (some-> ready (deliver path))
+      (dispatch/with-signals {"TERM" #(deliver stop :term) "INT" #(deliver stop :int) "HUP" (fn [])}
+        (fn []
+          @stop
+          (.close server)
+          (some-> ^java.net.ServerSocket wserver .close)
+          ;; Every conversation ends, and its wake records the end.
+          (doseq [[_ c] @(:convs eng)] ((:stop! c)))
+          (let [deadline (+ (System/currentTimeMillis) dispatch/stop-grace-ms 10000)]
+            (while (and (seq @(:convs eng)) (< (System/currentTimeMillis) deadline))
+              (Thread/sleep 50)))
+          (doseq [[_ c] @(:conns eng)] ((:close! c)))
+          (enqueue! eng ::quit)
+          (deref quit 5000 nil)
+          (fs/delete-if-exists path)
+          (.close ^FileChannel lock)
+          0)))))
 
 (defn serve!
   "Runs the relay service for the system's data directory until SIGTERM
@@ -444,7 +581,7 @@
         (if-let [lock (lock! lock-file)]
           (if-let [why (socket-in-the-way path)]
             (do (.close ^FileChannel lock) (println (str "relay serve: " why)) 1)
-            (run-service! sys path lock ready))
+            (run-service! sys path lock ready (websocket-settings (:config sys))))
           (do (println (str "relay serve is already running for " (:data-dir sys) " (" path ")."))
               1))))))
 

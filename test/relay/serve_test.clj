@@ -16,7 +16,9 @@
             [relay.inbound :as inbound]
             [relay.log :as log]
             [relay.serve :as serve]
-            [relay.test-support :as support]))
+            [relay.test-support :as support]
+            [babashka.http-client.websocket :as ws]
+            [relay.websocket]))
 
 (def agent-script
   "An agent that answers initialize and session/new (session s1) and each
@@ -84,16 +86,20 @@
         "the service listens")
     proc))
 
-(defn- stop-service! [proc]
+(defn- stop-service!
+  "Stops the service. Returns its result, with what it said on stderr."
+  [proc]
   (.destroy ^Process (:proc proc))
   (let [r (deref proc 30000 :timeout)]
     (is (not= :timeout r) "the service stops")
-    (when-not (= :timeout r) (is (= 0 (:exit r)) (:err r)))))
+    (when-not (= :timeout r) (is (= 0 (:exit r)) (:err r)))
+    r))
 
 (defn- with-service
   "Runs (f service) with a data directory, the clerk and hub roles, and a
-  service on a socket of its own, its agent the given script."
-  [f & [script]]
+  service on a socket of its own, its agent the given script, and
+  `settings` added to its relay.edn."
+  [f & [script settings]]
   (let [dir (str (fs/create-temp-dir {:prefix "relay-serve"}))
         sockdir (str (fs/create-temp-dir {:dir "/tmp" :prefix "rs"}))
         data (str dir "/data")
@@ -102,9 +108,10 @@
     (fs/set-posix-file-permissions agent "rwx------")
     (log/init! data)
     (spit (str data "/relay.edn")
-          (pr-str {:timezone "UTC" :default-harness :a
-                   :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin agent}}
-                   :notify {:kind :none}}))
+          (pr-str (merge {:timezone "UTC" :default-harness :a
+                          :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin agent}}
+                          :notify {:kind :none}}
+                         settings)))
     (let [sys (inbound/system data)]
       (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "clerk" :title "Clerk" :instructions "x"}})
       (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "hub" :title "Hub" :instructions "x"}})
@@ -448,3 +455,235 @@
       (#'serve/process! eng {:event :tick}))
     (is (= [:conversation/turn-end] @submitted) "tried again")
     (is (nil? (get-in @(:hub eng) [:convs "clerk" :turn-end-due])) "and recorded")))
+
+;; --- the WebSocket listener (relay#66)
+
+(def ws-token "tok-for-tests-123")
+
+(defn- free-port []
+  (with-open [s (java.net.ServerSocket. 0 1 (java.net.InetAddress/getByName "127.0.0.1"))]
+    (.getLocalPort s)))
+
+(defn- ws-settings [port & [extra]]
+  {:serve {:websocket (merge {:port port :token-command ["/bin/echo" ws-token]} extra)}})
+
+(defn- port-open? [port]
+  (try (with-open [_ (java.net.Socket. "127.0.0.1" (int port))] true)
+       (catch Exception _ false)))
+
+(defn- ws-connect!
+  "A client over WebSocket (java.net.http's, an implementation that is not
+  relay's), with the API of relay.acp-client."
+  [port & {:keys [token] :or {token ws-token}}]
+  (let [messages (atom []) lines (atom []) buf (StringBuilder.) closed (promise)
+        sock (ws/websocket {:uri (str "ws://127.0.0.1:" port "/")
+                            :headers {"Authorization" (str "Bearer " token)}
+                            :on-message (fn [_ data last?]
+                                          (locking buf
+                                            (.append buf (str data))
+                                            (when last?
+                                              (let [l (str buf)]
+                                                (.setLength buf 0)
+                                                (swap! lines conj l)
+                                                (swap! messages conj (json/parse-string l))))))
+                            :on-close (fn [_ code _] (deliver closed code))
+                            :on-error (fn [_ _] (deliver closed :error))})]
+    {:messages messages :lines lines :next-id (atom 0) :ws sock :closed closed
+     :send-fn (fn [text] (ws/send! sock text))}))
+
+(defn- ws-close! [c] (try (ws/close! (:ws c)) (catch Exception _ nil)))
+
+(defn- with-websocket-service
+  "with-service with the WebSocket listener on a free port: (f service port)."
+  [f & [extra]]
+  (let [port (free-port)]
+    (with-service
+      (fn [service]
+        (is (wait-for #(port-open? port) 15000) "the WebSocket listener is up")
+        (f service port))
+      nil (ws-settings port extra))))
+
+(deftest ^:volley/serial a-phone-holds-a-conversation-over-websocket
+  (with-websocket-service
+    (fn [_ port]
+      (let [c (ws-connect! port)]
+        (try
+          (let [init (client/request! c "initialize" {:protocolVersion 1 :clientCapabilities {}} 5000)]
+            (is (= {"relay/hub" 1 "relay/keeps" true} (get-in init ["result" "_meta"]))))
+          (is (= ["clerk" "hub"] (map #(get % "id") (get-in (client/request! c "_relay/roles" {} 5000) ["result" "roles"]))))
+          (is (= "s1" (get-in (client/request! c "session/new" {:cwd *dir* :mcpServers [] :_meta {"relay/role" "clerk"}} 10000)
+                              ["result" "sessionId"])))
+          (is (= "end_turn" (get-in (client/request! c "session/prompt" (prompt "Hello") 10000) ["result" "stopReason"])))
+          (is (= ["GOT" "REPLY"] (texts c)) "the reply, live, as the agent sent it")
+          (is (client/await! c #(= "_relay/roles/changed" (get % "method")) 5000) "and the roster as it changes")
+          (testing "every message is one JSON-RPC line"
+            (is (every? #(and (map? (json/parse-string %)) (not (str/includes? % "\n"))) @(:lines c))))
+          (finally (ws-close! c)))))))
+
+(deftest ^:volley/serial a-phone-and-a-terminal-share-one-conversation
+  (with-websocket-service
+    (fn [_ port]
+      (let [a (connect! :role "clerk" :approvals true)
+            b (ws-connect! port)]
+        (try
+          (new-session! a "clerk")
+          (client/request! b "initialize" {:protocolVersion 1} 5000)
+          (is (= {"sessionId" "s1" "_meta" {"relay/attached" true}}
+                 (get (client/request! b "session/new" {:cwd *dir* :mcpServers [] :_meta {"relay/role" "clerk"}} 5000) "result")))
+          (let [id (client/request-async! a "session/prompt" (prompt "PERM please"))
+                req-a (client/await! a #(= "session/request_permission" (get % "method")) 5000)
+                req-b (client/await! b #(= "session/request_permission" (get % "method")) 5000)]
+            (is (and req-a req-b) "the phone can approve, and is asked as the terminal is")
+            (is (some #{"PERM please"} (texts b)) "the phone sees the terminal's prompt")
+            (#'client/send! b {:jsonrpc "2.0" :id (get req-b "id") :result {:outcome {:outcome "selected" :optionId "a"}}})
+            (is (= "end_turn" (get-in (client/response a id 5000) ["result" "stopReason"])))
+            (is (= {"sessionId" "s1" "toolCallId" "c1" "outcome" "allow_once"}
+                   (get (client/await! a #(= "_relay/permission/settled" (get % "method")) 5000) "params"))
+                "the terminal is told the phone answered")
+            (is (client/await! b #(= "PERMITTED a" (get-in % ["params" "update" "content" "text"])) 5000)))
+          (testing "and the other way: the phone prompts, the terminal sees it"
+            (is (= "end_turn" (get-in (client/request! b "session/prompt" (prompt "From the phone") 10000) ["result" "stopReason"])))
+            (is (client/await! a #(= "From the phone" (get-in % ["params" "update" "content" "text"])) 5000)))
+          (finally (ws-close! b) (done! a)))))))
+
+(deftest ^:volley/serial a-phone-s-session-new-without-a-role-goes-to-the-default-role
+  (with-websocket-service
+    (fn [_ port]
+      (let [c (ws-connect! port)]
+        (try
+          (client/request! c "initialize" {:protocolVersion 1} 5000)
+          (is (= "s1" (get-in (client/request! c "session/new" {:cwd *dir* :mcpServers []} 10000) ["result" "sessionId"])))
+          (is (core/open-conversation (state) "clerk") "the configured default role")
+          (is (not (core/open-conversation (state) "hub")))
+          (finally (ws-close! c)))))
+    {:default-role "clerk"}))
+
+(defn- raw-request
+  "Sends a request's head to the listener and returns everything it
+  answers until it closes."
+  [port head]
+  (with-open [s (java.net.Socket. "127.0.0.1" (int port))]
+    (.setSoTimeout s 5000)
+    (.write (.getOutputStream s) (.getBytes (str head "\r\n\r\n") "ISO-8859-1"))
+    (.flush (.getOutputStream s))
+    (String. (.readAllBytes (.getInputStream s)) "ISO-8859-1")))
+
+(defn- upgrade-head [& extra]
+  (str/join "\r\n" (concat ["GET / HTTP/1.1" "Host: 127.0.0.1" "Upgrade: websocket" "Connection: Upgrade"
+                            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" "Sec-WebSocket-Version: 13"]
+                           extra)))
+
+(defn- upgraded
+  "A raw socket past the upgrade, and its streams."
+  [port]
+  (let [s (java.net.Socket. "127.0.0.1" (int port))
+        in (java.io.DataInputStream. (.getInputStream s))]
+    (.setSoTimeout s 5000)
+    (.write (.getOutputStream s) (.getBytes (str (upgrade-head (str "Authorization: Bearer " ws-token)) "\r\n\r\n") "ISO-8859-1"))
+    (is (str/starts-with? (relay.websocket/read-head in) "HTTP/1.1 101 "))
+    {:sock s :in in :out (.getOutputStream s)}))
+
+(defn- close-code
+  "The status of the close frame the listener sends next, and whether
+  the connection then ends."
+  [{:keys [^java.io.DataInputStream in]}]
+  (let [b0 (.readUnsignedByte in) n (.readUnsignedByte in) code (.readUnsignedShort in)]
+    [(= 0x88 b0) (= 2 n) code (try (= -1 (.read in)) (catch java.net.SocketException _ true))]))
+
+(deftest ^:volley/serial the-listener-refuses-before-the-upgrade-and-closes-on-what-it-does-not-take
+  (with-websocket-service
+    (fn [_ port]
+      (testing "refusals carry their status and nothing else"
+        (doseq [[what head status] [["no token" (upgrade-head) 401]
+                                    ["a wrong token" (upgrade-head "Authorization: Bearer tok-for-tests-12") 401]
+                                    ["an Origin, even with the token" (upgrade-head (str "Authorization: Bearer " ws-token)
+                                                                                    "Origin: http://localhost:3000") 403]
+                                    ["a plain request" "GET / HTTP/1.1\r\nHost: 127.0.0.1" 404]
+                                    ["a plain request with the token" (str "GET /x HTTP/1.1\r\nAuthorization: Bearer " ws-token) 404]]]
+          (let [answer (raw-request port head)]
+            (is (str/starts-with? answer (str "HTTP/1.1 " status " ")) (str what ": " answer))
+            (is (str/ends-with? answer "Content-Length: 0\r\nConnection: close\r\n\r\n") what)
+            (is (not (str/includes? (str/lower-case answer) "relay")) what))))
+      (testing "java.net.http's client is refused without the token"
+        (is (thrown? Exception (ws-connect! port :token "wrong"))))
+      (testing "a binary frame closes the socket"
+        (let [c (upgraded port)]
+          (try (.write ^java.io.OutputStream (:out c) (relay.websocket/frame-bytes :binary (.getBytes "{}") (byte-array [1 2 3 4]) true))
+               (is (= [true true 1003 true] (close-code c)))
+               (finally (.close ^java.net.Socket (:sock c))))))
+      (testing "a message over 8 MB closes the socket, before relay reads it"
+        (let [c (upgraded port)
+              ;; Only the frame's head: its length says 8 MB and one byte.
+              head (java.util.Arrays/copyOfRange (relay.websocket/frame-bytes :text (byte-array (inc (* 8 1024 1024))) (byte-array [1 2 3 4]) true) 0 14)]
+          (try (.write ^java.io.OutputStream (:out c) head)
+               (is (= [true true 1009 true] (close-code c)))
+               (finally (.close ^java.net.Socket (:sock c))))))
+      (testing "the listener still serves after all that"
+        (let [c (ws-connect! port)]
+          (try (is (some? (client/request! c "initialize" {:protocolVersion 1} 5000)))
+               (finally (ws-close! c))))))))
+
+(defn- listening
+  "The TCP addresses a process listens on, as lsof gives them."
+  [proc]
+  (let [{:keys [out]} (p/shell {:out :string :err :string :continue true}
+                               "lsof" "-nP" "-a" "-p" (str (.pid ^Process (:proc proc))) "-iTCP" "-sTCP:LISTEN" "-Fn")]
+    (vec (keep #(when (str/starts-with? % "n") (subs % 1)) (str/split-lines out)))))
+
+(deftest ^:volley/serial the-listener-binds-only-the-loopback-address
+  (with-websocket-service
+    (fn [service port]
+      (is (= [(str "127.0.0.1:" port)] (listening service)))
+      (testing "another address of this Mac does not reach it"
+        (doseq [addr (->> (re-seq #"inet (\d+\.\d+\.\d+\.\d+)" (:out (p/shell {:out :string} "ifconfig")))
+                          (map second)
+                          (remove #(str/starts-with? % "127."))
+                          (take 2))]
+          (is (thrown? java.io.IOException (with-open [_ (java.net.Socket. ^String addr (int port))]))
+              addr))))))
+
+(deftest ^:volley/serial no-listener-without-settings-or-a-token
+  (testing "no :websocket, no listener"
+    (with-service
+      (fn [service]
+        (is (= [] (listening service)))
+        (is (not (str/includes? (:err (stop-service! service)) "WebSocket"))))))
+  (doseq [[what command why] [["a token command that fails" ["/bin/sh" "-c" "echo nope >&2; exit 3"] "exited 3: nope"]
+                              ["an empty token" ["/usr/bin/true"] "printed no token"]]]
+    (testing what
+      (let [port (free-port)]
+        (with-service
+          (fn [service]
+            (Thread/sleep 300)
+            (is (not (port-open? port)))
+            (is (= [] (listening service)))
+            (testing "and the service still runs for the socket"
+              (let [a (connect! :role "clerk")]
+                (try (is (= "s1" (get-in (new-session! a "clerk") ["result" "sessionId"])))
+                     (finally (done! a)))))
+            (let [err (:err (stop-service! service))]
+              (is (str/includes? err (str "no WebSocket listener: its :token-command " why)) err)))
+          nil (ws-settings port {:token-command command}))))))
+
+(deftest the-websocket-and-the-socket-share-the-connection-cap
+  (let [eng (#'serve/engine nil :service false {:max-conns 2})
+        stream #(#'serve/add-connection! eng {:in (java.io.PipedInputStream. (java.io.PipedOutputStream.))
+                                              :out (java.io.ByteArrayOutputStream.) :origin :socket})
+        other #(#'serve/open-connection! eng {:write! (constantly true) :origin :websocket :approvals true})]
+    (is (some? (stream)))
+    (is (some? (other)))
+    (is (nil? (stream)) "the socket's third is refused")
+    (is (nil? (other)) "and so is the listener's")))
+
+(deftest a-connection-whose-client-stops-reading-is-closed-past-the-backlog
+  ;; The WebSocket's writer blocks on a client that does not read, as the
+  ;; socket's does, so what waits for it is bounded the same way.
+  (let [eng (#'serve/engine nil :service false)
+        closed (promise)
+        stuck (promise)]
+    (with-redefs [serve/write-backlog 1000]
+      (let [{:keys [send!]} (#'serve/open-connection! eng {:write! (fn [_] @stuck true) :origin :websocket
+                                                           :close-transport! #(deliver closed true)})]
+        (dotimes [_ 20] (send! (apply str (repeat 100 "x"))))
+        (is (deref closed 2000 false) "relay gave up on it")
+        (deliver stuck true)))))

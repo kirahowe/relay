@@ -9,10 +9,15 @@
             [cheshire.core :as json]
             [clojure.java.io :as io]))
 
-(defn- send! [{:keys [^java.io.Writer writer]} msg]
-  (locking writer
-    (.write writer (str (json/generate-string msg) "\n"))
-    (.flush writer)))
+(defn- send!
+  "Sends a message: on the client's :send-fn when it has one (a client
+  over another transport), else as a line on the agent's stdin."
+  [{:keys [^java.io.Writer writer send-fn]} msg]
+  (if send-fn
+    (send-fn (json/generate-string msg))
+    (locking writer
+      (.write writer (str (json/generate-string msg) "\n"))
+      (.flush writer))))
 
 (defn- answer [{:strs [id method] :as msg} permit]
   (if (= "session/request_permission" method)

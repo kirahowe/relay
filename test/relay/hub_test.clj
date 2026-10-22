@@ -126,6 +126,31 @@
         (is (= "hub is busy" (get-in (first (writes fx 2)) ["error" "message"])))
         (is (nil? (get-in h [:convs "hub"])))))))
 
+(deftest a-default-role-is-only-for-a-session-new-that-names-none
+  (let [ws (fn [] (first (run (fresh) {:event :connection-opened :conn 2 :origin :websocket :approvals true
+                                       :default-role "hub"})))]
+    (testing "a session/new with no role goes to the default role"
+      (let [[_ fx] (say (ws) 2 (req 3 "session/new" {:cwd "/"}))]
+        (is (= [{:effect :start :role "hub"}] fx))))
+    (testing "_meta relay/role still wins"
+      (let [[_ fx] (say (ws) 2 (req 3 "session/new" {:cwd "/" :_meta {"relay/role" "clerk"}}))]
+        (is (= [{:effect :start :role "clerk"}] fx))))
+    (testing "and the connection has no role of its own: a request with no sessionId is not routed to it"
+      (let [h (ws)]
+        (is (nil? (get-in h [:conns 2 :role])))
+        (let [[_ fx] (say h 2 (req 4 "_relay/items" {}))]
+          (is (= -32602 (get-in (first (writes fx 2)) ["error" "code"]))))))
+    (testing "a default role relay does not have is refused as any unknown role is"
+      (let [h (first (run (fresh) {:event :connection-opened :conn 2 :origin :websocket :approvals true
+                                   :default-role "nobody"}))
+            [_ fx] (say h 2 (req 3 "session/new" {:cwd "/"}))]
+        (is (str/includes? (get-in (first (writes fx 2)) ["error" "message"]) "no role called nobody"))))
+    (testing "a WebSocket connection cannot claim a role or approvals with _relay/connect"
+      (let [h (first (run (fresh) {:event :connection-opened :conn 2 :origin :websocket :approvals false}))
+            [h fx] (say h 2 (req 1 "_relay/connect" {:approvals true :role "clerk"}))]
+        (is (= -32600 (get-in (first (writes fx 2)) ["error" "code"])))
+        (is (= [false nil] ((juxt :approvals :role) (get-in h [:conns 2]))))))))
+
 (deftest a-second-session-new-attaches-with-the-replay
   (let [h (-> (live) (opened 2))
         upd (note "session/update" {:sessionId "s1" :update {:sessionUpdate "agent_message_chunk" :content {:type "text" :text "hi"}}})

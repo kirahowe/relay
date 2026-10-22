@@ -326,6 +326,55 @@
                        " greater than 0, and nothing else"
                        (when (some? budget) (str ", not " (pr-str budget))) "."))))))
 
+(def websocket-defaults
+  "What `:serve {:websocket ...}` takes when it leaves them out: the role a
+  session/new without _meta relay/role goes to, and the browser origins
+  allowed in (none)."
+  {:default-role "hub" :allowed-origins []})
+
+(defn websocket-problem
+  "What is wrong with `:serve`, the relay service's settings, as a
+  sentence for the operator, or nil. Its one setting is :websocket, the
+  listener a phone reaches the service through:
+  {:port 8765 :token-command [...] :default-role \"hub\" :allowed-origins []}."
+  [serve]
+  (let [example (str "{:websocket {:port 8765 :token-command [\"security\" \"find-generic-password\" \"-s\""
+                     " \"relay-websocket\" \"-w\"]}}")
+        {:keys [port token-command default-role allowed-origins] :as ws} (when (map? serve) (:websocket serve))]
+    (cond
+      (not (and (map? serve) (every? #{:websocket} (keys serve))))
+      (str "relay.edn's :serve is " example ", and nothing else, not " (pr-str serve) ".")
+      (not (contains? serve :websocket)) nil
+      (not (and (map? ws) (every? #{:port :token-command :default-role :allowed-origins} (keys ws))))
+      (str "relay.edn's :serve :websocket takes :port, :token-command, :default-role and :allowed-origins,"
+           " not " (pr-str ws) ".")
+      (not (and (int? port) (<= 1 port 65535)))
+      (str "relay.edn's :serve :websocket needs :port, the port on 127.0.0.1 to listen on, from 1 to 65535"
+           (when (some? port) (str ", not " (pr-str port))) ".")
+      (not (and (vector? token-command) (seq token-command)
+                (every? #(and (string? %) (not (str/blank? %))) token-command)))
+      (str "relay.edn's :serve :websocket needs :token-command, the command that prints the token a client"
+           " must send, such as [\"security\" \"find-generic-password\" \"-s\" \"relay-websocket\" \"-w\"]"
+           (when (some? token-command) (str ", not " (pr-str token-command))) ".")
+      (and (contains? ws :default-role) (not (role-id? default-role)))
+      (str "relay.edn's :serve :websocket has :default-role " (pr-str default-role)
+           ", which is not a role id such as \"hub\".")
+      (and (contains? ws :allowed-origins)
+           (not (and (vector? allowed-origins) (every? #(and (string? %) (not (str/blank? %))) allowed-origins))))
+      (str "relay.edn's :serve :websocket has :allowed-origins " (pr-str allowed-origins)
+           "; it is a vector of origins, such as [\"https://example.com\"], or [] for none."))))
+
+(defn- check-serve
+  "The optional :serve. Returns the config with :websocket's defaults
+  filled in."
+  [config]
+  (if-not (contains? config :serve)
+    config
+    (do (when-let [why (websocket-problem (:serve config))] (problem! why))
+        (cond-> config
+          (get-in config [:serve :websocket])
+          (update-in [:serve :websocket] #(merge websocket-defaults %))))))
+
 (defn- check-brief
   "The optional :brief: {:at \"07:30\"}, the time each day, and the tools
   it reads, :calendar and :reminders, when they are not cal and rem-read.
@@ -591,7 +640,7 @@
   (when-not (and (integer? max-attempts) (pos? max-attempts))
     (throw (ex-info ":max-attempts must be a positive integer." {})))
   ;; Labels are kept as relay.core keeps them: sorted distinct strings.
-  (update config :tools update-vals
+  (update (check-serve config) :tools update-vals
           (fn [t] (update t :labels #(vec (sort (distinct %)))))))
 
 (defn resolve-config
