@@ -1,6 +1,6 @@
 {:id 66
  :title "Reach the relay service from the phone over the tailnet"
- :status :in-progress
+ :status :review
  :type :feature
  :priority :p3
  :created "2026-10-21"
