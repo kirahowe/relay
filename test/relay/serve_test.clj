@@ -687,3 +687,82 @@
         (dotimes [_ 20] (send! (apply str (repeat 100 "x"))))
         (is (deref closed 2000 false) "relay gave up on it")
         (deliver stuck true)))))
+
+;; --- Codex round 1 (relay#66)
+
+(defn- in-process-listener
+  "The WebSocket listener of an engine with no system, on a port the OS
+  picks: [engine port server]."
+  []
+  (let [eng (#'serve/engine nil :service false)
+        server (#'serve/websocket-listener! eng {:port 0 :token ws-token :allowed-origins [] :default-role "hub"})]
+    [eng (.getLocalPort ^java.net.ServerSocket server) server]))
+
+(deftest ^:volley/serial whatever-ends-a-websocket-reader-frees-its-place
+  (testing "a reader that throws"
+    (let [[eng port server] (in-process-listener)]
+      (try
+        (with-redefs [relay.websocket/read-message (fn [& _] (throw (RuntimeException. "boom")))]
+          (let [c (upgraded port)]
+            (try
+              (is (= -1 (try (.read ^java.io.InputStream (:in c)) (catch java.io.IOException _ -1))) "it is closed")
+              (is (wait-for #(empty? @(:conns eng)) 5000) "and its place is free")
+              (finally (.close ^java.net.Socket (:sock c))))))
+        (finally (.close ^java.net.ServerSocket server)))))
+  (testing "a length that would overflow, after a fragment"
+    (let [[eng port server] (in-process-listener)]
+      (try
+        (let [c (upgraded port)
+              out ^java.io.OutputStream (:out c)
+              m (byte-array [1 2 3 4])
+              header (doto (java.nio.ByteBuffer/allocate 14)
+                       (.put (unchecked-byte 0x80)) (.put (unchecked-byte (bit-or 0x80 127)))
+                       (.putLong Long/MAX_VALUE) (.put m))]
+          (try
+            (.write out (relay.websocket/frame-bytes :text (.getBytes "x") m false))
+            (.write out (.array header))
+            (.flush out)
+            (is (= [true true 1009 true] (close-code c)))
+            (is (wait-for #(empty? @(:conns eng)) 5000) "its place is free")
+            (finally (.close ^java.net.Socket (:sock c)))))
+        (finally (.close ^java.net.ServerSocket server))))))
+
+(deftest ^:volley/serial a-message-whose-next-frame-never-comes-is-stopped
+  (let [[eng port server] (in-process-listener)]
+    (try
+      (with-redefs [relay.websocket/max-message-ms 300]
+        (let [c (upgraded port)
+              out ^java.io.OutputStream (:out c)]
+          (try
+            (.write out (relay.websocket/frame-bytes :text (.getBytes "x") (byte-array [1 2 3 4]) false))
+            (.flush out)
+            (is (wait-for #(empty? @(:conns eng)) 5000) "relay gave up on it")
+            (is (= -1 (try (.read ^java.io.InputStream (:in c)) (catch java.io.IOException _ -1))) "and closed it")
+            (finally (.close ^java.net.Socket (:sock c))))))
+      (finally (.close ^java.net.ServerSocket server)))))
+
+(deftest ^:volley/serial a-token-command-that-hangs-or-says-too-much-gives-no-listener
+  (let [tmp (str (fs/create-temp-dir {:prefix "relay-token"}))
+        pidf (str tmp "/sleeper.pid")]
+    (try
+      (doseq [[what command why] [["one that hangs" ["/bin/sh" "-c" (str "sleep 600 & echo $! > " pidf "; wait")]
+                                   "did not finish within 10 seconds"]
+                                  ["one that prints a lot" ["/usr/bin/yes"] "printed more than 4096 bytes"]]]
+        (testing what
+          (let [port (free-port)]
+            (with-service
+              (fn [service]
+                (testing "the socket works while the token command runs"
+                  (let [a (connect! :role "clerk")]
+                    (try (is (= "s1" (get-in (new-session! a "clerk") ["result" "sessionId"])))
+                         (finally (done! a)))))
+                (Thread/sleep 11000)
+                (is (not (port-open? port)))
+                (is (= [] (listening service)))
+                (let [err (:err (stop-service! service))]
+                  (is (str/includes? err (str "no WebSocket listener: its :token-command " why)) err)))
+              nil (ws-settings port {:token-command command})))))
+      (testing "what the hanging command started was killed too"
+        (let [pid (parse-long (str/trim (slurp pidf)))]
+          (is (not (.isPresent (java.lang.ProcessHandle/of pid))))))
+      (finally (fs/delete-tree tmp)))))

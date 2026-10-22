@@ -183,19 +183,62 @@
                      (ByteBuffer/wrap bs)))
        (catch CharacterCodingException _ nil)))
 
+(def max-frames
+  "How many frames one message may take, control frames between its
+  fragments included."
+  1024)
+
+(def max-message-ms
+  "How long one message may take, from its first frame to its last."
+  30000)
+
+(defn close-code-ok?
+  "Whether a client may send this status in a close frame (RFC 6455
+  7.4): the defined codes it may send, those IANA has registered since,
+  and the ranges for libraries and applications. 1004, 1005, 1006 and
+  1015 are reserved and never sent."
+  [code]
+  (or (contains? #{1000 1001 1002 1003 1007 1008 1009 1010 1011 1012 1013 1014} code)
+      (<= 3000 code 4999)))
+
+(defn- close-of
+  "What a client's close frame comes to: 1000, the normal answer, or
+  1002 when its payload breaks RFC 6455 (one byte, a status a client may
+  not send, or a reason that is not UTF-8)."
+  [^bytes payload]
+  (let [n (alength payload)]
+    (cond
+      (zero? n) {:close 1000}
+      (= 1 n) {:close 1002}
+      (not (close-code-ok? (bit-and 0xffff (.getShort (ByteBuffer/wrap payload))))) {:close 1002}
+      (nil? (utf8 (java.util.Arrays/copyOfRange payload 2 n))) {:close 1002}
+      :else {:close 1000})))
+
 (defn read-message
   "Reads frames from a client until a message is whole, answering pings
   with (pong! payload) on the way. Returns {:text s} for a text message,
   or {:close code} when the connection is to end: 1000 for the client's
-  own close, or relay's reason, 1003 for
-  a binary message, 1009 for one longer than `limit` bytes, 1007 for text
-  that is not UTF-8, 1002 for anything else RFC 6455 forbids, such as an
-  unmasked frame; nil when the stream ends. A frame's declared length is
-  checked before its payload is read, so nothing past the limit is held."
-  [^InputStream in limit pong!]
-  (let [din (DataInputStream. in)]
+  own close, or relay's reason: 1003 for a binary message, 1009 for one
+  longer than :limit bytes or taking more than :max-frames frames, 1008
+  for one that took longer than :max-ms by (now), 1007 for text that is
+  not UTF-8, and 1002 for anything else RFC 6455 forbids, such as an
+  unmasked frame, a length not given in its shortest form or a malformed
+  close; nil when the stream ends.
+
+  A frame's declared length is checked against what is left of the
+  limit before its payload is read, and a message's fragments go into
+  one buffer, so nothing past the limit is ever held. (partial! t) is
+  called with the time a fragmented message began, and with nil once it
+  ends, so the caller can also stop one whose next frame never comes."
+  [^InputStream in {:keys [limit max-frames max-ms now partial!]
+                    :or {max-frames max-frames max-ms max-message-ms
+                         now #(System/currentTimeMillis) partial! (fn [_])}}
+   pong!]
+  (let [din (DataInputStream. in)
+        buf (java.io.ByteArrayOutputStream.)
+        stop (fn [r] (partial! nil) r)]
     (try
-      (loop [parts [] size 0 started? false]
+      (loop [frames 0 started nil]
         (let [b0 (.readUnsignedByte din)
               b1 (.readUnsignedByte din)
               fin? (bit-test b0 7)
@@ -203,17 +246,24 @@
               masked? (bit-test b1 7)
               n7 (bit-and b1 0x7f)
               n (case n7 126 (.readUnsignedShort din) 127 (.readLong din) n7)
-              control? (>= op 8)]
+              control? (>= op 8)
+              frames (inc frames)]
           (cond
-            (not= 0 (bit-and b0 0x70)) {:close 1002}
-            (not masked?) {:close 1002}
-            (neg? n) {:close 1002}
-            (and control? (or (not fin?) (> n 125))) {:close 1002}
-            (not (#{0 1 2 8 9 10} op)) {:close 1002}
-            (= 2 op) {:close 1003}
-            (and (= 0 op) (not started?)) {:close 1002}
-            (and (= 1 op) started?) {:close 1002}
-            (and (not control?) (> (+ size n) limit)) {:close 1009}
+            (not= 0 (bit-and b0 0x70)) (stop {:close 1002})
+            (not masked?) (stop {:close 1002})
+            ;; The shortest form only, as RFC 6455 5.2 asks.
+            (or (and (= 126 n7) (< n 126)) (and (= 127 n7) (< n 65536))) (stop {:close 1002})
+            (neg? n) (stop {:close 1002})
+            (and control? (or (not fin?) (> n 125))) (stop {:close 1002})
+            (not (#{0 1 2 8 9 10} op)) (stop {:close 1002})
+            (= 2 op) (stop {:close 1003})
+            (and (= 0 op) (not started)) (stop {:close 1002})
+            (and (= 1 op) started) (stop {:close 1002})
+            ;; Against what is left, so a length near Long/MAX_VALUE
+            ;; cannot overflow a sum.
+            (and (not control?) (> n (- limit (.size buf)))) (stop {:close 1009})
+            (> frames max-frames) (stop {:close 1009})
+            (and started (> (- (now) started) max-ms)) (stop {:close 1008})
             :else
             (let [mask (byte-array 4)
                   _ (.readFully din mask)
@@ -221,18 +271,16 @@
                   _ (.readFully din payload)
                   _ (dotimes [i n] (aset payload i (unchecked-byte (bit-xor (aget payload i) (aget mask (mod i 4))))))]
               (case (int op)
-                ;; The client's own close is answered with a normal one.
-                8 {:close 1000}
-                9 (do (pong! payload) (recur parts size started?))
-                10 (recur parts size started?)
-                (let [parts (conj parts payload) size (+ size n)]
-                  (if-not fin?
-                    (recur parts size true)
-                    (let [all (byte-array size)]
-                      (reduce (fn [at ^bytes p] (System/arraycopy p 0 all at (alength p)) (+ at (alength p))) 0 parts)
-                      (if-let [s (utf8 all)] {:text s} {:close 1007})))))))))
-      (catch EOFException _ nil)
-      (catch java.io.IOException _ nil))))
+                8 (stop (close-of payload))
+                9 (do (pong! payload) (if started (recur frames started) (recur 0 nil)))
+                10 (if started (recur frames started) (recur 0 nil))
+                (do (.write buf payload)
+                    (if-not fin?
+                      (let [t (or started (let [t (now)] (partial! t) t))]
+                        (recur frames t))
+                      (stop (if-let [s (utf8 (.toByteArray buf))] {:text s} {:close 1007})))))))))
+      (catch EOFException _ (stop nil))
+      (catch java.io.IOException _ (stop nil)))))
 
 (defn write-frame!
   "Writes a frame's bytes to `out` and flushes, holding a lock on `out`

@@ -410,22 +410,36 @@
                                             :write! (fn [x] (try (ws/write-frame! out (ws/text-frame x)) true
                                                                  (catch java.io.IOException _ false)))
                                             :close-transport! shut!})]
-              (loop []
-                (let [m (ws/read-message in dispatch/line-limit
-                                         #(try (ws/write-frame! out (ws/frame-bytes :pong %))
-                                               (catch java.io.IOException _ nil)))]
-                  (if-let [text (:text m)]
-                    (do (line! text) (recur))
-                    (do
-                      ;; The close frame is sent on a thread of its own: a
-                      ;; client that stopped reading could hold it up forever.
-                      (when-let [code (:close m)]
-                        (let [sent (promise)]
-                          (daemon "relay-websocket-close"
-                                  #(do (try (ws/write-frame! out (ws/close-frame code)) (catch Exception _ nil))
-                                       (deliver sent true)))
-                          (deref sent 1000 nil)))
-                      (close!)))))
+              ;; Whatever ends the reader, the hub's connection ends with it,
+              ;; so nothing can keep its place under the cap.
+              (let [partial-since (atom nil)
+                    done (promise)]
+                ;; A message whose next frame never comes is stopped too.
+                (daemon "relay-websocket-message-timer"
+                        #(loop []
+                           (when (= ::waiting (deref done 250 ::waiting))
+                             (if (some-> @partial-since (< (- (System/currentTimeMillis) ws/max-message-ms)))
+                               (shut!)
+                               (recur)))))
+                (try
+                  (loop []
+                    (let [m (ws/read-message in {:limit dispatch/line-limit
+                                                 :partial! #(reset! partial-since %)}
+                                             #(try (ws/write-frame! out (ws/frame-bytes :pong %))
+                                                   (catch java.io.IOException _ nil)))]
+                      (if-let [text (:text m)]
+                        (do (line! text) (recur))
+                        ;; The close frame is sent on a thread of its own: a
+                        ;; client that stopped reading could hold it up forever.
+                        (when-let [code (:close m)]
+                          (let [sent (promise)]
+                            (daemon "relay-websocket-close"
+                                    #(do (try (ws/write-frame! out (ws/close-frame code)) (catch Exception _ nil))
+                                         (deliver sent true)))
+                            (deref sent 1000 nil))))))
+                  (finally
+                    (deliver done true)
+                    (close!))))
               (do (binding [*out* *err*] (println "relay serve turned a client away: it has as many as it takes."))
                   (shut!))))))
       (catch Exception _ (shut!)))))
@@ -452,23 +466,74 @@
                   (recur)))))
     server))
 
+(def token-timeout-ms
+  "How long the :token-command may take."
+  10000)
+
+(def token-limit
+  "How many bytes the :token-command may print. A token is far shorter."
+  4096)
+
+(defn- kill-tree!
+  "Kills a process and everything it started, by PID."
+  [^Process proc]
+  (let [tree (cons (.toHandle proc) (iterator-seq (.iterator (.descendants proc))))]
+    (doseq [^java.lang.ProcessHandle h tree] (.destroyForcibly h))))
+
+(defn- read-bounded
+  "Reads `in` to its end, keeping at most `limit` bytes. Calls (over!)
+  once when there is more, and stops reading."
+  ^bytes [^java.io.InputStream in limit over!]
+  (let [out (java.io.ByteArrayOutputStream.) buf (byte-array 1024)]
+    (loop []
+      (let [n (try (.read in buf) (catch java.io.IOException _ -1))]
+        (cond
+          (neg? n) nil
+          (> (+ (.size out) n) limit) (over!)
+          :else (do (.write out buf 0 n) (recur)))))
+    (.toByteArray out)))
+
+(defn read-token
+  "Runs a :token-command: {:token t}, what it printed, trimmed, or
+  {:error why}. It may take token-timeout-ms and print token-limit bytes;
+  past either it is killed, with whatever it started, and gives no
+  token."
+  [command]
+  (try
+    (let [pb (doto (ProcessBuilder. ^java.util.List (vec command))
+               (.redirectInput (java.io.File. "/dev/null")))
+          proc (.start pb)
+          over (atom nil)
+          over! (fn [what] (reset! over what) (kill-tree! proc))
+          out (promise) err (promise)]
+      (daemon "relay-token-out" #(deliver out (read-bounded (.getInputStream proc) token-limit (fn [] (over! :out)))))
+      (daemon "relay-token-err" #(deliver err (read-bounded (.getErrorStream proc) token-limit (fn [] (over! :err)))))
+      (if-not (.waitFor proc token-timeout-ms java.util.concurrent.TimeUnit/MILLISECONDS)
+        (do (kill-tree! proc)
+            {:error (str "its :token-command did not finish within " (quot token-timeout-ms 1000) " seconds")})
+        (let [o (deref out 1000 nil) e (deref err 1000 nil)
+              text (fn [^bytes b] (str/trim (String. b java.nio.charset.StandardCharsets/UTF_8)))]
+          (cond
+            @over {:error (str "its :token-command printed more than " token-limit " bytes")}
+            (or (nil? o) (nil? e)) {:error "its :token-command kept its output open"}
+            (not (zero? (.exitValue proc)))
+            {:error (str "its :token-command exited " (.exitValue proc)
+                         (when-not (str/blank? (text e)) (str ": " (text e))))}
+            (str/blank? (text o)) {:error "its :token-command printed no token"}
+            :else {:token (text o)}))))
+    (catch Exception e
+      {:error (str "its :token-command could not run: " (str/trim (or (ex-message e) (str (class e)))))})))
+
 (defn websocket-settings
   "The WebSocket listener's settings, from relay.edn's :serve :websocket
   and the token its :token-command prints, or nil with why on stderr:
   there is no listener without both. The token is read once, here."
   [config]
   (when-let [{:keys [token-command] :as ws} (get-in config [:serve :websocket])]
-    (let [{:keys [exit out err]} (try (apply p/shell {:out :string :err :string :continue true :in ""} token-command)
-                                      (catch Exception e {:exit -1 :err (ex-message e)}))
-          token (some-> out str/trim)]
-      (cond
-        (not (zero? exit))
-        (do (println (str "relay serve: no WebSocket listener: its :token-command exited " exit
-                          (when-not (str/blank? err) (str ": " (str/trim err)))))
-            nil)
-        (str/blank? token)
-        (do (println "relay serve: no WebSocket listener: its :token-command printed no token.") nil)
-        :else (-> ws (dissoc :token-command) (assoc :token token))))))
+    (let [{:keys [token error]} (read-token token-command)]
+      (if error
+        (do (println (str "relay serve: no WebSocket listener: " error ".")) nil)
+        (-> ws (dissoc :token-command) (assoc :token token))))))
 
 ;; --- relay serve
 
@@ -515,7 +580,7 @@
 (defn- run-service!
   "Listens on `path`, holding `lock`, and on the WebSocket listener when
   there are settings for it, until SIGTERM or SIGINT."
-  [sys path ^FileChannel lock ready websocket]
+  [sys path ^FileChannel lock ready]
   (let [_ (when (fs/exists? path {:nofollow-links true}) (fs/delete path))
         server (doto (ServerSocketChannel/open StandardProtocolFamily/UNIX)
                  (.bind (UnixDomainSocketAddress/of ^String path)))
@@ -539,13 +604,22 @@
                     (try (.close ^SocketChannel ch) (catch Exception _ nil)))
                   (recur)))))
     (println (str "relay serve: listening on " path))
-    (let [wserver (listen-websocket! eng websocket)]
+    (let [wserver (atom nil)]
+      ;; The token command runs on a thread of its own, once the socket
+      ;; listens, so a slow one holds up only the WebSocket listener.
+      (daemon "relay-websocket-start"
+              (fn []
+                (let [server (binding [*out* *err*] (listen-websocket! eng (websocket-settings (:config sys))))]
+                  (locking wserver
+                    (if (realized? stop)
+                      (some-> ^java.net.ServerSocket server .close)
+                      (reset! wserver server))))))
       (some-> ready (deliver path))
       (dispatch/with-signals {"TERM" #(deliver stop :term) "INT" #(deliver stop :int) "HUP" (fn [])}
         (fn []
           @stop
           (.close server)
-          (some-> ^java.net.ServerSocket wserver .close)
+          (locking wserver (some-> ^java.net.ServerSocket @wserver .close))
           ;; Every conversation ends, and its wake records the end.
           (doseq [[_ c] @(:convs eng)] ((:stop! c)))
           (let [deadline (+ (System/currentTimeMillis) dispatch/stop-grace-ms 10000)]
@@ -581,7 +655,7 @@
         (if-let [lock (lock! lock-file)]
           (if-let [why (socket-in-the-way path)]
             (do (.close ^FileChannel lock) (println (str "relay serve: " why)) 1)
-            (run-service! sys path lock ready (websocket-settings (:config sys))))
+            (run-service! sys path lock ready))
           (do (println (str "relay serve is already running for " (:data-dir sys) " (" path ")."))
               1))))))
 

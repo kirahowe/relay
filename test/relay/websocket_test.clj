@@ -116,10 +116,10 @@
       (.write out (ws/frame-bytes :ping (.getBytes "p" StandardCharsets/UTF_8) mask true)))
     (.toByteArray out)))
 
-(defn- read-all [^bytes bs limit]
+(defn- read-all [^bytes bs limit & [opts]]
   (let [in (ByteArrayInputStream. bs) pongs (atom 0)]
     (loop [acc []]
-      (let [m (ws/read-message in limit (fn [_] (swap! pongs inc)))]
+      (let [m (ws/read-message in (merge {:limit limit} opts) (fn [_] (swap! pongs inc)))]
         (if (:text m) (recur (conj acc m)) {:messages acc :end m :pongs @pongs})))))
 
 (defspec a-message-reads-back-whole-however-it-was-split 200
@@ -214,3 +214,69 @@
                      [nil #":serve is"]]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo why (config/resolve-config (assoc complete :serve bad)))
         (pr-str bad))))
+
+;; --- Codex round 1
+
+(defn- frames-of [& xs]
+  (let [o (ByteArrayOutputStream.)] (doseq [x xs] (.write o ^bytes x)) (.toByteArray o)))
+
+(def ^:private m4 (byte-array [5 6 7 8]))
+
+(deftest a-message-is-bounded-in-frames-and-in-time
+  (testing "endless empty continuations end at max-frames, however small the limit"
+    (let [empties (repeat 2000 (ws/frame-bytes :continuation (byte-array 0) m4 false))
+          bs (apply frames-of (ws/frame-bytes :text (byte-array 0) m4 false) empties)]
+      (is (= {:close 1009} (:end (read-all bs 0))))))
+  (testing "max-frames frames is still a message"
+    (let [bs (apply frames-of (ws/frame-bytes :text (.getBytes "a") m4 false)
+                    (concat (repeat (- ws/max-frames 2) (ws/frame-bytes :continuation (byte-array 0) m4 false))
+                            [(ws/frame-bytes :continuation (.getBytes "b") m4 true)]))]
+      (is (= [{:text "ab"}] (:messages (read-all bs 100))))))
+  (testing "a message that takes longer than max-ms ends with 1008, and the caller is told when it began and ended"
+    (let [clock (atom 0)
+          seen (atom [])
+          bs (frames-of (ws/frame-bytes :text (.getBytes "a") m4 false)
+                        (ws/frame-bytes :continuation (.getBytes "b") m4 false)
+                        (ws/frame-bytes :continuation (.getBytes "c") m4 true))
+          in (ByteArrayInputStream. bs)
+          r (ws/read-message in {:limit 100 :max-ms 1000
+                                 :now #(swap! clock + 600)
+                                 :partial! #(swap! seen conj %)}
+                             (fn [_]))]
+      (is (= {:close 1008} r))
+      (is (= [600 nil] @seen)))))
+
+(deftest a-length-near-the-largest-long-is-refused-not-overflowed
+  (let [header (doto (java.nio.ByteBuffer/allocate 14)
+                 (.put (unchecked-byte 0x80)) (.put (unchecked-byte (bit-or 0x80 127)))
+                 (.putLong Long/MAX_VALUE) (.put m4))
+        bs (frames-of (ws/frame-bytes :text (.getBytes "x") m4 false) (.array header))]
+    (is (= {:close 1009} (:end (read-all bs (* 8 1024 1024)))))))
+
+(deftest a-reader-is-strict-about-close-frames-and-lengths
+  (let [close (fn [^bytes payload] (:end (read-all (ws/frame-bytes :close payload m4 true) 100)))
+        status (fn [code & [^bytes reason]]
+                 (let [r (or reason (byte-array 0))]
+                   (.array (doto (java.nio.ByteBuffer/allocate (+ 2 (alength r))) (.putShort (unchecked-short code)) (.put r)))))]
+    (testing "a close of one byte"
+      (is (= {:close 1002} (close (byte-array [3])))))
+    (testing "statuses a client may not send"
+      (doseq [code [0 999 1004 1005 1006 1015 1016 2999 5000 65535]]
+        (is (= {:close 1002} (close (status code))) (str code))))
+    (testing "statuses it may"
+      (doseq [code [1000 1001 1002 1003 1007 1008 1009 1010 1011 1012 1013 1014 3000 4999]]
+        (is (= {:close 1000} (close (status code))) (str code)))
+      (is (= {:close 1000} (close (status 1000 (.getBytes "bye" StandardCharsets/UTF_8))))))
+    (testing "a reason that is not UTF-8"
+      (is (= {:close 1002} (close (status 1000 (byte-array [(unchecked-byte 0xc3) (unchecked-byte 0x28)]))))))
+    (testing "a length not in its shortest form"
+      (let [short16 (doto (java.nio.ByteBuffer/allocate 9)
+                      (.put (unchecked-byte 0x81)) (.put (unchecked-byte (bit-or 0x80 126)))
+                      (.putShort (short 1)) (.put m4) (.put (unchecked-byte (bit-xor (int \x) 5))))
+            short64 (doto (java.nio.ByteBuffer/allocate 15)
+                      (.put (unchecked-byte 0x81)) (.put (unchecked-byte (bit-or 0x80 127)))
+                      (.putLong 1) (.put m4) (.put (unchecked-byte (bit-xor (int \x) 5))))]
+        (is (= {:close 1002} (:end (read-all (.array short16) 100))))
+        (is (= {:close 1002} (:end (read-all (.array short64) 100))))
+        (is (= [{:text "x"}] (:messages (read-all (ws/frame-bytes :text (.getBytes "x") m4 true) 100)))
+            "the same frame in its shortest form is read")))))

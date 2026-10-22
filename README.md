@@ -1439,9 +1439,10 @@ your keychain.
 
 3. Restart the service (`launchctl bootout gui/$(id -u)/relay.serve`,
    then `launchctl bootstrap` as above). It reads the token once, when it
-   starts. If the command fails or prints nothing, the service says so in
-   its log and runs without the listener, and the Unix socket works as
-   before.
+   starts, after the Unix socket is up. If the command fails, prints
+   nothing, prints more than 4 KB or takes more than 10 seconds, the
+   service says so in its log and runs without the listener, and the Unix
+   socket works as before.
 
 4. Publish the port on your tailnet (`--bg` keeps it published after the
    terminal closes):
@@ -1458,7 +1459,8 @@ relay answers a request with no token or a wrong one with a bare 401, a
 request with an origin it does not allow with a bare 403, and anything
 that is not a WebSocket upgrade with a 404. None of these responses has
 a body. One text message carries one JSON-RPC message. relay closes the
-connection on a binary message or on one over 8 MB. WebSocket clients
+connection on a binary message, on one over 8 MB, 1024 frames or 30
+seconds, and on anything else RFC 6455 forbids. WebSocket clients
 share the socket's limits: at most 64 connected clients, and a client
 that stops reading is dropped once 64 MB wait for it.
 
