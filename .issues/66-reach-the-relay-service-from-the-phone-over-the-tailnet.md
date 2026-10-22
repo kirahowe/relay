@@ -147,6 +147,34 @@ reader, and the shell tests ran with each fix reverted in place.
 After: `bb test --agentloop ../agentloop/bin/agentloop` with
 acp-tui-convs' bin on PATH, 859 tests, all pass.
 
+## Codex round 2
+
+Round 1's fixes confirmed. One in-scope finding, fixed in the commit
+"Time a WebSocket message from its first byte".
+
+1. The message deadline started only after a first non-final frame had
+   arrived whole, and a single-frame message was never timed, so a
+   client stalling partway through a header, a mask or a payload held
+   its place and up to 8 MB for good. Now `read-message` calls
+   `(busy! t)` as soon as a message's first byte arrives and
+   `(busy! nil)` when it ends. Every read in between, across all its
+   frames, falls under the shell's one timer, which closes the socket
+   at `max-message-ms` (30 s), checking every 100 ms. The reader no
+   longer checks a clock. A ping or pong between messages counts as a
+   short message of its own. Waiting for a first byte is unbounded, so
+   an idle connection stays.
+   Tests: serve-test
+   `a-message-that-stalls-anywhere-is-stopped-at-its-deadline` (stalls
+   in the first frame's header, in its mask, in a single-frame
+   message's payload, and between fragments; each closed between 350
+   ms and 3 s with a 400 ms deadline, and its place freed). The first
+   three fail on round 1's code. `an-idle-connection-between-messages-is-never-closed`
+   (1.5 s idle with a 200 ms deadline, then still answering pings).
+   websocket-test checks when busy! is called, single frames included.
+
+After: `bb test --agentloop ../agentloop/bin/agentloop` with
+acp-tui-convs' bin on PATH, 860 tests, all pass.
+
 ## Notes
 
 Agmente will not know `_relay/*` methods, so it sees conversations through
