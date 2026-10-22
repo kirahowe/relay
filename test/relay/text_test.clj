@@ -11,6 +11,7 @@
             [clojure.test.check.properties :as prop]
             [relay.cli :as cli]
             [relay.core :as core]
+            [relay.test-support :as support]
             [relay.inbound :as inbound]
             [relay.log :as log]
             [relay.render :as render]
@@ -59,7 +60,7 @@
           (submit "clerk" :journal/write {:text s})
           (submit "clerk" :routine/write {:name "r" :schedule "every 1d" :instructions s})
           (submit "operator" :wake/start {:role "clerk" :note s})
-          (let [wake (core/running-wake (inbound/current-state sys) "clerk")]
+          (let [wake (support/calling-wake (inbound/current-state sys) "clerk")]
             (submit "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :session "s" :said s
                                             :held [{:id "c1" :name "post" :input {:text s}}]}))
           (let [outs (for [args [["inbox"] ["status"] ["holds"] ["log"] ["log" "--json"] ["docs"]
@@ -214,7 +215,7 @@
           (is (not (str/includes? text twice)) what))
         (inbound/submit! sys {:type :wake/start :actor "operator" :args {:role "clerk" :note "go"}})
         (inbound/submit! sys {:type :wake/end :actor "dispatcher"
-                              :args {:wake (:id (core/running-wake (state) "clerk")) :outcome "ran" :session "s1" :said ""
+                              :args {:wake (:id (support/calling-wake (state) "clerk")) :outcome "ran" :session "s1" :said ""
                                      :held [{:id "c1" :name "post" :input {:text s} :input-sha256 "d1"}
                                             {:id "c2" :name "post" :input {:text s} :input-sha256 "d2"}]}})
         (let [[h1 h2] (map :id (core/open-holds (state)))]
@@ -281,7 +282,7 @@
         (submit "clerk" :journal/write {:text t})
         (submit "clerk" :routine/write {:name "r" :schedule "every 1d" :instructions t})
         (submit "operator" :wake/start {:role "clerk" :note "go"})
-        (submit "dispatcher" :wake/end {:wake (:id (core/running-wake (state) "clerk")) :outcome "ran" :session "s" :said t
+        (submit "dispatcher" :wake/end {:wake (:id (support/calling-wake (state) "clerk")) :outcome "ran" :session "s" :said t
                                         :held [{:id "c1" :name "post" :input {:text t} :input-sha256 "d"}]})
         (let [hold (str (:id (first (core/open-holds (state)))))
               memo (str (:id (last (sort-by :id (core/unread-memos (state) "clerk")))))

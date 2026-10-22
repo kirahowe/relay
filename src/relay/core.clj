@@ -157,11 +157,6 @@
   [state role-id]
   (boolean (seq (running-wakes state role-id))))
 
-(defn running-wake
-  "The wake a role's call is taken to come from when it names none: its
-  working wake, else its open conversation, else nil."
-  [state role-id]
-  (or (working-wake state role-id) (open-conversation state role-id)))
 
 (defn unread-memos
   "Open memos to someone, oldest first."

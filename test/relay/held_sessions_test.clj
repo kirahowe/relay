@@ -4,7 +4,8 @@
             [clojure.test :refer [deftest is testing]]
             [relay.tools]
             [relay.config :as config]
-            [relay.core :as core])
+            [relay.core :as core]
+            [relay.test-support :as support])
   (:import (java.time Instant)))
 
 (def t0 (Instant/parse "2026-10-14T12:00:00Z"))
@@ -26,7 +27,7 @@
               (run "operator" :role/add {:id "clerk" :title "Clerk" :instructions "File things."})
               (run "operator" :memo/send {:to "clerk" :subject "Post it" :body "Please."})
               (run "dispatcher" :wake/start {:role "clerk" :dispatched true}))
-        wake (core/running-wake (:state w) "clerk")]
+        wake (support/calling-wake (:state w) "clerk")]
     (run w "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :exit 0 :session "sess-1" :said ""
                                    :labels ["contaminated" "private"]
                                    :held [{:id "c1" :name "post" :input {:a 1} :input-sha256 "h1"}
@@ -39,7 +40,7 @@
         _ (is (= :denied (:status (core/hold (:state w) (:id h2)))) "ending it denies its other open calls")
         _ (is (thrown? clojure.lang.ExceptionInfo (run w "operator" :hold/resolve {:hold (:id h2) :verdict "allow"})))
         w (run w "dispatcher" :wake/start {:role "clerk" :dispatched true})
-        wake (core/running-wake (:state w) "clerk")]
+        wake (support/calling-wake (:state w) "clerk")]
     (is (nil? (:resumes wake)) "the ended session must not be carried on")
     (is (= 1 (count (:memos wake))) "its memo goes on in a fresh session")))
 
@@ -48,7 +49,7 @@
         kept (:id (first (core/unread-memos (:state w) "clerk")))
         w (run w "operator" :memo/send {:to "clerk" :subject "Other" :body "b"})
         w (run w "dispatcher" :wake/start {:role "clerk" :dispatched true})]
-    (is (core/running-wake (:state w) "clerk"))
+    (is (support/calling-wake (:state w) "clerk"))
     (is (nil? (try (run w "clerk" :memo/close {:memo kept :outcome "done by the fresh session"}) :closed
                    (catch clojure.lang.ExceptionInfo _ nil)))
         "a fresh session closes a memo the held session keeps")))
@@ -58,13 +59,13 @@
         [h1 h2] (core/open-holds (:state w) "clerk")
         w (run w "operator" :memo/send {:to "clerk" :subject "Other" :body "b"})
         w (run w "dispatcher" :wake/start {:role "clerk" :dispatched true})
-        fresh (core/running-wake (:state w) "clerk")
+        fresh (support/calling-wake (:state w) "clerk")
         w (run w "dispatcher" :wake/end {:wake (:id fresh) :outcome "ran" :exit "timeout" :cut-short true :session "sess-2" :said ""})
         _ (is (= (:id fresh) (:interrupted-wake (core/role (:state w) "clerk"))))
         w (run w "operator" :hold/resolve {:hold (:id h1) :verdict "allow"})
         w (run w "operator" :hold/resolve {:hold (:id h2) :verdict "allow"})
         w (run w "dispatcher" :wake/start {:role "clerk" :dispatched true})
-        resumed (core/running-wake (:state w) "clerk")
+        resumed (support/calling-wake (:state w) "clerk")
         w (run w "dispatcher" :wake/end {:wake (:id resumed) :outcome "ran" :exit 0 :session "sess-1" :said ""})]
     (is (= (:id fresh) (:interrupted-wake (core/role (:state w) "clerk"))) "sess-2 should still be resumable")))
 

@@ -9,6 +9,7 @@
             [relay.cli :as cli]
             [relay.config :as config]
             [relay.core :as core]
+            [relay.test-support :as support]
             [relay.dispatch :as dispatch]
             [relay.harness.agentloop :as agentloop]
             [relay.inbound :as inbound]
@@ -44,7 +45,7 @@
               (run "operator" :role/add {:id "clerk" :title "Clerk" :instructions "File things."})
               (run "operator" :memo/send {:to "clerk" :subject "Post it" :body "Please."})
               (run "dispatcher" :wake/start {:role "clerk" :dispatched true}))
-        wake (core/running-wake (:state w) "clerk")]
+        wake (support/calling-wake (:state w) "clerk")]
     (run w "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :exit 0 :session "sess-1" :said "Waiting."
                                    :labels ["contaminated" "private"]
                                    :held [{:id "toolu_1" :name "post" :input {:args ["hello"]}
@@ -70,7 +71,7 @@
             other (:id (last (sort-by :id (core/unread-memos (:state w) "clerk"))))
             _ (is (= ["clerk"] (core/roles-to-wake (:state w) cfg t0)))
             w (run w "dispatcher" :wake/start {:role "clerk" :dispatched true})
-            wake (core/running-wake (:state w) "clerk")]
+            wake (support/calling-wake (:state w) "clerk")]
         (is (= [other] (:memos wake)) "only the memo the held session does not keep")
         (is (nil? (:resumes wake)) "and never the held session")
         (testing "and once the call is decided, the held session is carried on when the role is free"
@@ -78,12 +79,12 @@
             (is (empty? (core/roles-to-wake (:state w) cfg t0)) "not while it runs")
             (let [w (run w "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :session "fresh" :said ""})
                   w (run w "dispatcher" :wake/start {:role "clerk" :dispatched true})
-                  resumed (core/running-wake (:state w) "clerk")]
+                  resumed (support/calling-wake (:state w) "clerk")]
               (is (= (:wake h) (:resumes resumed)))
               (is (= [(:id memo)] (:memos resumed)))
               (is (= [(:id h)] (:resolves resumed))))))))
     (testing "a conversation uses a session of its own, so it may go ahead"
-      (is (core/running-wake (:state (run w "operator" :wake/start {:role "clerk" :chat true})) "clerk")))))
+      (is (support/calling-wake (:state (run w "operator" :wake/start {:role "clerk" :chat true})) "clerk")))))
 
 (deftest only-the-operator-decides-a-hold
   (let [w (held-world)
@@ -102,7 +103,7 @@
         w (run w "operator" :hold/resolve {:hold hold-id :verdict "deny" :reason "Not today."})]
     (is (= ["clerk"] (core/roles-to-wake (:state w) cfg t0)))
     (let [w (run w "dispatcher" :wake/start {:role "clerk" :dispatched true})
-          wake (core/running-wake (:state w) "clerk")
+          wake (support/calling-wake (:state w) "clerk")
           request (dispatch/wake-request {:data-dir "/nowhere" :config cfg} (:state w) wake
                                          {:shared "" :now t0 :relay-bin "relay" :data-path "/nowhere"})]
       (is (= [hold-id] (:resolves wake)))
@@ -134,9 +135,9 @@
   (let [w (-> {:state core/empty-state :now t0}
               (run "operator" :role/add {:id "clerk" :title "Clerk" :instructions "File things."})
               (run "operator" :wake/start {:role "clerk" :note "Go."}))
-        wake (core/running-wake (:state w) "clerk")]
+        wake (support/calling-wake (:state w) "clerk")]
     (let [w (run (run w "dispatcher" :wake/end {:wake (:id wake) :outcome "ran"}) "operator" :wake/start {:role "clerk" :chat true})
-          chat (core/running-wake (:state w) "clerk")
+          chat (support/calling-wake (:state w) "clerk")
           w (run w "dispatcher" :wake/end {:wake (:id chat) :outcome "ran" :session "s" :held [{:id "a" :name "post" :input-sha256 "d"}]})]
       (is (empty? (core/open-holds (:state w))) "a conversation's holds go through its client, not relay"))
     (doseq [args [{:outcome "limited" :session "s" :held [{:id "a" :name "post"}]}
@@ -181,7 +182,7 @@
             _ (doseq [c [{:type :role/add :actor "operator" :args {:id "clerk" :title "Clerk" :instructions "x"}}
                          {:type :wake/start :actor "operator" :args {:role "clerk" :note "Go."}}]]
                 (inbound/submit! sys c))
-            wake (core/running-wake (inbound/current-state sys) "clerk")
+            wake (support/calling-wake (inbound/current-state sys) "clerk")
             _ (inbound/submit! sys {:type :wake/end :actor "dispatcher"
                                     :args {:wake (:id wake) :outcome "ran" :session "s1" :said ""
                                            :held [{:id "toolu_9" :name "post" :input {:args ["\u001b[2Jhi‮"]}
@@ -237,7 +238,7 @@
         (testing "deny takes a reason"
           (submit {:type :wake/start :actor "operator" :args {:role "clerk" :note "Go."}})
           (submit {:type :wake/end :actor "dispatcher"
-                   :args {:wake (:id (core/running-wake (state) "clerk")) :outcome "ran" :session "s1" :said ""
+                   :args {:wake (:id (support/calling-wake (state) "clerk")) :outcome "ran" :session "s1" :said ""
                           :held [{:id "toolu_2" :name "post" :input {} :input-sha256 "d2"}]}})
           (let [id (:id (first (core/open-holds (state))))]
             (binding [cli/*tty* (tty (atom "") typed-code)]
@@ -407,7 +408,7 @@
                        ["operator" :doc/put {:path "mine.md" :content "Mine."}]
                        ["clerk" :fact/add {:text "A fact."}]
                        ["operator" :wake/start {:role "clerk" :note "Go."}]])
-            wake (core/running-wake (:state w) "clerk")
+            wake (support/calling-wake (:state w) "clerk")
             w (step w "dispatcher" :wake/end {:wake (:id wake) :outcome "limited" :session "old-session"})]
         (log/transact! data (constantly t0) (fn [_] (mapv #(-> % (dissoc :seq :at) (assoc :labels [])) @events)))
         (is (every? #(= [] (:labels %)) (log/read-events data)))
@@ -426,7 +427,7 @@
           (testing "the session from before is not carried on"
             (is (some? (:interrupted-wake (core/role state "clerk"))))
             (inbound/submit! sys {:type :wake/start :actor "operator" :args {:role "clerk" :note "Again."}})
-            (is (nil? (:resumes (core/running-wake (inbound/current-state sys) "clerk")))))
+            (is (nil? (:resumes (support/calling-wake (inbound/current-state sys) "clerk")))))
           (testing "the operator can trust what they have read"
             (let [v (core/trusted-version (inbound/current-state sys) "doc" "web.md")]
               (inbound/submit! sys {:type :label/trust :actor "operator"
@@ -476,7 +477,7 @@
       (is (nil? (:interrupted-wake (core/role (:state ended) "clerk"))))
       (is (empty? (core/pending-resolutions (:state ended) "clerk")))
       (let [w (run ended "dispatcher" :wake/start {:role "clerk" :dispatched true})
-            wake (core/running-wake (:state w) "clerk")]
+            wake (support/calling-wake (:state w) "clerk")]
         (is (nil? (:resumes wake)))
         (is (empty? (:resolves wake)))
         (is (= 1 (count (:memos wake))))))
@@ -486,7 +487,7 @@
     (testing "the third denial in one session ends it, and the operator is told"
       (let [deny-again (fn [w call]
                          (let [w (run w "dispatcher" :wake/start {:role "clerk" :dispatched true})
-                               wake (core/running-wake (:state w) "clerk")
+                               wake (support/calling-wake (:state w) "clerk")
                                w (run w "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :session "sess-1" :said ""
                                                                 :held [{:id call :name "post" :input {} :input-sha256 call}]})
                                h (first (core/open-holds (:state w) "clerk"))]
@@ -502,7 +503,7 @@
   (let [w (-> {:state core/empty-state :now t0}
               (run "operator" :role/add {:id "clerk" :title "C" :instructions "x"})
               (run "operator" :wake/start {:role "clerk" :chat true}))
-        wake (:id (core/running-wake (:state w) "clerk"))
+        wake (:id (support/calling-wake (:state w) "clerk"))
         body (fn [why] (:body (last (sort-by :id (vals (:notifications
                                                           (:state (run w "dispatcher" :permission/answered
                                                                        {:wake wake :call "c" :tool "post" :outcome "reject_once"
@@ -537,7 +538,7 @@
         (testing "a decided hold is refused before any code is asked for"
           (submit {:type :wake/start :actor "operator" :args {:role "clerk" :note "Go."}})
           (submit {:type :wake/end :actor "dispatcher"
-                   :args {:wake (:id (core/running-wake (state) "clerk")) :outcome "ran" :session "s1" :said ""
+                   :args {:wake (:id (support/calling-wake (state) "clerk")) :outcome "ran" :session "s1" :said ""
                           :held [{:id "c1" :name "post" :input {:secret "the safe code is 1234"} :input-sha256 "d"}]}})
           (let [id (:id (first (core/open-holds (state))))
                 asked (atom false)]

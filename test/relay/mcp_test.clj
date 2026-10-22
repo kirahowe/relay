@@ -13,6 +13,7 @@
             [clojure.test.check.properties :as prop]
             [relay.config :as config]
             [relay.core :as core]
+            [relay.test-support :as support]
             [relay.dispatch :as dispatch]
             [relay.harness.agentloop :as agentloop]
             [relay.render :as render]
@@ -127,7 +128,7 @@
                   (cmd "operator" :wake/start {:role role}))
         sys {:data-dir (str (fs/path (fs/temp-dir) (str "relay-never-made-" (random-uuid)))) :config cfg}
         inputs {:shared "" :now t0 :relay-bin "relay" :data-path "/d"}
-        request (dispatch/wake-request sys state (core/running-wake state role) inputs)
+        request (dispatch/wake-request sys state (support/calling-wake state role) inputs)
         text (json/generate-string (agentloop/request-json request "sid" "/w"))]
     [(json/parse-string text) text]))
 
@@ -267,7 +268,7 @@
   (run w "dispatcher" :wake/start {:role "hub" :dispatched true} now))
 
 (defn- end [w args now]
-  (run w "dispatcher" :wake/end (merge {:wake (:id (core/running-wake (:state w) "hub")) :exit 0} args) now))
+  (run w "dispatcher" :wake/end (merge {:wake (:id (support/calling-wake (:state w) "hub")) :exit 0} args) now))
 
 (defn- fresh
   "relay fresh as the command line sends it: with what it showed."
@@ -290,7 +291,7 @@
   (let [w (-> (setup) (start t0)
               (end {:outcome "ran" :session "s1" :cut-short true} t0)
               (run "operator" :wake/start {:role "hub"} t0))
-        _ (is (= "s1" (:session (get-in (:state w) [:wakes (:resumes (core/running-wake (:state w) "hub"))]))))
+        _ (is (= "s1" (:session (get-in (:state w) [:wakes (:resumes (support/calling-wake (:state w) "hub"))]))))
         w (end w {:outcome "needs-attention" :session "s1" :labels ["private"]
                   :tools-error {:server "files" :tool "file_read" :pinned pinned :got got
                                 :message "The definition of the tool file_read is not the one this session pinned."}}
@@ -331,7 +332,7 @@
         (is (not (core/waiting-on-tools? (:state w) "hub" t0)))
         (is (= ["hub"] (core/roles-to-wake (:state w) (:config w) later)))
         (let [w (start w later)]
-          (is (nil? (:resumes (core/running-wake (:state w) "hub"))) "a fresh session")
+          (is (nil? (:resumes (support/calling-wake (:state w) "hub"))) "a fresh session")
           (testing "and relay fresh has nothing more to end"
             (let [w (end w {:outcome "ran" :session "s2"} later)]
               (is (= :invalid (first (rejection #(fresh w "hub" later))))))))))))
@@ -349,7 +350,7 @@
     (is (= [] (core/roles-to-wake (:state w) (:config w) t0)))
     (is (= ["hub"] (core/roles-to-wake (:state w) (:config w) retry)))
     (let [w (start w retry)
-          _ (is (= "s1" (:session (get-in (:state w) [:wakes (:resumes (core/running-wake (:state w) "hub"))])))
+          _ (is (= "s1" (:session (get-in (:state w) [:wakes (:resumes (support/calling-wake (:state w) "hub"))])))
                 "no new session is needed")
           w2 (end w {:outcome "needs-attention" :session "s1"
                      :tools-error {:server "files" :message "still down"}} retry)]
@@ -397,7 +398,7 @@
                     :tools-error {:server "files" :message "did not start"}} t0))
         later (.plusSeconds t0 600)
         w (run w "operator" :wake/start {:role "hub" :chat true} later)
-        chat (core/running-wake (:state w) "hub")
+        chat (support/calling-wake (:state w) "hub")
         w (run w "dispatcher" :wake/end {:wake (:id chat) :outcome "ran" :sessions ["c1"]} later)]
     (is (some? (get-in (:state w) [:roles "hub" :tools-unavailable])) "a conversation that ran clears nothing")))
 
@@ -448,9 +449,9 @@
             sys {:data-dir "/nonexistent" :config (:config w)}
             w2 (run w "operator" :memo/send {:to "hub" :subject "Again" :body "Again."})
             w2 (start w2 t0)
-            req (dispatch/wake-request sys (:state w2) (core/running-wake (:state w2) "hub") inputs)
+            req (dispatch/wake-request sys (:state w2) (support/calling-wake (:state w2) "hub") inputs)
             chat (-> w (run "operator" :wake/start {:role "hub" :chat true}))
-            creq (dispatch/wake-request sys (:state chat) (core/running-wake (:state chat) "hub") inputs)
+            creq (dispatch/wake-request sys (:state chat) (support/calling-wake (:state chat) "hub") inputs)
             digest-of (fn [r n] (get-in (first (filter #(= n (:name %)) (:tools r))) [:mcp :digest]))]
         (is (= pinned (digest-of req "file_read")))
         (is (= pinned (digest-of creq "file_read")))
@@ -472,7 +473,7 @@
         (testing "another role offered the changed tool is stopped too"
           (let [w (-> w (run "operator" :memo/send {:to "clerk" :subject "Go" :body "Go."})
                       (run "dispatcher" :wake/start {:role "clerk" :dispatched true}))
-                cw (core/running-wake (:state w) "clerk")
+                cw (support/calling-wake (:state w) "clerk")
                 w (run w "dispatcher" :wake/end {:wake (:id cw) :exit 0 :outcome "needs-attention" :session "c1"
                                                  :tools-error {:tool "file_read" :pinned pinned :got got :message "changed"}})]
             (is (get-in (:state w) [:roles "clerk" :tools-unavailable :fresh]))
@@ -551,7 +552,7 @@
         _ (is (= pinned (core/tool-pin (:state w) "file_read")) "the definition it changed from is held")
         w (-> w (run "operator" :memo/send {:to "clerk" :subject "Go" :body "Go."})
               (run "dispatcher" :wake/start {:role "clerk" :dispatched true}))
-        cw (core/running-wake (:state w) "clerk")
+        cw (support/calling-wake (:state w) "clerk")
         w (run w "dispatcher" :wake/end {:wake (:id cw) :exit 0 :outcome "ran" :session "c1" :pins {"file_read" got}})]
     (is (= pinned (core/tool-pin (:state w) "file_read")))
     (is (get-in (:state w) [:roles "hub" :tools-unavailable :fresh]) "only relay fresh lifts it")

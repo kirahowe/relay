@@ -10,6 +10,7 @@
             [relay.config :as config]
             [relay.cli :as cli]
             [relay.core :as core]
+            [relay.test-support :as support]
             [relay.dispatch :as dispatch]
             [relay.inbound :as inbound]
             [relay.log :as log]
@@ -196,7 +197,7 @@
 ;; --- report_submit
 
 (defn- run [{:keys [state now] :as w} actor type args & [{:keys [labels public]}]]
-  (let [wake (core/running-wake state actor)
+  (let [wake (support/calling-wake state actor)
         [state' events] (core/run-command state (cond-> {:type type :actor actor :args args :labels labels :public public}
                                                    wake (assoc :session-wake (:id wake)))
                                           {:now now :config cfg})]
@@ -234,7 +235,7 @@
     (is (= ["contaminated"] (:labels e)))
     (is (= {:status :submitted :role "scout"} (select-keys r [:status :role])))
     (testing "the tool says only that it was submitted"
-      (with-redefs [relay.inbound/submit! (fn [_ cmd] (second (core/run-command (:state w) (assoc cmd :session-wake (:id (core/running-wake (:state w) "scout")))
+      (with-redefs [relay.inbound/submit! (fn [_ cmd] (second (core/run-command (:state w) (assoc cmd :session-wake (:id (support/calling-wake (:state w) "scout")))
                                                                               {:now t0 :config cfg})))]
         (is (re-matches #"Report \d+ submitted; it will be checked\."
                         ((:run (get (tools/offered cfg "scout") "report_submit")) {} "scout" [] a-report)))))))
@@ -936,7 +937,7 @@
 (deftest relay-review-says-what-a-fake-decision-shows-again
   (with-data "ok" a-report
     (fn [sys dir a]
-      (let [wake (:id (core/running-wake (inbound/current-state sys) "scout"))
+      (let [wake (:id (support/calling-wake (inbound/current-state sys) "scout"))
             b (:seq (first (inbound/submit! sys {:type :report/submit :actor "scout" :session-wake wake
                                                  :labels ["contaminated"] :args a-report})))]
         (dispatch/verify! sys a {:draw #(vec (repeat % false))})

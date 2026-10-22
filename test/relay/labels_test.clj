@@ -23,6 +23,7 @@
             [clojure.test.check.properties :as prop]
             [relay.config :as config]
             [relay.core :as core]
+            [relay.test-support :as support]
             [relay.dispatch :as dispatch]
             [relay.inbound :as inbound]
             [relay.log :as log]
@@ -73,7 +74,7 @@
   "A role's command as a harness sends it: naming the wake whose session
   made it, as relay's tool command does."
   [state {:keys [actor] :as command}]
-  (if-let [w (and (not (contains? command :session-wake)) (core/running-wake state actor))]
+  (if-let [w (and (not (contains? command :session-wake)) (support/calling-wake state actor))]
     (assoc command :session-wake (:id w))
     command))
 
@@ -97,7 +98,7 @@
   to: anything but what a public role writes in a session that began
   public."
   [w actor]
-  (not (and (= public-role actor) (:public-session (core/running-wake (:state w) actor)))))
+  (not (and (= public-role actor) (:public-session (support/calling-wake (:state w) actor)))))
 
 (defn- advance [w seconds] (update w :now #(.plusSeconds ^Instant % seconds)))
 
@@ -264,7 +265,7 @@
       (let [[n session-labels hold? closes close-labels cut-short?] args
             r (nth-or (roles w) n)
             w (if r (run w "dispatcher" [] :wake/start {:role r}) w)
-            wake (when r (core/running-wake (:state w) r))]
+            wake (when r (support/calling-wake (:state w) r))]
         (if-not wake
           w
           (let [w (reduce (fn [w i]
@@ -348,7 +349,7 @@
           :wake (if (core/open? s public-role)
                   w
                   (let [w (run-public w labels :wake/start {:role public-role :note (str "Look at " a)})
-                        wake (core/running-wake (:state w) public-role)]
+                        wake (support/calling-wake (:state w) public-role)]
                     (if wake
                       (run w "dispatcher" [] :wake/end {:wake (:id wake) :outcome "ran" :exit 0
                                                         :session (str "s" (:id wake)) :said "ok" :labels labels})
@@ -361,7 +362,7 @@
 
       :report
       (let [[labels two?] args
-            wake (core/running-wake s public-role)
+            wake (support/calling-wake s public-role)
             finding (fn [w]
                       (let [[w title] (mark w labels (content? w public-role))
                             [w org] (mark w labels (content? w public-role))
@@ -696,7 +697,7 @@
   (let [w (-> (seed)
               (run "operator" [] :memo/send {:to "clerk" :subject "s" :body "b"})
               (run "dispatcher" [] :wake/start {:role "clerk"}))
-        wake (core/running-wake (:state w) "clerk")
+        wake (support/calling-wake (:state w) "clerk")
         told (run w "dispatcher" [] :wake/end {:wake (:id wake) :outcome "ran" :said "x" :session "s"
                                                :labels ["contaminated" "private"]})
         untold (run w "dispatcher" [] :wake/end {:wake (:id wake) :outcome "ran" :said "x" :session "s"})]
@@ -747,7 +748,7 @@
       (let [w (run w "operator" [] :memo/release {:memo id})]
         (is (not (core/quarantined? cfg (core/memo (:state w) id))))
         (is (= ["hub"] (core/roles-to-wake (:state w) cfg (:now w))))
-        (let [wake (core/running-wake (:state (run w "dispatcher" [] :wake/start {:role "hub" :dispatched true})) "hub")]
+        (let [wake (support/calling-wake (:state (run w "dispatcher" [] :wake/start {:role "hub" :dispatched true})) "hub")]
           (is (= [id] (:memos wake))))))))
 
 (deftest a-role-with-no-tool-that-reaches-out-takes-contaminated-memos-in
@@ -760,7 +761,7 @@
     (is (str/includes? (:content r) "From the web"))
     (is (= ["contaminated" "private"] (:labels r)) "and reading it makes clerk contaminated")
     (let [w (run w "dispatcher" [] :wake/start {:role "clerk" :dispatched true})
-          wake (core/running-wake (:state w) "clerk")
+          wake (support/calling-wake (:state w) "clerk")
           request (dispatch/wake-request {:data-dir "/nowhere" :config cfg} (:state w) wake
                                          {:shared "" :now t0 :relay-bin "relay" :data-path "/nowhere"})]
       (is (= [(:id m)] (:memos wake)))

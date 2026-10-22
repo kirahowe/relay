@@ -11,6 +11,7 @@
             [clojure.test.check.properties :as prop]
             [relay.config :as config]
             [relay.core :as core]
+            [relay.test-support :as support]
             [relay.dispatch :as dispatch]
             [relay.harness.agentloop :as agentloop]
             [relay.tools :as tools])
@@ -140,7 +141,7 @@
                   (cmd "operator" :wake/start {:role "clerk"}))
         sys {:data-dir (str (fs/path (fs/temp-dir) (str "relay-never-made-" (random-uuid)))) :config cfg}
         inputs {:shared "" :now t0 :relay-bin "relay" :data-path "/d"}
-        request (fn [role] (dispatch/wake-request sys state (core/running-wake state role) inputs))]
+        request (fn [role] (dispatch/wake-request sys state (support/calling-wake state role) inputs))]
     (is (= ["web_fetch" "mail_read"] (:quarantine (request "hub"))))
     (is (str/includes? (:system-prompt (request "hub")) "`web_fetch`, `mail_read` through `read_quarantined`"))
     (is (nil? (:quarantine (request "clerk"))))
@@ -156,7 +157,7 @@
                   (cmd "operator" :memo/send {:to "hub" :subject "Look" :body "Look."})
                   (cmd "operator" :wake/start {:role "hub"}))
         sys {:data-dir (str (fs/path (fs/temp-dir) (str "relay-never-made-" (random-uuid)))) :config cfg}
-        request (dispatch/wake-request sys state (core/running-wake state "hub")
+        request (dispatch/wake-request sys state (support/calling-wake state "hub")
                                        {:shared "" :now t0 :relay-bin "relay" :data-path "/d"})
         run (agentloop/request-json request "id" "/w")]
     (is (= ["web_fetch" "mail_read"] (:reader-only request)))

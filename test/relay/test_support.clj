@@ -6,6 +6,7 @@
   (:require [babashka.fs :as fs]
             [relay.cli :as cli]
             [relay.connect :as connect]
+            [relay.core :as core]
             [relay.serve :as serve]))
 
 (def relay-bin (str (fs/absolutize "bin/relay")))
@@ -54,3 +55,9 @@
                                :open-browser (fn [_] (throw (ex-info "tests never open a browser" {})))}))
   (when-not (System/getProperty "relay.bin")
     (System/setProperty "relay.bin" relay-bin)))
+
+(defn calling-wake
+  "The wake a test takes a role's call to come from, as relay's tool
+  command names it: the role's working wake, else its open conversation."
+  [state role-id]
+  (or (core/working-wake state role-id) (core/open-conversation state role-id)))

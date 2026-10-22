@@ -10,6 +10,7 @@
             [clojure.test.check.properties :as prop]
             [relay.config :as config]
             [relay.core :as core]
+            [relay.test-support :as support]
             [relay.dispatch :as dispatch]
             [relay.harness.agentloop :as agentloop]
             [relay.tools :as tools])
@@ -152,7 +153,7 @@
         data-dir (str (fs/path (fs/temp-dir) (str "relay-never-made-" (random-uuid))))
         sys {:data-dir data-dir :config cfg}
         inputs {:shared "" :now t0 :relay-bin "relay" :data-path "/d"}
-        request (fn [role] (dispatch/wake-request sys state (core/running-wake state role) inputs))]
+        request (fn [role] (dispatch/wake-request sys state (support/calling-wake state role) inputs))]
     (is (= {:deny-read ["/Users/you/private"]} (:workbench (request "hub"))))
     (is (str/includes? (:system-prompt (request "hub")) "`workbench`"))
     (is (nil? (:workbench (request "clerk"))))

@@ -14,6 +14,7 @@
             [relay.cli :as cli]
             [relay.config :as config]
             [relay.core :as core]
+            [relay.test-support :as support]
             [relay.dispatch :as dispatch]
             [relay.harness :as harness]
             [relay.inbound :as inbound]
@@ -502,7 +503,7 @@
         started (-> core/empty-state
                     (cmd "operator" :role/add {:id "clerk" :title "Clerk" :instructions "x"})
                     (cmd "operator" :wake/start {:role "clerk" :chat true}))
-        wake-id (:id (core/running-wake started "clerk"))]
+        wake-id (:id (support/calling-wake started "clerk"))]
     (prop/for-all [report gen-report]
       (let [args (dispatch/conversation-end-args wake-id report)
             ended (get-in (cmd started "dispatcher" :wake/end args) [:wakes wake-id])
@@ -542,7 +543,7 @@
                     (cmd "operator" :role/add {:id "clerk" :title "Clerk" :instructions "File things."})
                     (cmd "operator" :memo/send {:to "clerk" :subject "File this" :body "Body."})
                     (cmd "operator" :wake/start {:role "clerk"}))
-        wake (core/running-wake started "clerk")
+        wake (support/calling-wake started "clerk")
         data-dir (str (fs/path (fs/temp-dir) (str "relay-never-made-" (random-uuid))))
         sys {:data-dir data-dir :config cfg
              :clock #(throw (ex-info "wake-request read the clock" {}))}
@@ -594,7 +595,7 @@
                     (cmd "operator" :role/add {:id "clerk" :title "Clerk" :instructions "x"})
                     (cmd "operator" :memo/send {:to "clerk" :subject "s" :body "b"})
                     (cmd "operator" :wake/start {:role "clerk"}))
-        wake-id (:id (core/running-wake started "clerk"))]
+        wake-id (:id (support/calling-wake started "clerk"))]
     (prop/for-all [exit (gen/one-of [gen/small-integer (gen/return "timeout")])
                    out gen/string
                    err gen/string

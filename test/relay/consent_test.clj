@@ -13,6 +13,7 @@
             [relay.acp :as acp]
             [relay.config :as config]
             [relay.core :as core]
+            [relay.test-support :as support]
             [relay.dispatch :as dispatch]
             [relay.render :as render]
             [relay.text :as text]
@@ -98,7 +99,7 @@
               (run "operator" :role/add {:id "clerk" :title "Clerk" :instructions "File things."})
               (run "operator" :memo/send {:to "clerk" :subject "Send it" :body "Please."})
               (run "dispatcher" :wake/start {:role "clerk" :dispatched true}))
-        wake (core/running-wake (:state w) "clerk")]
+        wake (support/calling-wake (:state w) "clerk")]
     (run w "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :exit 0 :session "sess-1" :said "Waiting."
                                    :labels ["contaminated" "private"] :held held})))
 
@@ -493,7 +494,7 @@
       (let [w (run (held-world []) "operator" :memo/send {:to "clerk" :subject "Again" :body "Please."})
             wake-start (core/run-command (:state w) {:type :wake/start :actor "dispatcher" :args {:role "clerk" :dispatched true}}
                                          {:now t0 :config config})
-            wake (core/running-wake (first wake-start) "clerk")
+            wake (support/calling-wake (first wake-start) "clerk")
             [st] (core/run-command (first wake-start)
                                    {:type :wake/end :actor "dispatcher"
                                     :args {:wake (:id wake) :outcome "ran" :exit 0 :session "sess-9" :said "Waiting."

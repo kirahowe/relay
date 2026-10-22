@@ -7,6 +7,7 @@
             [clojure.test.check.properties :as prop]
             [relay.config :as config]
             [relay.core :as core]
+            [relay.test-support :as support]
             [relay.dispatch :as dispatch]
             [relay.report-support :as report-support]
             [relay.reports :as reports])
@@ -41,7 +42,7 @@
   running wake, as relay's tool command does."
   [{:keys [state now] :as w} actor type args & [public]]
   (try
-    (let [wake (core/running-wake state actor)
+    (let [wake (support/calling-wake state actor)
           [state' events] (core/run-command state (cond-> {:type type :actor actor :args args :public public}
                                                     wake (assoc :session-wake (:id wake)))
                                             {:now now :config cfg})]
@@ -66,7 +67,7 @@
   in `closes` in between."
   [w role-id {:keys [outcome closes dispatched resets-at cut-short] :or {outcome "ran"}}]
   (let [w (run w "dispatcher" :wake/start {:role role-id :dispatched dispatched})
-        wake-id (some-> (core/running-wake (:state w) role-id) :id)]
+        wake-id (some-> (support/calling-wake (:state w) role-id) :id)]
     (if-not wake-id
       w
       (as-> w w
@@ -96,7 +97,7 @@
         (is (nil? (:interrupted-wake (core/role (:state w) "clerk"))))))
     (testing "a conversation cut short is not kept"
       (let [w (-> w (run "operator" :wake/start {:role "clerk" :chat true}))
-            chat (core/running-wake (:state w) "clerk")
+            chat (support/calling-wake (:state w) "clerk")
             w (run w "dispatcher" :wake/end {:wake (:id chat) :outcome "ran" :cut-short true})]
         (is (not= (:id chat) (:interrupted-wake (core/role (:state w) "clerk"))))))))
 
@@ -115,14 +116,14 @@
     (testing "not when the role wrote its own entry in that wake"
       (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "s" :body "b"})
                   (run "dispatcher" :wake/start {:role "clerk"}))
-            wake-id (:id (core/running-wake (:state w) "clerk"))
+            wake-id (:id (support/calling-wake (:state w) "clerk"))
             w (-> w (run "clerk" :journal/write {:text "Started on it."})
                   (run "dispatcher" :wake/end {:wake wake-id :outcome "ran" :cut-short true}))]
         (is (= ["Started on it."] (map :text (core/journal (:state w) "clerk" nil))))))
     (testing "even when the operator wrote in the role's journal during that wake"
       (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "s" :body "b"})
                   (run "dispatcher" :wake/start {:role "clerk"}))
-            wake-id (:id (core/running-wake (:state w) "clerk"))
+            wake-id (:id (support/calling-wake (:state w) "clerk"))
             w (-> w (run "operator" :journal/write {:owner "clerk" :text "Note from Kira."})
                   (run "dispatcher" :wake/end {:wake wake-id :outcome "ran" :cut-short true}))
             texts (map :text (core/journal (:state w) "clerk" nil))]
@@ -163,7 +164,7 @@
       (is (empty? (core/roles-to-wake (:state w) cfg (:now w))))
       (is (= ["clerk"] (core/roles-to-wake (:state w) cfg (.plusSeconds t0 60)))))
     (testing "a wake asked for by hand ignores the delay"
-      (is (= [id] (:memos (core/running-wake (:state (run w "operator" :wake/start {:role "clerk"})) "clerk")))))))
+      (is (= [id] (:memos (support/calling-wake (:state (run w "operator" :wake/start {:role "clerk"})) "clerk")))))))
 
 (deftest a-memo-never-closed-is-dead-lettered-to-the-hub
   (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "File this" :body "b"}))
@@ -276,7 +277,7 @@
     (testing "the next wake resumes the one cut short, and a good run lifts the pause"
       (let [interrupted (:interrupted-wake (core/role (:state w) "clerk"))
             w (-> w (advance 7200) (run "dispatcher" :wake/start {:role "clerk" :dispatched true}))
-            running (core/running-wake (:state w) "clerk")]
+            running (support/calling-wake (:state w) "clerk")]
         (is (some? interrupted))
         (is (= interrupted (:resumes running)))
         (let [w (run w "dispatcher" :wake/end {:wake (:id running) :outcome "ran"})]
@@ -314,7 +315,7 @@
 (deftest a-wake-keeps-what-its-calls-used-and-cost
   (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "a" :body "b"})
               (run "dispatcher" :wake/start {:role "clerk"}))
-        wake-id (:id (core/running-wake (:state w) "clerk"))
+        wake-id (:id (support/calling-wake (:state w) "clerk"))
         usage {:input 10 :output 5 :cache-read 7 :cache-write 2}
         end #(run w "dispatcher" :wake/end (merge {:wake wake-id :outcome "ran"} %))
         kept #(select-keys (get-in % [:wakes wake-id]) [:usage :cost-usd])]
@@ -346,7 +347,7 @@
                      (-> w (assoc :state state') (update :events into events))))]
     (reduce (fn [w cost]
               (let [w (run-with w "operator" :wake/start {:role "clerk" :note "Go."})
-                    wake-id (:id (core/running-wake (:state w) "clerk"))]
+                    wake-id (:id (support/calling-wake (:state w) "clerk"))]
                 (-> w
                     (run-with "dispatcher" :wake/end {:wake wake-id :outcome "ran" :cost-usd cost})
                     (advance 86400))))
@@ -388,7 +389,7 @@
 
 (deftest a-conversation-records-the-sessions-it-used-in-order
   (let [w (run (seed) "operator" :wake/start {:role "clerk" :chat true})
-        chat (core/running-wake (:state w) "clerk")
+        chat (support/calling-wake (:state w) "clerk")
         end #(run w "dispatcher" :wake/end (merge {:wake (:id chat) :outcome "ran"} %))]
     (is (= ["b" "a"] (get-in (:state (end {:sessions ["b" "a"]})) [:wakes (:id chat) :sessions])))
     (is (= ["b" "a"] (get-in (core/replay (json-round-trip (:events (end {:sessions '("b" "a")}))))
@@ -401,7 +402,7 @@
   (testing "a wake has one session, not a list"
     (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "a" :body "b"})
                 (run "dispatcher" :wake/start {:role "clerk"}))
-          wake-id (:id (core/running-wake (:state w) "clerk"))]
+          wake-id (:id (support/calling-wake (:state w) "clerk"))]
       (is (= :invalid (:rejected (run w "dispatcher" :wake/end {:wake wake-id :outcome "ran"
                                                                  :sessions ["s"]})))))))
 
@@ -460,7 +461,7 @@
     (is (nil? (:rejected w)))
     (is (core/working-wake (:state w) "clerk"))
     (is (core/open-conversation (:state w) "clerk"))
-    (is (= (:id (core/working-wake (:state w) "clerk")) (:id (core/running-wake (:state w) "clerk")))
+    (is (= (:id (core/working-wake (:state w) "clerk")) (:id (support/calling-wake (:state w) "clerk")))
         "a role's call is taken to come from the wake that works")
     (is (= :busy (:rejected (run w "operator" :wake/start {:role "clerk" :chat true}))))
     (testing "another role's conversation is its own"
@@ -559,7 +560,7 @@
 (deftest a-lost-wake-is-ended-by-the-tick-and-counts-against-its-memos
   (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "a" :body "b"})
               (run "dispatcher" :wake/start {:role "clerk"}))
-        wake-id (:id (core/running-wake (:state w) "clerk"))
+        wake-id (:id (support/calling-wake (:state w) "clerk"))
         w (run w "dispatcher" :tick {:lost-wakes [wake-id]})]
     (is (not (core/open? (:state w) "clerk")))
     (is (true? (:crashed (get-in (:state w) [:wakes wake-id]))))
@@ -569,7 +570,7 @@
   ;; Regression: Zed closes a thread with SIGKILL to relay's process group,
   ;; and the tick recorded every such conversation as a crash.
   (let [w (-> (seed) (run "operator" :wake/start {:role "clerk" :chat true}))
-        wake-id (:id (core/running-wake (:state w) "clerk"))
+        wake-id (:id (support/calling-wake (:state w) "clerk"))
         w (run w "dispatcher" :tick {:lost-wakes [wake-id]})
         wake (get-in (:state w) [:wakes wake-id])]
     (is (not (core/open? (:state w) "clerk")))

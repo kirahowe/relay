@@ -10,6 +10,7 @@
             [clojure.test.check.properties :as prop]
             [relay.config :as config]
             [relay.core :as core]
+            [relay.test-support :as support]
             [relay.core-test :as ct]
             [relay.render :as render]
             [relay.week :as week])
@@ -135,7 +136,7 @@
 
 (deftest a-conversation-asks-its-client
   (let [w (-> (seeded) (ct/run "operator" :wake/start {:role "hub" :chat true}))
-        wake (:id (core/running-wake (:state w) "hub"))
+        wake (:id (support/calling-wake (:state w) "hub"))
         w (ct/run w "dispatcher" :permission/asked {:wake wake :session "s" :call "c1" :tool "post" :input-sha256 "x"})
         _ (is (= 1 (:pending (kind (report w) "permission"))))
         w (ct/run w "dispatcher" :permission/answered {:wake wake :session "s" :call "c1" :outcome "allow_once" :by "client"})]
@@ -147,7 +148,7 @@
   (let [w (-> (seeded) (ct/run "operator" :memo/send {:to "clerk" :subject "s" :body "b"})
               (ct/run "dispatcher" :wake/start {:role "clerk"}))
         w (reduce (fn [w i] (ct/run w "clerk" :memo/send {:to "operator" :subject (str "s" i) :body "b"})) w (range 3))
-        wake (core/running-wake (:state w) "clerk")
+        wake (support/calling-wake (:state w) "clerk")
         w (-> w (ct/advance 86400) (ct/run "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :said "" :cost-usd 0.5}))
         {:keys [notifications roles health]} (report w)]
     (is (= {"clerk" 3} (:memos-by-role notifications)))
@@ -181,7 +182,7 @@
 (deftest a-wake-that-did-its-job-passes-every-check
   (let [w (-> (seeded) (ct/run "operator" :memo/send {:to "clerk" :subject "s" :body "b"})
               (ct/run "dispatcher" :wake/start {:role "clerk"}))
-        wake (core/running-wake (:state w) "clerk")
+        wake (support/calling-wake (:state w) "clerk")
         id (first (:memos wake))
         w (-> w (ct/run "clerk" :memo/close {:memo id :outcome "done"})
               (ct/run "clerk" :journal/write {:owner "clerk" :text "did it"})
@@ -212,7 +213,7 @@
 (deftest flag-marks-a-wake-and-refuses-what-is-not-one
   (let [w (-> (seeded) (ct/run "operator" :memo/send {:to "hub" :subject "s" :body "b"})
               (ct/run "dispatcher" :wake/start {:role "hub"}))
-        wake (:id (core/running-wake (:state w) "hub"))]
+        wake (:id (support/calling-wake (:state w) "hub"))]
     (testing "an unknown id, a memo's id, a bad value, or anyone but the operator is refused"
       (is (= :not-found (:rejected (ct/run w "operator" :wake/flag {:wake 9999 :value "good"}))))
       (is (= :not-found (:rejected (ct/run w "operator" :wake/flag {:wake (dec wake) :value "good"}))))

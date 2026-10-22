@@ -12,6 +12,7 @@
             [relay.cli :as cli]
             [relay.config :as config]
             [relay.core :as core]
+            [relay.test-support :as support]
             [relay.dispatch :as dispatch]
             [relay.harness.agentloop :as agentloop]
             [relay.inbound :as inbound]
@@ -43,7 +44,7 @@
   "A role's command as a harness sends it: naming the wake whose session
   made it, as relay's tool command does."
   [state {:keys [actor] :as command}]
-  (if-let [w (and (not (contains? command :session-wake)) (core/running-wake state actor))]
+  (if-let [w (and (not (contains? command :session-wake)) (support/calling-wake state actor))]
     (assoc command :session-wake (:id w))
     command))
 
@@ -75,7 +76,7 @@
 
 (defn- wake-request [w role]
   (let [w (run w "dispatcher" :wake/start {:role role :dispatched true})
-        wake (core/running-wake (:state w) role)]
+        wake (support/calling-wake (:state w) role)]
     (when wake
       (dispatch/wake-request {:data-dir "/nowhere" :config cfg} (:state w) wake
                              {:shared "Shared." :operator-additions "SECRET-ADDITIONS" :now t0
@@ -95,7 +96,7 @@
   (let [w (-> w (run-public :memo/send {:to role :subject "Go" :body "Look."})
               (run "dispatcher" :wake/start {:role role :dispatched true}))
         w (f w)
-        wake (core/running-wake (:state w) role)]
+        wake (support/calling-wake (:state w) role)]
     (run w "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :session (str "s" (:id wake)) :said "" :labels []})))
 
 ;; --- settings
@@ -206,7 +207,7 @@
         (is (not (core/awaiting-declassification? cfg m)))))
     (testing "a public note on a wake reaches the role's prompt without private"
       (let [w (run-public w :wake/start {:role "scout" :note "Look at the arts council."})
-            wake (core/running-wake (:state w) "scout")
+            wake (support/calling-wake (:state w) "scout")
             request (dispatch/wake-request {:data-dir "/nowhere" :config cfg} (:state w) wake
                                            {:shared "" :now t0 :relay-bin "relay" :data-path "/nowhere"})]
         (is (str/includes? (:prompt request) "arts council"))
@@ -362,7 +363,7 @@
     (is (not (contains? (:policy hub) :forbid_labels)))
     (testing "nor is a conversation with it"
       (let [w (run w "operator" :wake/start {:role "scout" :chat true :note dispatch/conversation-note})
-            wake (core/running-wake (:state w) "scout")
+            wake (support/calling-wake (:state w) "scout")
             request (dispatch/conversation-request {:data-dir "/nowhere" :config cfg} (:state w) wake
                                                    {:shared "Shared." :operator-additions "SECRET-ADDITIONS"
                                                     :now t0 :relay-bin "relay" :data-path "/nowhere"})]
@@ -414,13 +415,13 @@
 (deftest a-deny-reason-for-a-public-role-is-public
   (let [w (run-public (world) :memo/send {:to "scout" :subject "Go" :body "Look."})
         w (run w "dispatcher" :wake/start {:role "scout" :dispatched true})
-        wake (core/running-wake (:state w) "scout")
+        wake (support/calling-wake (:state w) "scout")
         w (run w "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :session "s1" :said "" :labels ["contaminated"]
                                          :held [{:id "c1" :name "search" :input {:args ["x"]} :input-sha256 "d"}]})
         hold (first (core/open-holds (:state w) "scout"))
         w (run w "operator" :hold/resolve {:hold (:id hold) :verdict "deny" :reason "Not that site."})
         w (run w "dispatcher" :wake/start {:role "scout" :dispatched true})
-        wake (core/running-wake (:state w) "scout")]
+        wake (support/calling-wake (:state w) "scout")]
     (is (= [(:id hold)] (:resolves wake)))
     (is (not (core/private? (core/wake-labels (:state w) cfg wake))))))
 
@@ -474,7 +475,7 @@
     (is (= ["ran" true ["private"]] ((juxt :outcome :crashed :forbidden) forbidden)))
     (let [w (run-public (world) :memo/send {:to "scout" :subject "Go" :body "Look."})
           w (run w "dispatcher" :wake/start {:role "scout" :dispatched true})
-          wake (core/running-wake (:state w) "scout")
+          wake (support/calling-wake (:state w) "scout")
           ended (run w "dispatcher" :wake/end (dispatch/wake-end-args (:id wake) report))
           ended-forbidden (run w "dispatcher" :wake/end (dispatch/wake-end-args (:id wake) forbidden))]
       (is (some #(and (= "result-refused" (:kind %)) (str/includes? (:body %) "lookup"))
@@ -541,7 +542,7 @@
         (testing "a deny for a public role says the reason is public"
           (inbound/submit! sys {:type :wake/start :actor "dispatcher" :args {:role "scout" :dispatched true}})
           (inbound/submit! sys {:type :wake/end :actor "dispatcher"
-                                :args {:wake (:id (core/running-wake (state) "scout")) :outcome "ran" :session "s1"
+                                :args {:wake (:id (support/calling-wake (state) "scout")) :outcome "ran" :session "s1"
                                        :said "" :labels []
                                        :held [{:id "c1" :name "search" :input {} :input-sha256 "d"}]}})
           (let [shown (atom "")
@@ -556,26 +557,26 @@
   (let [w (-> (world)
               (run-before "operator" :memo/send {:to "scout" :subject "Kira's thesis" :body "Secret topic."})
               (run-before "dispatcher" :wake/start {:role "scout" :dispatched true}))
-        wake (core/running-wake (:state w) "scout")
+        wake (support/calling-wake (:state w) "scout")
         ;; Cut short, so its next wake would carry the session on.
         w (run-before w "dispatcher" :wake/end {:wake (:id wake) :outcome "limited" :session "old" :said ""
                                                  :labels ["private"]})]
     (is (= (:id wake) (:interrupted-wake (core/role (:state w) "scout"))))
     (let [w (-> w (run-public :memo/send {:to "scout" :subject "Go" :body "Look."})
                 (run "dispatcher" :wake/start {:role "scout"}))
-          now (core/running-wake (:state w) "scout")]
+          now (support/calling-wake (:state w) "scout")]
       (is (nil? (:resumes now)) "the session from before is not resumed")
       (is (:public-session now))
       (testing "one from after is"
         (let [w (run w "dispatcher" :wake/end {:wake (:id now) :outcome "limited" :session "new" :said "" :labels []})
               w (run w "dispatcher" :wake/start {:role "scout"})]
-          (is (= (:id now) (:resumes (core/running-wake (:state w) "scout")))))))))
+          (is (= (:id now) (:resumes (support/calling-wake (:state w) "scout")))))))))
 
 (deftest a-held-session-from-before-a-role-was-public-is-ended
   (let [w (-> (world)
               (run-before "operator" :memo/send {:to "scout" :subject "Post it" :body "Secret."})
               (run-before "dispatcher" :wake/start {:role "scout" :dispatched true}))
-        wake (core/running-wake (:state w) "scout")
+        wake (support/calling-wake (:state w) "scout")
         w (run-before w "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :session "old" :said "" :labels ["private"]
                                                  :held [{:id "c1" :name "search" :input {} :input-sha256 "d"}
                                                         {:id "c2" :name "search" :input {:x 1} :input-sha256 "e"}]})
@@ -587,7 +588,7 @@
           s (:state w)]
       (is (get-in s [:ended-sessions "old"]))
       (is (empty? (core/open-holds s "scout")) "its other call is denied")
-      (is (nil? (core/running-wake s "scout")) "and its memo, not public, waits")
+      (is (nil? (support/calling-wake s "scout")) "and its memo, not public, waits")
       (is (not-any? (comp seq :resolves) (vals (:wakes s)))))
     (testing "a reason given before the role was public stays private wherever it goes"
       (is (core/private? (core/wake-labels (:state w) cfg {:role "scout" :resolves [(:id h1)]}))))
@@ -630,7 +631,7 @@
 (deftest a-public-role-s-conversations-are-kept-apart
   (let [w (run (world) "operator" :wake/start {:role "scout" :chat true :note dispatch/conversation-note})
         w (run w "operator" :wake/start {:role "hub" :chat true :note dispatch/conversation-note})
-        req #(dispatch/conversation-request {:data-dir "/d" :config cfg} (:state w) (core/running-wake (:state w) %)
+        req #(dispatch/conversation-request {:data-dir "/d" :config cfg} (:state w) (support/calling-wake (:state w) %)
                                             {:shared "" :now t0 :relay-bin "relay" :data-path "/d"})]
     (is (str/ends-with? (:session-dir (req "scout")) "conversations-public"))
     (is (str/ends-with? (:session-dir (req "hub")) "conversations-labelled"))))
@@ -648,7 +649,7 @@
         (submit before {:type :memo/send :actor "operator" :args {:to "scout" :subject "Post it" :body "Secret."}})
         (submit before {:type :wake/start :actor "dispatcher" :args {:role "scout" :dispatched true}})
         (submit before {:type :wake/end :actor "dispatcher"
-                        :args {:wake (:id (core/running-wake (state) "scout")) :outcome "ran" :session "old" :said ""
+                        :args {:wake (:id (support/calling-wake (state) "scout")) :outcome "ran" :session "old" :said ""
                                :labels ["private"] :held [{:id "c1" :name "search" :input {} :input-sha256 "d"}]}})
         (let [memo (:id (first (core/unread-memos (state) "scout")))]
           (submit sys {:type :memo/declassify :actor "operator" :args {:memo memo}})
@@ -672,27 +673,27 @@
         (inbound/submit! before {:type :memo/send :actor "operator" :args {:to "scout" :subject "Post it" :body "Secret."}})
         (inbound/submit! before {:type :wake/start :actor "dispatcher" :args {:role "scout" :dispatched true}})
         (inbound/submit! before {:type :wake/end :actor "dispatcher"
-                                 :args {:wake (:id (core/running-wake (state) "scout")) :outcome "ran" :session "old"
+                                 :args {:wake (:id (support/calling-wake (state) "scout")) :outcome "ran" :session "old"
                                         :said "" :labels ["private"]
                                         :held [{:id "c1" :name "search" :input {} :input-sha256 "d"}]}})
         (with-redefs [dispatch/run-harness! (fn [& _] (throw (ex-info "no harness should run" {})))]
           (is (= {:result :idle} (dispatch/wake! sys "scout" {:dispatched true}))))
         (is (get-in (state) [:ended-sessions "old"]))
-        (is (nil? (core/running-wake (state) "scout")))
+        (is (nil? (support/calling-wake (state) "scout")))
         (is (empty? (core/roles-to-wake (state) cfg (Instant/now))) "and it is not woken again for them")))))
 
 (deftest a-call-is-public-only-from-the-public-wake-that-made-it
   (let [w (-> (world)
               (run-before "operator" :memo/send {:to "scout" :subject "s" :body "b"})
               (run-before "dispatcher" :wake/start {:role "scout" :dispatched true}))
-        old (:id (core/running-wake (:state w) "scout"))
+        old (:id (support/calling-wake (:state w) "scout"))
         ;; The old wake's relay went away; the tick ends it, and a public
         ;; wake starts while the old agentloop may still be calling.
         w (-> w (run "dispatcher" :tick {:lost-wakes [old]})
               (run-public :memo/send {:to "scout" :subject "Go" :body "Look."})
               (run "dispatcher" :wake/start {:role "scout" :dispatched true}))
-        new (:id (core/running-wake (:state w) "scout"))
-        hub-wake (:id (core/running-wake (:state (-> w (run "operator" :memo/send {:to "hub" :subject "s" :body "b"})
+        new (:id (support/calling-wake (:state w) "scout"))
+        hub-wake (:id (support/calling-wake (:state (-> w (run "operator" :memo/send {:to "hub" :subject "s" :body "b"})
                                                      (run "dispatcher" :wake/start {:role "hub" :dispatched true})))
                                          "hub"))
         note (fn [wake]
@@ -723,7 +724,7 @@
   (let [w (-> (world)
               (run-before "operator" :memo/send {:to "scout" :subject "Go" :body "Look."})
               (run-before "dispatcher" :wake/start {:role "scout"})
-              (as-> w (let [wake (core/running-wake (:state w) "scout")]
+              (as-> w (let [wake (support/calling-wake (:state w) "scout")]
                         (-> w
                             (run-before "scout" :routine/write {:name "daily" :schedule "every 10m" :instructions "Look."}
                                         ["private"])
@@ -735,14 +736,14 @@
     (is (core/private? (core/routine-labels (:state w) "scout" "daily")))
     (is (not (core/private? (core/wake-labels (:state w) cfg {:role "scout" :memos [m]}))))
     (is (= ["scout"] (core/roles-to-wake (:state w) cfg (:now w))))
-    (is (= [m] (:memos (core/running-wake (:state (run w "dispatcher" :wake/start {:role "scout" :dispatched true})) "scout"))))))
+    (is (= [m] (:memos (support/calling-wake (:state (run w "dispatcher" :wake/start {:role "scout" :dispatched true})) "scout"))))))
 
 (deftest a-public-session-is-ended-rather-than-given-a-private-reason
   ;; Held while public, denied with a reason while the role was briefly
   ;; not public, then carried on once it is again.
   (let [w (-> (world) (run-public :memo/send {:to "scout" :subject "Go" :body "Look."})
               (run "dispatcher" :wake/start {:role "scout" :dispatched true}))
-        wake (core/running-wake (:state w) "scout")
+        wake (support/calling-wake (:state w) "scout")
         w (run w "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :session "pub" :said "" :labels []
                                          :held [{:id "c1" :name "search" :input {} :input-sha256 "d"}]})
         h (:id (first (core/open-holds (:state w) "scout")))
@@ -751,8 +752,8 @@
     (let [w (run w "dispatcher" :wake/start {:role "scout" :dispatched true})
           s (:state w)]
       (is (get-in s [:ended-sessions "pub"]))
-      (is (not (core/private? (core/wake-labels s cfg (core/running-wake s "scout")))))
-      (is (empty? (:resolves (core/running-wake s "scout")))))))
+      (is (not (core/private? (core/wake-labels s cfg (support/calling-wake s "scout")))))
+      (is (empty? (:resolves (support/calling-wake s "scout")))))))
 
 ;; --- from the round 4 review
 
@@ -765,7 +766,7 @@
         w (in-wake w "scout" identity)
         w (-> w (run-public :memo/send {:to "scout" :subject "Go" :body "Look."})
               (run "dispatcher" :wake/start {:role "scout" :dispatched true}))
-        wake (:id (core/running-wake (:state w) "scout"))
+        wake (:id (support/calling-wake (:state w) "scout"))
         read (fn [tool] (binding [tools/*wake* wake]
                           (let [r ((:read (get tools/builtin tool)) {:state (:state w) :config before-public :now t0}
                                    "scout" {})]
@@ -882,7 +883,7 @@
   (let [w (-> (world) (run "operator" :role/add {:id "tax" :title "Tax" :instructions "My taxes."}))
         w (-> w (run-public :memo/send {:to "scout" :subject "Go" :body "Look."})
               (run "dispatcher" :wake/start {:role "scout" :dispatched true}))
-        wake (:id (core/running-wake (:state w) "scout"))
+        wake (:id (support/calling-wake (:state w) "scout"))
         demoted (config/resolve-config (assoc-in settings [:grants "scout"] {:may-add true}))
         refused (fn [type args]
                   (try (core/decide (:state w) {:type type :actor "scout" :args args :labels [] :session-wake wake}
@@ -993,7 +994,7 @@
           (binding [cli/*tty* (tty shown typed-code)]
             (is (= 0 (:exit (cli/execute ["--data" data "declassify" (str id)])))))
           (inbound/submit! sys {:type :wake/start :actor "dispatcher" :args {:role "scout" :dispatched true}})
-          (let [wake (:id (core/running-wake (inbound/current-state sys) "scout"))
+          (let [wake (:id (support/calling-wake (inbound/current-state sys) "scout"))
                 got (:ok (tools/call! sys "scout" "inbox" {} [] "c" wake))
                 line "B: hxxp://evil[.]example/x café"]
             (is (str/includes? @shown line))
