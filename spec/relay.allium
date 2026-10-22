@@ -2184,13 +2184,16 @@ rule StartTurn {
         wake.last_activity = now
 
     @guidance
-        -- Each prompt the operator's client sends is a turn. relay acp
-        -- asks for it before the prompt reaches the agent; refused
-        -- because a wake of the role works, the prompt is answered with
-        -- an error saying the role is busy with scheduled work, and the
-        -- agent never sees it. The role takes one turn at a time: no
-        -- turn starts while a wake works, and no wake starts while a
-        -- turn runs.
+        -- Each prompt the operator's client sends is a turn. relay's hub
+        -- asks for it before the prompt reaches the agent. Refused
+        -- because a wake of the role works, the prompt waits in the
+        -- hub's queue, its turn shown as queued, and is asked for again
+        -- whenever the log changes; it keeps its place if the client that
+        -- sent it goes. Refused for any other reason, it is answered with
+        -- relay's reason and the agent never sees it. A session takes one
+        -- prompt at a time. The role takes one turn at a time: no turn
+        -- starts while a wake works, and no wake starts while a turn
+        -- runs.
 }
 
 rule EndTurn {
@@ -4145,10 +4148,11 @@ surface ConversationService {
         -- session/new for a role opens it, or attaches the connection to
         -- the live one; session/load attaches by session; nothing ended
         -- is reopened. An attaching connection gets the conversation's
-        -- updates so far, at most a bounded amount, with a notice when
-        -- older ones were dropped, the session's latest labels (and usage)
-        -- before any of them whatever was dropped, so no text is shown
-        -- with fewer labels than it carries, then _relay/replayed, then every later
+        -- updates so far, at most a bounded amount, with consecutive text
+        -- chunks of one kind merged and the session's latest labels (and
+        -- usage) before any of them whatever was dropped, so no text is
+        -- shown with fewer labels than it carries, then _relay/replayed,
+        -- which says whether older updates were dropped, then every later
         -- update, with no gap and no duplicate. Each prompt also reaches
         -- the other attached connections as the operator's message.
         -- Every request a connection sends is answered once; relay gives

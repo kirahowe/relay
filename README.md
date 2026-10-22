@@ -1154,8 +1154,9 @@ conversations and answer permission requests for you.
 
 ### ACP clients
 
-`relay acp [<role>]` speaks the [Agent Client Protocol](https://agentclientprotocol.com)
-on stdin and stdout, so an editor or any other ACP client can run it as
+`relay acp [<role>]` speaks the
+[Agent Client Protocol](https://agentclientprotocol.com) on stdin and
+stdout, so an editor or any other ACP client can run it as
 its agent command. When relay serve runs for the data directory, `relay
 acp` is a bridge to it: it copies bytes between the client and the
 service's socket. Otherwise it runs the same code in its own process, and
@@ -1176,7 +1177,9 @@ started); the conversation goes on.
 A conversation holds its role only while a turn runs: from a
 `session/prompt` until the agent answers it. Between turns the dispatcher
 may wake the role for its memos. A prompt sent while such a wake works
-waits until the wake is done and then runs; `session/cancel` drops it.
+waits until the wake is done and then runs, even if the client that
+sent it has gone; `session/cancel` from any client drops it. A session
+takes one prompt at a time.
 The wake records the ACP sessions the conversation used. Their logs are
 kept in `<data>/runs/<role>/conversations-labelled/` (for a public role,
 `conversations-public/`), apart from the role's wake sessions.
@@ -1195,13 +1198,18 @@ already has a conversation open, relay writes the reason to stderr and
 exits 1 before sending anything.
 
 relay adds some methods of its own, which a client that knows them can
-use; `initialize` says relay offers them with `_meta {"relay/hub": 1}`.
+use; `initialize` says relay offers them with `_meta {"relay/hub": 1}`,
+and with `"relay/keeps"` whether conversations outlive the client (true
+when relay serve holds them).
 `_relay/roles` gives every role with what it is doing (working, held
 calls, its conversation's turn and unread reply) and then sends
 `_relay/roles/changed` whenever that changes. `_relay/seen` says the
 operator has read a conversation through a turn,
 `_relay/conversations/end` ends a conversation, and `_relay/replayed`
-marks where a replay ends and live updates begin. A permission request
+marks where a replay ends and live updates begin, with `"truncated"`
+saying whether older updates were dropped. A replay keeps consecutive
+text chunks of one kind merged, and starts with the session's latest
+labels. A permission request
 goes to every attached client that may answer one (`--approvals`); the
 first answer goes to the agent, and the others get
 `_relay/permission/settled`. The pane's methods (`_relay/items`,
@@ -1285,9 +1293,9 @@ client sees it.
 relay acp also gives the client your board. `_relay/cards`, with
 `{"archived": true}` to include archived cards, answers `{"rev": <the
 log's last seq>, "cards": [...]}`, each card in its wire form (below).
-The first call subscribes the client: from then on relay acp watches the
-log, about once a second, and sends `_relay/cards/changed` `{"rev",
-"cards"}` with every card whose rev changed since it last sent one,
+The first call subscribes the client: from then on, whenever the log
+changes, relay sends it `_relay/cards/changed` `{"rev", "cards"}` with
+every card whose rev changed since what it last sent that client,
 archived cards included so the client can drop them. A change made by
 another process (a role's wake, the command line) arrives this way.
 `_relay/cards/op` takes `{card, op, item, row, column, state, text,
