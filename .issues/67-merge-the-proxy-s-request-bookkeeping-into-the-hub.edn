@@ -1,0 +1,11 @@
+{:id 67
+ :title "Merge the proxy's request bookkeeping into the hub"
+ :status :inbox
+ :type :feature
+ :priority :p3
+ :created "2026-10-22"
+ :updated "2026-10-22"
+ :tags #{"conversations"}
+ :blocked-by #{}
+ :related #{}
+ :details "67-merge-the-proxy-s-request-bookkeeping-into-the-hub.md"}

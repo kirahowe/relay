@@ -10,9 +10,11 @@
 | [48](48-judge-remote-tool-definitions-with-a-decision-model.md) | Judge remote tool definitions with a decision model | feature | P2 |
 | [49](49-haiku-leaves-the-memo-or-journal-undone-before-an-act-call.md) | Haiku leaves the memo or journal undone before an act call | bug | P2 |
 | [62](62-keep-a-live-conversation-with-each-role-that-any-client-can.md) | Keep a live conversation with each role that any client can switch to | feature | P2 |
+| [68](68-have-bb-deploy-check-for-a-running-relay-service.md) | Have bb deploy check for a running relay service | feature | P2 |
 | [56](56-serve-the-board-over-http-and-sse-on-the-tailnet-for-a-web.edn) | Serve the board over HTTP and SSE on the tailnet for a web client | feature | P3 |
 | [59](59-keep-large-integers-exact-in-mcp-structured-results.md) | Keep large integers exact in MCP structured results | bug | P3 |
 | [60](60-let-relay-acp-start-agentloop-with-a-relative-data-path.edn) | Let relay acp start agentloop with a relative --data path | bug | P3 |
+| [67](67-merge-the-proxy-s-request-bookkeeping-into-the-hub.md) | Merge the proxy's request bookkeeping into the hub | feature | P3 |
 
 ### Ready
 
@@ -37,13 +39,13 @@
 | [52](52-show-large-numbers-in-a-permission-request-exactly-in-acp.md) | Show large numbers in a permission request exactly in acp-tui | bug | P2 |
 | [63](63-track-conversations-and-each-role-s-status-in-relay-s-core.md) | Track conversations and each role's status in relay's core | feature | P2 |
 | [64](64-run-conversations-in-a-relay-service-that-outlives-its.md) | Run conversations in a relay service that outlives its clients | feature | P2 |
+| [65](65-switch-between-roles-and-their-conversations-in-acp-tui.md) | Switch between roles and their conversations in acp-tui | feature | P2 |
 
 ### Blocked
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [17](17-set-up-the-job-search-role.md) | Set up the job search role | feature | P2 |
-| [65](65-switch-between-roles-and-their-conversations-in-acp-tui.md) | Switch between roles and their conversations in acp-tui | feature | P2 |
 | [18](18-set-up-the-grant-search-role.md) | Set up the grant search role | feature | P3 |
 | [66](66-reach-the-relay-service-from-the-phone-over-the-tailnet.md) | Reach the relay service from the phone over the tailnet | feature | P3 |
 

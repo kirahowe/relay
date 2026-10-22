@@ -13,18 +13,41 @@ conversation on the alt screen and is the place to start.
 
 ## Acceptance criteria
 
-- [ ] A sidebar lists roles with their status from `_relay/roles`. A role
+All work is in the acp-tui jj workspace `acp-tui-convs`, main..ruvwwmmu.
+`make check` passes there; relay's acp-test and display-test pty tests
+pass against its build (relay bb test 835/835, 2026-10-22).
+
+- [x] A sidebar lists roles with their status from `_relay/roles`. A role
   with an unseen reply or a pending approval stands out.
-- [ ] Choosing a role opens its conversation, or starts one. Keys to move
+  - Receipt: render `TestHubMarksStandOut`, `TestHubGolden`,
+    `TestHubQueuedTurnIsSaid`; e2e `TestHubWorkingFlagShowsInTheSidebar`.
+- [x] Choosing a role opens its conversation, or starts one. Keys to move
   between conversations are taken from the free ones (ctrl+n/p, alt+digits).
-- [ ] Core state becomes a top-level state holding the sidebar and one
+  - Receipt: core `TestHubPickingARoleWithALiveConversationLoadsItAndAnEmptyOneDoesNot`;
+    e2e `TestHubListThenOpenReplaysTheConversation`,
+    `TestHubOpenFlagAttachesAndPromptsEcho`, `TestHubHelpListsTheKeys`.
+- [x] Core state becomes a top-level state holding the sidebar and one
   conversation State per session; every event carries its session id. The
   core stays pure, with property tests for switching.
-- [ ] Permission requests from a conversation in the background show in the
+  - Receipt: core `TestHubSwitchingNeverLosesOrMixesEntries`,
+    `TestHubReplayThenLiveEqualsTheWholeTranscript`,
+    `TestHubRosterUpdateIsIdempotent` (properties); e2e
+    `TestHubSwitchingKeepsEveryConversationIntact`.
+- [x] Permission requests from a conversation in the background show in the
   sidebar and can be answered after switching to it.
-- [ ] The workspace pane and the board keep working.
-- [ ] Works at narrow widths: the sidebar collapses into a list screen, the
+  - Receipt: e2e `TestHubBackgroundRequestShowsInTheSidebarAndIsAnsweredAfterSwitching`,
+    `TestHubAYKeyJustAfterSwitchingDoesNotApprove`,
+    `TestHubAnotherDeviceSettlesARequest`; core
+    `TestHubEveryUncoveringArmsRequestsAgain`, `TestHubQuitNeverAnswersARequest`.
+- [x] The workspace pane and the board keep working.
+  - Receipt: e2e `TestHubWorkspacePaneAndBoardWorkForTheFocusedConversation`;
+    render `TestHubShowsTheDisplayBesideTheConversation`; relay
+    display-test `the-pane-in-relay-chat-shows-a-display-and-trusts-it`.
+- [x] Works at narrow widths: the sidebar collapses into a list screen, the
   way a phone client would show it.
+  - Receipt: render `TestHubNarrowShowsOneOrTheOther`, `TestHubFrameFits`,
+    `TestHubListScrollsToTheSelectedRole`; e2e
+    `TestHubNarrowScreenShowsTheListOrTheConversation`.
 
 ## Log
 
@@ -95,6 +118,11 @@ conversation on the alt screen and is the place to start.
   cancelled. relay drops that late answer, per section 4.
 - Tests: the fake hub (`cmd/fakehub`, `internal/fakehub`) plays one client;
   a second device is a control file the test appends commands to.
+
+- **ctrl+y marks the latest paste after the fact (no armed trust).** Kira
+  approved this redesign on 2026-10-22. A paste is always untrusted when it
+  arrives; ctrl+y changes the latest untrusted placeholder in the input to
+  `trusted #k`.
 
 ## Protocol questions
 
@@ -280,3 +308,37 @@ layout rules Codex found".
 5. **Role list scrolls.** Both the sidebar and the narrow list keep the
    selected role (cursor, or the one in focus) in view. Test
    `TestHubListScrollsToTheSelectedRole` (four roles at 39x7).
+
+## Independent review
+
+In the acp-tui commits "Match the fake hub to relay's hub" and "Quit without
+answering requests; say what quitting does".
+
+- **D1 quit answered every request.** `interrupt` and `EOF` no longer call
+  `cancelAsks`: quitting (ctrl+c from the list or an idle conversation, or
+  EOF) only emits `Quit`, so relay holds the request. Ctrl+c with a turn of
+  ours running still cancels that turn (and that conversation's own
+  requests with it), never another's. Tests `TestHubQuitNeverAnswersARequest`,
+  `TestHubCtrlCStopsOnlyTheFocusedTurn`, e2e `TestHubQuitLeavesRequestsUnanswered`.
+- **P1 `relay/keeps`.** Read in wire (`HubConnected.KeepsKnown/Keeps`). When
+  false the view says "relay service not running: conversations end when you
+  close this" in every layout (a reserved bold line in the conversation, in
+  the narrow list screen). When true, acp-tui prints "conversations keep
+  running in the relay service" as it exits; when false, "the conversations
+  ended". Tests `TestHubSaysWhenConversationsEndWithTheClient`,
+  `TestHubConnectedReadsKeeps`, e2e `TestHubEmbeddedModeIsSaidAllTheTime`.
+- **P2 `truncated`.** `Replayed.Truncated` -> `Conv.Truncated`; the
+  conversation starts with an italic faint "— relay: earlier history is not
+  shown —" line that no agent text can produce. Tests
+  `TestHubTruncatedReplayIsSaidAtTheTop`, `TestReplayedReadsTruncated`,
+  `TestHubReplayedRemembersWhatWasCut`, e2e `TestHubTruncatedReplayShowsRelaysNotice`.
+- **P3 merged chunks.** No code change; property test
+  `TestHubMergedReplayChunkEqualsManySmallOnes` (one merged chunk = many
+  small ones, same entries).
+- **F1 fakehub.** `_relay/replayed {truncated}` after every `session/new`
+  (fresh too), `relay/keeps` in initialize (config `embedded`), -32000 for a
+  second prompt while a turn runs or is queued, and the roster's turn ends
+  30 ms after the prompt's answer. Tests in `internal/fakehub/fakehub_test.go`
+  and e2e `TestHubPromptsAcrossTheRosterLagAreNotRefused`.
+- **N1 `Hub.Ended`.** Bounded to 64 (`noteEnded`) and pruned of sessions the
+  roster no longer lists on every roster update. Test `TestHubEndedSessionsAreBounded`.
