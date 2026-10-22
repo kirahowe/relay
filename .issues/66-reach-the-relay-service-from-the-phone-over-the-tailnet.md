@@ -52,8 +52,10 @@ Commits: psxunzxk (the listener, settings, tests), zkwulvuv (docs).
   conversation, if Agmente supports a link for it.
   - Needs Kira's phone, with the previous item.
 - [x] Codex review loop until a round has no in-scope defect.
-  - Receipt: not run by me. The coordinator runs the loop after this
-    review, as they asked.
+  - Receipt: three read-only Codex rounds on mnxzrokx..nvwyywuw. Round 1
+    found four (fragment memory, a hanging token command, a length
+    overflow, lax close frames), round 2 one (the message deadline), and
+    round 3 found no in-scope defect (2026-10-22).
 
 ## Judgment calls
 
