@@ -102,6 +102,51 @@ Commits: psxunzxk (the listener, settings, tests), zkwulvuv (docs).
 - `relay init`'s template is unchanged; setup/relay.example.edn shows
   the setting, as it does ntfy's token command.
 
+## Codex round 1
+
+No auth or origin bypass. Four findings, all fixed in spqpkwuz. Each
+test failed before its fix: the reader tests ran against the old
+reader, and the shell tests ran with each fix reverted in place.
+
+1. Fragments were kept as a list of arrays and only payload bytes were
+   counted, so endless empty continuations grew memory. Now they go into
+   one buffer, a message may take at most 1024 frames (control frames
+   between fragments included) and 30 seconds by the reader's clock, and
+   a timer in the shell closes the socket when a fragmented message's
+   next frame never comes. Tests: websocket-test
+   `a-message-is-bounded-in-frames-and-in-time` (2000 empty
+   continuations with a limit of 0; exactly 1024 frames still pass; a
+   fake clock gives 1008); serve-test
+   `a-message-whose-next-frame-never-comes-is-stopped`.
+2. The token command ran before the Unix socket, with no timeout and
+   unbounded output. Now it runs on a thread after the socket listens,
+   with 10 s and 4 KB; past either relay kills it and its descendants by
+   PID (ProcessHandle), and on any failure the service runs without the
+   listener and says why on stderr. Test: serve-test
+   `a-token-command-that-hangs-or-says-too-much-gives-no-listener` (a
+   command that hangs and one that is `yes`: the socket works while it
+   runs, no listener after, the hanging command's child is gone).
+   Found on the way: the listener's stderr lines were printed from a
+   new thread that did not have serve!'s binding of *out* to *err*.
+   They now go to stderr.
+3. `(+ size n)` overflowed for a length near Long/MAX_VALUE, and the
+   exception skipped the hub connection's close!. Now the length is
+   compared with what is left of the limit (1009), and close! runs in a
+   finally. Tests: websocket-test
+   `a-length-near-the-largest-long-is-refused-not-overflowed`;
+   serve-test `whatever-ends-a-websocket-reader-frees-its-place` (a
+   reader that throws, and the overflow over a real socket: the place
+   is freed both times).
+4. Close frames and lengths are now read strictly: a 1-byte close
+   payload, a status outside 1000-1003, 1007-1014 and 3000-4999, a
+   reason that is not UTF-8, and a length not in its shortest form all
+   close with 1002. 1012-1014 are accepted because IANA registered
+   them after RFC 6455. Test: websocket-test
+   `a-reader-is-strict-about-close-frames-and-lengths`.
+
+After: `bb test --agentloop ../agentloop/bin/agentloop` with
+acp-tui-convs' bin on PATH, 859 tests, all pass.
+
 ## Notes
 
 Agmente will not know `_relay/*` methods, so it sees conversations through
