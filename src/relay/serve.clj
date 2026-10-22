@@ -190,24 +190,26 @@
   (case effect
     :write (do (when-let [c (get @(:conns eng) (:conn f))] ((:send! c) (:line f))) nil)
     :send (do (when-let [c (get @(:convs eng) (:role f))] ((:send! c) (:line f))) nil)
-    :submit (merge {:event :submit-result :tag (:tag f)} (submit-result (:sys eng) (:command f) (:with-state f)))
+    :submit (merge {:event :submit-result} (submit-result (:sys eng) (:command f) (:with-state f)))
     :warn (do (binding [*out* *err*] (println (:text f))) nil)
     :start (do (start-conversation! eng (:role f) nil) nil)
     :stop (do (when-let [c (get @(:convs eng) (:role f))] ((:stop! c))) nil)))
 
 (defn- process!
-  "Steps the hub with an event and carries out what it calls for, an
-  effect's own result first."
+  "Steps the hub through an event and all it leads to, in relay.hub/drive's
+  order. The watcher's ::log-moved becomes a :log-changed read here, on the
+  loop, so it is never older than a submit the loop has made."
   [eng e]
-  (let [[h fx] (hub/step @(:hub eng) e)]
-    (reset! (:hub eng) h)
+  (let [e (if (= ::log-moved e) (roster-event eng) e)]
     (when (= :connection-closed (:event e)) (reset! (:closed-any eng) true))
-    (doseq [f fx]
-      (when-let [follow (try (carry-out! eng f)
-                             (catch Exception ex
-                               (binding [*out* *err*] (println "relay could not carry out" (:effect f) ":" (ex-message ex)))
-                               nil))]
-        (process! eng follow)))))
+    (swap! (:hub eng) hub/drive e
+           (fn [f]
+             (try (carry-out! eng f)
+                  (catch Exception ex
+                    (binding [*out* *err*] (println "relay could not carry out" (:effect f) ":" (ex-message ex)))
+                    ;; The hub waits for a submit's result, so it gets one.
+                    (when (= :submit (:effect f))
+                      {:event :submit-result :rejection :error :message (or (ex-message ex) (str (class ex)))})))))))
 
 (defn- run-loop!
   "Takes events until `done?` says the hub is done, or ::quit, its own
@@ -229,9 +231,8 @@
   5000)
 
 (defn- watch-log!
-  "Feeds the hub the state and roster whenever the log changes, about
-  four times a second, and a :tick every tick-ms, until `stop` is
-  delivered."
+  "Tells the loop whenever the log changes, about four times a second,
+  and sends a :tick every tick-ms, until `stop` is delivered."
   [eng stop]
   (daemon "relay-log-watcher"
           (fn []
@@ -243,8 +244,9 @@
                 (let [now-ms (System/currentTimeMillis)
                       tick? (>= (- now-ms last-tick) tick-ms)]
                   (when tick? (enqueue! eng {:event :tick}))
+                  ;; It only signals: the loop reads the state.
                   (recur (try (let [now (dispatch/log-stamp (:data-dir (:sys eng)))]
-                                (when (not= now stamp) (enqueue! eng (roster-event eng)))
+                                (when (not= now stamp) (enqueue! eng ::log-moved))
                                 now)
                               (catch Exception e
                                 (binding [*out* *err*] (println "relay could not read the log:" (ex-message e)))

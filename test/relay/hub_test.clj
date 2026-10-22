@@ -64,7 +64,11 @@
   (let [[_ fx] (say (opened (fresh) 1) 1 (req 0 "initialize" {:protocolVersion 1}))
         [a] (writes fx 1)]
     (is (= 0 (get a "id")))
-    (is (= {"relay/hub" 1} (get-in a ["result" "_meta"])))
+    (is (= {"relay/hub" 1 "relay/keeps" true} (get-in a ["result" "_meta"])) "a service keeps conversations")
+    (is (= {"relay/hub" 1 "relay/keeps" false}
+           (get-in (first (writes (second (say (opened (fresh :embedded) 1 :origin :stdio) 1 (req 0 "initialize" {}))) 1))
+                   ["result" "_meta"]))
+        "relay acp on its own does not")
     (is (true? (get-in a ["result" "agentCapabilities" "loadSession"])))
     (is (= {} (get-in a ["result" "agentCapabilities" "sessionCapabilities" "list"])))
     (is (= {"name" "relay" "title" "relay" "version" "1"} (get-in a ["result" "agentInfo"])))))
@@ -105,7 +109,7 @@
         _ (is (= ["session/new" {"cwd" "/w" "mcpServers" []}] [(get new "method") (get new "params")]))
         [h fx] (agent h "clerk" (res (get new "id") {:sessionId "s1" :configOptions []}))]
     (is (= [{"jsonrpc" "2.0" "id" 2 "result" {"sessionId" "s1" "configOptions" []}}
-            {"jsonrpc" "2.0" "method" "_relay/replayed" "params" {"sessionId" "s1"}}]
+            {"jsonrpc" "2.0" "method" "_relay/replayed" "params" {"sessionId" "s1" "truncated" false}}]
            (writes fx 1)))
     (is (= #{"clerk"} (get-in h [:conns 1 :attached])))
     (testing "a role comes from _meta, else the connection, else it is an error"
@@ -130,7 +134,7 @@
         [h fx] (say h 2 (req 5 "session/new" {:cwd "/x" :_meta {"relay/role" "clerk"}}))]
     (is (= [{"jsonrpc" "2.0" "id" 5 "result" {"sessionId" "s1" "_meta" {"relay/attached" true}}}
             (parse upd)
-            {"jsonrpc" "2.0" "method" "_relay/replayed" "params" {"sessionId" "s1"}}]
+            {"jsonrpc" "2.0" "method" "_relay/replayed" "params" {"sessionId" "s1" "truncated" false}}]
            (writes fx 2))
         "the answer, then the replay, then _relay/replayed")
     (is (empty? (sends fx "clerk")) "the agent is not asked again")
@@ -143,7 +147,7 @@
         [h] (agent (live) "clerk" upd)
         h (opened h 2)
         [h fx] (say h 2 (req 4 "session/load" {:sessionId "s1" :cwd "/" :mcpServers []}))]
-    (is (= [(parse upd) {"jsonrpc" "2.0" "method" "_relay/replayed" "params" {"sessionId" "s1"}}
+    (is (= [(parse upd) {"jsonrpc" "2.0" "method" "_relay/replayed" "params" {"sessionId" "s1" "truncated" false}}
             {"jsonrpc" "2.0" "id" 4 "result" {}}]
            (writes fx 2)))
     (is (contains? (get-in h [:conns 2 :attached]) "clerk"))
@@ -151,17 +155,21 @@
       (let [[_ fx] (say h 2 (req 5 "session/load" {:sessionId "old"}))]
         (is (= -32602 (get-in (first (writes fx 2)) ["error" "code"])))))))
 
-(deftest a-replay-past-its-cap-starts-with-a-notice
+(deftest a-replay-past-its-cap-says-so
   (let [h (assoc (live) :replay-cap 300)
-        upd #(note "session/update" {:sessionId "s1" :update {:sessionUpdate "agent_message_chunk"
-                                                              :content {:type "text" :text (str "chunk " %)}}})
+        upd #(note "session/update" {:sessionId "s1" :update {:sessionUpdate "tool_call_update" :toolCallId (str "t" %)}})
         h (reduce (fn [h i] (first (agent h "clerk" (upd i)))) h (range 10))
         [_ fx] (say (opened h 2) 2 (req 1 "session/load" {:sessionId "s1"}))
         got (writes fx 2)
-        texts (keep #(get-in % ["params" "update" "content" "text"]) got)]
-    (is (= hub/truncated-notice (first texts)))
-    (is (= "chunk 9" (last texts)) "the newest are kept")
-    (is (< (count texts) 11))))
+        ids (keep #(get-in % ["params" "update" "toolCallId"]) got)]
+    (is (= "t9" (last ids)) "the newest are kept")
+    (is (< (count ids) 10))
+    (is (= {"sessionId" "s1" "truncated" true} (get (first (filter #(= "_relay/replayed" (get % "method")) got)) "params"))
+        "and _relay/replayed says older ones were dropped; relay words nothing itself")
+    (is (not-any? #(get-in % ["params" "update" "content" "text"]) got)))
+  (testing "a replay that dropped nothing says that too"
+    (let [[_ fx] (say (opened (live) 2) 2 (req 1 "session/load" {:sessionId "s1"}))]
+      (is (= {"sessionId" "s1" "truncated" false} (get (first (writes fx 2)) "params"))))))
 
 (deftest session-list-gives-live-conversations
   (let [h (assoc (live) :roster [(roster-entry "clerk" {:wake 7 :session "s1" :opened-at t0 :last-activity t0 :turn :idle :turns 1
@@ -287,9 +295,9 @@
     (let [[h fx] (agent (two-approvers) "clerk" (permission 900))
           [p1] (writes fx 1)
           [_ fx] (say h 1 (str "{\"jsonrpc\":\"2.0\",\"id\":" (json/generate-string (get p1 "id")) ",\"result\":{},\"result\":{}}"))
-          [sent] (sends fx "clerk")]
-      (is (nil? (try (json/parse-string sent) (catch Exception _ nil))) "unreadable, so the proxy refuses it")
-      (is (str/includes? sent "\"id\":900"))))
+          [sent] (map parse (sends fx "clerk"))]
+      (is (= {"jsonrpc" "2.0" "id" 900 "result" {"outcome" {"outcome" "selected" "optionId" "r"}}} sent)
+          "refused through the proxy, which records it")))
   (testing "a client that is not approving cannot answer"
     (let [[h fx] (agent (two-approvers) "clerk" (permission 900))
           id (get (first (writes fx 1)) "id")
@@ -302,7 +310,7 @@
           [h fx] (agent h "clerk" (permission 900))]
       (is (= [{:type :permission/unattended :actor "dispatcher" :args {:wake 7 :call "c1"}}] (map :command (submits fx))))
       (is (empty? (sends fx "clerk")))
-      (let [h (opened h 2 :approvals true)
+      (let [h (-> (submit-ok h fx) (opened 2 :approvals true))
             [_ fx] (say h 2 (req 1 "session/load" {:sessionId "s1"}))]
         (is (= ["_relay/replayed" nil "session/request_permission"] (map #(get % "method") (writes fx 2)))
             "after the replay and the answer"))))
@@ -505,8 +513,8 @@
                                                               :content {:type "text" :text (str "https://example.com/" %)}}})
         h (reduce (fn [h i] (first (agent h "clerk" (upd i)))) h (range 20))
         [_ fx] (say (opened h 2) 2 (req 1 "session/load" {:sessionId "s1"}))
-        [notice labels usage & more] (writes fx 2)]
-    (is (= hub/truncated-notice (get-in notice ["params" "update" "content" "text"])))
+        [labels usage & more] (writes fx 2)]
+    (is (true? (get-in (first (filter #(= "_relay/replayed" (get % "method")) more)) ["params" "truncated"])))
     (is (= {"sessionUpdate" "session_info_update" "_meta" {"agentloop/labels" ["contaminated"]}}
            (get-in labels ["params" "update"]))
         "the labels come first, before any text they cover")
@@ -553,7 +561,8 @@
             "and the proxy's record of it is closed")
         (is (empty? (get-in h' [:convs "clerk" :perms])))))
     (testing "the turn ending, however: no client is asked about it again"
-      (let [[h fx] (agent h "clerk" (res prompt-id {:stopReason "cancelled"}))]
+      (let [[h fx] (agent h "clerk" (res prompt-id {:stopReason "cancelled"}))
+            h (submit-ok h fx)]
         (is (some #(= "_relay/permission/settled" (get % "method")) (writes fx 2)))
         (is (empty? (get-in h [:convs "clerk" :perms])))
         (let [[_ fx] (say (opened h 3 :approvals true) 3 (req 1 "session/load" {:sessionId "s1"}))]
@@ -622,12 +631,14 @@
         (is (= [7] (keep #(get % "id") (writes fx 1))))
         (is (empty? (filter #(= "_relay/cards/changed" (get % "method")) (writes fx 1))))
         (is (= [[true false]] (map board-items (writes fx 2))))))
-    (testing "the changer leaving before the answer comes loses the others nothing"
+    (testing "the changer leaving at once loses the others nothing: relay decides the op before anything else happens"
       (let [[h fx] (say (subscribed) 1 (req 7 "_relay/cards/op" {:card card :op "tick" :item 1}))
-            [{:keys [tag]}] (submits fx)
-            [h] (run h {:event :connection-closed :conn 1})
-            [_ fx] (run h {:event :submit-result :tag tag :ok true :changed true :state s1})]
-        (is (= [[true false]] (map board-items (writes fx 2))))))
+            [h fx2] (run h {:event :submit-result :ok true :changed true :state s1})
+            [_ fx3] (run h {:event :connection-closed :conn 1})]
+        (is (= [[true false]] (map board-items (writes fx2 2))))
+        (is (thrown? clojure.lang.ExceptionInfo (run (first (say (subscribed) 1 (req 7 "_relay/cards/op" {:card card :op "tick" :item 1})))
+                                                     {:event :connection-closed :conn 1}))
+            "no event can come between a submit and its result")))
     (testing "a second client subscribing takes nothing from the first"
       (let [h (-> (live) (assoc :state s0))
             [h] (say h 1 (req 5 "_relay/cards" {}))
@@ -697,7 +708,8 @@
     (is (= 1 (count (filter #(= :warn (:effect %)) fx))) "the operator is told on stderr")
     (is (= [:conversation/turn-unrecorded] (map #(get-in % [:command :type]) (submits fx))) "and through notify")
     (testing "the role stays busy: no other turn starts"
-      (let [[h fx] (say h 1 (req 31 "session/prompt" {:sessionId "s1" :prompt []}))]
+      (let [h (submit-ok h fx)
+            [h fx] (say h 1 (req 31 "session/prompt" {:sessionId "s1" :prompt []}))]
         (is (empty? (filter #(= :conversation/turn-start (get-in % [:command :type])) (submits fx))))
         (testing "it is tried again when time passes, told only once more never"
           (let [[h fx] (run h {:event :tick})
@@ -716,3 +728,94 @@
         [_ fx] (run h {:event :submit-result :tag (:tag (first (submits fx))) :rejection :error :message "No space left on device"})]
     (is (empty? (sends fx "clerk")))
     (is (= "No space left on device" (get-in (first (writes fx 1)) ["error" "message"])))))
+
+;; --- independent review
+
+(defn- drive
+  "The hub through an event and all it leads to, in the shell's order,
+  with relay answering each submit ok (or as `decide` says). Returns
+  [hub effects]."
+  [h e & [decide]]
+  (let [fx (volatile! [])
+        h (hub/drive h e (fn [f] (vswap! fx conj f)
+                           (when (= :submit (:effect f))
+                             (merge {:event :submit-result} ((or decide (constantly {:ok true})) f)))))]
+    [h @fx]))
+
+(deftest a-prompt-never-shows-queued-while-its-role-is-free
+  ;; The shell once carried out a submit's result before the rest of its
+  ;; step's effects, so a roster subscriber got idle and then a stale
+  ;; queued, and kept queued until the next log change.
+  (let [idle {:wake 7 :session "s1" :opened-at t0 :last-activity t0 :turn :idle :turns 0 :unread? false :approvals 0}
+        h (assoc (live) :roster [(roster-entry "clerk" idle) (roster-entry "hub")])
+        [h] (drive h {:event :connection-line :conn 1 :line (req 5 "_relay/roles" {})})
+        turns (fn [fx] (for [m (writes fx 1) :when (= "_relay/roles/changed" (get m "method"))]
+                         (get-in m ["params" "roles" 0 "conversation" "turn"])))
+        [h fx] (drive h {:event :connection-line :conn 1 :line (req 30 "session/prompt" {:sessionId "s1" :prompt []})})]
+    (is (not-any? #{"queued"} (turns fx)) (pr-str (turns fx)))
+    (testing "while the role is busy it is queued, and stays so until it runs"
+      (let [h (assoc (live) :roster [(roster-entry "clerk" idle) (roster-entry "hub")])
+            [h] (drive h {:event :connection-line :conn 1 :line (req 5 "_relay/roles" {})})
+            [h fx] (drive h {:event :connection-line :conn 1 :line (req 30 "session/prompt" {:sessionId "s1" :prompt []})}
+                          (constantly {:rejection :busy}))]
+        (is (= ["queued"] (turns fx)))))))
+
+(defn- canon
+  "Updates as their history reads: consecutive text chunks of one kind
+  joined."
+  [msgs]
+  (let [chunk? #(and (#{"agent_message_chunk" "agent_thought_chunk" "user_message_chunk"} (get-in % ["params" "update" "sessionUpdate"]))
+                     (string? (get-in % ["params" "update" "content" "text"])))
+        bare #(update-in % ["params" "update" "content"] dissoc "text")]
+    (reduce (fn [acc m]
+              (let [l (peek acc)]
+                (if (and l (chunk? l) (chunk? m) (= (bare l) (bare m)))
+                  (conj (pop acc) (update-in l ["params" "update" "content" "text"] str (get-in m ["params" "update" "content" "text"])))
+                  (conj acc m))))
+            [] msgs)))
+
+(def gen-update
+  (gen/one-of [(gen/fmap (fn [[k t]] {:sessionId "s1" :update {:sessionUpdate k :content {:type "text" :text t}}})
+                         (gen/tuple (gen/elements ["agent_message_chunk" "agent_thought_chunk" "user_message_chunk"])
+                                    gen/string-alphanumeric))
+               (gen/fmap (fn [n] {:sessionId "s1" :update {:sessionUpdate "tool_call_update" :toolCallId (str "t" n)}})
+                         gen/nat)
+               (gen/return {:sessionId "s1" :update {:sessionUpdate "agent_message_chunk" :messageId "m2"
+                                                     :content {:type "text" :text "x"}}})]))
+
+(defspec a-replay-merges-text-and-keeps-everything-else 200
+  (prop/for-all [updates (gen/vector gen-update 0 40)]
+    (let [lines (map #(note "session/update" %) updates)
+          h (reduce (fn [h l] (first (agent h "clerk" l))) (live) lines)
+          [_ fx] (say (opened h 2) 2 (req 1 "session/load" {:sessionId "s1"}))
+          replayed (filter #(= "session/update" (get % "method")) (writes fx 2))]
+      (and (= (canon (map parse lines)) (canon replayed))
+           (<= (count replayed) (count lines))))))
+
+(deftest a-waiting-prompt-keeps-its-place-when-its-client-goes
+  (let [h (opened (live) 2)
+        [h] (say h 2 (req 1 "session/load" {:sessionId "s1"}))
+        [h] (drive h {:event :connection-line :conn 1 :line (req 30 "session/prompt" {:sessionId "s1" :prompt [{:type "text" :text "Later"}]})}
+                   (constantly {:rejection :busy}))
+        [h] (drive h {:event :connection-closed :conn 1})
+        _ (is (= 1 (count (hub/queued h "clerk"))) "it waits, an orphan")
+        [h fx] (drive h {:event :log-changed :roster roster})]
+    (is (= ["session/prompt"] (map #(get (parse %) "method") (sends fx "clerk"))) "and runs once the role is free")
+    (is (= [{"sessionUpdate" "user_message_chunk" "content" {"type" "text" "text" "Later"}}]
+           (map #(get-in % ["params" "update"]) (writes fx 2)))
+        "the other client sees it start")
+    (let [[h fx] (drive h {:event :agent-line :role "clerk" :line (res (:up (second (hub/running h "clerk"))) {:stopReason "end_turn"})})]
+      (is (= [:conversation/turn-end] (map #(get-in % [:command :type]) (submits fx))))
+      (is (empty? (writes fx 1)) "its answer goes nowhere")
+      (is (empty? (:requests h))))))
+
+(deftest the-properties-reach-what-they-are-about
+  ;; Each property is only as good as the runs it sees: a change to the
+  ;; generator must not quietly stop them reaching these paths. Half the
+  ;; runs have a cap small enough to truncate a replay.
+  (let [runs (for [i (range 300)]
+               (sim/drain (reduce sim/act (sim/start :service (when (odd? i) 400))
+                                  (gen/generate (gen/vector sim/gen-action 1 80) (mod i 100) i))))
+        share (fn [k] (/ (count (filter #(pos? (get-in % [:seen k] 0)) runs)) (count runs)))]
+    (doseq [k [:settled-for-another :unattended :truncated :queued-then-run :orphan-answered]]
+      (is (>= (share k) 0.02) (str k " reached in " (double (share k)) " of runs")))))

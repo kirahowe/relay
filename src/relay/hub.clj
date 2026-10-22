@@ -16,11 +16,11 @@
                answered, one record each, from the moment it is taken to
                the moment it is answered: {:conn :id :method :state :role
                :up :kind ...}. Its state says where it is: :local (being
-               answered now), :waiting (for a session to open), :queued or
-               :asking (a prompt waiting for its turn), :upstream (passed
-               on to the conversation under :up, the hub's id for it),
-               :submit (waiting for relay to decide) or :ending (waiting
-               for the conversation to end). While a record lives its id
+               answered now, or by relay's decision, which is the next
+               event), :waiting (for a session to open), :queued (a
+               prompt waiting for its turn), :upstream (passed on to the
+               conversation under :up, the hub's id for it) or :ending
+               (waiting for the conversation to end). While a record lives its id
                stays the connection's; a record whose connection went
                away stays, an orphan, until its answer comes and is
                dropped. Every lookup (a prompt's turn, who waits for a
@@ -29,7 +29,11 @@
                with no connection.
     :perms     per conversation, the agent's permission requests and the
                id each client was sent it under.
-    :tags      what to do with each submit's result.
+    :awaiting  what to do with the result of each submit made and not yet
+               answered, in order. A submit's result is the next event the
+               hub sees (drive carries effects out so), so nothing else
+               happens in between: a prompt cannot be cancelled while
+               relay decides its turn.
 
   The board is the hub's too: it knows the state, which connections
   subscribe, and the rev of every card it sent each one, and on every
@@ -43,7 +47,9 @@
     :conversation-failed  {:role :message}  it could not start
     :agent-line         {:role :line}       a line from the proxy
     :conversation-gone  {:role}             the wake has ended
-    :submit-result      {:tag :ok :changed :state | :rejection :message}
+    :submit-result      {:ok :changed :state | :rejection :message}
+                                            the result of the oldest submit
+                                            not yet answered
     :log-changed        {:roster :state}    relay.roster/roster and the
                                             core state, now
     :tick               {}                  time passes: retry what failed
@@ -51,11 +57,10 @@
   Effects, maps with :effect:
     :write   {:conn :line}         a line to a connection
     :send    {:role :line}         a line to a conversation's proxy
-    :submit  {:tag :command :with-state}
+    :submit  {:command :with-state}
                                    a command for relay.inbound; its result
-                                   comes back as :submit-result with the
-                                   tag, and with the state after it when
-                                   :with-state
+                                   is the next :submit-result, with the
+                                   state after it when :with-state
     :start   {:role}               open the role's conversation
     :stop    {:role}               end it
     :warn    {:text}               tell the operator on stderr
@@ -100,7 +105,7 @@
   (when-not (#{:service :embedded} mode)
     (throw (ex-info "A hub's mode is :service or :embedded." {:mode mode})))
   {:mode mode :replay-cap replay-cap :max-pending max-pending :max-per-conversation max-per-conversation
-   :conns {} :convs {} :requests {} :next-rid 0 :roster [] :state nil :tags {} :next-tag 0})
+   :conns {} :convs {} :requests {} :next-rid 0 :roster [] :state nil :awaiting clojure.lang.PersistentQueue/EMPTY})
 
 ;; --- effects and lines
 
@@ -111,9 +116,13 @@
 (defn- submit
   "A command for relay, and what to do with its result."
   [h command continuation & {:keys [with-state]}]
-  (let [tag (:next-tag h)]
-    (-> h (assoc-in [:tags tag] continuation) (update :next-tag inc)
-        (fx (cond-> {:effect :submit :tag tag :command command} with-state (assoc :with-state true))))))
+  (-> h (update :awaiting conj continuation)
+      (fx (cond-> {:effect :submit :command command} with-state (assoc :with-state true)))))
+
+(defn- awaiting?
+  "Whether a submit made and not yet answered is one pred picks."
+  [h pred]
+  (some pred (:awaiting h)))
 
 (defn- with-id [msg id] (strict/generate (assoc msg "id" id)))
 
@@ -135,7 +144,7 @@
 (defn queued
   "A conversation's prompts waiting for their turn, oldest first."
   [h role]
-  (records h #(and (= role (:role %)) (= :prompt (:kind %)) (#{:queued :asking} (:state %)))))
+  (records h #(and (= role (:role %)) (= :prompt (:kind %)) (= :queued (:state %)))))
 
 (defn running
   "The prompt whose turn runs in a conversation: [rid record], or nil."
@@ -204,7 +213,9 @@
                    (fn [wc]
                      (cond-> wc
                        (and (nil? (get wc "sessionId")) (:session c)) (assoc "sessionId" (:session c))
-                       (and (= "idle" (get wc "turn")) (seq (queued h (:id e)))) (assoc "turn" "queued"))))
+                       ;; Only while it waits for the role: a prompt relay is
+                       ;; about to start is not shown waiting.
+                       (and (= "idle" (get wc "turn")) (:blocked c) (seq (queued h (:id e)))) (assoc "turn" "queued"))))
            w))))
 
 (defn- roster-changes
@@ -245,15 +256,12 @@
   (let [{:keys [command error]} (workspace/card-op-command (params-of msg))]
     (if error
       (refuse h rid -32602 error)
-      (-> h (update-record rid :state :submit)
-          (submit command {:kind :card-op :rid rid :card (get-in command [:args :card])} :with-state true)))))
+      (submit h command {:kind :card-op :rid rid :card (get-in command [:args :card])} :with-state true))))
 
 (defn- card-op-result [h {:keys [rid card]} {:keys [ok changed rejection message] :as result}]
   (let [{:keys [conn]} (record h rid)
         state (or (:state result) (:state h))]
     (cond
-      ;; Its client has gone: the others still get the change.
-      (nil? conn) (if ok (-> h (assoc :state state) board-changes) h)
       (not ok) (refuse h rid -32000 (or message (str "relay refused it" (when rejection (str " (" (name rejection) ")")) ".")))
       :else
       (as-> h h
@@ -268,30 +276,53 @@
 
 ;; --- the replay buffer
 
-(def truncated-notice
-  "The text a replay starts with when its oldest updates were dropped."
-  "Earlier history of this conversation is not shown.")
+(def ^:private chunk-kinds #{"agent_message_chunk" "agent_thought_chunk" "user_message_chunk"})
+
+(defn- text-chunk
+  "A session/update that is a text chunk of one of chunk-kinds: the
+  message with its text taken out, and the text. Nil for anything else."
+  [msg]
+  (let [u (get-in msg ["params" "update"])
+        text (get-in u ["content" "text"])]
+    (when (and (chunk-kinds (get u "sessionUpdate")) (= "text" (get-in u ["content" "type"])) (string? text))
+      [(update-in msg ["params" "update" "content"] dissoc "text") text])))
+
+(def merge-limit
+  "The longest text a merged replay entry grows to before a new one
+  starts, so the cap still drops history a piece at a time."
+  (* 64 1024))
+
+(defn merge-chunk
+  "The replay entry two consecutive updates make, when both are text
+  chunks of one kind that differ in nothing but their text: one chunk
+  with the texts joined. Nil when they do not merge."
+  [a b]
+  (let [[ka ta] (text-chunk (acp/message a))
+        [kb tb] (text-chunk (acp/message b))]
+    (when (and ka kb (= ka kb) (<= (+ (count ta) (count tb)) merge-limit))
+      (strict/generate (assoc-in ka ["params" "update" "content" "text"] (str ta tb))))))
 
 (defn- remember
-  "Adds a session/update line to a conversation's replay buffer, dropping
+  "Adds a session/update line to a conversation's replay buffer, merged
+  into the last entry when both are text chunks of one kind, and drops
   the oldest past the cap. The buffer is a queue, so what it drops is
   gone: a subvec would keep its whole backing vector."
   [h role line]
   (let [cap (:replay-cap h)]
     (update-in h [:convs role :replay]
                (fn [{:keys [entries size dropped] :or {entries clojure.lang.PersistentQueue/EMPTY size 0 dropped false}}]
-                 (loop [entries (conj entries line) size (+ size (count line)) dropped dropped]
-                   (if (and (> size cap) (seq entries))
-                     (recur (pop entries) (- size (count (peek entries))) true)
-                     {:entries entries :size size :dropped dropped}))))))
-
-(defn- notice-line [session]
-  (workspace/notification-line
-   "session/update"
-   {"sessionId" session
-    "update" {"sessionUpdate" "agent_message_chunk"
-              "content" {"type" "text" "text" truncated-notice}
-              "_meta" {"relay/notice" "replay-truncated"}}}))
+                 (let [last-entry (last entries)
+                       merged (when last-entry (merge-chunk last-entry line))
+                       [entries size] (if merged
+                                        ;; A queue's last entry is replaced by
+                                        ;; rebuilding it; the buffer is bounded.
+                                        [(into clojure.lang.PersistentQueue/EMPTY (concat (butlast entries) [merged]))
+                                         (+ (- size (count last-entry)) (count merged))]
+                                        [(conj entries line) (+ size (count line))])]
+                   (loop [entries entries size size dropped dropped]
+                     (if (and (> size cap) (seq entries))
+                       (recur (pop entries) (- size (count (peek entries))) true)
+                       {:entries entries :size size :dropped dropped})))))))
 
 ;; The session-level state a client needs to read the rest of a replay,
 ;; kept outside the capped buffer so dropping old updates cannot lose it:
@@ -326,16 +357,17 @@
                                 "update" {"sessionUpdate" "session_info_update" "_meta" {labels-key labels}}}))
 
 (defn- replay
-  "Writes a conversation's replay to a connection: the notice when its
-  oldest updates were dropped, the session's latest labels and usage,
-  every update kept, and _relay/replayed."
+  "Writes a conversation's replay to a connection: the session's latest
+  labels and usage, every update kept, and _relay/replayed, which says
+  whether older updates were dropped. relay words nothing about that
+  itself: the client does."
   [h cid role]
   (let [{:keys [session replay labels usage]} (get-in h [:convs role])
-        h (if (:dropped replay) (write h cid (notice-line session)) h)
         h (if labels (write h cid (labels-line session labels)) h)
         h (if usage (write h cid usage) h)
         h (reduce #(write %1 cid %2) h (:entries replay))]
-    (write h cid (workspace/notification-line "_relay/replayed" {"sessionId" session}))))
+    (write h cid (workspace/notification-line "_relay/replayed" {"sessionId" session
+                                                                 "truncated" (boolean (:dropped replay))}))))
 
 ;; --- permission requests
 
@@ -361,17 +393,26 @@
                :when (and (contains? sent cid) (= k (acp/id-key (get sent cid))))]
            [role pkey])))
 
-(defn- refusal-line [{:keys [msg]}]
-  (strict/generate (acp/refusal {:id (get msg "id")
-                                 :options (vec (filter map? (let [o (get-in msg ["params" "options"])]
-                                                              (when (sequential? o) o))))})))
-
-(defn- unreadable-answer
-  "A line relay's proxy cannot read that carries the agent's id for a
-  permission request: the proxy refuses the request for it, as it does
-  when a client's answer cannot be read."
+(defn- refusal
+  "The answer that refuses a permission request, under the agent's id:
+  its reject_once option, or cancelled. Every refusal the hub makes is
+  this line, through the proxy, which records it."
   [{:keys [msg]}]
-  (str "{\"jsonrpc\":\"2.0\",\"id\":" (strict/generate (get msg "id")) ",\"result\":"))
+  (acp/refusal {:id (get msg "id")
+                :options (vec (filter map? (let [o (get-in msg ["params" "options"])] (when (sequential? o) o))))}))
+
+(defn- refusal-line [perm] (strict/generate (refusal perm)))
+
+(defn- refusal-outcome [perm]
+  (if (= "selected" (get-in (refusal perm) ["result" "outcome" "outcome"])) "reject_once" "cancelled"))
+
+(declare settle)
+
+(defn- refuse-perm
+  "Settles a permission request as refused, on a connection's behalf."
+  [h role pkey cid]
+  (let [perm (get-in h [:convs role :perms pkey])]
+    (settle h role pkey cid (refusal-line perm) (refusal-outcome perm))))
 
 (defn- unattended
   "A permission request no approving connection can see: in service mode
@@ -383,9 +424,9 @@
       (nil? perm) h
       (= :embedded (:mode h))
       (-> h (update-in [:convs role :perms] dissoc pkey) (send-conv role (refusal-line perm)))
-      (#{:asking :told} (:notified perm)) h
+      (or (:notified perm) (awaiting? h #(and (= :unattended (:kind %)) (= [role pkey] [(:role %) (:pkey %)])))) h
       :else
-      (-> h (assoc-in [:convs role :perms pkey :notified] :asking)
+      (-> h
           (submit {:type :permission/unattended :actor core/dispatcher
                    :args {:wake (get-in h [:convs role :wake]) :call (:call perm)}}
                   {:kind :unattended :role role :pkey pkey})))))
@@ -496,10 +537,9 @@
   [h role]
   (let [{:keys [status session blocked wake turn-end-due]} (get-in h [:convs role])
         [rid r] (first (queued h role))]
-    (if (and (= :running status) session (not blocked) (not turn-end-due) (nil? (running h role))
-             rid (= :queued (:state r)))
-      (-> h (update-record rid :state :asking)
-          (submit (workspace/turn-start-command wake session) {:kind :turn-start :rid rid :role role}))
+    (if (and (= :running status) session (not blocked) (not turn-end-due) (nil? (running h role)) rid
+             (not (awaiting? h #(and (= :turn-start (:kind %)) (= role (:role %))))))
+      (submit h (workspace/turn-start-command wake session) {:kind :turn-start :rid rid :role role})
       h)))
 
 (defn- mirror
@@ -527,10 +567,9 @@
   "Asks again to record a turn's end that could not be recorded."
   [h]
   (reduce (fn [h [role {:keys [turn-end-due]}]]
-            (if (and turn-end-due (not (:asking turn-end-due)))
-              (-> h (assoc-in [:convs role :turn-end-due :asking] true)
-                  (submit (workspace/turn-end-command (get-in h [:convs role :wake]) (:stop-reason turn-end-due))
-                          {:kind :turn-end :role role}))
+            (if (and turn-end-due (not (awaiting? h #(and (= :turn-end (:kind %)) (= role (:role %))))))
+              (submit h (workspace/turn-end-command (get-in h [:convs role :wake]) (:stop-reason turn-end-due))
+                      {:kind :turn-end :role role})
               h))
           h (sort-by key (:convs h))))
 
@@ -562,7 +601,7 @@
         (reduce (fn [h [rid {:keys [kind state]}]]
                   (cond
                     (= :ending state) (answer h rid {})
-                    (and (= :prompt kind) (#{:queued :asking} state)) (answer h rid {"stopReason" "cancelled"})
+                    (and (= :prompt kind) (= :queued state)) (answer h rid {"stopReason" "cancelled"})
                     :else (refuse h rid -32000 gone)))
                 h (records h #(= role (:role %))))
         (reduce (fn [h pkey] (settle h role pkey nil nil "cancelled")) h (sort (keys (:perms c))))
@@ -694,7 +733,7 @@
         role (conversation-of h s)]
     (if-not role
       (refuse h rid -32602 (str "There is no live conversation " (pr-str s) "."))
-      (-> h (update-record rid :state :submit)
+      (-> h
           (submit {:type :conversation/seen :actor core/operator
                    :args {:wake (get-in h [:convs role :wake]) :turn (get (params-of msg) "turn")}}
                   {:kind :reply :rid rid})))))
@@ -734,21 +773,22 @@
       (cond-> h
         rid (refuse rid -32600 "relay takes _relay/connect only as the first line of a connection to its socket.")))))
 
-(defn- initialize-answer [_msg]
+(defn- initialize-answer [h]
   {"protocolVersion" 1
    "agentCapabilities" {"loadSession" true
                         "promptCapabilities" {"embeddedContext" true}
                         "sessionCapabilities" {"list" {} "close" {}}}
    "agentInfo" {"name" "relay" "title" "relay" "version" "1"}
    "authMethods" []
-   "_meta" {"relay/hub" 1}})
+   ;; relay/keeps: whether a conversation outlives this client.
+   "_meta" {"relay/hub" 1 "relay/keeps" (= :service (:mode h))}})
 
 (defn- dispatch-request [h rid msg first?]
   (let [cid (:conn (record h rid))
         method (get msg "method")]
     (case method
       "_relay/connect" (connect h cid rid msg first?)
-      "initialize" (-> h (assoc-in [:conns cid :init] (params-of msg)) (answer rid (initialize-answer msg)))
+      "initialize" (-> h (assoc-in [:conns cid :init] (params-of msg)) (answer rid (initialize-answer h)))
       "authenticate" (answer h rid {})
       "session/new" (new-session h rid msg)
       "session/load" (load-session h rid msg)
@@ -832,7 +872,7 @@
         ;; An answer to nothing it was asked: the client is confused, so
         ;; what it holds open is refused rather than left to hang a turn.
         (reduce (fn [h [role pkey]]
-                  (settle h role pkey cid (unreadable-answer (get-in h [:convs role :perms pkey])) "reject_once"))
+                  (refuse-perm h role pkey cid))
                 h (for [[role c] (sort-by key (:convs h))
                         [pkey p] (sort-by key (:perms c))
                         :when (contains? (:sent p) cid)]
@@ -851,7 +891,7 @@
       (let [lid (acp/line-id line)
             k (when (some? lid) (acp/id-key lid))]
         (if-let [[role pkey] (when k (perm-sent h cid k))]
-          (settle h role pkey cid (unreadable-answer (get-in h [:convs role :perms pkey])) "reject_once")
+          (refuse-perm h role pkey cid)
           (if (and k (not (hub-id? lid)) (not (reserved? h cid k)))
             (write h cid (workspace/error-line lid -32600 "relay does not pass on a line that is not one strictly valid JSON object."))
             h)))
@@ -863,10 +903,11 @@
 
 (defn- close-connection
   "A connection has gone. A request of its that was passed on stays, an
-  orphan, until its answer comes; the rest are forgotten."
+  orphan, until its answer comes, and so does a prompt waiting for its
+  turn, which keeps its place and runs; the rest are forgotten."
   [h cid]
   (let [h (reduce (fn [h [rid {:keys [state]}]]
-                    (if (#{:upstream :asking} state)
+                    (if (#{:upstream :queued} state)
                       (update-record h rid :orphan true)
                       (update h :requests dissoc rid)))
                   h (records h #(= cid (:conn %))))
@@ -965,24 +1006,19 @@
 
 ;; --- what relay decided
 
-(defn- submit-result [h {:keys [tag ok rejection message] :as result}]
-  (let [{:keys [kind role rid pkey] :as continuation} (get-in h [:tags tag])
-        h (update h :tags dissoc tag)
+(defn- submit-result [h {:keys [ok rejection message] :as result}]
+  (let [{:keys [kind role rid pkey] :as continuation} (peek (:awaiting h))
+        h (update h :awaiting pop)
         r (when rid (record h rid))]
     (case kind
-      nil h
       :turn-start
       (cond
-        ;; The prompt was cancelled while relay decided: the turn it got
-        ;; ends at once.
-        (nil? r) (if (and ok (get-in h [:convs role])) (end-turn h role "cancelled") h)
-        (not (get-in h [:convs role])) h
         ok (let [{:keys [conn params]} r]
              (-> h (mirror role conn params)
                  (send-upstream rid role {"jsonrpc" "2.0" "method" "session/prompt" "params" params} :prompt)))
         ;; It waits for the role, and is asked for again when the log
         ;; changes.
-        (= :busy rejection) (-> h (update-record rid :state :queued) (assoc-in [:convs role :blocked] true))
+        (= :busy rejection) (assoc-in h [:convs role :blocked] true)
         ;; Not recorded, so not run.
         :else (-> h (refuse rid -32000 (or message "relay could not start the turn.")) (pump role)))
       :turn-end
@@ -991,7 +1027,6 @@
         ok (-> h (update-in [:convs role] dissoc :turn-end-due :told) (pump role))
         :else
         (as-> h h
-          (assoc-in h [:convs role :turn-end-due :asking] false)
           ;; Told once; the role stays busy, as the log says it is, until
           ;; the end is recorded.
           (if (get-in h [:convs role :told])
@@ -1004,12 +1039,11 @@
                          :args {:wake (get-in h [:convs role :wake])}}
                         {:kind :ignore})))))
       :unattended
-      (if (get-in h [:convs role :perms pkey])
-        (assoc-in h [:convs role :perms pkey :notified] (if ok :told nil))
+      (if (and ok (get-in h [:convs role :perms pkey]))
+        (assoc-in h [:convs role :perms pkey :notified] true)
         h)
       :reply
       (cond
-        (nil? r) h
         ok (answer h rid {})
         :else (refuse h rid -32000 (or message "relay refused it.")))
       :card-op (card-op-result h continuation result)
@@ -1018,8 +1052,13 @@
 ;; --- step
 
 (defn step
-  "The hub after one event, and the effects it calls for, in order."
+  "The hub after one event, and the effects it calls for, in order. While
+  a submit waits for its result, that result must be the next event."
   [h {:keys [event] :as e}]
+  (when (and (seq (:awaiting h)) (not= :submit-result event))
+    (throw (ex-info "The hub was given an event while a submit's result was owed." {:event event})))
+  (when (and (= :submit-result event) (empty? (:awaiting h)))
+    (throw (ex-info "The hub was given a submit's result it did not ask for." {})))
   (let [h (assoc h ::fx [])
         h (case event
             :connection-opened
@@ -1050,8 +1089,25 @@
               (reduce (fn [h role] (-> h (assoc-in [:convs role :blocked] false) (pump role)))
                       h (sort (keys (:convs h)))))
             :tick (-> h retry-turn-ends retry-unattended))
-        h (roster-changes h)]
+        ;; The roster is sent once relay has decided what this event led
+        ;; to, never in between.
+        h (if (empty? (:awaiting h)) (roster-changes h) h)]
     [(dissoc h ::fx) (::fx h)]))
+
+(defn drive
+  "Steps the hub through an event and everything it leads to, carrying
+  out each effect with (perform effect), which returns the event it
+  leads to (a submit's result) or nil. This is the one order relay uses,
+  in its shell and in its tests: each step's effects in order, then the
+  events they led to, oldest first, before anything else. Returns the
+  hub."
+  [h event perform]
+  (loop [h h pending (conj clojure.lang.PersistentQueue/EMPTY event)]
+    (if-let [e (peek pending)]
+      (let [[h fx] (step h e)
+            follow (keep perform fx)]
+        (recur h (into (pop pending) follow)))
+      h)))
 
 (defn idle?
   "Whether an embedded hub is done: no connection and no conversation."

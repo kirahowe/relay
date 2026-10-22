@@ -180,7 +180,8 @@
             (let [r (client/request! c "session/load" {:sessionId "s1" :cwd *dir* :mcpServers []})]
               (is (= {} (get r "result")) (pr-str r)))
             (testing "the replay: the prompt, everything the agent said, then _relay/replayed, then the answer"
-              (is (= ["SLOW job" "GOT" "REPLY"] (filter #{"SLOW job" "GOT" "REPLY"} (texts c))))
+              ;; The agent's two chunks come back merged into one.
+              (is (= ["SLOW job" "GOTREPLY"] (texts c)))
               (let [ms (vec @(:messages c))
                     replayed (.indexOf ^java.util.List (mapv #(get % "method") ms) "_relay/replayed")
                     answered (first (keep-indexed #(when (= 2 (get %2 "id")) %1) ms))]

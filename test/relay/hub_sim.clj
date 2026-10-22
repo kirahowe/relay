@@ -36,7 +36,7 @@
 
 ;; --- the effects, carried out
 
-(declare run-events)
+(declare run-events carry-out*)
 
 (defn- conn-write [w cid line]
   (let [c (get-in w [:conns cid])
@@ -65,9 +65,14 @@
             (cond-> (assoc-in w [:conns cid :perm-ids k] call)
               (and was (not= was call)) (problem [:perm-id-reused cid k])))
           w)
+        (if (and (= "_relay/replayed" (get msg "method")) (true? (get-in msg ["params" "truncated"])))
+          (update-in w [:seen :truncated] (fnil inc 0))
+          w)
         (if (= "_relay/permission/settled" (get msg "method"))
           (let [call (get-in msg ["params" "toolCallId"])]
-            (cond-> (update-in w [:conns cid :settled call] (fnil inc 0))
+            (cond-> (cond-> (update-in w [:conns cid :settled call] (fnil inc 0))
+                      ;; Settled by another device's answer.
+                      (not= "cancelled" (get-in msg ["params" "outcome"])) (update-in [:seen :settled-for-another] (fnil inc 0)))
               (pos? (get-in w [:conns cid :settled call] 0)) (problem [:settled-twice cid call])))
           w)
         ;; What it sees of each session, in order.
@@ -84,14 +89,7 @@
         a (agent-of w role)]
     (cond
       (nil? a) w
-      ;; A line the proxy cannot read, with a permission request's id: the
-      ;; proxy refuses the request.
-      (nil? msg)
-      (let [id (acp/line-id line)]
-        (if (contains? (:perms a) id)
-          (-> w (update-in [:agents role :perms] disj id) (update-in [:agents role :answers id] (fnil inc 0))
-              (cond-> (pos? (get-in a [:answers id] 0)) (problem [:perm-answered-twice role id])))
-          (problem w [:unreadable-to-agent role line])))
+      (nil? msg) (problem w [:unreadable-to-agent role line])
       (and (contains? msg "method") (contains? msg "id"))
       (let [id (get msg "id")
             w (cond-> (update-in w [:agents role :ids] (fnil conj #{}) id)
@@ -125,7 +123,10 @@
             (pos? (get-in a [:answers id] 0)) (problem [:perm-answered-twice role id]))
           (problem w [:answer-to-nothing role id]))))))
 
-(defn- relay-decides [w {:keys [tag command]}]
+(defn- relay-decides
+  "Relay deciding a submit: the world after it, and the result, which the
+  hub sees next."
+  [w {:keys [command]}]
   (let [{:keys [type args]} command
         role (some (fn [[r a]] (when (= (:wake args) (:wake a)) r)) (:agents w))
         result (case type
@@ -134,17 +135,30 @@
                                                 :else {:ok true})
                  {:ok true})
         w (cond-> w
+            (and (= type :conversation/turn-start) (:ok result) (contains? (:was-busy w) role))
+            (-> (update :was-busy disj role) (update-in [:seen :queued-then-run] (fnil inc 0)))
+            (and (= type :conversation/turn-start) (= :busy (:rejection result)))
+            (update :was-busy (fnil conj #{}) role)
             (and (= type :conversation/turn-start) (:ok result))
             (-> (update :running conj role) (update-in [:turns-ok role] (fnil inc 0)))
             (= type :conversation/turn-end) (update :running disj role)
-            (= type :permission/unattended) (update :unattended (fnil conj []) (:call args)))]
-    (update w :pending #(into [(merge {:event :submit-result :tag tag} result)] %))))
+            (= type :permission/unattended) (-> (update :unattended (fnil conj []) (:call args))
+                                                (update-in [:seen :unattended] (fnil inc 0))))]
+    [w (merge {:event :submit-result} result)]))
 
-(defn- carry-out [w {:keys [effect] :as f}]
+(defn- carry-out
+  "Carries out an effect: the world after it, and the event it leads to
+  at once (a submit's result), if any."
+  [w {:keys [effect] :as f}]
+  (case effect
+    :submit (relay-decides w f)
+    [(carry-out* w f) nil]))
+
+(defn- carry-out* [w {:keys [effect] :as f}]
   (case effect
     :write (conn-write w (:conn f) (:line f))
     :send (agent-gets w (:role f) (:line f))
-    :submit (relay-decides w f)
+    :warn w
     :start (let [role (:role f)
                  wake (:next-wake w)
                  w (cond-> (-> w (update :next-wake inc)
@@ -162,17 +176,23 @@
   (-> w (update :agents dissoc role) (update :running disj role) (update :turns-ok dissoc role)))
 
 (defn run-events
-  "Steps the hub through the events and everything they lead to, depth
-  first, as the shell does."
+  "Steps the hub through the events and everything they lead to, in
+  relay.hub/drive's order, the one the shell uses."
   [w events]
   (loop [w (update w :pending (fnil into []) events)]
     (if-let [[e & more] (seq (:pending w))]
       (let [w (assoc w :pending (vec more))
             before (:h w)
-            [h fx] (hub/step (:h w) e)
-            w (assoc w :h h)
             w (cond-> w (= :conversation-gone (:event e)) (gone (:role e)))
-            w (reduce carry-out w fx)
+            ;; An agent's answer to a request whose client has gone.
+            w (let [m (when (= :agent-line (:event e)) (parse (:line e)))]
+                (if (and m (contains? m "id") (not (contains? m "method"))
+                         (some #(and (:orphan %) (= (:role e) (:role %)) (= (get m "id") (:up %))) (vals (:requests before))))
+                  (update-in w [:seen :orphan-answered] (fnil inc 0))
+                  w))
+            world (volatile! w)
+            h (hub/drive (:h w) e (fn [f] (let [[w' follow] (carry-out @world f)] (vreset! world w') follow)))
+            w (assoc @world :h h)
             w (if (= :conversation-gone (:event e))
                 ;; Ending a conversation answers everything owed about it.
                 (let [session (get-in before [:convs (:role e) :session])]
@@ -219,6 +239,33 @@
   [w cid]
   (vec (sort (for [[id _] (get-in w [:conns cid :requests]) :when (zero? (get-in w [:conns cid :responses id] 0))] id))))
 
+(defn- text-chunk? [m]
+  (and (#{"agent_message_chunk" "agent_thought_chunk" "user_message_chunk"} (get-in m ["params" "update" "sessionUpdate"]))
+       (string? (get-in m ["params" "update" "content" "text"]))))
+
+(defn- without-text [m] (update-in m ["params" "update" "content"] dissoc "text"))
+
+(defn- canonical
+  "Updates as their history reads, whatever relay merged: the labels a
+  replay starts with (relay's, with no title, unlike the agent's) left
+  out, the connection's own prompts' text taken out (it is not sent them
+  live), and consecutive text chunks of one kind joined."
+  [lines own]
+  (->> lines
+       (map parse)
+       (remove #(let [u (get-in % ["params" "update"])]
+                  (and (= "session_info_update" (get u "sessionUpdate")) (nil? (get u "title")))))
+       (map #(if (= "user_message_chunk" (get-in % ["params" "update" "sessionUpdate"]))
+               (update-in % ["params" "update" "content" "text"] (fn [t] (reduce (fn [t o] (str/replace t o "")) (str t) own)))
+               %))
+       (remove #(and (text-chunk? %) (= "" (get-in % ["params" "update" "content" "text"]))))
+       (reduce (fn [acc m]
+                 (let [l (peek acc)]
+                   (if (and l (text-chunk? l) (text-chunk? m) (= (without-text l) (without-text m)))
+                     (conj (pop acc) (update-in l ["params" "update" "content" "text"] str (get-in m ["params" "update" "content" "text"])))
+                     (conj acc m))))
+               [])))
+
 (defn- end-segment
   "Checks what a connection saw of a session since it attached: with its
   own prompts' text taken out, exactly the observer's history so far,
@@ -226,17 +273,10 @@
   [w cid session]
   (if-let [{:keys [start labels]} (get-in w [:conns cid :segments session])]
     (let [own (get-in w [:own cid] #{})
-          ;; Its own prompts, and the labels a replay starts with (relay's,
-          ;; with no title, unlike the agent's), which the observer may
-          ;; not have had where this connection did.
-          strip (fn [ls] (vec (remove #(let [u (get-in (parse %) ["params" "update"])]
-                                         (or (own (get-in u ["content" "text"]))
-                                             (and (= "session_info_update" (get u "sessionUpdate")) (nil? (get u "title")))))
-                                      ls)))
           seen (subvec (get-in w [:conns cid :updates session] []) start)
           first-labels (some #(get-in (parse %) ["params" "update" "_meta" "agentloop/labels"]) seen)
-          seen (strip seen)
-          history (strip (get-in w [:conns observer :updates session] []))]
+          seen (canonical seen own)
+          history (canonical (get-in w [:conns observer :updates session] []) own)]
       (cond-> (update-in w [:conns cid :segments] dissoc session)
         ;; The labels a late attacher sees first are the latest the agent
         ;; sent, however much of the history the cap dropped.
@@ -287,7 +327,8 @@
   [w [kind a :as action]]
   (let [cids (vec (sort (keep (fn [[cid c]] (when (and (:open c) (not= observer cid)) cid)) (:conns w))))
         acting (when (#{:answer :stray} kind) (nth-or cids (or a 0)))]
-    (let [w' (told-of-settling w (act* w action) acting)
+    (let [after (act* (dissoc w :winner) action)
+          w' (told-of-settling w after (if (= :race kind) (:winner after) acting))
           bound (get-in w' [:h :max-per-conversation])]
       ;; Requests waiting on a conversation, orphans included, stay within
       ;; its bound however clients come and go.
@@ -330,7 +371,7 @@
                       (conn-sends w cid "session/load" {:sessionId s}))
                     w)
             :prompt (if-let [s (and cid (nth-or (attached-sessions w cid) b))]
-                      (let [text (str "p" (:next-text w))]
+                      (let [text (str "<p" (:next-text w) ">")]
                         (-> w (update :next-text inc) (update-in [:own cid] (fnil conj #{}) text)
                             (conn-sends cid "session/prompt" {:sessionId s :prompt [{:type "text" :text text}]})))
                       w)
@@ -399,6 +440,18 @@
                                                                  {:optionId "r" :kind "reject_once"}]}})
                             (run-events [])))
                       w))
+            ;; Two devices answering the same request, one after the other.
+            :race (let [role (nth-or roles a)
+                        w (act* w [:perm a])
+                        call (str "c" (+ 5000 (dec (:next-text w))))
+                        holders (for [[cid c] (sort-by key (:conns w))
+                                      :when (and (:open c) (not= observer cid))
+                                      [k pc] (:perm-ids c) :when (= call pc)]
+                                  [cid (second k)])]
+                    (reduce (fn [w [cid id]]
+                              (run-events w [{:event :connection-line :conn cid
+                                              :line (jl {:jsonrpc "2.0" :id id :result {:outcome {:outcome "selected" :optionId "a"}}})}]))
+                            (assoc w :winner (ffirst holders)) holders))
             :agent-cancel (let [role (nth-or roles a)]
                             (if-let [id (first (sort (:perms (agent-of w role))))]
                               (-> w (agent-says role {:jsonrpc "2.0" :method "$/cancel_request" :params {:requestId id}})
@@ -424,7 +477,7 @@
 
 (def gen-action
   (gen/frequency
-   [[2 (gen/tuple (gen/return :open) gen/boolean gen/nat)]
+   [[3 (gen/tuple (gen/return :open) (gen/frequency [[3 (gen/return true)] [1 (gen/return false)]]) gen/nat)]
     [1 (gen/tuple (gen/return :close) gen/nat)]
     [2 (gen/tuple (gen/return :initialize) gen/nat)]
     [4 (gen/tuple (gen/return :new) gen/nat gen/nat)]
@@ -435,7 +488,7 @@
     [1 (gen/tuple (gen/return :roles) gen/nat)]
     [1 (gen/tuple (gen/return :end) gen/nat gen/nat)]
     [1 (gen/tuple (gen/return :items) gen/nat gen/nat)]
-    [4 (gen/tuple (gen/return :answer) gen/nat gen/nat)]
+    [6 (gen/tuple (gen/return :answer) gen/nat gen/nat)]
     [1 (gen/tuple (gen/return :stray) gen/nat)]
     [5 (gen/tuple (gen/return :update) gen/nat)]
     [3 (gen/tuple (gen/return :perm) gen/nat)]
@@ -445,6 +498,7 @@
     [2 (gen/tuple (gen/return :slow) gen/nat gen/boolean)]
     [3 (gen/tuple (gen/return :labels) gen/nat gen/nat)]
     [2 (gen/tuple (gen/return :agent-cancel) gen/nat)]
+    [3 (gen/tuple (gen/return :race) gen/nat)]
     [2 (gen/tuple (gen/return :reuse) gen/nat gen/nat)]
     [1 (gen/tuple (gen/return :garble) gen/nat gen/nat)]
     [3 (gen/tuple (gen/return :release) gen/nat)]]))
