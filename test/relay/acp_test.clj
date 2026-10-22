@@ -679,22 +679,15 @@
             (Thread/sleep 50)
             (recur))))))
 
-(def acp-tui
-  "acp-tui on PATH, when it can open a role's conversation (--open,
-  relay#65), which relay chat asks of it."
-  (when-let [bin (some-> (fs/which "acp-tui") str)]
-    (when (str/includes? (str (:out (p/shell {:out :string :err :string :continue true} bin "--help"))
-                              (:err (p/shell {:out :string :err :string :continue true} bin "--help")))
-                         "--open")
-      bin)))
-
 (deftest chat-with-the-real-acp-tui-on-a-pty
   ;; script(1) gives relay chat a pseudo-terminal, as a person's terminal
   ;; would; the keys go in through its stdin.
-  (if-not (and bin acp-tui (fs/which "script"))
-    (println "SKIPPED: needs agentloop, an acp-tui with --open (relay#65) and script(1)")
+  (if-not (and bin support/acp-tui-bin (fs/which "script"))
+    (println "SKIPPED: needs agentloop, ../acp-tui/bin/acp-tui with --open (relay#65) and script(1)")
     (with-world {} (fn [body] {:text (str "You said: " (str/includes? (pr-str body) "hello relay"))})
       (fn []
+        ;; The sibling build, never the acp-tui on PATH (support/acp-tui-bin).
+        (set-chat-client! [support/acp-tui-bin])
         (let [proc (p/process ["script" "-q" "/dev/null" relay-bin "chat" "clerk" "--data" (data)]
                               {:out :string :err :string :dir *dir*})
               keys! (fn [s] (doto ^java.io.OutputStream (:in proc) (.write (.getBytes ^String s)) (.flush)))

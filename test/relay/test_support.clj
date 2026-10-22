@@ -2,8 +2,10 @@
   "What every test shares about the machine it runs on. The tests must never
   reach the operator's real relay: not the per-user config file, which names
   the live data directory, not the relay command on PATH, and not the
-  agentloop on PATH, which may be the live install."
+  agentloop or acp-tui on PATH, either of which may be the live install."
   (:require [babashka.fs :as fs]
+            [babashka.process :as p]
+            [clojure.string :as str]
             [relay.cli :as cli]
             [relay.connect :as connect]
             [relay.core :as core]
@@ -17,6 +19,19 @@
   --agentloop <path>` names another build instead (use-agentloop!)."
   (let [sibling (fs/absolutize "../agentloop/bin/agentloop")]
     (when (fs/executable? sibling) (str (fs/normalize sibling)))))
+
+(def acp-tui-bin
+  "acp-tui built in the sibling checkout (make -C ../acp-tui build), when it
+  can open a role's conversation (--open, relay#65), which relay chat asks
+  of it; nil otherwise, which skips the tests that need it. Never the
+  acp-tui on PATH: that is the live install, which bb deploy moves only
+  after the tests pass, so it can be older than the commit under test. bb
+  deploy builds the sibling from the commit it deploys."
+  (let [f (fs/absolutize "../acp-tui/bin/acp-tui")]
+    (when (and (fs/executable? f)
+               (let [r (p/shell {:out :string :err :string :continue true} (str f) "--help")]
+                 (str/includes? (str (:out r) (:err r)) "--open")))
+      (str (fs/normalize f)))))
 
 (defn use-agentloop!
   "Runs the tests against the agentloop binary at `path`, which must exist,
