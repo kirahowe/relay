@@ -183,4 +183,26 @@ Agmente will not know `_relay/*` methods, so it sees conversations through
 `session/list`. If it falls short, record what it lacks before deciding on
 a client of our own.
 
+## Kira's phone setup, for later
+
+The code is deployed and relay.serve has run under launchd since
+2026-10-22, so only the phone side is left. The README section
+"Reaching relay from your phone" has the details.
+
+- [ ] Put a token in the keychain:
+  `security add-generic-password -a "$USER" -s relay-websocket -w "$(openssl rand -hex 32)"`
+- [ ] Add `:serve {:websocket {:port 8765 :token-command ["security"
+  "find-generic-password" "-s" "relay-websocket" "-w"]}}` to
+  ~/Sync/relay/relay.edn.
+- [ ] Restart the service: `launchctl bootout gui/$(id -u)/relay.serve`,
+  then `launchctl bootstrap gui/$(id -u)
+  ~/Library/LaunchAgents/relay.serve.plist`. Look for the listener line
+  in ~/Library/Logs/relay/serve.log. Restarting ends live conversations.
+- [ ] `tailscale serve --bg --https=8765 http://127.0.0.1:8765` (ntfy
+  keeps 8443).
+- [ ] In Agmente, add `wss://<the Mac's tailnet name>:8765` with the token.
+- [ ] Try it out: list conversations, pick up one started in acp-tui, and
+  answer an approval on the phone. Record what works and what doesn't in
+  the two criteria above.
+
 ## Log
