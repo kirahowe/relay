@@ -364,6 +364,56 @@ table. `bb test --agentloop ../agentloop/bin/agentloop` with
 acp-tui-convs' bin on PATH: 831 tests, all pass. `bb tck`: 43 pass, 12
 skipped, ACP-SESSION-002 failing by design.
 
+## Independent review
+
+Triaged by the coordinator; each item and the commit that does it.
+
+- D1 (zyqvzzmm): `relay.hub/drive` is the one function that orders a
+  step's effects and the events they lead to (each step's effects in
+  order, then the follow-up events oldest first); relay.serve and the
+  simulator both use it. The roster shows `queued` only while a prompt
+  waits for its role, and is sent only once relay has decided what an
+  event led to. Test: hub-test
+  `a-prompt-never-shows-queued-while-its-role-is-free`.
+- D2 (wtxwpznm): StartTurn's guidance, the README (the hub's queue, the
+  board sent by the hub, relay/keeps, truncated) and the new README and
+  AGENTS.md paragraphs wrapped.
+- S1 (zyqvzzmm): `step` asserts a submit's result is the next event; the
+  `:asking` and `:submit` states, the `(nil? r)` turn-start branch, the
+  `:asking` orphans and the turn-end and notice `:asking` flags are gone,
+  and `:tags` is `:awaiting`, a queue of continuations. hub.clj is 1115
+  lines, from 1059: the deletions are outweighed by drive, the replay
+  merge (P3) and the refusal helpers (S2).
+- S2 (zyqvzzmm): every permission request the hub refuses goes to the
+  proxy as its refusal (`refuse-perm`, `refusal-line`); `unreadable-answer`
+  and the simulator's special case are gone.
+- S3 (zyqvzzmm): the log watcher enqueues a signal; the loop reads the
+  state and the roster.
+- P1 (zyqvzzmm): `initialize` answers `_meta {"relay/hub": 1,
+  "relay/keeps": bool}`. Test: `initialize-says-it-is-relay-s-hub`.
+- P2 (zyqvzzmm): no truncation notice text; `_relay/replayed` carries
+  `"truncated"`. Test: `a-replay-past-its-cap-says-so`.
+- P3 (zyqvzzmm): consecutive text chunks of one kind that differ in
+  nothing but their text are merged in the replay buffer, up to 64 KB
+  an entry so the cap still drops history a piece at a time. Property:
+  `a-replay-merges-text-and-keeps-everything-else`; the simulator's
+  replay check compares merge-blind.
+- P4 (zyqvzzmm): a queued prompt keeps its place, as an orphan, when its
+  client goes, and runs with its user_message_chunk mirrored to the
+  others. Test: `a-waiting-prompt-keeps-its-place-when-its-client-goes`.
+- N1 (ztmksuxw): `core/running-wake` is gone from src; the tests use
+  `relay.test-support/calling-wake`.
+- N2 (zyqvzzmm): `the-properties-reach-what-they-are-about` runs 300
+  simulated worlds (half with a small cap) and requires each of
+  settled-for-another-device, unattended, truncated replay, queued then
+  run, and orphan answered in at least 2% of them. A `:race` action
+  (two devices answering one request) was added so the first is reached.
+
+After: `bb test --agentloop ../agentloop/bin/agentloop` with
+acp-tui-convs' bin on PATH, 835 tests, all pass (one serve test was
+updated for P3's merged chunks and rerun on its own). `bb tck`: 43
+pass, 12 skipped, ACP-SESSION-002 failing by design.
+
 ## Notes
 
 - No env vars for wiring. The socket path comes from config.
