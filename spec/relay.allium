@@ -4138,8 +4138,19 @@ surface ConversationService {
     -- by relay acp in its own process.
 
     @guidance
-        -- Clients are connections: relay acp's stdio, or the service's
-        -- Unix socket, which only the operator's user can open. A
+        -- Clients are connections: relay acp's stdio, the service's
+        -- Unix socket, which only the operator's user can open, or, when
+        -- relay.edn configures it, the service's WebSocket listener on
+        -- 127.0.0.1, which the operator publishes on the tailnet. A
+        -- WebSocket client is let in only with the token the service
+        -- read at startup (compared in constant time) and with no Origin
+        -- header unless the operator allowed that origin; a refusal is a
+        -- bare status that says nothing about relay. Each WebSocket is a
+        -- connection that may answer permission requests and has no
+        -- role; its session/new without a role goes to the configured
+        -- default role. One text message is one line; a binary message
+        -- or one over 8 MB closes it. Every transport shares one cap on
+        -- connections and one bound on what waits for a client. A
         -- connection through relay acp says first, in a _relay/connect
         -- line relay acp writes itself, whether it may answer permission
         -- requests and which role it is for; relay takes that line only

@@ -1406,6 +1406,62 @@ roles remember what their notes, facts and journals hold, as after any
 conversation. The service runs the code it started with until it is
 restarted, so it must be restarted after a deploy in any case.
 
+### Reaching relay from your phone
+
+The service can also speak ACP over WebSocket, so a phone client such as
+[Agmente](https://github.com/rebornix/Agmente) reaches the same
+conversations as acp-tui: it can list them, pick one up and answer
+permission requests. relay listens only on 127.0.0.1. Tailscale puts it
+on your tailnet with TLS, the same way as ntfy, so only your own devices
+reach it, and each client must also send a token that relay reads from
+your keychain.
+
+1. Put a long random token in the login keychain:
+
+   ```sh
+   security add-generic-password -a "$USER" -s relay-websocket -w "$(openssl rand -hex 32)"
+   ```
+
+2. Add the listener to relay.edn:
+
+   ```clojure
+   :serve {:websocket {:port 8765
+                       :token-command ["security" "find-generic-password" "-s" "relay-websocket" "-w"]}}
+   ```
+
+   `:default-role` (`"hub"` unless you set it) is the role a client's
+   new session goes to when the client does not name one. Agmente
+   cannot name one, so its new sessions go there. `:allowed-origins` is
+   empty unless you set it, and relay refuses any request that carries
+   an `Origin` header, since that is what a web page in a browser on this
+   Mac would send. A native app sends none. If yours turns out to send
+   one, add that exact origin to the list.
+
+3. Restart the service (`launchctl bootout gui/$(id -u)/relay.serve`,
+   then `launchctl bootstrap` as above). It reads the token once, when it
+   starts. If the command fails or prints nothing, the service says so in
+   its log and runs without the listener, and the Unix socket works as
+   before.
+
+4. Publish the port on your tailnet (`--bg` keeps it published after the
+   terminal closes):
+
+   ```sh
+   tailscale serve --bg --https=8765 http://127.0.0.1:8765
+   ```
+
+5. In Agmente, add a server at `wss://<your Mac's tailnet name>:8765` with
+   the token from step 1 (to see it again, run the `security` command from
+   step 2).
+
+relay answers a request with no token or a wrong one with a bare 401, a
+request with an origin it does not allow with a bare 403, and anything
+that is not a WebSocket upgrade with a 404. None of these responses has
+a body. One text message carries one JSON-RPC message. relay closes the
+connection on a binary message or on one over 8 MB. WebSocket clients
+share the socket's limits: at most 64 connected clients, and a client
+that stops reading is dropped once 64 MB wait for it.
+
 ## Development
 
 ```sh

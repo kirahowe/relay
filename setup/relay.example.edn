@@ -37,6 +37,15 @@
  ;; which appends one JSON line per notification and reaches nobody (used
  ;; by staging data).
 
+ ;; relay serve's WebSocket listener, for a phone client over the tailnet
+ ;; (README: Reaching relay from your phone). It listens on 127.0.0.1 at
+ ;; :port, for clients that send the token :token-command prints. Leave it
+ ;; out for no listener. :default-role is where a session with no role
+ ;; goes ("hub" unless set); :allowed-origins lists browser origins let in
+ ;; (none unless set).
+ ;; :serve {:websocket {:port 8765
+ ;;                     :token-command ["security" "find-generic-password" "-s" "relay-websocket" "-w"]}}
+
  ;; The role that is sent dead letters to sort out.
  :dead-letter-handler "hub"
 

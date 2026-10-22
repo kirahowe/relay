@@ -325,7 +325,7 @@ turns relay may wake you for your memos, so your inbox, your notes and
 anything else you looked at earlier in the conversation may have changed.
 Look again before you act on it. The conversation also keeps going when
 the operator steps away, so they may read your reply hours later, on
-another device. Say what you did and what waits for them in the reply
+another device such as their phone. Say what you did and what waits for them in the reply
 itself.
 
 ## Time

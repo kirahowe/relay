@@ -66,7 +66,9 @@ Every command needs the data directory, from --data <dir> or from the file
   relay serve                         run the service that keeps conversations
                                       going while no client is attached (launchd
                                       runs this; see setup/); its lock and
-                                      socket are in ~/.relay/run. --socket and
+                                      socket are in ~/.relay/run. With :serve
+                                      :websocket in relay.edn it also listens
+                                      for phone clients on 127.0.0.1. --socket and
                                       --run-dir, here and for relay acp, are
                                       for relay's own tests only
   relay tick [--pause-file <f>]       one dispatcher pass (launchd runs this); does
