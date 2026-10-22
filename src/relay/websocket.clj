@@ -189,7 +189,7 @@
   1024)
 
 (def max-message-ms
-  "How long one message may take, from its first frame to its last."
+  "How long one message may take, from its first byte to its last."
   30000)
 
 (defn close-code-ok?
@@ -219,27 +219,32 @@
   with (pong! payload) on the way. Returns {:text s} for a text message,
   or {:close code} when the connection is to end: 1000 for the client's
   own close, or relay's reason: 1003 for a binary message, 1009 for one
-  longer than :limit bytes or taking more than :max-frames frames, 1008
-  for one that took longer than :max-ms by (now), 1007 for text that is
-  not UTF-8, and 1002 for anything else RFC 6455 forbids, such as an
-  unmasked frame, a length not given in its shortest form or a malformed
-  close; nil when the stream ends.
+  longer than :limit bytes or taking more than :max-frames frames, 1007
+  for text that is not UTF-8, and 1002 for anything else RFC 6455
+  forbids, such as an unmasked frame, a length not given in its shortest
+  form or a malformed close; nil when the stream ends.
 
   A frame's declared length is checked against what is left of the
   limit before its payload is read, and a message's fragments go into
-  one buffer, so nothing past the limit is ever held. (partial! t) is
-  called with the time a fragmented message began, and with nil once it
-  ends, so the caller can also stop one whose next frame never comes."
-  [^InputStream in {:keys [limit max-frames max-ms now partial!]
-                    :or {max-frames max-frames max-ms max-message-ms
-                         now #(System/currentTimeMillis) partial! (fn [_])}}
+  one buffer, so nothing past the limit is ever held.
+
+  (busy! t) is called with (now) as soon as the first byte of a message
+  arrives, a ping or a close between messages included, and (busy! nil)
+  once it is whole or the reader returns. Every read in between belongs
+  to that message, so the caller can bound the whole of it, however the
+  client stalls, by closing the stream; waiting for a message's first
+  byte is not bounded."
+  [^InputStream in {:keys [limit max-frames now busy!]
+                    :or {max-frames max-frames now #(System/currentTimeMillis) busy! (fn [_])}}
    pong!]
   (let [din (DataInputStream. in)
         buf (java.io.ByteArrayOutputStream.)
-        stop (fn [r] (partial! nil) r)]
+        stop (fn [r] (busy! nil) r)]
     (try
-      (loop [frames 0 started nil]
+      (loop [frames 0 started? false]
         (let [b0 (.readUnsignedByte din)
+              ;; The message's first byte: from here on it is timed.
+              _ (when (zero? frames) (busy! (now)))
               b1 (.readUnsignedByte din)
               fin? (bit-test b0 7)
               op (bit-and b0 0x0f)
@@ -257,13 +262,12 @@
             (and control? (or (not fin?) (> n 125))) (stop {:close 1002})
             (not (#{0 1 2 8 9 10} op)) (stop {:close 1002})
             (= 2 op) (stop {:close 1003})
-            (and (= 0 op) (not started)) (stop {:close 1002})
-            (and (= 1 op) started) (stop {:close 1002})
+            (and (= 0 op) (not started?)) (stop {:close 1002})
+            (and (= 1 op) started?) (stop {:close 1002})
             ;; Against what is left, so a length near Long/MAX_VALUE
             ;; cannot overflow a sum.
             (and (not control?) (> n (- limit (.size buf)))) (stop {:close 1009})
             (> frames max-frames) (stop {:close 1009})
-            (and started (> (- (now) started) max-ms)) (stop {:close 1008})
             :else
             (let [mask (byte-array 4)
                   _ (.readFully din mask)
@@ -272,12 +276,13 @@
                   _ (dotimes [i n] (aset payload i (unchecked-byte (bit-xor (aget payload i) (aget mask (mod i 4))))))]
               (case (int op)
                 8 (stop (close-of payload))
-                9 (do (pong! payload) (if started (recur frames started) (recur 0 nil)))
-                10 (if started (recur frames started) (recur 0 nil))
+                ;; A ping or pong between messages is done once read: what
+                ;; follows is idle until the next first byte.
+                9 (do (pong! payload) (if started? (recur frames true) (do (busy! nil) (recur 0 false))))
+                10 (if started? (recur frames true) (do (busy! nil) (recur 0 false)))
                 (do (.write buf payload)
                     (if-not fin?
-                      (let [t (or started (let [t (now)] (partial! t) t))]
-                        (recur frames t))
+                      (recur frames true)
                       (stop (if-let [s (utf8 (.toByteArray buf))] {:text s} {:close 1007})))))))))
       (catch EOFException _ (stop nil))
       (catch java.io.IOException _ (stop nil)))))

@@ -412,19 +412,21 @@
                                             :close-transport! shut!})]
               ;; Whatever ends the reader, the hub's connection ends with it,
               ;; so nothing can keep its place under the cap.
-              (let [partial-since (atom nil)
+              (let [message-since (atom nil)
                     done (promise)]
-                ;; A message whose next frame never comes is stopped too.
+                ;; Every message has max-message-ms from its first byte to
+                ;; its last, however the client stalls in it; the time
+                ;; between messages is not bounded.
                 (daemon "relay-websocket-message-timer"
                         #(loop []
-                           (when (= ::waiting (deref done 250 ::waiting))
-                             (if (some-> @partial-since (< (- (System/currentTimeMillis) ws/max-message-ms)))
+                           (when (= ::waiting (deref done 100 ::waiting))
+                             (if (some-> @message-since (< (- (System/currentTimeMillis) ws/max-message-ms)))
                                (shut!)
                                (recur)))))
                 (try
                   (loop []
                     (let [m (ws/read-message in {:limit dispatch/line-limit
-                                                 :partial! #(reset! partial-since %)}
+                                                 :busy! #(reset! message-since %)}
                                              #(try (ws/write-frame! out (ws/frame-bytes :pong %))
                                                    (catch java.io.IOException _ nil)))]
                       (if-let [text (:text m)]

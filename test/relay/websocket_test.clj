@@ -232,19 +232,22 @@
                     (concat (repeat (- ws/max-frames 2) (ws/frame-bytes :continuation (byte-array 0) m4 false))
                             [(ws/frame-bytes :continuation (.getBytes "b") m4 true)]))]
       (is (= [{:text "ab"}] (:messages (read-all bs 100))))))
-  (testing "a message that takes longer than max-ms ends with 1008, and the caller is told when it began and ended"
+  (testing "the caller is told when a message's first byte came and when it ended, and nothing between messages"
     (let [clock (atom 0)
           seen (atom [])
-          bs (frames-of (ws/frame-bytes :text (.getBytes "a") m4 false)
-                        (ws/frame-bytes :continuation (.getBytes "b") m4 false)
-                        (ws/frame-bytes :continuation (.getBytes "c") m4 true))
+          bs (frames-of (ws/frame-bytes :ping (byte-array 0) m4 true)
+                        (ws/frame-bytes :text (.getBytes "a") m4 false)
+                        (ws/frame-bytes :ping (byte-array 0) m4 true)
+                        (ws/frame-bytes :continuation (.getBytes "b") m4 true)
+                        (ws/frame-bytes :text (.getBytes "c") m4 true))
           in (ByteArrayInputStream. bs)
-          r (ws/read-message in {:limit 100 :max-ms 1000
-                                 :now #(swap! clock + 600)
-                                 :partial! #(swap! seen conj %)}
-                             (fn [_]))]
-      (is (= {:close 1008} r))
-      (is (= [600 nil] @seen)))))
+          read! #(ws/read-message in {:limit 100 :now (fn [] (swap! clock inc)) :busy! (fn [t] (swap! seen conj t))} (fn [_]))]
+      (is (= {:text "ab"} (read!)))
+      (is (= [1 nil 2 nil] @seen) "the ping before it, then the message from its first byte, its own ping inside")
+      (is (= {:text "c"} (read!)))
+      (is (= [1 nil 2 nil 3 nil] @seen) "a single frame is timed too")
+      (is (nil? (read!)))
+      (is (= nil (last @seen))))))
 
 (deftest a-length-near-the-largest-long-is-refused-not-overflowed
   (let [header (doto (java.nio.ByteBuffer/allocate 14)

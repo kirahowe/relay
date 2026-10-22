@@ -727,17 +727,52 @@
             (finally (.close ^java.net.Socket (:sock c)))))
         (finally (.close ^java.net.ServerSocket server))))))
 
-(deftest ^:volley/serial a-message-whose-next-frame-never-comes-is-stopped
-  (let [[eng port server] (in-process-listener)]
+(deftest ^:volley/serial a-message-that-stalls-anywhere-is-stopped-at-its-deadline
+  (let [m (byte-array [1 2 3 4])
+        frame (relay.websocket/frame-bytes :text (.getBytes "{\"jsonrpc\":\"2.0\",\"method\":\"x\"}") m true)
+        long-frame (relay.websocket/frame-bytes :text (byte-array 300) m true)
+        fragment (relay.websocket/frame-bytes :text (.getBytes "x") m false)]
+    (doseq [[what ^bytes sent] [["partway through the first frame's header" (java.util.Arrays/copyOfRange long-frame 0 3)]
+                                ["partway through its mask" (java.util.Arrays/copyOfRange frame 0 4)]
+                                ["partway through a single-frame message's payload" (java.util.Arrays/copyOfRange long-frame 0 100)]
+                                ["after a whole fragment, before the next" fragment]]]
+      (testing what
+        (let [[eng port server] (in-process-listener)]
+          (try
+            (with-redefs [relay.websocket/max-message-ms 400]
+              (let [c (upgraded port)
+                    out ^java.io.OutputStream (:out c)
+                    t0 (System/currentTimeMillis)]
+                (try
+                  (.write out sent)
+                  (.flush out)
+                  (is (= -1 (try (.read ^java.io.InputStream (:in c)) (catch java.io.IOException _ -1))) "closed")
+                  (let [took (- (System/currentTimeMillis) t0)]
+                    (is (<= 350 took 3000) (str "at the deadline, after " took " ms")))
+                  (is (wait-for #(empty? @(:conns eng)) 5000) "and its place is free")
+                  (finally (.close ^java.net.Socket (:sock c))))))
+            (finally (.close ^java.net.ServerSocket server))))))))
+
+(deftest ^:volley/serial an-idle-connection-between-messages-is-never-closed
+  (let [[eng port server] (in-process-listener)
+        m (byte-array [1 2 3 4])]
     (try
-      (with-redefs [relay.websocket/max-message-ms 300]
+      (with-redefs [relay.websocket/max-message-ms 200]
         (let [c (upgraded port)
               out ^java.io.OutputStream (:out c)]
           (try
-            (.write out (relay.websocket/frame-bytes :text (.getBytes "x") (byte-array [1 2 3 4]) false))
+            (.write out (relay.websocket/frame-bytes :text (.getBytes "{\"jsonrpc\":\"2.0\",\"method\":\"x\"}") m true))
+            (.write out (relay.websocket/frame-bytes :ping (.getBytes "p") m true))
             (.flush out)
-            (is (wait-for #(empty? @(:conns eng)) 5000) "relay gave up on it")
-            (is (= -1 (try (.read ^java.io.InputStream (:in c)) (catch java.io.IOException _ -1))) "and closed it")
+            (Thread/sleep 1500)
+            (is (= 1 (count @(:conns eng))) "still connected after many deadlines")
+            (testing "and it still takes a message"
+              (.write out (relay.websocket/frame-bytes :ping (.getBytes "q") m true))
+              (.flush out)
+              (let [in ^java.io.DataInputStream (:in c)]
+                ;; The two pongs, in order.
+                (is (= [0x8a 1 (int \p)] [(.readUnsignedByte in) (.readUnsignedByte in) (.readUnsignedByte in)]))
+                (is (= [0x8a 1 (int \q)] [(.readUnsignedByte in) (.readUnsignedByte in) (.readUnsignedByte in)]))))
             (finally (.close ^java.net.Socket (:sock c))))))
       (finally (.close ^java.net.ServerSocket server)))))
 
