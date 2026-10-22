@@ -29,6 +29,12 @@
 | [36](36-clean-up-after-an-interrupted-deploy-and-leave-no-check.md) | Clean up after an interrupted deploy, and leave no check dirs in TMPDIR | bug | P3 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
 
+### In progress
+
+| ID | Title | Type | Priority |
+| --- | --- | --- | --- |
+| [66](66-reach-the-relay-service-from-the-phone-over-the-tailnet.md) | Reach the relay service from the phone over the tailnet | feature | P3 |
+
 ### Review
 
 | ID | Title | Type | Priority |
@@ -47,7 +53,6 @@
 | --- | --- | --- | --- |
 | [17](17-set-up-the-job-search-role.md) | Set up the job search role | feature | P2 |
 | [18](18-set-up-the-grant-search-role.md) | Set up the grant search role | feature | P3 |
-| [66](66-reach-the-relay-service-from-the-phone-over-the-tailnet.md) | Reach the relay service from the phone over the tailnet | feature | P3 |
 
 ## Done
 
