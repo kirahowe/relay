@@ -19,6 +19,7 @@
 | [59](59-keep-large-integers-exact-in-mcp-structured-results.md) | Keep large integers exact in MCP structured results | bug | P3 |
 | [60](60-let-relay-acp-start-agentloop-with-a-relative-data-path.edn) | Let relay acp start agentloop with a relative --data path | bug | P3 |
 | [67](67-merge-the-proxy-s-request-bookkeeping-into-the-hub.md) | Merge the proxy's request bookkeeping into the hub | feature | P3 |
+| [78](78-keep-an-emoji-with-a-variation-selector-inside-the-width.md) | Keep an emoji with a variation selector inside the width relay-tui draws | bug | P3 |
 
 ### Ready
 
