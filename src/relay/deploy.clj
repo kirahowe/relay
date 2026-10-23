@@ -21,13 +21,13 @@
 (def repo-keys
   "The checkouts, in the order a deploy moves them: what relay runs on
   first, relay last. A rollback goes the other way."
-  [:agentloop :acp-tui :relay])
+  [:agentloop :relay-tui :relay])
 
 (def builds
   "How each checkout is built after it moves. relay is a script and needs
   none."
   {:agentloop ["make" "build"]
-   :acp-tui ["make" "build"]})
+   :relay-tui ["make" "build"]})
 
 ;; --- reading what jj says
 

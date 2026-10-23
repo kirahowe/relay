@@ -1,6 +1,6 @@
 # Strict JSON cases (relay#58)
 
-The one table of lines that relay, agentloop and acp-tui must read
+The one table of lines that relay, agentloop and relay-tui must read
 identically. Each line of `cases.jsonl` is a test case:
 
 - `name`: what it checks.
@@ -20,7 +20,7 @@ integer after `e` or `E`, sign included) between -9999 and 9999
 inclusive, by value, so leading zeros in it are allowed as JSON allows
 them.
 
-This copy, in relay, is the source. agentloop and acp-tui keep
+This copy, in relay, is the source. agentloop and relay-tui keep
 byte-identical copies at `testdata/strict-json/cases.jsonl`, and each
 repo runs every case through its real reader. To change the table,
 change it here and copy it to both.

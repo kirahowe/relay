@@ -1,12 +1,12 @@
 (ns card-fixtures
-  "Records what relay acp really says about cards, for acp-tui's board
+  "Records what relay acp really says about cards, for relay-tui's board
   tests. It makes a throwaway data directory, has the hub add a
   checklist, a tracker and a contaminated note, runs bin/relay acp with a
   scripted client, and writes one JSON file per exchange into <out-dir>.
 
     bb -cp src:resources:test scripts/card_fixtures.clj <out-dir>
 
-  acp-tui keeps the files in testdata/relay. The agent is a script that
+  relay-tui keeps the files in testdata/relay. The agent is a script that
   reads its input and says nothing: card methods never reach it."
   (:require [babashka.fs :as fs]
             [cheshire.core :as json]
@@ -20,7 +20,7 @@
 
 (defn- exchange
   "A request and relay's response, as one fixture. The params carry the
-  sessionId acp-tui sends; relay ignores it."
+  sessionId relay-tui sends; relay ignores it."
   [c method params]
   (let [params (assoc params :sessionId "fixture-session")]
     {:request {:method method :params params}

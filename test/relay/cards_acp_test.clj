@@ -72,7 +72,7 @@
     (let [{:keys [command error]} (workspace/card-op-command params)]
       (is (nil? command))
       (is (str/includes? (str error) (str "no parameter " typo)) error)))
-  (testing "sessionId, which acp-tui sends, is accepted and not passed on"
+  (testing "sessionId, which relay-tui sends, is accepted and not passed on"
     (is (= {:card 1 :op "edit" :item 2 :text "x" :seen 5}
            (get-in (workspace/card-op-command {"sessionId" "s1" "card" 1 "op" "edit" "item" 2 "text" "x" "seen" 5})
                    [:command :args])))))

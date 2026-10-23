@@ -2,7 +2,7 @@
   "The one strict JSON reader, for every read of JSON that another process
   wrote: ACP lines in both directions, tool envelopes, external tool
   output, agentloop's output and session files. relay, agentloop and
-  acp-tui read such JSON by one rule (relay#58), so a message means the
+  relay-tui read such JSON by one rule (relay#58), so a message means the
   same thing to every component or is refused by all of them:
 
     - RFC 8259 JSON in valid UTF-8, with no byte order mark;

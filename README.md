@@ -558,8 +558,8 @@ passes the request through.
 `relay approve`, `deny`, `fresh`, `release`, `declassify` and `trust` print what
 they are about on the terminal (`/dev/tty`, never stdin) and ask for a
 four-character code to be typed back there, so no harness or pipe can
-answer for the operator. Trusting from the workspace pane in `relay chat`
-is the one other way to trust (see relay chat).
+answer for the operator. Trusting from the workspace pane in the dashboard (`relay`)
+is the one other way to trust (see the dashboard).
 
 #### What you are shown
 
@@ -1015,7 +1015,8 @@ model's context window: agentloop asks the provider for it, and an ACP
 client shows how full the context is when the provider gives one.
 Anthropic's API does; OpenAI's does not.
 
-Talk to a role with `relay chat <role>` in this terminal, or from an ACP
+Open the dashboard with `relay` in this terminal (`relay chat <role>` puts
+a role in focus), or from an ACP
 client with `relay acp <role>`. `relay status` shows roles, open work,
 harnesses, this week's spend and recent wakes, and `relay help` lists
 every command.
@@ -1119,40 +1120,42 @@ goes out at the first tick after, the same day. A day the Mac sleeps
 through has no brief: the next morning's does not repeat it. The log
 records each day's brief, sent or empty, as a `brief/composed` event.
 
-### relay chat
+### The dashboard
 
-`relay chat [<role>]` needs [acp-tui](https://github.com/kirahowe/acp-tui),
-a terminal client for ACP agents. Build it with `make -C ../acp-tui build`
-and put `bin/acp-tui` on your PATH. relay runs it as
-`acp-tui [--open <role>] -- relay acp --approvals`, adding `--data <dir>`
-when you gave `relay chat` one. acp-tui shows every role, with `<role>`
+`relay` opens the dashboard in this terminal, and `relay chat [<role>]` does
+the same with `<role>` in focus; `chat` is an alias that stays. `relay help`
+and `relay --help` print the usage. The dashboard needs [relay-tui](https://github.com/kirahowe/relay-tui),
+a terminal client for ACP agents. Build it with `make -C ../relay-tui build`
+and put `bin/relay-tui` on your PATH. relay runs it as
+`relay-tui [--open <role>] -- relay acp --approvals`, adding `--data <dir>`
+when you gave `relay` one. relay-tui shows every role, with `<role>`
 in focus, and each role's conversation. When relay serve runs (see
 [The relay service](#the-relay-service)), conversations live in it and
-keep going after acp-tui closes; otherwise they end with it.
+keep going after relay-tui closes; otherwise they end with it.
 
-To use another client, or acp-tui somewhere other than PATH, set
-`:chat-client` in `relay.edn` to the command and any arguments that come
+To use another client, or relay-tui somewhere other than PATH, set
+`:client` in `relay.edn` to the command and any arguments that come
 before `--`:
 
 ```clojure
-:chat-client ["/opt/acp-tui/bin/acp-tui" "--agent-log" "/tmp/relay-agent.log"]
+:client ["/opt/relay-tui/bin/relay-tui" "--agent-log" "/tmp/relay-agent.log"]
 ```
 
 The client gets `--open <role>` when you named one, then `--` and the
 agent command as its last arguments. If relay cannot find the client, it
 says so on stderr and exits 1.
 
-acp-tui has a workspace pane. It lists, newest first, what the role
+relay-tui has a workspace pane. It lists, newest first, what the role
 showed you, the calls it wants to make with relay's preview of each, and
 the sources the latest answer cites, each checked with relay and marked
 when it does not exist. Everything in the pane comes from relay, never
 from the model's text, and anything contaminated is marked untrusted.
 You approve or deny a call as before. Trusting a shown item from the
 pane does what `relay trust doc <path>` does, for the text the pane
-showed you; it needs `relay chat`, as approvals do. acp-tui's README has
+showed you; it needs the dashboard, as approvals do. relay-tui's README has
 the keys.
 
-Give `:chat-client` an absolute path, and likewise `:bin` in the harness
+Give `:client` an absolute path, and likewise `:bin` in the harness
 settings for agentloop. A bare name is looked up on PATH, so whatever
 comes first on PATH would run as your chat client, see your
 conversations and answer permission requests for you.
@@ -1231,7 +1234,7 @@ a directory others can write to, such as `/tmp`.
 
 When agentloop holds a tool call in a conversation, it asks the client
 with `session/request_permission`. relay passes that request on only when
-`relay acp` was started with `--approvals`, which `relay chat` does,
+`relay acp` was started with `--approvals`, which the dashboard (`relay`) does,
 since its client is the operator's terminal. The client's answer goes
 back only if it picks an option the agent offered, or cancels; anything
 else, and a request still open when the client goes away, is a refusal.
@@ -1280,7 +1283,7 @@ that knows nothing of displays: characters that draw as nothing show as
 `\u{XXXX}`, links are defanged, and the whole sits in a code fence
 nothing in it can close. relay makes it so from the display, whatever
 the agent sent, so no client fetches an image in it or follows a link
-before you have read it. acp-tui shows the display from `_meta`.
+before you have read it. relay-tui shows the display from `_meta`.
 
 relay acp also answers ACP extension methods of its own, which never
 reach agentloop. `_relay/items` lists a session's shown docs and
@@ -1361,7 +1364,7 @@ their text. Escapes such as
 so `Method` is just another member, which no component reads as the
 method.
 
-relay, agentloop and acp-tui read every line by one strict rule, so a
+relay, agentloop and relay-tui read every line by one strict rule, so a
 line means the same to all of them or is not passed on. A line must be
 one JSON object in valid UTF-8 with no byte order mark and nothing but
 whitespace after it. No member name may appear twice in one object, at
@@ -1388,10 +1391,10 @@ error when it can find the message's id.
 ### The relay service
 
 `relay serve` keeps conversations going while no client is attached: a
-turn finishes after you close acp-tui, and opening it again (or a client
+turn finishes after you close relay-tui, and opening it again (or a client
 on another device) picks the conversation up with what it said so far.
 It listens on a Unix socket of the data directory's own, under
-`~/.relay/run/`, which only you can open. `relay acp`, and so `relay chat`,
+`~/.relay/run/`, which only you can open. `relay acp`, and so the dashboard,
 uses it whenever it runs. Only one service runs for a data directory,
 however you name the directory. The `--socket` and `--run-dir` options
 exist only for relay's own tests; a real service uses neither.
@@ -1399,7 +1402,7 @@ exist only for relay's own tests; a real service uses neither.
 A permission request waits while no client that may answer it is
 attached, and relay tells you once through your notifications that a
 conversation is waiting for you. A conversation ends when you end it
-(acp-tui does it with `_relay/conversations/end`) or when the service
+(relay-tui does it with `_relay/conversations/end`) or when the service
 stops. Stopping it (SIGTERM, or launchd unloading it) ends each
 conversation and records it; a turn in progress ends there. If the
 service dies without that, the next one ends the conversations it left,
@@ -1431,7 +1434,7 @@ restarted, so it must be restarted after a deploy in any case.
 
 The service can also speak ACP over WebSocket, so a phone client such as
 [Agmente](https://github.com/rebornix/Agmente) reaches the same
-conversations as acp-tui: it can list them, pick one up and answer
+conversations as relay-tui: it can list them, pick one up and answer
 permission requests. relay listens only on 127.0.0.1. Tailscale puts it
 on your tailnet with TLS, the same way as ntfy, so only your own devices
 reach it, and each client must also send a token that relay reads from
@@ -1602,7 +1605,7 @@ These are for you to run, not an agent. Run `bb deploy` from a relay working
 copy that has no changes:
 
 ```sh
-bb deploy [--relay <dir>] [--agentloop <dir>] [--acp-tui <dir>] [--bookmark main] [--record <file>] [--data <dir>] [--paused-externally]
+bb deploy [--relay <dir>] [--agentloop <dir>] [--relay-tui <dir>] [--bookmark main] [--record <file>] [--data <dir>] [--paused-externally]
 bb rollback                        # same flags
 ```
 
@@ -1622,7 +1625,7 @@ and `relay status` shows the file's path, why it is there and how to lift it
 (`rm '<path>'`, and `bb rollback` when a deploy made it). It waits until no wake or tick is running (read
 from the live log, which `--data` must point at, and from markers the ticks
 leave), writes a record, and for each checkout runs `jj new <commit>`, builds
-agentloop and acp-tui with `make build`, and finally runs `relay status`
+agentloop and relay-tui with `make build`, and finally runs `relay status`
 against that data directory. Just before it moves a checkout it looks at it
 again, and it stops if anything changed since the plan or jj cannot read it.
 It refuses to start if any checkout has changes in its working copy or sits on
@@ -1657,7 +1660,7 @@ by an earlier failure until it has worked.
 ## Pentests
 
 `bb pentest` attacks the whole system as built: relay, agentloop,
-acp-tui and cleanroom's `relay-tool`, driven from outside through the
+relay-tui and cleanroom's `relay-tool`, driven from outside through the
 command line, ACP and a terminal, the way the operator and an attacker
 would reach them. `bb test` checks relay's parts; this checks that they
 still keep the lethal trifecta apart when put together. Each scenario
@@ -1718,9 +1721,9 @@ bb pentest --list            # the scenarios and what each needs
 bb pentest --jobs 4          # several at once, about a minute
 ```
 
-It takes agentloop, acp-tui and cleanroom from the sibling checkouts
+It takes agentloop, relay-tui and cleanroom from the sibling checkouts
 (`../agentloop/bin/agentloop` and so on), or from `--agentloop`,
-`--acp-tui` and `--cleanroom`, never from PATH. It takes webtool's
+`--relay-tui` and `--cleanroom`, never from PATH. It takes webtool's
 fixture build from `../webtool/bin/webtool-fixture` or `--webtool`; the
 release build does not count. `--build` builds a
 sibling that is missing. A scenario that needs a missing piece, or a
@@ -1759,7 +1762,7 @@ listed in `relay/pentest/main.clj`:
 ```clojure
 {:id "s11-my-attack"            ; the name bb pentest takes
  :title "what it shows"
- :needs #{:agentloop :python}   ; also :acp-tui, :cleanroom, :webtool
+ :needs #{:agentloop :python}   ; also :relay-tui, :cleanroom, :webtool
  :before (fn [env] env)         ; optional: start what relay.edn names
  :config (fn [cfg env] cfg)     ; optional: change relay.edn
  :run (fn [env]

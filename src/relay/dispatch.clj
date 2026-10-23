@@ -1013,17 +1013,17 @@
 
 (defn chat!
   "Talks with the roles on this terminal by running the chat client (the
-  :chat-client setting, acp-tui by default) with `relay acp` as its
+  :client setting, relay-tui by default) with `relay acp` as its
   agent, opening `role-id` first when given. relay acp opens and ends the
   conversations, or relay serve keeps them; this only waits for the
   client. Returns the client's exit code, or 1 when there is no client."
   [{:keys [config]} role-id {:keys [data]}]
-  (let [[program & args] (:chat-client config)
+  (let [[program & args] (:client config)
         found (some-> (fs/which program) str)]
     (if-not found
       (binding [*out* *err*]
-        (println (str "relay chat needs the chat client " program ", and it is not installed. "
-                      "Install acp-tui, or name another ACP client with :chat-client in relay.edn."))
+        (println (str "relay needs the client " program ", and it is not installed. "
+                      "Install relay-tui, or name another ACP client with :client in relay.edn."))
         1)
       (with-signals terminal-signals
         #(:exit (apply p/shell {:continue true}

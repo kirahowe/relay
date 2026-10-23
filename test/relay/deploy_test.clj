@@ -59,14 +59,14 @@
 
 (deftest a-checkout-already-on-main-does-not-move
   (let [o (checkout c2)
-        {:keys [steps]} (deploy/plan-deploy {:observed {:relay o :agentloop o :acp-tui o} :bookmark "main"})]
+        {:keys [steps]} (deploy/plan-deploy {:observed {:relay o :agentloop o :relay-tui o} :bookmark "main"})]
     (is (every? (comp false? :moves?) steps))))
 
 (deftest problems-say-which-checkout-and-why
   (let [ok (checkout c1)
-        problems #(:problems (deploy/plan-deploy {:observed (merge {:relay ok :agentloop ok :acp-tui ok} %) :bookmark "main"}))]
+        problems #(:problems (deploy/plan-deploy {:observed (merge {:relay ok :agentloop ok :relay-tui ok} %) :bookmark "main"}))]
     (is (str/includes? (first (problems {:agentloop (assoc-in ok [:wc :empty?] false)})) "agentloop: its working copy has changes"))
-    (is (str/includes? (first (problems {:acp-tui {:path "/gone" :exists? false}})) "does not exist"))
+    (is (str/includes? (first (problems {:relay-tui {:path "/gone" :exists? false}})) "does not exist"))
     (is (str/includes? (first (problems {:relay (assoc ok :jj? false)})) "not a jj repository"))
     (is (str/includes? (first (problems {:relay (assoc ok :target nil)})) "no main bookmark"))
     (testing "a working copy on a merge is refused: a rollback could not restore it"
@@ -260,9 +260,9 @@
               (is (= (:two (commits r)) (commit-id d "@-")) (name r))
               (is (= "2" (version d)))
               (is (= "true" (sh! d "jj" "--no-pager" "log" "--no-graph" "-r" "@" "-T" "empty"))))
-            (testing "the agentloop and acp-tui were built"
+            (testing "the agentloop and relay-tui were built"
               (is (fs/exists? (str (:agentloop repos) "/built")))
-              (is (fs/exists? (str (:acp-tui repos) "/built")))
+              (is (fs/exists? (str (:relay-tui repos) "/built")))
               (is (not (fs/exists? (str (:relay repos) "/built"))))))
           (testing "relay was paused while it moved, and runs again afterwards"
             (is (some? @paused-during))
@@ -353,10 +353,10 @@
   (when jj?
     (with-world
       (fn [{:keys [commits pause-file] :as w}]
-        ;; The process dies (here: throws) while building acp-tui, after
+        ;; The process dies (here: throws) while building relay-tui, after
         ;; agentloop has moved.
         (let [crash (hooked-sh (fn [dir cmd]
-                                 (when (and (= ["make" "build"] cmd) (str/ends-with? dir "/acp-tui")
+                                 (when (and (= ["make" "build"] cmd) (str/ends-with? dir "/relay-tui")
                                             (not (str/includes? dir "relay-deploy-check")))
                                    (throw (ex-info "killed" {})))))
               msg (threw #(run/deploy! (opts w :sh crash)))]
@@ -383,17 +383,17 @@
         (run/deploy! (opts w))
         (let [fail-once (atom true)
               flaky (hooked-sh (fn [dir cmd]
-                                 (when (and (= ["make" "build"] cmd) (str/ends-with? dir "/acp-tui") @fail-once)
+                                 (when (and (= ["make" "build"] cmd) (str/ends-with? dir "/relay-tui") @fail-once)
                                    (reset! fail-once false)
                                    (throw (ex-info "build broke" {})))))
               msg (threw #(run/rollback! (opts w :sh flaky)))]
           (is (str/includes? msg "ROLLBACK FAILED"))
-          (is (= ["1" "1" "2"] (map #(version (get repos %)) [:agentloop :acp-tui :relay]))
-              "agentloop and acp-tui went back (acp-tui's build failed), relay has not yet")
+          (is (= ["1" "1" "2"] (map #(version (get repos %)) [:agentloop :relay-tui :relay]))
+              "agentloop and relay-tui went back (relay-tui's build failed), relay has not yet")
           (is (some? (pause/reason pause-file))))
         (run/rollback! (opts w))
         (is (on-previous? w))
-        (is (= ["1" "1" "1"] (map #(version (get repos %)) [:agentloop :acp-tui :relay])))
+        (is (= ["1" "1" "1"] (map #(version (get repos %)) [:agentloop :relay-tui :relay])))
         (is (nil? (pause/reason pause-file)))
         (is (str/includes? (threw #(run/rollback! (opts w))) "already rolled back"))))))
 
@@ -401,11 +401,11 @@
   (when jj?
     (with-world
       (fn [{:keys [repos pause-file] :as w}]
-        (let [msg (threw #(run/deploy! (opts w :confirm (fn [_ _] (spit (str (:acp-tui repos) "/edit") "mine") true))))]
+        (let [msg (threw #(run/deploy! (opts w :confirm (fn [_ _] (spit (str (:relay-tui repos) "/edit") "mine") true))))]
           (is (str/includes? msg "A checkout changed since it was tested"))
-          (is (str/includes? msg "acp-tui's working copy changed")))
-        (is (= "mine" (slurp (str (:acp-tui repos) "/edit"))) "the edit is still in the working copy")
-        (is (on-previous? (assoc w :repos (dissoc repos :acp-tui))))
+          (is (str/includes? msg "relay-tui's working copy changed")))
+        (is (= "mine" (slurp (str (:relay-tui repos) "/edit"))) "the edit is still in the working copy")
+        (is (on-previous? (assoc w :repos (dissoc repos :relay-tui))))
         (is (nil? (pause/reason pause-file)) "nothing moved, so relay runs again")))))
 
 (deftest an-edit-made-during-a-build-stops-the-checkout-it-was-made-in
@@ -821,14 +821,14 @@
         (run/deploy! (opts w))
         ;; Deploy again: nothing to move, but the build runs and breaks its artifact.
         (let [breaking (fn [dir cmd]
-                         (if (and (= ["make" "build"] cmd) (str/ends-with? dir "/acp-tui")
+                         (if (and (= ["make" "build"] cmd) (str/ends-with? dir "/relay-tui")
                                   (not (str/includes? dir "relay-deploy-check")))
                            (do (spit (str dir "/built") "BROKEN") {:exit 2 :out "" :err "build broke"})
                            (run/sh dir cmd)))
               msg (threw #(run/deploy! (opts w :sh breaking)))]
           (is (str/includes? msg "DEPLOY FAILED"))
           (is (some? (pause/reason pause-file)) "the artifact changed, so relay stays paused")
-          (is (= :building (get-in (last (records w)) [:repos :acp-tui :state]))))))))
+          (is (= :building (get-in (last (records w)) [:repos :relay-tui :state]))))))))
 
 (deftest a-lookup-that-fails-after-a-move-does-not-pass-for-no-edit
   (when jj?
@@ -870,15 +870,15 @@
           (is (str/includes? msg "relay status failed")))
         (is (some? (pause/reason pause-file)) "artifacts were rebuilt, so relay stays paused")
         (let [states (update-vals (:repos (last (records w))) :state)]
-          (is (= {:agentloop :built :acp-tui :built :relay :kept} states)))))))
+          (is (= {:agentloop :built :relay-tui :built :relay :kept} states)))))))
 
 ;; --- the Opus review of round 5
 
 (deftest describe-plan-names-the-build
   (let [step (fn [repo moves?] {:repo repo :path (str "/p/" (name repo)) :from c1 :to c2 :moves? moves?})
-        lines (deploy/describe-plan {:steps [(step :agentloop true) (step :acp-tui false) (step :relay true)]})]
+        lines (deploy/describe-plan {:steps [(step :agentloop true) (step :relay-tui false) (step :relay true)]})]
     (is (= ["  agentloop (/p/agentloop): aaa -> bbb, then make build"
-            "  acp-tui (/p/acp-tui): already on bbb, then make build"
+            "  relay-tui (/p/relay-tui): already on bbb, then make build"
             "  relay (/p/relay): aaa -> bbb"]
            lines))))
 
@@ -988,14 +988,14 @@
   (when jj?
     (with-world
       (fn [{:keys [repos] :as w}]
-        (let [msg (threw #(run/deploy! (opts w :paths (assoc repos :acp-tui (:agentloop repos)))))]
+        (let [msg (threw #(run/deploy! (opts w :paths (assoc repos :relay-tui (:agentloop repos)))))]
           (is (str/includes? msg "three different directories"))
           (is (on-previous? w)))))))
 
 ;; --- Opus round 6
 
-(defn- breaking-acp-tui-build [dir cmd]
-  (if (and (= ["make" "build"] cmd) (str/ends-with? dir "/acp-tui") (not (str/includes? dir "relay-deploy-check")))
+(defn- breaking-relay-tui-build [dir cmd]
+  (if (and (= ["make" "build"] cmd) (str/ends-with? dir "/relay-tui") (not (str/includes? dir "relay-deploy-check")))
     {:exit 2 :out "" :err "build broke"}
     (run/sh dir cmd)))
 
@@ -1005,7 +1005,7 @@
       (fn [{:keys [repos pause-file] :as w}]
         ;; Everything is already on main, so the first deploy moves nothing.
         (doseq [[_ d] repos] (sh! d "jj" "new" "main"))
-        (let [msg (threw #(run/deploy! (opts w :sh breaking-acp-tui-build)))]
+        (let [msg (threw #(run/deploy! (opts w :sh breaking-relay-tui-build)))]
           (is (str/includes? msg "DEPLOY FAILED")))
         (is (some? (pause/reason pause-file)))
         (testing "the refusal to deploy again says how to lift the pause"
@@ -1026,7 +1026,7 @@
     (with-world
       (fn [{:keys [repos pause-file] :as w}]
         (run/deploy! (opts w))
-        (threw #(run/deploy! (opts w :sh breaking-acp-tui-build)))
+        (threw #(run/deploy! (opts w :sh breaking-relay-tui-build)))
         (is (some? (pause/reason pause-file)))
         (testing "the first rollback is of the failed rebuild: the good deploy stays"
           (run/rollback! (opts w))
@@ -1112,7 +1112,7 @@
       (fn [w]
         (run/deploy! (opts w))
         (let [said (atom [])
-              _ (threw #(run/deploy! (opts w :sh breaking-acp-tui-build :say (fn [s] (swap! said conj s)))))]
+              _ (threw #(run/deploy! (opts w :sh breaking-relay-tui-build :say (fn [s] (swap! said conj s)))))]
           (is (some #(str/includes? % "a checkout was touched") @said))
           (is (not-any? #(str/includes? % "some checkouts moved") @said)))
         (run/rollback! (opts w))

@@ -2,7 +2,7 @@
   "What every test shares about the machine it runs on. The tests must never
   reach the operator's real relay: not the per-user config file, which names
   the live data directory, not the relay command on PATH, and not the
-  agentloop or acp-tui on PATH, either of which may be the live install."
+  agentloop or relay-tui on PATH, either of which may be the live install."
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [clojure.string :as str]
@@ -20,14 +20,14 @@
   (let [sibling (fs/absolutize "../agentloop/bin/agentloop")]
     (when (fs/executable? sibling) (str (fs/normalize sibling)))))
 
-(def acp-tui-bin
-  "acp-tui built in the sibling checkout (make -C ../acp-tui build), when it
+(def relay-tui-bin
+  "relay-tui built in the sibling checkout (make -C ../relay-tui build), when it
   can open a role's conversation (--open, relay#65), which relay chat asks
   of it; nil otherwise, which skips the tests that need it. Never the
-  acp-tui on PATH: that is the live install, which bb deploy moves only
+  relay-tui on PATH: that is the live install, which bb deploy moves only
   after the tests pass, so it can be older than the commit under test. bb
   deploy builds the sibling from the commit it deploys."
-  (let [f (fs/absolutize "../acp-tui/bin/acp-tui")]
+  (let [f (fs/absolutize "../relay-tui/bin/relay-tui")]
     (when (and (fs/executable? f)
                (let [r (p/shell {:out :string :err :string :continue true} (str f) "--help")]
                  (str/includes? (str (:out r) (:err r)) "--open")))

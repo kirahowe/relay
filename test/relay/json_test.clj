@@ -1,6 +1,6 @@
 (ns relay.json-test
   "relay reads JSON another process wrote by one strict rule, the same
-  rule agentloop and acp-tui read it by (relay#58)."
+  rule agentloop and relay-tui read it by (relay#58)."
   (:require [cheshire.core :as cheshire]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
@@ -16,7 +16,7 @@
 ;; --- the shared table
 
 (def cases
-  "The table of lines relay, agentloop and acp-tui must read alike. Each
+  "The table of lines relay, agentloop and relay-tui must read alike. Each
   repo keeps a byte-identical copy."
   (mapv json/parse (remove str/blank? (str/split-lines (slurp "testdata/strict-json/cases.jsonl")))))
 

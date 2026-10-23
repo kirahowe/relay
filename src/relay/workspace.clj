@@ -326,7 +326,7 @@
   [params]
   (let [{:strs [card]} params
         ;; A typo must not pass as success: a misspelled seen would turn
-        ;; off the stale-edit check. sessionId is what acp-tui sends.
+        ;; off the stale-edit check. sessionId is what relay-tui sends.
         known (into #{"card" "sessionId"} (map name) cards/op-fields)
         unknown (sort (remove known (keys params)))]
     (cond

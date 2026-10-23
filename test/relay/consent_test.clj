@@ -319,7 +319,7 @@
 (deftest the-proxy-gives-the-client-the-preview-s-own-labels
   ;; Regression: a clean, private session's act call whose preview read
   ;; contaminated text reached the client with only the session's labels,
-  ;; so acp-tui and the pane left the preview's links live.
+  ;; so relay-tui and the pane left the preview's links live.
   (let [request (json/generate-string {:jsonrpc "2.0" :id 7 :method "session/request_permission"
                                        :params {:sessionId "s" :toolCall {:toolCallId "t" :name "send" :rawInput {:group "Everyone"}
                                                                           :_meta {"agentloop/labels" ["private"]}}

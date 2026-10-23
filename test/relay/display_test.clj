@@ -402,17 +402,17 @@
     (is (not (str/includes? (tools/envelope (assoc result :error "e" :ok nil)) "display"))
         "an error carries no display")))
 
-;; --- the pane in relay chat, with the real acp-tui on a pseudo-terminal
+;; --- the pane in relay chat, with the real relay-tui on a pseudo-terminal
 
 (def drive-py (str (fs/absolutize "pentest/pty/drive.py")))
 
 (deftest the-pane-in-relay-chat-shows-a-display-and-trusts-it
-  (if-not (and bin support/acp-tui-bin (fs/exists? "/usr/bin/python3"))
-    (println "SKIPPED: needs agentloop, ../acp-tui/bin/acp-tui with --open (relay#65) and python3")
+  (if-not (and bin support/relay-tui-bin (fs/exists? "/usr/bin/python3"))
+    (println "SKIPPED: needs agentloop, ../relay-tui/bin/relay-tui with --open (relay#65) and python3")
     (with-world asks-venues
       (fn []
         (let [cfg (read-string (slurp (str (data) "/relay.edn")))
-              _ (spit (str (data) "/relay.edn") (pr-str (assoc cfg :chat-client [support/acp-tui-bin])))
+              _ (spit (str (data) "/relay.edn") (pr-str (assoc cfg :client [support/relay-tui-bin])))
               transcript (str *dir* "/pty.out")
               plan {:rows 50 :cols 160 :timeout 90
                     :steps [{:wait "ready" :timeout 60}

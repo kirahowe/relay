@@ -64,9 +64,9 @@
    ;; A last resort against a role stuck in a loop, far above ordinary use.
    :runaway-wakes 30
    :runaway-window-minutes 60
-   ;; The ACP client `relay chat` runs, given `[--open <role>] -- relay
+   ;; The ACP client bare `relay` runs, given `[--open <role>] -- relay
    ;; acp --approvals` after these arguments.
-   :chat-client ["acp-tui"]
+   :client ["relay-tui"]
    :tools {}
    :mcp-servers {}
    ;; The remote MCP servers relay connect set up, by name (relay.connections).
@@ -581,12 +581,12 @@
 
 (defn validate
   "Returns the config, or throws describing the first problem found."
-  [{:keys [tools grants max-attempts chat-client] :as config}]
+  [{:keys [tools grants max-attempts] client :client :as config}]
   (check-required config)
-  (when-not (and (sequential? chat-client) (seq chat-client)
-                 (every? #(and (string? %) (not (str/blank? %))) chat-client))
-    (problem! (str "relay.edn has :chat-client " (pr-str chat-client)
-                   "; it must be a command, such as [\"acp-tui\"].")))
+  (when-not (and (sequential? client) (seq client)
+                 (every? #(and (string? %) (not (str/blank? %))) client))
+    (problem! (str "relay.edn has :client " (pr-str client)
+                   "; it must be a command, such as [\"relay-tui\"].")))
   (doseq [[tool-name {:keys [class labels always-hold] :as tool}] tools]
     (when-not (tool-classes class)
       (throw (ex-info (str "Tool " tool-name " needs a :class, one of "
@@ -643,10 +643,19 @@
   (update (check-serve config) :tools update-vals
           (fn [t] (update t :labels #(vec (sort (distinct %)))))))
 
+(defn- rename-client
+  "The settings with :chat-client, the old name of :client, read as :client
+  when :client is absent. :client wins when both are set. The tick reads
+  the same relay.edn, so a file written before the rename keeps working."
+  [settings]
+  (cond-> (dissoc settings :chat-client)
+    (and (contains? settings :chat-client) (not (contains? settings :client)))
+    (assoc :client (:chat-client settings))))
+
 (defn resolve-config
   "Defaults overlaid with the operator's settings."
   [settings]
-  (validate (merge defaults (dissoc settings :format))))
+  (validate (merge defaults (dissoc (rename-client settings) :format))))
 
 (defn load-config [data-dir]
   (let [file (fs/path data-dir "relay.edn")]

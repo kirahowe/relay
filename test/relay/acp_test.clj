@@ -612,7 +612,7 @@
 ;; --- relay chat: a chat client on the terminal, running relay acp
 
 (defn- fake-tui!
-  "A stand-in for acp-tui: it writes its argv to argv.json, runs the agent
+  "A stand-in for relay-tui: it writes its argv to argv.json, runs the agent
   command after `--`, opens a session for the role --open names, sends
   one prompt, writes what it saw to seen.json and quits. Returns its
   path."
@@ -637,16 +637,16 @@
     (fs/set-posix-file-permissions path "rwxr-xr-x")
     path))
 
-(defn- set-chat-client! [client]
+(defn- set-client! [client]
   (let [file (str (data) "/relay.edn")]
-    (spit file (pr-str (assoc (read-string (slurp file)) :chat-client client)))))
+    (spit file (pr-str (assoc (read-string (slurp file)) :client client)))))
 
 (deftest chat-runs-the-client-with-relay-acp-and-opens-one-conversation
   (if-not bin
     (println "SKIPPED: agentloop is not built; run make -C ../agentloop build")
     (with-world {} (fn [body] {:text (str "You said: " (str/includes? (pr-str body) "hello relay"))})
       (fn []
-        (set-chat-client! [(fake-tui!)])
+        (set-client! [(fake-tui!)])
         (let [{:keys [exit out err]} @(p/process [relay-bin "chat" "clerk" "--data" (data)]
                                                  {:in "" :out :string :err :string :dir *dir*})
               argv (json/parse-string (slurp (str *dir* "/argv.json")))
@@ -679,15 +679,15 @@
             (Thread/sleep 50)
             (recur))))))
 
-(deftest chat-with-the-real-acp-tui-on-a-pty
+(deftest chat-with-the-real-relay-tui-on-a-pty
   ;; script(1) gives relay chat a pseudo-terminal, as a person's terminal
   ;; would; the keys go in through its stdin.
-  (if-not (and bin support/acp-tui-bin (fs/which "script"))
-    (println "SKIPPED: needs agentloop, ../acp-tui/bin/acp-tui with --open (relay#65) and script(1)")
+  (if-not (and bin support/relay-tui-bin (fs/which "script"))
+    (println "SKIPPED: needs agentloop, ../relay-tui/bin/relay-tui with --open (relay#65) and script(1)")
     (with-world {} (fn [body] {:text (str "You said: " (str/includes? (pr-str body) "hello relay"))})
       (fn []
-        ;; The sibling build, never the acp-tui on PATH (support/acp-tui-bin).
-        (set-chat-client! [support/acp-tui-bin])
+        ;; The sibling build, never the relay-tui on PATH (support/relay-tui-bin).
+        (set-client! [support/relay-tui-bin])
         (let [proc (p/process ["script" "-q" "/dev/null" relay-bin "chat" "clerk" "--data" (data)]
                               {:out :string :err :string :dir *dir*})
               keys! (fn [s] (doto ^java.io.OutputStream (:in proc) (.write (.getBytes ^String s)) (.flush)))

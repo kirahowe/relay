@@ -2348,7 +2348,7 @@
           (cond-> labels preview (union (preview-labels config tool preview labels))))))
 
 (def ^:private refusal-reasons
-  {"no-approvals" "Its ACP client was not started with --approvals, so relay refused the call for it. To decide such calls yourself, talk with it through relay chat."
+  {"no-approvals" "Its ACP client was not started with --approvals, so relay refused the call for it. To decide such calls yourself, talk with it in the dashboard (relay)."
    "client-gone" "Its client went away before answering, so relay refused the call."
    "client-error" "Its client answered a request that was not open, so relay refused what was open rather than let the turn hang."
    "unreadable" "relay could not read the request, so it refused it rather than pass it on."

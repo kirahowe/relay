@@ -8,7 +8,7 @@
         :extra-deps {com.kirahowe/volley {:mvn/version "0.1.0-alpha.1"}}
         :requires ([relay.test-runner :as runner])
         :task (runner/run! *command-line-args*)}
-  pentest {:doc "Attack relay, agentloop, acp-tui and cleanroom together on artificial data: bb pentest --help"
+  pentest {:doc "Attack relay, agentloop, relay-tui and cleanroom together on artificial data: bb pentest --help"
            :extra-paths ["test" "pentest"]
            :requires ([relay.pentest.main :as pentest])
            :task (pentest/run! *command-line-args*)}

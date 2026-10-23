@@ -2,7 +2,7 @@
   "`bb deploy` and `bb rollback`: the jj, make and relay calls around the
   decisions in relay.deploy. For the operator to run, never an agent:
 
-    bb deploy   [--relay <dir>] [--agentloop <dir>] [--acp-tui <dir>]
+    bb deploy   [--relay <dir>] [--agentloop <dir>] [--relay-tui <dir>]
                 [--bookmark main] [--record <file>] [--data <dir>]
                 [--paused-externally]
     bb rollback [same flags]
@@ -27,7 +27,7 @@
   Then it pauses relay (relay.pause), so `relay tick` starts nothing, waits
   until no wake or tick is running, writes the record, and moves each
   checkout's empty working copy onto its commit with `jj new <commit>`,
-  building agentloop and acp-tui with `make build`, and runs the live
+  building agentloop and relay-tui with `make build`, and runs the live
   `relay status`. Each checkout is looked at again just before it is moved,
   and left alone if anything about it changed since the plan or jj cannot
   read it. A write that lands between that look and the move is found
@@ -250,7 +250,7 @@
           (if (ok? res)
             (swap! made conj r)
             (reset! problem (failure (str "Making a workspace of " (name r) " at " (commit-of r)) res)))))
-      (doseq [r [:agentloop :acp-tui]]
+      (doseq [r [:agentloop :relay-tui]]
         (when-not @problem (say (str "Building " (name r) " at " (subs (commit-of r) 0 12) " in a fresh workspace")))
         (run! (str (name r) " would not build") (deploy/builds r) (dirs r)))
       (doseq [cmd test-cmds]
@@ -537,7 +537,7 @@
 (defn- defaults [home]
   {:paths {:relay (str home "/code/projects/relay")
            :agentloop (str home "/code/projects/agentloop")
-           :acp-tui (str home "/code/projects/acp-tui")}
+           :relay-tui (str home "/code/projects/relay-tui")}
    :record (str home "/Library/Application Support/relay/deploys.edn")
    :pause-file (pause/default-file home)
    :bookmark "main"
@@ -591,7 +591,7 @@
   which data directory to watch, which must be a relay data directory."
   [{:keys [record sync paths data home] :as o}]
   (when-not (= (count deploy/repo-keys) (count (set (vals paths))))
-    (refuse! [(str "relay, agentloop and acp-tui must be three different directories; got "
+    (refuse! [(str "relay, agentloop and relay-tui must be three different directories; got "
                    (str/join ", " (for [r deploy/repo-keys] (str (name r) " " (get paths r)))) ".")]))
   (when-let [p (deploy/record-path-problem {:path record :sync sync :repo-paths (vals paths)})]
     (refuse! [p]))
@@ -637,7 +637,7 @@
     final))
 
 (defn deploy!
-  "Deploys the bookmark. Options: :paths {:relay :agentloop :acp-tui}, :record,
+  "Deploys the bookmark. Options: :paths {:relay :agentloop :relay-tui}, :record,
   :bookmark, :data (the live data directory, read for running wakes),
   :from (the working copy it is run from, default the current directory),
   :paused-externally (ticks are stopped some other way), and for tests
@@ -759,7 +759,7 @@
 
 ;; --- bb tasks
 
-(def ^:private spec {:coerce {:relay :string :agentloop :string :acp-tui :string
+(def ^:private spec {:coerce {:relay :string :agentloop :string :relay-tui :string
                               :bookmark :string :record :string :data :string
                               :paused-externally :boolean}})
 
@@ -770,7 +770,7 @@
       (:record o) (assoc :record (:record o))
       (:data o) (assoc :data (:data o))
       (:paused-externally o) (assoc :paused-externally true)
-      (seq (select-keys o [:relay :agentloop :acp-tui])) (assoc :paths (select-keys o [:relay :agentloop :acp-tui])))))
+      (seq (select-keys o [:relay :agentloop :relay-tui])) (assoc :paths (select-keys o [:relay :agentloop :relay-tui])))))
 
 (defn- run-command [f args]
   (try (f (options args))

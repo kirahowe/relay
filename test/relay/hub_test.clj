@@ -536,7 +536,7 @@
         [_ fx] (say h 2 (note "session/cancel" {:sessionId "s1"}))]
     (is (= ["session/cancel"] (map #(get (parse %) "method") (sends fx "clerk"))))))
 
-;; --- Codex round 1 (acp-tui finding 4)
+;; --- Codex round 1 (relay-tui finding 4)
 
 (deftest a-replay-starts-with-the-latest-labels-even-when-the-cap-dropped-them
   ;; The update that carried the session's labels was dropped with the

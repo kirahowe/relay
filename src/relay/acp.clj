@@ -95,7 +95,7 @@
 (defn message
   "A line as a message: the JSON object it is, read by relay's strict
   reader (relay.json), or nil when it is not one. Every reader of ACP in
-  relay, agentloop and acp-tui reads by the same rule, so a line that
+  relay, agentloop and relay-tui reads by the same rule, so a line that
   passes means the same to all of them. A line already read (`line`) is
   not read again."
   [x]

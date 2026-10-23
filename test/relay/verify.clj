@@ -10,12 +10,12 @@
 (def usage
   "usage: bb verify [options]
 
-Runs, in order: agentloop, acp-tui and webtool's own tests and builds,
+Runs, in order: agentloop, relay-tui and webtool's own tests and builds,
 relay's tests, the mock scenarios and the pentests. With --live it also
 runs the behaviour evals against the real model, which costs a little.
 
   --agentloop-dir <dir>  agentloop checkout (default ../agentloop)
-  --acp-tui-dir <dir>    acp-tui checkout (default ../acp-tui)
+  --relay-tui-dir <dir>  relay-tui checkout (default ../relay-tui)
   --webtool-dir <dir>    webtool checkout (default ../webtool)
   --cleanroom <path>     cleanroom binary for the mail pentests (they skip without it)
   --only <a,b>           run only these steps, by id
@@ -25,7 +25,7 @@ runs the behaviour evals against the real model, which costs a little.
   --list                 list the steps and exit")
 
 (def ^:private flags-with-values
-  #{"--agentloop-dir" "--acp-tui-dir" "--webtool-dir" "--cleanroom" "--only" "--skip" "--max-cost"})
+  #{"--agentloop-dir" "--relay-tui-dir" "--webtool-dir" "--cleanroom" "--only" "--skip" "--max-cost"})
 
 (defn parse-args
   "Options from the command line, or {:error msg}."
@@ -49,12 +49,12 @@ runs the behaviour evals against the real model, which costs a little.
   [opts root]
   (let [sib (fn [k default] (str (fs/absolutize (or (get opts k) (fs/path root ".." default)))))
         al (sib :agentloop-dir "agentloop")
-        tui (sib :acp-tui-dir "acp-tui")
+        tui (sib :relay-tui-dir "relay-tui")
         wt (sib :webtool-dir "webtool")
         al-bin (str (fs/path al "bin" "agentloop"))
         steps [{:id "agentloop" :what "agentloop's tests, then its build" :dir al
                 :cmd ["sh" "-c" "make test && make build"]}
-               {:id "acp-tui" :what "acp-tui's checks, then its build" :dir tui
+               {:id "relay-tui" :what "relay-tui's checks, then its build" :dir tui
                 :cmd ["sh" "-c" "make check && make build"]}
                {:id "webtool" :what "webtool's tests, then its release and fixture builds" :dir wt
                 :cmd ["sh" "-c" "make test && make build && make fixture"]}
@@ -65,7 +65,7 @@ runs the behaviour evals against the real model, which costs a little.
                {:id "pentest" :what "the whole system attacked on artificial data" :dir root
                 :cmd (cond-> ["bb" "pentest" "--jobs" "4"
                               "--agentloop" al-bin
-                              "--acp-tui" (str (fs/path tui "bin" "acp-tui"))
+                              "--relay-tui" (str (fs/path tui "bin" "relay-tui"))
                               "--webtool" (str (fs/path wt "bin" "webtool-fixture"))]
                        (:cleanroom opts) (into ["--cleanroom" (:cleanroom opts)]))}
                {:id "eval" :what "behaviour evals against the real model (costs money)" :dir root

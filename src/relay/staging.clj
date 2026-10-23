@@ -242,7 +242,8 @@
     (vec (concat [[(c (str home "/Sync")) "which is never staging data"]
                   [(c (str home "/.config/relay")) "relay's own config directory"]
                   [(c (str home "/Library/Application Support/relay")) "where deploys keep their records and the pause file"]]
-                 (for [r ["relay" "agentloop" "acp-tui"]]
+                 ;; acp-tui is the old name of relay-tui, a live checkout until it moves.
+                 (for [r ["relay" "agentloop" "relay-tui" "acp-tui"]]
                    [(c (str home "/code/projects/" r)) "a live checkout"])
                  (for [config operator-configs
                        :let [d (operator-data-dir config home)]

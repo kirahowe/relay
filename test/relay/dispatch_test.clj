@@ -449,21 +449,35 @@
     (is (:pass? result) (pr-str (select-keys result [:seed :shrunk :fail])))))
 
 (deftest chat-without-its-client-says-so-and-opens-no-conversation
-  (write-config! {:chat-client [(str *dir* "/no-such-client")]})
+  (write-config! {:client [(str *dir* "/no-such-client")]})
   (let [err (java.io.StringWriter.)
         exit (binding [*err* err] (dispatch/chat! (system) "clerk" {}))]
     (is (= 1 exit))
     (is (str/includes? (str err) "no-such-client, and it is not installed") (str err))
     (is (empty? (chat-wakes)))))
 
-(deftest the-chat-client-must-be-a-command
+(deftest the-client-must-be-a-command
   (let [cfg (fn [c] (config/resolve-config (cond-> {:timezone "UTC" :default-harness :a :notify {:kind :none}
                                                     :harnesses {:a {:kind :script}}}
-                                             (some? c) (assoc :chat-client c))))]
-    (is (= ["acp-tui"] (:chat-client (cfg nil))) "acp-tui by default")
-    (is (= ["/opt/bin/tui" "--agent-log" "/tmp/x"] (:chat-client (cfg ["/opt/bin/tui" "--agent-log" "/tmp/x"]))))
-    (doseq [bad [[] "acp-tui" [""] [:acp-tui] ["acp-tui" nil] {}]]
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":chat-client" (cfg bad)) (pr-str bad)))))
+                                             (some? c) (assoc :client c))))]
+    (is (= ["relay-tui"] (:client (cfg nil))) "relay-tui by default")
+    (is (= ["/opt/bin/tui" "--agent-log" "/tmp/x"] (:client (cfg ["/opt/bin/tui" "--agent-log" "/tmp/x"]))))
+    (doseq [bad [[] "relay-tui" [""] [:relay-tui] ["relay-tui" nil] {}]]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":client" (cfg bad)) (pr-str bad)))))
+
+(deftest chat-client-is-read-as-the-old-name-of-client
+  (let [cfg (fn [m] (config/resolve-config (merge {:timezone "UTC" :default-harness :a :notify {:kind :none}
+                                                   :harnesses {:a {:kind :script}}}
+                                                  m)))]
+    (testing "alone, :chat-client is the client"
+      (is (= ["old-tui" "--x"] (:client (cfg {:chat-client ["old-tui" "--x"]}))))
+      (is (not (contains? (cfg {:chat-client ["old-tui"]}) :chat-client)) "and the old key is not kept"))
+    (testing ":client wins when both are set"
+      (is (= ["new-tui"] (:client (cfg {:chat-client ["old-tui"] :client ["new-tui"]})))))
+    (testing "a bad :client is not rescued by a good :chat-client"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":client" (cfg {:chat-client ["old-tui"] :client []}))))
+    (testing "a bad :chat-client is reported under the name :client"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":client" (cfg {:chat-client []}))))))
 
 (deftest a-conversation-killed-earlier-is-reaped-before-the-next-one-starts
   (let [dead (p/process ["true"])
