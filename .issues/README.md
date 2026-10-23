@@ -29,6 +29,12 @@
 | [36](36-clean-up-after-an-interrupted-deploy-and-leave-no-check.md) | Clean up after an interrupted deploy, and leave no check dirs in TMPDIR | bug | P3 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
 
+### In progress
+
+| ID | Title | Type | Priority |
+| --- | --- | --- | --- |
+| [70](70-let-the-operator-trust-a-card-with-outside-text.md) | Let the operator trust a card with outside text | feature | P2 |
+
 ### Review
 
 | ID | Title | Type | Priority |
