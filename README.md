@@ -1415,10 +1415,14 @@ sed -e "s|@BB@|$(command -v bb)|" -e "s|@RELAY@|$PWD|" \
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/relay.serve.plist
 ```
 
+`bb service stop`, `bb service start`, `bb service restart` and `bb
+service status` do the same with less typing. Each does nothing where
+there is nothing to do: stopping a stopped service, or starting a
+running one.
+
 A deploy waits for every running wake, and a conversation the service
-holds is one, so stop the service before `bb deploy`
-(`launchctl bootout gui/$(id -u)/relay.serve`) and start it again after
-(`launchctl bootstrap` as above). That ends every live conversation; the
+holds is one, so stop the service before `bb deploy` (`bb service
+stop`) and start it again after (`bb service start`). That ends every live conversation; the
 roles remember what their notes, facts and journals hold, as after any
 conversation. The service runs the code it started with until it is
 restarted, so it must be restarted after a deploy in any case.
