@@ -1205,27 +1205,25 @@ because a role has only relay's tools. Without a service, if the role
 already has a conversation open, relay writes the reason to stderr and
 exits 1 before sending anything.
 
-relay adds some methods of its own, which a client that knows them can
-use; `initialize` says relay offers them with `_meta {"relay/hub": 1}`,
-and with `"relay/keeps"` whether conversations outlive the client (true
-when relay serve holds them).
-`_relay/roles` gives every role with what it is doing (working, held
-calls, its conversation's turn and unread reply) and then sends
-`_relay/roles/changed` whenever that changes. `_relay/seen` says the
-operator has read a conversation through a turn,
-`_relay/conversations/end` ends a conversation, and `_relay/replayed`
-marks where a replay ends and live updates begin, with `"truncated"`
-saying whether older updates were dropped. A replay keeps consecutive
-text chunks of one kind merged, and starts with the session's latest
-labels. A permission request
-goes to every attached client that may answer one (`--approvals`); the
-first answer goes to the agent, and the others get
-`_relay/permission/settled`. The pane's methods (`_relay/items`,
-`_relay/resolve`, `_relay/trust`) are as before, for the conversation the
-request's `sessionId` names. The board (`_relay/cards`,
-`_relay/cards/op`, `_relay/cards/trust`) is relay's own and needs no conversation: each client
-that asks for it is sent, as `_relay/cards/changed`, every card that
-changed since what that client was last sent.
+relay adds methods of its own, which a client that knows them can use;
+`initialize` says relay offers them with `_meta {"relay/hub": 1}`, and
+with `"relay/keeps"` whether conversations outlive the client (true when
+relay serve holds them). `_relay/roles` gives every role with what it is
+doing, and `_relay/roles/changed` follows whenever that changes.
+`_relay/seen` says the operator has read a conversation through a turn,
+`_relay/conversations/end` ends one, and `_relay/replayed` marks where a
+replay ends and live updates begin. A permission request goes to every
+attached client that may answer one (`--approvals`); the first answer
+goes to the agent, and the others get `_relay/permission/settled`. The
+pane's methods (`_relay/items`, `_relay/resolve`, `_relay/trust`) are
+about the conversation the request's `sessionId` names. The board
+(`_relay/cards`, `_relay/cards/op`, `_relay/cards/trust`) belongs to the
+connection and needs no conversation: its methods refuse a `sessionId`,
+and each client that asks for the board is sent, as
+`_relay/cards/changed`, every card that changed since what that client
+was last sent. [docs/client-protocol.md](docs/client-protocol.md) lists
+every method, notification and `_meta` key, with its scope, params,
+answer and errors.
 
 `--trace <file>` appends every line in both directions to `<file>`, one
 JSON object per line, with `from` set to `client` or `agent`. The file
@@ -1285,9 +1283,9 @@ nothing in it can close. relay makes it so from the display, whatever
 the agent sent, so no client fetches an image in it or follows a link
 before you have read it. relay-tui shows the display from `_meta`.
 
-relay acp also answers ACP extension methods of its own, which never
-reach agentloop. `_relay/items` lists a session's shown docs and
-the permission requests relay passed on, with their previews.
+relay acp also answers the pane's methods itself, and they never reach
+agentloop. `_relay/items` lists a session's shown docs and the
+permission requests relay passed on, with their previews.
 `_relay/resolve` looks up a `[[kind:id]]` ref. `_relay/trust` trusts a
 shown doc. relay takes `_relay/trust` only with `--approvals`, for the
 reason it passes permission requests on only then: the client is your
@@ -1298,59 +1296,19 @@ doc` command to run instead. The log records that a trust came from the
 chat. relay keeps each display as the conversation goes, before the
 client sees it.
 
-relay acp also gives the client your board. `_relay/cards`, with
-`{"archived": true}` to include archived cards, answers `{"rev": <the
-log's last seq>, "cards": [...]}`, each card in its wire form (below).
-The first call subscribes the client: from then on, whenever the log
-changes, relay sends it `_relay/cards/changed` `{"rev", "cards"}` with
-every card whose rev changed since what it last sent that client,
-archived cards included so the client can drop them. A change made by
-another process (a role's wake, the command line) arrives this way.
-`_relay/cards/trust` takes `{card, rev, sha256}` and does what `relay
-trust card <id>` does, for the card as the client was sent it: it answers
-`{"trusted": true, "card": <wire form, now clean>}`, or a JSON-RPC error
-with relay's refusal ("Nothing was trusted; look again." when the card
-changed since, or when `rev` or `sha256` is not the card's current one).
-It refuses an unknown parameter, `sessionId` included, and, as
-`_relay/trust`, refuses unless relay acp was started with `--approvals`.
-The card's `rev` moves, so every subscribed client is sent
-`_relay/cards/changed` with the clean card.
-`_relay/cards/op` takes `{card, op, item, row, column, state, text,
-seen}` and answers `{"card": <wire form>, "changed": true|false}`, or a
-JSON-RPC error whose message is relay's refusal. It refuses a parameter
-it does not know, naming it, so a typo such as `iten` or `sen` fails
-instead of passing as success. The board's methods are the connection's
-and refuse a `sessionId`, as `_relay/cards` refuses any parameter but
-`archived`. An op from the client is
-yours, with no labels, whether or not relay acp was started with
-`--approvals`.
-
-A card's wire form uses string keys and is ready to show. relay has
-already made every text field safe: hidden characters shown as
-`\u{XXXX}`, and text whose labels are contaminated defanged, with
-`"outsider": true` beside it. A client renders what it gets and works
-nothing out for itself. `text` is the card's text form, for a client
-that does not know its kind. A card with contaminated text also has
-`"sha256"`, the digest of that text form, which is what
-`_relay/cards/trust` sends back with the card's `rev`; a clean card has
-no `sha256`.
-
-```json
-{"id": 1840, "kind": "tracker", "status": "active", "complete": false,
- "rev": 1842, "owner": "hub", "addedAt": "2026-10-20T15:03:00Z",
- "title": {"text": "Catch up monthly financials", "outsider": false, "rev": 1840},
- "progress": {"done": 6, "total": 24},
- "labels": ["private"],
- "rows": [{"id": 1, "text": "BMO", "outsider": false, "rev": 1840}],
- "columns": [{"id": 1, "text": "Jun", "outsider": false, "rev": 1840}],
- "cells": [{"row": 1, "column": 1, "state": "done"}],
- "text": "Card 1840: ..."}
-```
-
-A checklist has `"items": [{"id", "text", "done", "outsider", "rev"}]`
-and a note `"note": {"text", "outsider", "rev"}`. Only cells that are not
-open are listed, and a note has no `progress`. An element's `rev` is
-when its text was last written, which is what `seen` is checked against.
+relay acp also gives the client your board. `_relay/cards` answers every
+active card in a wire form that is ready to show, and from then on relay
+sends the client every card that changes, including changes made by a
+role's wake or the command line. `_relay/cards/op` changes a card as
+you, with no labels, whether or not relay acp was started with
+`--approvals`. It refuses a parameter it does not know, naming it, so a
+typo such as `iten` fails instead of passing as success, and an edit
+carries the rev you saw, so relay refuses it when someone changed that
+text in the meantime. `_relay/cards/trust` does what `relay trust card
+<id>` does, for the card as the client was sent it, and only with
+`--approvals`. All three are the connection's and work with no
+conversation open. [docs/client-protocol.md](docs/client-protocol.md)
+has their params, answers and errors, and the card's wire form.
 
 Only relay speaks relay's methods to the client: relay acp drops any
 message from the agent whose method starts with `_relay/`, so an agent
