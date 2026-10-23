@@ -16,7 +16,9 @@
             [relay.log :as log]
             [relay.prompt :as prompt]
             [relay.refs :as refs]
-            [relay.tools :as tools]))
+            [relay.tools :as tools]
+            [relay.cli]
+            [relay.workspace :as workspace]))
 
 (defn- check [n property]
   (let [result (tc/quick-check n property)]
@@ -552,3 +554,131 @@
           (is (= "newer" (get-in (the-card sys id) [:note :text]))))
         (is (some? (tools/input-problem (:parameters (get (tools/offered (:config sys) "hub") "card_op"))
                                         {:card id :op "write" :text "x" (keyword "x" "seen") 1})))))))
+
+;; --- the operator trusts a card (relay#70)
+
+(defn- tainted-world
+  "[state id]: a checklist hub wrote with private text, then a
+  contaminated session added an item to."
+  []
+  (let [[s ev] (run (seeded) "hub" :card/add {:kind "checklist" :title "Taxes" :items ["Find the T4"]}
+                    {:labels ["private"]})
+        id (:seq (first ev))
+        [s _] (run s "hub" :card/op {:card id :op "add" :text "Read https://evil.example"}
+                   {:labels ["contaminated"]})]
+    [s id]))
+
+(defn- trust-args [state id]
+  (let [v (core/trusted-version state "card" (str id))]
+    {:kind "card" :ref (str id) :version (:version v) :sha256 (core/sha256 (:text v))}))
+
+(deftest only-the-operator-trusts-a-card
+  (let [[s id] (tainted-world)
+        args (trust-args s id)]
+    (testing "a role is refused, whatever its labels"
+      (doseq [actor ["hub"]]
+        (is (= :forbidden (:rejected (run s actor :label/trust args))) actor)))
+    (testing "the operator is not"
+      (is (vector? (run s "operator" :label/trust args))))))
+
+(deftest a-clean-card-is-not-trusted
+  (let [[s ev] (run (seeded) "hub" :card/add {:kind "note" :title "Plan" :text "x"} {:labels ["private"]})
+        id (:seq (first ev))
+        r (run s "operator" :label/trust (trust-args s id))]
+    (is (= :invalid (:rejected r)) (pr-str r))
+    (is (str/includes? (:message r) "is not contaminated"))))
+
+(deftest a-card-that-changed-since-it-was-read-trusts-nothing
+  (let [[s id] (tainted-world)
+        args (trust-args s id)
+        [s2 _] (run s "hub" :card/op {:card id :op "add" :text "Another"} {:labels ["contaminated"]})
+        [s3 _] (run s "hub" :card/op {:card id :op "tick" :item 1} {:labels []})]
+    (doseq [[what st] [["a new item" s2] ["a tick" s3]]]
+      (let [r (run st "operator" :label/trust args)]
+        (is (= :conflict (:rejected r)) what)
+        (is (str/includes? (:message r) "Nothing was trusted; look again.") what)))
+    (testing "a wrong digest, and a wrong rev"
+      (is (= :conflict (:rejected (run s "operator" :label/trust (assoc args :sha256 (core/sha256 "other"))))))
+      (is (= :conflict (:rejected (run s "operator" :label/trust (update args :version dec))))))))
+
+(deftest trusting-a-card-clears-contaminated-from-every-element
+  (let [[s id] (tainted-world)
+        before (core/card s id)
+        [s' ev] (run s "operator" :label/trust (assoc (trust-args s id) :via "chat"))
+        after (core/card s' id)
+        trusted-seq (:seq (first ev))]
+    (is (= "label/trusted" (:type (first ev))))
+    (is (= "chat" (get-in (first ev) [:data :via])))
+    (testing "contaminated is off every element; private stays"
+      (is (core/contaminated? (core/card-labels before)))
+      (is (= ["private"] (core/card-labels after)))
+      (is (= [["private"] []] (map :labels (:items after)))))
+    (testing "the text and the elements' own revs are untouched; the card's rev moves"
+      (is (= (map #(select-keys % [:id :text :rev]) (:items before))
+             (map #(select-keys % [:id :text :rev]) (:items after))))
+      (is (= trusted-seq (:rev after)))
+      (is (> (:rev after) (:rev before))))
+    (testing "the stale-edit check still sees the elements' revs, and a rev from before the trust is a rev read"
+      (let [seen (:rev before)
+            [_ ev2] (run s' "hub" :card/op {:card id :op "edit" :item 1 :text "T4 found" :seen seen} {:labels []})]
+        (is (= "card/changed" (:type (first ev2))))))
+    (testing "a client is sent the clean card"
+      (is (= [id] (cards/changed-since (cards/revs (:cards s)) (:cards s'))))
+      (is (= [] (cards/changed-since (cards/revs (:cards s')) (:cards s')))))
+    (testing "a later role edit contaminates again; trust was of the text as it stood"
+      (let [[s2 _] (run s' "hub" :card/op {:card id :op "edit" :item 1 :text "Changed" :seen (:rev after)}
+                        {:labels ["contaminated"]})]
+        (is (core/contaminated? (core/card-labels (core/card s2 id))))
+        (is (= :conflict (:rejected (run s2 "operator" :label/trust (trust-args s id)))))))))
+
+(deftest trusted-cards-lose-only-contaminated
+  (check 100
+         (prop/for-all [args gen-card-args
+                        labels gen-labels]
+           (let [w (new-card args labels)
+                 card (get (:cards w) 1)
+                 t (cards/trusted card 99)]
+             (and (= 99 (:rev t))
+                  (= (cards/text-labels t) (vec (remove #{"contaminated"} (cards/text-labels card))))
+                  (= (map #(select-keys % [:id :text :rev]) (cards/text-elements card))
+                     (map #(select-keys % [:id :text :rev]) (cards/text-elements t)))
+                  (= (dissoc card :rev :title :items :rows :columns :note)
+                     (dissoc t :rev :title :items :rows :columns :note)))))))
+
+(deftest the-wire-form-has-a-digest-only-when-the-card-is-contaminated
+  (let [[s id] (tainted-world)
+        dirty (workspace/card-wire (core/card s id))
+        [s' _] (run s "operator" :label/trust (trust-args s id))
+        clean (workspace/card-wire (core/card s' id))]
+    (is (= (core/sha256 (cards/text-form (core/card s id))) (get dirty "sha256")))
+    (is (= (:sha256 (trust-args s id)) (get dirty "sha256")) "the digest the command line sends")
+    (is (not (contains? clean "sha256")))))
+
+(deftest relay-trust-card-works-on-the-command-line
+  (let [dir (str (fs/create-temp-dir {:prefix "relay-cards-trust"}))
+        data (str dir "/data")
+        shown (atom "")
+        relay (fn [& args] ((requiring-resolve 'relay.cli/execute) (into ["--data" data] args)))]
+    (try
+      (fs/create-dirs data)
+      (spit (str data "/relay.edn") (pr-str {:timezone "UTC" :default-harness :x
+                                             :harnesses {:x {:kind :script :command ["true"]}}
+                                             :notify {:kind :none}}))
+      (log/init! data)
+      (let [sys (inbound/system data)
+            state #(inbound/current-state sys)]
+        (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "hub" :title "Hub" :instructions "x"}})
+        (let [id (:seq (first (inbound/submit! sys {:type :card/add :actor "hub" :labels ["contaminated"]
+                                                    :args {:kind "checklist" :title "From the web" :items ["a"]}})))]
+          (is (core/contaminated? (core/card-labels (core/card (state) id))))
+          (binding [relay.cli/*tty* (fn [] {:say #(swap! shown str %)
+                                            :ask (fn [] (second (re-find #"Type (\w{4}) to" @shown)))})]
+            (is (= 0 (:exit (relay "trust" "card" (str id))))))
+          (is (str/includes? @shown "From the web"))
+          (is (not (core/contaminated? (core/card-labels (core/card (state) id)))))
+          (testing "a clean card is refused"
+            (reset! shown "")
+            (binding [relay.cli/*tty* (fn [] {:say #(swap! shown str %) :ask (fn [] (second (re-find #"Type (\w{4}) to" @shown)))})]
+              (is (thrown-with-msg? clojure.lang.ExceptionInfo #"is not contaminated"
+                                    (relay "trust" "card" (str id))))))))
+      (finally (fs/delete-tree dir)))))

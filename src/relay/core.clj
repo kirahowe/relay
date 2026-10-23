@@ -1065,7 +1065,7 @@
 (defn- clean-version [versions version]
   (mapv #(cond-> % (= version (:seq %)) (update :labels clean)) versions))
 
-(defmethod evolve* "label/trusted" [state {:keys [data]}]
+(defmethod evolve* "label/trusted" [state {:keys [data] :as event}]
   (let [{:keys [kind ref version]} data
         num (parse-long ref)
         [owner nm] (str/split ref #"/" 2)]
@@ -1081,7 +1081,10 @@
       "role" (update-in state [:roles ref] #(-> % (update :id-labels clean) (update :title-labels clean)
                                                 (update :instructions-labels clean)))
       "journal" (update state :journals
-                        (fn [js] (update-vals js (fn [es] (mapv #(cond-> % (= num (:id %)) (update :labels clean)) es))))))))
+                        (fn [js] (update-vals js (fn [es] (mapv #(cond-> % (= num (:id %)) (update :labels clean)) es)))))
+      ;; Every text element of the card as it stands; the decision already
+      ;; checked the rev and digest the operator saw.
+      "card" (update-in state [:cards num] cards/trusted (:seq event)))))
 
 (defmethod evolve* "hold/opened" [state {:keys [seq at data labels]}]
   (let [{:keys [role wake session call tool input input-sha256 label-sources effective-input fixed-args]} data]
@@ -2261,7 +2264,7 @@
                " may not see.")
           :role actor :labels (id-labels state actor)))
 
-(def trust-kinds #{"memo" "fact" "doc" "note" "routine" "role" "journal"})
+(def trust-kinds #{"memo" "fact" "doc" "note" "routine" "role" "journal" "card"})
 
 (defn trusted-version
   "What `relay trust <kind> <ref>` is about, and its labels: a memo, a
@@ -2288,6 +2291,9 @@
                 :text (str ref "\n" (:title r) "\n\n" (:instructions r))})
       "journal" (when-let [e (first (filter #(= num (:id %)) (mapcat val (:journals state))))]
                   {:version (:id e) :labels (:labels e) :text (:text e)})
+      ;; The whole card as it stands, at its rev.
+      "card" (when-let [c (some->> num (card state))]
+               {:version (:rev c) :labels (cards/text-labels c) :text (cards/text-form c)})
       nil)))
 
 (defn sha256

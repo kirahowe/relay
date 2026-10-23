@@ -381,6 +381,23 @@
   [cards {:keys [seq data] :as event}]
   (update cards (:card data) #(assoc (apply-op % (:op data) event) :rev seq)))
 
+;; --- trusting a card
+
+(defn- clean-el [el] (update el :labels (fn [ls] (vec (remove #{"contaminated"} ls)))))
+
+(defn trusted
+  "The card once the operator trusts it at event `seq`: contaminated is
+  off every text element, whatever else the labels hold. The elements'
+  own revs stay, since they drive the stale-edit check; the card's rev
+  moves so that a client is sent the clean card."
+  [card seq]
+  (let [clean-all (fn [els] (mapv clean-el els))]
+    (cond-> (assoc card :rev seq :title (clean-el (:title card)))
+      (:items card) (update :items clean-all)
+      (:rows card) (update :rows clean-all)
+      (:columns card) (update :columns clean-all)
+      (:note card) (update :note clean-el))))
+
 ;; --- the text form
 
 (defn- plain-mark [_labels s] s)
