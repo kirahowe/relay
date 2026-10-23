@@ -30,6 +30,9 @@ Built by extending `:label/trust` with kind `card`; no new mechanism.
 - [x] `_relay/cards/trust`: refused without approvals; unknown params refused; stale digest refused; success answers `{trusted, card}`, logs `via chat`, and a subscribed client is sent `_relay/cards/changed`.
   - Receipt: `_relay-cards-trust-over-relay-acp`, `an-unknown-trust-parameter-is-refused` (cards_acp_test.clj)
 - [x] README and spec/relay.allium updated. resources/AGENTS.md does not describe trusting to roles, so unchanged.
+  - Receipt: uvvwvwwy changes README.md (trust kinds, `_relay/cards/trust`, the wire `sha256`) and spec/relay.allium.
+- [x] An adversarial Codex review finds nothing in scope.
+  - Receipt: round 1, 2026-10-23, "No in-scope findings" (see Log).
 
 ## Plan
 
@@ -61,3 +64,15 @@ Done in two commits: core+cards+cli path, then wire/hub/docs.
   relay allows one conversation per role and so one ACP client per role.
 - A role with the `card` the operator trusted can still be re-contaminated by a
   later contaminated edit; trust covers the text as it stood.
+- 2026-10-23: Codex review round 1 (read-only, threat model given) over
+  ypqwnonz..yovxoswy: "No in-scope findings." It ran 42 in-memory checks
+  across checklist, tracker and note cards: a role or public role
+  refused, a stale rev or digest refused, private kept, later outside
+  text re-contaminates and refuses the old digest, a client without
+  approvals refused, and other subscribers sent the clean card. A clean
+  round, so the review stops here.
+- acp-tui's side (t on the board, a confirm with the arm delay, the rev
+  and digest sent back, the question closed if the card changes) is in
+  the acp-tui workspace .next/acp-tui-boardfix, commit cc94f035.
+  scripts/card_fixtures.clj now records the trust exchanges for its
+  tests.

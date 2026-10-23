@@ -29,12 +29,6 @@
 | [36](36-clean-up-after-an-interrupted-deploy-and-leave-no-check.md) | Clean up after an interrupted deploy, and leave no check dirs in TMPDIR | bug | P3 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
 
-### In progress
-
-| ID | Title | Type | Priority |
-| --- | --- | --- | --- |
-| [70](70-let-the-operator-trust-a-card-with-outside-text.md) | Let the operator trust a card with outside text | feature | P2 |
-
 ### Review
 
 | ID | Title | Type | Priority |
@@ -47,6 +41,7 @@
 | [64](64-run-conversations-in-a-relay-service-that-outlives-its.md) | Run conversations in a relay service that outlives its clients | feature | P2 |
 | [65](65-switch-between-roles-and-their-conversations-in-acp-tui.md) | Switch between roles and their conversations in acp-tui | feature | P2 |
 | [69](69-board-cards-out-of-sight-in-relay-chat-s-pane.md) | Board cards out of sight in relay chat's pane | bug | P2 |
+| [70](70-let-the-operator-trust-a-card-with-outside-text.md) | Let the operator trust a card with outside text | feature | P2 |
 | [66](66-reach-the-relay-service-from-the-phone-over-the-tailnet.md) | Reach the relay service from the phone over the tailnet | feature | P3 |
 
 ### Blocked

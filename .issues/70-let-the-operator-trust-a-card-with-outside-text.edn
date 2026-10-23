@@ -1,6 +1,6 @@
 {:id 70
  :title "Let the operator trust a card with outside text"
- :status :in-progress
+ :status :review
  :type :feature
  :priority :p2
  :created "2026-10-23"
