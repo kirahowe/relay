@@ -139,3 +139,33 @@ commit with a regression test that failed before the fix.
   the hub) held the layout only when the pane had the keys, so a view of
   just a focused role was dropped before `HubConnected`. It now holds the
   layout while the view has a hub part (relay-tui xzmzuvky).
+
+2026-10-23, Codex round 1 over phase 4 (relay-tui ovnlqpmw..krxzsrto),
+the two restore defects, each with a test that failed before the fix:
+
+- Ctrl-Y trusted the wrong paste after a restore (relay-tui smzxykwz).
+  Restore puts the saved text ahead of what was typed since but appends
+  its pastes to the list, and Ctrl-Y scanned the list backwards, so after
+  a restart and a paste of your own it trusted the old email. The main
+  session decided: Ctrl-Y trusts only a paste made in this run. Each
+  paste now carries `Seq`, when it was pasted in this run (a counter on
+  the app, carried from single to hub mode, and also kept above every
+  paste a conversation holds so a bare `Reduce` stays ordered). Ctrl-Y
+  takes the highest; a restored paste has Seq 0, keeps the trust it was
+  saved with, and is never trusted by Ctrl-Y ("a paste from before
+  cannot be trusted: paste it again"). Seq is never saved. A property
+  test runs pastes, typing, the roster, save and reopen, and Ctrl-Y in
+  any order.
+- Typing and pastes before the hub was known were dropped (relay-tui
+  rlrunsrz). The input now goes to the hub as a draft with no role yet
+  (`Hub.Loose`), its pastes as trusted as they were and still this run's.
+  The first role in focus takes it, after what its input holds
+  (`RestoreDraft.After`): with --open that is at once, so a saved draft
+  still goes ahead of it and later typing after it; with a saved focus it
+  lands right after that role's saved draft. A save before any role is in
+  focus keeps it as a draft with no role, and a reopen holds it the same
+  way.
+- Test fix (relay-tui uyutxmsm): `TestRestoredDraftIsNeverMoreTrusted`
+  failed on a random seed because its damage changed a paste's number or
+  text and kept its trust, which the file's seal cannot do. The damage
+  now drops the trust. No change to the restore.

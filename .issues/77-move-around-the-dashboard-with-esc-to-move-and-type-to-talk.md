@@ -156,3 +156,41 @@ lands on the board as commands).
   typing in Writer with the draft; quit from the pane and reopen landed
   moving on the board with the card open. At 60 columns h and l walked
   the list, the conversation and the pane over it.
+
+2026-10-23, Codex round 1 over phase 4 (relay-tui ovnlqpmw..krxzsrto):
+four in-scope defects and a nit, each fixed in its own relay-tui commit
+with a test that failed before the fix.
+
+- Typing could approve a request (relay-tui orqotqox). A request that
+  arrived while composing took the keys at once, so a y typed more than
+  600 ms later approved it. The main session decided: a request is
+  answered only while moving. While typing it takes no keys; a bold line
+  above the input ("permission needed", the tool, "esc to answer") and
+  the status line ("esc to answer") say it waits, and the row of keys
+  leads with "esc answer". Its delay starts when it becomes answerable
+  (`Hub.answerable`: on screen and moving; esc, moving to its role, or
+  arriving while moving), and in single mode on the switch to moving.
+  The core also drops answers (allow, reject, confirm, cancel, move,
+  show all) while typing, in both modes, so the rule does not rest on the
+  shell. A paste while a request waits now lands in the input when
+  typing. ctrl+c still stops the turn, and that cancels its requests on
+  purpose, so the property test leaves ctrl+c and ctrl+d out. Esc while
+  typing with a request on offer now moves rather than cancelling it
+  (it used to cancel); esc again cancels. After an answer the operator
+  stays moving; i types again.
+- Closing the help also acted (relay-tui kuypskkw). Any key closed the
+  list of keys and then did what it does, so at 60x20 ? then x ticked a
+  checklist item hidden under the list. The closing key is now used up.
+- Nit: with no role in focus the conversation panel's top border carried
+  an empty title; it now runs unbroken (relay-tui trvpwlnp). `panel`
+  draws no title gap for an empty title.
+
+The other two are in relay#74's Log (Ctrl-Y after a restore, typing
+before the hub is known). Also found and fixed there: a phase 3 property
+test whose simulated damage was unrealistic.
+
+Not fixed, for the main session: `render.TestWidthBound` failed once on
+a random seed, a thought entry with "AAAA" and U+FE0F (emoji
+presentation) measured 9 wide at width 8. It is in the entry renderer,
+unrelated to navigation and older than this work; the failing input is
+kept in the scratchpad, not in the repo. It should be an issue.
