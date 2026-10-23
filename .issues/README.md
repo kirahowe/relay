@@ -11,6 +11,8 @@
 | [49](49-haiku-leaves-the-memo-or-journal-undone-before-an-act-call.md) | Haiku leaves the memo or journal undone before an act call | bug | P2 |
 | [62](62-keep-a-live-conversation-with-each-role-that-any-client-can.md) | Keep a live conversation with each role that any client can switch to | feature | P2 |
 | [68](68-have-bb-deploy-check-for-a-running-relay-service.md) | Have bb deploy check for a running relay service | feature | P2 |
+| [71](71-let-bb-deploy-stop-and-restart-relay-serve-itself.md) | Let bb deploy stop and restart relay serve itself | feature | P2 |
+| [72](72-use-the-sidebar-s-empty-space-under-the-roles.md) | Use the sidebar's empty space under the roles | feature | P2 |
 | [56](56-serve-the-board-over-http-and-sse-on-the-tailnet-for-a-web.edn) | Serve the board over HTTP and SSE on the tailnet for a web client | feature | P3 |
 | [59](59-keep-large-integers-exact-in-mcp-structured-results.md) | Keep large integers exact in MCP structured results | bug | P3 |
 | [60](60-let-relay-acp-start-agentloop-with-a-relative-data-path.edn) | Let relay acp start agentloop with a relative --data path | bug | P3 |
