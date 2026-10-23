@@ -520,8 +520,13 @@ clear it. No wake or conversation session from before the mark is
 carried on: the next wake starts afresh.
 
 `relay trust <kind> <ref>` clears `contaminated`
-from something the operator has read and vouches for. It never clears
-`private`. `--untrusted` on `relay memo`, `put`, `add`, `update` and
+from something the operator has read and vouches for. The kinds are
+`memo`, `fact`, `doc`, `note`, `routine`, `role`, `journal` and `card`.
+`relay trust card <id>` vouches for a whole card, the title and every
+item, row, column and note text as they stand now, at the rev you were
+shown; a card that changed since is not trusted. A later edit by a role
+that read outside text makes that element contaminated again. It never
+clears `private`. `--untrusted` on `relay memo`, `put`, `add`, `update` and
 `routine` marks what the operator writes as contaminated, for text pasted
 from somewhere untrusted.
 
@@ -1215,7 +1220,7 @@ first answer goes to the agent, and the others get
 `_relay/permission/settled`. The pane's methods (`_relay/items`,
 `_relay/resolve`, `_relay/trust`) are as before, for the conversation the
 request's `sessionId` names. The board (`_relay/cards`,
-`_relay/cards/op`) is relay's own and needs no conversation: each client
+`_relay/cards/op`, `_relay/cards/trust`) is relay's own and needs no conversation: each client
 that asks for it is sent, as `_relay/cards/changed`, every card that
 changed since what that client was last sent.
 
@@ -1298,6 +1303,15 @@ changes, relay sends it `_relay/cards/changed` `{"rev", "cards"}` with
 every card whose rev changed since what it last sent that client,
 archived cards included so the client can drop them. A change made by
 another process (a role's wake, the command line) arrives this way.
+`_relay/cards/trust` takes `{card, rev, sha256}` and does what `relay
+trust card <id>` does, for the card as the client was sent it: it answers
+`{"trusted": true, "card": <wire form, now clean>}`, or a JSON-RPC error
+with relay's refusal ("Nothing was trusted; look again." when the card
+changed since, or when `rev` or `sha256` is not the card's current one).
+It refuses an unknown parameter (`sessionId` aside), and, as
+`_relay/trust`, refuses unless relay acp was started with `--approvals`.
+The card's `rev` moves, so every subscribed client is sent
+`_relay/cards/changed` with the clean card.
 `_relay/cards/op` takes `{card, op, item, row, column, state, text,
 seen}` and answers `{"card": <wire form>, "changed": true|false}`, or a
 JSON-RPC error whose message is relay's refusal. It refuses a parameter
@@ -1311,7 +1325,10 @@ already made every text field safe: hidden characters shown as
 `\u{XXXX}`, and text whose labels are contaminated defanged, with
 `"outsider": true` beside it. A client renders what it gets and works
 nothing out for itself. `text` is the card's text form, for a client
-that does not know its kind.
+that does not know its kind. A card with contaminated text also has
+`"sha256"`, the digest of that text form, which is what
+`_relay/cards/trust` sends back with the card's `rev`; a clean card has
+no `sha256`.
 
 ```json
 {"id": 1840, "kind": "tracker", "status": "active", "complete": false,

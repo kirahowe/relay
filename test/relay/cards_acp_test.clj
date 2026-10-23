@@ -271,3 +271,72 @@
                       (fn [send!] (Thread/sleep 1500) (send! (workspace/result-line 50 {"cards" []})))))]
     (relay.dispatch/proxy! {:argv agent} {:in in :out out :extension extension :grace-ms 1000})
     (is (= (str (workspace/result-line 50 {"cards" []}) "\n") (.toString out "UTF-8")))))
+
+(defn- tainted-card! [sys]
+  (:seq (first (inbound/submit! sys {:type :card/add :actor "clerk" :labels ["contaminated"]
+                                     :args {:kind "checklist" :title "From the web" :items ["a"]}}))))
+
+(deftest an-unknown-trust-parameter-is-refused
+  (doseq [[bad params] [["iten" {"card" 1 "rev" 2 "sha256" (apply str (repeat 64 "a")) "iten" 1}]]]
+    (let [{:keys [command error]} (workspace/card-trust-command params)]
+      (is (nil? command))
+      (is (str/includes? (str error) (str "no parameter " bad)) error)))
+  (is (= {:kind "card" :ref "7" :version 9 :sha256 (apply str (repeat 64 "a")) :via "chat"}
+         (get-in (workspace/card-trust-command {"sessionId" "s" "card" 7 "rev" 9 "sha256" (apply str (repeat 64 "a"))})
+                 [:command :args])))
+  (is (= "operator" (get-in (workspace/card-trust-command {"card" 7 "rev" 9 "sha256" (apply str (repeat 64 "a"))})
+                            [:command :actor])))
+  (doseq [params [{"rev" 9 "sha256" "x"} {"card" 7 "sha256" (apply str (repeat 64 "a"))} {"card" 7 "rev" 9}
+                  {"card" 7 "rev" 9 "sha256" "nothex"}]]
+    (is (:error (workspace/card-trust-command params)) (pr-str params))))
+
+(deftest _relay-cards-trust-over-relay-acp
+  (doseq [approvals [false true]]
+    (with-relay
+      (fn [dir sys]
+        (let [id (tainted-card! sys)
+              c (client/start! (into [support/relay-bin "acp" "clerk"]
+                                     (concat (when approvals ["--approvals"]) ["--data" (:data-dir sys)]))
+                               {:dir dir})]
+          (try
+            (is (conversation-running? sys))
+            (let [[card] (get-in (client/request! c "_relay/cards" {}) ["result" "cards"])
+                  params {:card id :rev (get card "rev") :sha256 (get card "sha256")}]
+              (is (string? (get card "sha256")) (pr-str card))
+              (if-not approvals
+                (testing "without approvals it is refused and nothing is trusted"
+                  (let [r (client/request! c "_relay/cards/trust" params)]
+                    (is (= -32000 (get-in r ["error" "code"])) (pr-str r))
+                    (is (str/includes? (str (get-in r ["error" "message"])) "relay trust card"))
+                    (is (core/contaminated? (core/card-labels (core/card (inbound/current-state sys) id))))))
+                (do
+                  (testing "an unknown parameter is refused"
+                    (let [r (client/request! c "_relay/cards/trust" (assoc params :iten 1))]
+                      (is (= -32602 (get-in r ["error" "code"])) (pr-str r))
+                      (is (str/includes? (str (get-in r ["error" "message"])) "no parameter iten"))))
+                  (testing "a stale digest trusts nothing"
+                    (let [r (client/request! c "_relay/cards/trust" (assoc params :sha256 (apply str (repeat 64 "0"))))]
+                      (is (str/includes? (str (get-in r ["error" "message"])) "Nothing was trusted; look again.") (pr-str r))
+                      (is (core/contaminated? (core/card-labels (core/card (inbound/current-state sys) id))))))
+                  (testing "the operator's trust clears the card, is logged from the chat, and every client is told"
+                    (let [r (client/request! c "_relay/cards/trust" params)
+                          e (last (log/read-events (:data-dir sys)))]
+                      (is (true? (get-in r ["result" "trusted"])) (pr-str r))
+                      (is (not (contains? (get-in r ["result" "card"]) "sha256")))
+                      (is (= [false] (distinct (map #(get % "outsider") (get-in r ["result" "card" "items"])))))
+                      (is (= ["label/trusted" "operator" "chat"] [(:type e) (:actor e) (get-in e [:data :via])]))
+                      (is (not (core/contaminated? (core/card-labels (core/card (inbound/current-state sys) id)))))))
+                  (testing "a trust made elsewhere reaches a subscribed client as a changed card"
+                    (let [id2 (tainted-card! sys)
+                          v (core/trusted-version (inbound/current-state sys) "card" (str id2))]
+                      (inbound/submit! sys {:type :label/trust :actor "operator" :labels []
+                                            :args {:kind "card" :ref (str id2) :version (:version v)
+                                                   :sha256 (core/sha256 (:text v))}})
+                      (is (client/await! c #(and (= "_relay/cards/changed" (get % "method"))
+                                                 (some (fn [x] (and (= id2 (get x "id")) (not (contains? x "sha256"))
+                                                                    (> (get x "rev") (:version v))))
+                                                       (get-in % ["params" "cards"])))
+                                         10000)))))))
+            (client/close-input! c)
+            (is (= 0 (client/wait! c 20000)))
+            (finally (client/sever! c))))))))

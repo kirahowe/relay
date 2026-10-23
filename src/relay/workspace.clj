@@ -10,6 +10,7 @@
                      the first call subscribes the client to
                      _relay/cards/changed notifications
     _relay/cards/op  change a card, as the operator
+    _relay/cards/trust  trust a whole card, as `relay trust card <id>` does
 
   relay answers them itself, and agentloop never sees them: the board's in
   relay.hub, which knows what each client was sent, the rest in each
@@ -28,7 +29,8 @@
             [relay.acp :as acp]
             [relay.cards :as cards]
             [relay.core :as core]
-            [relay.json :as strict]))
+            [relay.json :as strict]
+            [relay.text :as text]))
 
 ;; --- what a conversation has learned
 
@@ -279,7 +281,13 @@
 ;; relay acp takes approvals: the pane is the operator's as the command
 ;; line is. A card change never wakes a role.
 
-(defn card-wire [c] (cards/wire c (core/card-labels c)))
+(defn card-wire
+  "A card as a client is sent it (relay.cards/wire). A card with
+  contaminated text also carries the \"sha256\" of its text form, which is
+  the digest a client sends back to trust it (_relay/cards/trust)."
+  [c]
+  (cond-> (cards/wire c (core/card-labels c))
+    (text/contaminated? (cards/text-labels c)) (assoc "sha256" (core/sha256 (cards/text-form c)))))
 
 (defn log-rev
   "The seq of the log's last event, which a client can compare revs with."
@@ -332,6 +340,29 @@
                  :args (into {:card card}
                              (keep (fn [k] (when (contains? params (name k)) [k (get params (name k))])))
                              cards/op-fields)}})))
+
+(defn card-trust-command
+  "What a _relay/cards/trust asks for, as the operator's :label/trust
+  command, or {:error why}. The params are strict: a client that sends
+  anything else is not told it trusted a card."
+  [params]
+  (let [{:strs [card rev sha256]} params
+        unknown (sort (remove #{"card" "rev" "sha256" "sessionId"} (keys params)))]
+    (cond
+      (seq unknown)
+      {:error (str "_relay/cards/trust has no parameter " (str/join ", " unknown) ". It takes card, rev, sha256.")}
+      (not (integer? card)) {:error "_relay/cards/trust needs a card, by number."}
+      (not (integer? rev)) {:error "_relay/cards/trust needs the rev you were shown, a number."}
+      (not (and (string? sha256) (re-matches #"[0-9a-f]{64}" sha256)))
+      {:error "_relay/cards/trust needs the sha256 you were shown."}
+      :else
+      {:command {:type :label/trust :actor core/operator :labels []
+                 :args {:kind "card" :ref (str card) :version rev :sha256 sha256 :via "chat"}}})))
+
+(defn card-trust-answer
+  "The _relay/cards/trust answer once the card is trusted."
+  [state card-id]
+  {"trusted" true "card" (card-wire (core/card state card-id))})
 
 (defn card-op-answer
   "The _relay/cards/op answer once the op is decided: the card as it is

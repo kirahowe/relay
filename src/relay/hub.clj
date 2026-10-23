@@ -263,7 +263,19 @@
       (refuse h rid -32602 error)
       (submit h command {:kind :card-op :rid rid :card (get-in command [:args :card])} :with-state true))))
 
-(defn- card-op-result [h {:keys [rid card]} {:keys [ok changed rejection message] :as result}]
+(defn- card-trust [h rid msg]
+  (let [cid (:conn (record h rid))
+        {:keys [command error]} (workspace/card-trust-command (params-of msg))]
+    (cond
+      ;; As _relay/trust: only a client that may approve vouches.
+      (not (get-in h [:conns cid :approvals]))
+      (refuse h rid -32000 (str "This conversation does not take trust from its client. Run relay trust card "
+                                (get (params-of msg) "card") " in a terminal."))
+      error (refuse h rid -32602 error)
+      :else (submit h command {:kind :card-op :trust true :rid rid :card (parse-long (get-in command [:args :ref]))}
+                    :with-state true))))
+
+(defn- card-op-result [h {:keys [rid card trust]} {:keys [ok changed rejection message] :as result}]
   (let [{:keys [conn]} (record h rid)
         state (or (:state result) (:state h))]
     (cond
@@ -276,7 +288,9 @@
         (if (get-in h [:conns conn :board])
           (assoc-in h [:conns conn :board :cards card] (:rev (core/card state card)))
           h)
-        (answer h rid (workspace/card-op-answer state card changed))
+        (answer h rid (if trust
+                        (workspace/card-trust-answer state card)
+                        (workspace/card-op-answer state card changed)))
         (board-changes h)))))
 
 ;; --- the replay buffer
@@ -807,6 +821,7 @@
       "_relay/conversations/end" (end-request h rid msg)
       "_relay/cards" (cards-request h rid msg)
       "_relay/cards/op" (card-op h rid msg)
+      "_relay/cards/trust" (card-trust h rid msg)
       (cond
         (workspace/methods method) (forward h rid msg)
         (str/starts-with? method "_relay/") (refuse h rid -32601 (str "relay has no method " method "."))

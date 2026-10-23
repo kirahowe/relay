@@ -423,7 +423,7 @@ enum ToolClass { read | write | edit | egress | act }
 enum Label { private | contaminated }
 enum HoldStatus { open | allowed | denied }
 enum HoldVerdict { allow | deny }
-enum TrustKind { memo_text | fact_text | doc_text | note_text | routine_text | role_text | journal_text }
+enum TrustKind { memo_text | fact_text | doc_text | note_text | routine_text | role_text | journal_text | card_text }
 enum FactChange { added | superseded | corrected | retracted }
 enum ReportStatus { submitted | verified | failed }
 enum FlagKind {
@@ -1702,7 +1702,10 @@ rule TrustText {
         -- The operator has read the text and vouches for it: a memo, a
         -- fact's current version, a doc's latest version and its path,
         -- a note, a routine, a role's id, title and instructions, or a
-        -- journal entry. relay trust shows it on the terminal and asks
+        -- journal entry, or a whole card (every text element, at the rev
+        -- the operator saw: a card changed since is refused, and a chat
+        -- client does it with _relay/cards/trust, only with approvals,
+        -- which moves the card's rev). relay trust shows it on the terminal and asks
         -- for a fresh code typed back there. It clears contaminated
         -- from what that text says now and never clears private.
         -- Copies already made keep their labels.
