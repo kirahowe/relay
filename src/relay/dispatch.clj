@@ -475,7 +475,7 @@
 (def terminal-signals
   "SIGINT and SIGHUP, ignored. The terminal sends them to relay as well as
   to the program relay runs on it, and relay has to outlive that program:
-  `relay acp` to record that the conversation ended, `relay chat` to wait
+  `relay acp` to record that the conversation ended, the dashboard to wait
   for its client. The program decides what they mean."
   {"INT" (fn []) "HUP" (fn [])})
 
@@ -1002,8 +1002,8 @@
 
 ;; --- a conversation on this terminal
 
-(defn chat-argv
-  "The command `relay chat` runs: the chat client, told which role to open
+(defn client-argv
+  "The command bare `relay` runs: the client, told which role to open
   first when one was named, given relay's own `acp` command for every
   role as its agent, with the data directory when one was named. The
   client is the operator's terminal, so it may answer permission
@@ -1011,8 +1011,8 @@
   [client relay role data]
   (vec (concat client (when role ["--open" role]) ["--" relay "acp" "--approvals"] (when data ["--data" data]))))
 
-(defn chat!
-  "Talks with the roles on this terminal by running the chat client (the
+(defn dashboard!
+  "Opens the dashboard on this terminal by running the client (the
   :client setting, relay-tui by default) with `relay acp` as its
   agent, opening `role-id` first when given. relay acp opens and ends the
   conversations, or relay serve keeps them; this only waits for the
@@ -1027,7 +1027,7 @@
         1)
       (with-signals terminal-signals
         #(:exit (apply p/shell {:continue true}
-                       (chat-argv (cons found args) (relay-bin) role-id data)))))))
+                       (client-argv (cons found args) (relay-bin) role-id data)))))))
 
 ;; --- the morning brief (relay.brief)
 

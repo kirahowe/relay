@@ -21,7 +21,7 @@
 
   Trust needs the same presence of the operator as an answer to a
   permission request: it is taken only when relay acp was started with
-  --approvals, which relay chat does because its client is the operator's
+  --approvals, which the dashboard does because its client is the operator's
   terminal. Without it the pane is told to show the command instead. A
   trust names the version and the digest of the text the pane showed, so
   a doc that changed since is not trusted."

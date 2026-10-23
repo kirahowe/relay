@@ -433,25 +433,25 @@
 
 (def gen-arg (gen/such-that #(not= "--" %) gen/string-alphanumeric))
 
-(def chat-gives-the-client-relay-acp-as-its-agent
+(def the-dashboard-gives-the-client-relay-acp-as-its-agent
   (prop/for-all [client (gen/not-empty (gen/vector gen-arg 1 4))
                  relay gen-arg
                  role (gen/one-of [(gen/return nil) gen-arg])
                  data (gen/one-of [(gen/return nil) gen-arg])]
-    (let [argv (dispatch/chat-argv client relay role data)
+    (let [argv (dispatch/client-argv client relay role data)
           [before [_ & agent]] (split-with #(not= "--" %) argv)]
       ;; The role is the client's to open first; relay acp serves every role.
       (and (= (concat client (when role ["--open" role])) before)
            (= (concat [relay "acp" "--approvals"] (when data ["--data" data])) agent)))))
 
-(deftest chat-runs-the-client-with-relay-acp-after-the-double-dash
-  (let [result (tc/quick-check 300 chat-gives-the-client-relay-acp-as-its-agent)]
+(deftest the-dashboard-runs-the-client-with-relay-acp-after-the-double-dash
+  (let [result (tc/quick-check 300 the-dashboard-gives-the-client-relay-acp-as-its-agent)]
     (is (:pass? result) (pr-str (select-keys result [:seed :shrunk :fail])))))
 
-(deftest chat-without-its-client-says-so-and-opens-no-conversation
+(deftest the-dashboard-without-its-client-says-so-and-opens-no-conversation
   (write-config! {:client [(str *dir* "/no-such-client")]})
   (let [err (java.io.StringWriter.)
-        exit (binding [*err* err] (dispatch/chat! (system) "clerk" {}))]
+        exit (binding [*err* err] (dispatch/dashboard! (system) "clerk" {}))]
     (is (= 1 exit))
     (is (str/includes? (str err) "no-such-client, and it is not installed") (str err))
     (is (empty? (chat-wakes)))))
@@ -465,26 +465,20 @@
     (doseq [bad [[] "relay-tui" [""] [:relay-tui] ["relay-tui" nil] {}]]
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #":client" (cfg bad)) (pr-str bad)))))
 
-(deftest chat-client-is-read-as-the-old-name-of-client
-  (let [cfg (fn [m] (config/resolve-config (merge {:timezone "UTC" :default-harness :a :notify {:kind :none}
-                                                   :harnesses {:a {:kind :script}}}
-                                                  m)))]
-    (testing "alone, :chat-client is the client"
-      (is (= ["old-tui" "--x"] (:client (cfg {:chat-client ["old-tui" "--x"]}))))
-      (is (not (contains? (cfg {:chat-client ["old-tui"]}) :chat-client)) "and the old key is not kept"))
-    (testing ":client wins when both are set"
-      (is (= ["new-tui"] (:client (cfg {:chat-client ["old-tui"] :client ["new-tui"]})))))
-    (testing "a bad :client is not rescued by a good :chat-client"
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":client" (cfg {:chat-client ["old-tui"] :client []}))))
-    (testing "a bad :chat-client is reported under the name :client"
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":client" (cfg {:chat-client []}))))))
+(deftest chat-client-is-not-a-setting
+  ;; acp-tui's old name for the setting is gone. A relay.edn that still
+  ;; has it must not stop the tick: the key is ignored, as any unknown
+  ;; top-level key is, and the client is the default.
+  (let [cfg (config/resolve-config {:timezone "UTC" :default-harness :a :notify {:kind :none}
+                                    :harnesses {:a {:kind :script}} :chat-client ["old-tui"]})]
+    (is (= ["relay-tui"] (:client cfg)))))
 
 (defn- recording-client!
   "A client that writes its arguments, one per line, to argv.txt and exits 0."
   []
   (script! (str *dir* "/rec-client") (str "printf '%s\\n' \"$@\" > \"" *dir* "/argv.txt\"")))
 
-(deftest bare-relay-and-relay-chat-both-open-the-dashboard
+(deftest bare-relay-opens-the-dashboard
   (let [data (str *dir* "/data")
         argv #(vec (str/split-lines (slurp (str *dir* "/argv.txt"))))
         run! (fn [args] (fs/delete-if-exists (str *dir* "/argv.txt")) (cli/execute args))]
@@ -492,14 +486,17 @@
     (testing "relay --data <dir>, with no subcommand"
       (is (= 0 (:exit (run! ["--data" data]))))
       (is (= ["--" (dispatch/relay-bin) "acp" "--approvals" "--data" (str (fs/absolutize data))] (argv))))
-    (testing "relay chat, the alias, gives the same and may name a role"
-      (is (= 0 (:exit (run! ["chat" "--data" data]))))
-      (is (= ["--" (dispatch/relay-bin) "acp" "--approvals" "--data" (str (fs/absolutize data))] (argv)))
-      (is (= 0 (:exit (run! ["--data" data "chat" "clerk"]))))
+    (testing "--open puts a role in focus, before or after --data"
+      (is (= 0 (:exit (run! ["--data" data "--open" "clerk"]))))
+      (is (= ["--open" "clerk" "--"] (take 3 (argv))))
+      (is (= 0 (:exit (run! ["--open" "clerk" "--data" data]))))
       (is (= ["--open" "clerk" "--"] (take 3 (argv)))))
-    (testing "the dashboard is what the scenario runner sees for a bare relay"
-      (is (= "chat" (cli/command-of [])))
-      (is (= "chat" (cli/command-of ["--data" data]))))))
+    (testing "relay chat is gone: it runs no client"
+      (is (not= 0 (:exit (run! ["chat" "--data" data]))))
+      (is (not (fs/exists? (str *dir* "/argv.txt")))))
+    (testing "the dashboard's command is no word a scenario could name"
+      (is (= :dashboard (cli/command-of [])))
+      (is (= :dashboard (cli/command-of ["--data" data "--open" "clerk"]))))))
 
 (deftest help-prints-the-usage-and-opens-nothing
   (let [data (str *dir* "/data")]
@@ -509,7 +506,7 @@
         (is (= 0 (:exit r)) (pr-str args))
         (is (= (str/split-lines cli/usage) (:out r)) (pr-str args))
         (is (not (fs/exists? (str *dir* "/argv.txt"))) (str "no client ran for " (pr-str args)))))
-    (is (some #(str/includes? % "relay chat [<role>]") (str/split-lines cli/usage)) "chat stays listed as an alias")
+    (is (not-any? #(str/includes? % "relay chat") (str/split-lines cli/usage)) "chat is not listed")
     (is (nil? (cli/command-of ["--help"])))))
 
 (deftest a-conversation-killed-earlier-is-reaped-before-the-next-one-starts

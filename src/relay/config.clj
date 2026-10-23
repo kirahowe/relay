@@ -643,19 +643,10 @@
   (update (check-serve config) :tools update-vals
           (fn [t] (update t :labels #(vec (sort (distinct %)))))))
 
-(defn- rename-client
-  "The settings with :chat-client, the old name of :client, read as :client
-  when :client is absent. :client wins when both are set. The tick reads
-  the same relay.edn, so a file written before the rename keeps working."
-  [settings]
-  (cond-> (dissoc settings :chat-client)
-    (and (contains? settings :chat-client) (not (contains? settings :client)))
-    (assoc :client (:chat-client settings))))
-
 (defn resolve-config
   "Defaults overlaid with the operator's settings."
   [settings]
-  (validate (merge defaults (dissoc (rename-client settings) :format))))
+  (validate (merge defaults (dissoc settings :format))))
 
 (defn load-config [data-dir]
   (let [file (fs/path data-dir "relay.edn")]

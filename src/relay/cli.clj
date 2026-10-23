@@ -50,10 +50,10 @@ Every command needs the data directory, from --data <dir> or from the file
   relay unroutine <role> <name>       remove a routine
   relay retry <role>                  requeue a role's dead-lettered memos
   relay wake <role> [--note <text>]   run a role now, ignoring retry delays
-  relay                               open the dashboard in this terminal, through
+  relay [--open <role>]               open the dashboard in this terminal, through
                                       the client (relay-tui unless relay.edn
-                                      names another with :client)
-  relay chat [<role>]                 the same, an alias, with <role> in focus
+                                      names another with :client), with <role>
+                                      in focus when given
   relay help                          print this (also relay --help)
   relay acp [<role>] [--trace <file>] [--approvals]
                                       talk with the roles from an ACP client, which
@@ -507,7 +507,7 @@ and --instructions marks the id public too.")
             :version :long :wake :long :role :string :trace :string :untrusted :boolean :public :boolean :approvals :boolean
             :topic :string :from :string :to :string :why :string :text :string :end :boolean
             :pause-file :string :socket :string :run-dir :string :since :string :until :string :out :string :agentloop :string
-            :client-id :string :url :string
+            :client-id :string :url :string :open :string
             :item [:string] :row [:string] :column [:string] :state :string :seen :long :archived :boolean}})
 
 (defn- command
@@ -557,8 +557,7 @@ and --instructions marks the id public too.")
                    woke (dispatch/wake! sys r {:note (:note opts) :dispatched (:dispatched opts)
                                                :public (:public opts)})]
                {:exit (if (#{:ran :idle} (:result woke)) 0 1) :out (render/wake-result woke)})
-      "chat" (let [[r] more]
-               (result (dispatch/chat! sys r {:data (when (:data opts) (str (fs/absolutize dir)))})))
+      :dashboard (result (dispatch/dashboard! sys (:open opts) {:data (when (:data opts) (str (fs/absolutize dir)))}))
       "acp" (let [[r] more]
               (result (serve/acp! sys r {:trace (:trace opts) :approvals (:approvals opts) :socket (:socket opts)
                                          :run-dir (:run-dir opts)})))
@@ -814,14 +813,15 @@ and --instructions marks the id public too.")
   ;; babashka.cli stops at the first argument, so parse in two passes.
   (let [{global :opts rest-args :args} (cli/parse-args args spec)
         {[cmd & more] :args local-opts :opts} (cli/parse-args rest-args spec)]
-    ;; Bare `relay` opens the dashboard, as `relay chat` does (relay#75). No
-    ;; command and a help flag stays nil, which `execute` answers with the
-    ;; usage; so does `relay help`. command-of reports "chat" for a bare
-    ;; relay, so the scenario runner refuses it as it refuses chat.
+    ;; Bare `relay` opens the dashboard (relay#75). No command and a help
+    ;; flag stays nil, which `execute` answers with the usage; so does
+    ;; `relay help`. The dashboard's command is a keyword, so no word typed
+    ;; names it, and the scenario runner, which allows only named
+    ;; commands, refuses it.
     (let [opts (merge global local-opts)]
       {:cmd (cond cmd cmd
                   (or (:help opts) (:h opts)) nil
-                  :else "chat")
+                  :else :dashboard)
        :more more :opts opts})))
 
 (defn parsed-options

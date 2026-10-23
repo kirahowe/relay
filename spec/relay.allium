@@ -1684,7 +1684,7 @@ rule TrustFromThePane {
         -- relay acp's _relay/trust, with the version and digest of the
         -- text it listed, so a doc changed since is not trusted. It is
         -- taken only when relay acp was started with --approvals, as
-        -- the dashboard (relay, or relay chat) starts it for the operator's terminal: the same
+        -- the dashboard (bare relay) starts it for the operator's terminal: the same
         -- presence an answer to a permission request needs. Without it
         -- the pane shows the relay trust doc command instead. The log
         -- records that the trust came from the chat.
@@ -2162,7 +2162,7 @@ rule OpenConversation {
         -- earlier ones, so no conversation carries on another's history
         -- or labels.
         -- A conversation runs over ACP, so any ACP client can hold one;
-        -- the dashboard (relay, or relay chat) is one such client, on the operator's terminal.
+        -- the dashboard (bare relay) is one such client, on the operator's terminal.
         -- Its system prompt says when the conversation started, with the
         -- weekday, in the operator's time zone (a public role's too: the
         -- zone is not private), and points the role at the clock tool for
@@ -2473,7 +2473,7 @@ rule TellTheOperatorAPermissionWaits {
     ensures: Notification.created(
         kind: permission_waiting,
         title: wake.role.id + " is waiting for you in a conversation",
-        body: waiting_note(wake.role),   -- black box: open relay chat to answer it
+        body: waiting_note(wake.role),   -- black box: open the dashboard to answer it
         about: wake.role,
         created_at: now,
         delivery: pending

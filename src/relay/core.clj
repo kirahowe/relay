@@ -2318,7 +2318,7 @@
     (when-not (and (= version (:version v)) (= digest (sha256 (:text v))))
       (reject! :conflict (str "The " kind " " ref " changed since you read it. Nothing was trusted; look again.")))
     (emit tx "label/trusted" (cond-> {:kind kind :ref (str ref) :version version}
-                               ;; Trusted from the workspace pane in relay chat.
+                               ;; Trusted from the workspace pane in the dashboard.
                                (= "chat" via) (assoc :via "chat")))))
 
 ;; permission requests in a conversation
@@ -2378,7 +2378,7 @@
     (if (and chat (= :running status) open?)
       (notify tx "permission-waiting" (str role " is waiting for you in a conversation")
               (str role " asked to use a tool in its conversation, and no client that can answer is attached."
-                   " Open relay chat " role " to answer it. The conversation waits until you do.")
+                   " Open relay --open " role " to answer it. The conversation waits until you do.")
               :role role :wake wake :labels (id-labels state role))
       tx)))
 

@@ -172,7 +172,7 @@
 
 (deftest a-step-may-only-run-commands-that-stay-in-the-data-directory
   (let [with-run (fn [args] {:steps [{:run args}] :assert [[:has :memo {}]]})]
-    (doseq [args [["export" "/live/new"] ["acp" "hub" "--trace" "/live/file"] ["init"] ["chat" "hub"]
+    (doseq [args [["export" "/live/new"] ["acp" "hub" "--trace" "/live/file"] ["init"] ["--open" "hub"]
                   ["tool" "--role" "hub" "memo_send"] ["--untrusted" "memo" "hub"] ["nonsense"]]]
       (is (some #(or (str/includes? % "must start with one of the commands")
                      (str/includes? % "path option"))

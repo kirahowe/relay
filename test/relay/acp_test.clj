@@ -647,7 +647,7 @@
     (with-world {} (fn [body] {:text (str "You said: " (str/includes? (pr-str body) "hello relay"))})
       (fn []
         (set-client! [(fake-tui!)])
-        (let [{:keys [exit out err]} @(p/process [relay-bin "chat" "clerk" "--data" (data)]
+        (let [{:keys [exit out err]} @(p/process [relay-bin "--open" "clerk" "--data" (data)]
                                                  {:in "" :out :string :err :string :dir *dir*})
               argv (json/parse-string (slurp (str *dir* "/argv.json")))
               seen (json/parse-string (slurp (str *dir* "/seen.json")) true)]
@@ -688,7 +688,7 @@
       (fn []
         ;; The sibling build, never the relay-tui on PATH (support/relay-tui-bin).
         (set-client! [support/relay-tui-bin])
-        (let [proc (p/process ["script" "-q" "/dev/null" relay-bin "chat" "clerk" "--data" (data)]
+        (let [proc (p/process ["script" "-q" "/dev/null" relay-bin "--open" "clerk" "--data" (data)]
                               {:out :string :err :string :dir *dir*})
               keys! (fn [s] (doto ^java.io.OutputStream (:in proc) (.write (.getBytes ^String s)) (.flush)))
               conversation #(first (filter :chat (vals (:wakes (state)))))]

@@ -433,7 +433,7 @@
                             {:send "\u0004"}]}
               r (p/shell {:out :string :err :string :continue true :dir *dir*}
                          "/usr/bin/python3" drive-py transcript (json/generate-string plan) "--"
-                         relay-bin "chat" "clerk" "--data" (data))
+                         relay-bin "--open" "clerk" "--data" (data))
               result (json/parse-string (last (str/split-lines (:out r))) true)
               [doc] (shown-docs)]
           (is (every? true? (:waits result)) (str (pr-str result) "\n" (subs (slurp transcript) 0 (min 4000 (count (slurp transcript))))))

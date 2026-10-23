@@ -1015,8 +1015,8 @@ model's context window: agentloop asks the provider for it, and an ACP
 client shows how full the context is when the provider gives one.
 Anthropic's API does; OpenAI's does not.
 
-Open the dashboard with `relay` in this terminal (`relay chat <role>` puts
-a role in focus), or from an ACP
+Open the dashboard with `relay` in this terminal (`relay --open <role>`
+puts a role in focus), or from an ACP
 client with `relay acp <role>`. `relay status` shows roles, open work,
 harnesses, this week's spend and recent wakes, and `relay help` lists
 every command.
@@ -1122,8 +1122,8 @@ records each day's brief, sent or empty, as a `brief/composed` event.
 
 ### The dashboard
 
-`relay` opens the dashboard in this terminal, and `relay chat [<role>]` does
-the same with `<role>` in focus; `chat` is an alias that stays. `relay help`
+`relay` opens the dashboard in this terminal, and `relay --open <role>` does
+the same with `<role>` in focus. `relay help`
 and `relay --help` print the usage. The dashboard needs [relay-tui](https://github.com/kirahowe/relay-tui),
 a terminal client for ACP agents. Build it with `make -C ../relay-tui build`
 and put `bin/relay-tui` on your PATH. relay runs it as
