@@ -1,0 +1,11 @@
+{:id 77
+ :title "Move around the dashboard with Esc to move and type to talk"
+ :status :inbox
+ :type :feature
+ :priority :p2
+ :created "2026-10-23"
+ :updated "2026-10-23"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "77-move-around-the-dashboard-with-esc-to-move-and-type-to-talk.md"}
