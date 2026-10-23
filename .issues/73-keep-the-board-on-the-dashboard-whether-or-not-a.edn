@@ -1,0 +1,11 @@
+{:id 73
+ :title "Keep the board on the dashboard whether or not a conversation is open"
+ :status :in-progress
+ :type :bug
+ :priority :p1
+ :created "2026-10-23"
+ :updated "2026-10-23"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "73-keep-the-board-on-the-dashboard-whether-or-not-a.md"}

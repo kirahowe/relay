@@ -28,8 +28,16 @@
 | [53](53-let-the-personal-agent-move-and-rename-my-files.md) | Let the personal agent move and rename my files | feature | P2 |
 | [57](57-make-hidden-characters-visible-in-card-text-that-roles-and.md) | Make hidden characters visible in card text that roles and resolve get | bug | P2 |
 | [61](61-fork-acp-go-sdk-and-decode-with-encoding-json-v2.md) | Fork acp-go-sdk and decode with encoding/json/v2 | feature | P2 |
+| [74](74-reopen-the-dashboard-looking-as-it-was-left.md) | Reopen the dashboard looking as it was left | feature | P2 |
+| [75](75-open-the-dashboard-with-bare-relay-instead-of-relay-chat.md) | Open the dashboard with bare relay instead of relay chat | feature | P2 |
 | [36](36-clean-up-after-an-interrupted-deploy-and-leave-no-check.md) | Clean up after an interrupted deploy, and leave no check dirs in TMPDIR | bug | P3 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
+
+### In progress
+
+| ID | Title | Type | Priority |
+| --- | --- | --- | --- |
+| [73](73-keep-the-board-on-the-dashboard-whether-or-not-a.md) | Keep the board on the dashboard whether or not a conversation is open | bug | P1 |
 
 ### Review
 

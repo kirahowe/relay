@@ -1,0 +1,11 @@
+{:id 75
+ :title "Open the dashboard with bare relay instead of relay chat"
+ :status :ready
+ :type :feature
+ :priority :p2
+ :created "2026-10-23"
+ :updated "2026-10-23"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "75-open-the-dashboard-with-bare-relay-instead-of-relay-chat.md"}
