@@ -1,0 +1,11 @@
+{:id 76
+ :title "Fix the s5-acp-disconnect and s5-acp-wrong-request-id pentest scenarios"
+ :status :inbox
+ :type :bug
+ :priority :p2
+ :created "2026-10-23"
+ :updated "2026-10-23"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "76-fix-the-s5-acp-disconnect-and-s5-acp-wrong-request-id.md"}
