@@ -114,3 +114,28 @@ Kira's answers (2026-10-23):
 relay-tui now pass it `--state-dir` under their temp directory, so no
 test writes the operator's `~/.local/state/relay-tui`. Phase 3's agent
 found the gap and left the relay change to the main session.
+
+2026-10-23, Codex round 1 over phase 3 (relay-tui sxtryuoz..ovnlqpmw):
+three in-scope defects in the restore, each fixed in its own relay-tui
+commit with a regression test that failed before the fix.
+
+- A letter the input box takes for itself did not count as a key, so
+  typing while the agent was slow to start left the saved pane and card
+  pending; the roster and board then gave the pane the keys and the next
+  `x` ticked a checklist item. The shell now sends `core.KeyPressed`
+  ahead of every key in both modes, and the restore counts it (relay-tui
+  pvourwxz).
+- A draft typed before the restore came back replaced the waiting one in
+  the next save, so closing in that window lost the saved text and
+  pastes silently. The save now merges them, saved draft ahead, as the
+  restore does. Judgment call: the restore used to drop a saved draft
+  with pastes when pastes had been made meanwhile (numbers could clash).
+  It now renumbers the saved pastes to follow the new ones, placeholders
+  with them and trust unchanged, and the save does the same, so nothing
+  is dropped for that reason any more. A property test checks that every
+  paste of both drafts goes out as it would have and no number repeats
+  (relay-tui konpyrwm).
+- The start (`RestoreSingle`, used before the client knows the agent is
+  the hub) held the layout only when the pane had the keys, so a view of
+  just a focused role was dropped before `HubConnected`. It now holds the
+  layout while the view has a hub part (relay-tui xzmzuvky).

@@ -420,7 +420,9 @@
                             {:wait "Venues near the hall" :timeout 60}
                             {:wait "untrusted" :timeout 10}
                             {:sleep 1}
-                            {:send "\u0018"}
+                            {:send "\u001b"}
+                            {:sleep 0.5}
+                            {:send "l"}
                             {:sleep 1}
                             {:send "t"}
                             {:sleep 1.5}
