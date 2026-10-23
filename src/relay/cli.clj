@@ -50,10 +50,11 @@ Every command needs the data directory, from --data <dir> or from the file
   relay unroutine <role> <name>       remove a routine
   relay retry <role>                  requeue a role's dead-lettered memos
   relay wake <role> [--note <text>]   run a role now, ignoring retry delays
-  relay chat [<role>]                 talk with the roles in this terminal, through
-                                      the chat client (acp-tui unless relay.edn
-                                      names another with :chat-client), with
-                                      <role> in focus
+  relay                               open the dashboard in this terminal, through
+                                      the client (relay-tui unless relay.edn
+                                      names another with :client)
+  relay chat [<role>]                 the same, an alias, with <role> in focus
+  relay help                          print this (also relay --help)
   relay acp [<role>] [--trace <file>] [--approvals]
                                       talk with the roles from an ACP client, which
                                       runs this as its agent command: through
@@ -813,7 +814,15 @@ and --instructions marks the id public too.")
   ;; babashka.cli stops at the first argument, so parse in two passes.
   (let [{global :opts rest-args :args} (cli/parse-args args spec)
         {[cmd & more] :args local-opts :opts} (cli/parse-args rest-args spec)]
-    {:cmd cmd :more more :opts (merge global local-opts)}))
+    ;; Bare `relay` opens the dashboard, as `relay chat` does (relay#75). No
+    ;; command and a help flag stays nil, which `execute` answers with the
+    ;; usage; so does `relay help`. command-of reports "chat" for a bare
+    ;; relay, so the scenario runner refuses it as it refuses chat.
+    (let [opts (merge global local-opts)]
+      {:cmd (cond cmd cmd
+                  (or (:help opts) (:h opts)) nil
+                  :else "chat")
+       :more more :opts opts})))
 
 (defn parsed-options
   "The options relay would read from these arguments, as a map. Whatever

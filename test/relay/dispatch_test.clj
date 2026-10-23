@@ -479,6 +479,39 @@
     (testing "a bad :chat-client is reported under the name :client"
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #":client" (cfg {:chat-client []}))))))
 
+(defn- recording-client!
+  "A client that writes its arguments, one per line, to argv.txt and exits 0."
+  []
+  (script! (str *dir* "/rec-client") (str "printf '%s\\n' \"$@\" > \"" *dir* "/argv.txt\"")))
+
+(deftest bare-relay-and-relay-chat-both-open-the-dashboard
+  (let [data (str *dir* "/data")
+        argv #(vec (str/split-lines (slurp (str *dir* "/argv.txt"))))
+        run! (fn [args] (fs/delete-if-exists (str *dir* "/argv.txt")) (cli/execute args))]
+    (write-config! {:client [(recording-client!)]})
+    (testing "relay --data <dir>, with no subcommand"
+      (is (= 0 (:exit (run! ["--data" data]))))
+      (is (= ["--" (dispatch/relay-bin) "acp" "--approvals" "--data" (str (fs/absolutize data))] (argv))))
+    (testing "relay chat, the alias, gives the same and may name a role"
+      (is (= 0 (:exit (run! ["chat" "--data" data]))))
+      (is (= ["--" (dispatch/relay-bin) "acp" "--approvals" "--data" (str (fs/absolutize data))] (argv)))
+      (is (= 0 (:exit (run! ["--data" data "chat" "clerk"]))))
+      (is (= ["--open" "clerk" "--"] (take 3 (argv)))))
+    (testing "the dashboard is what the scenario runner sees for a bare relay"
+      (is (= "chat" (cli/command-of [])))
+      (is (= "chat" (cli/command-of ["--data" data]))))))
+
+(deftest help-prints-the-usage-and-opens-nothing
+  (let [data (str *dir* "/data")]
+    (write-config! {:client [(recording-client!)]})
+    (doseq [args [["help"] ["--help"] ["-h"] ["--data" data "--help"] ["help" "--data" data]]]
+      (let [r (cli/execute args)]
+        (is (= 0 (:exit r)) (pr-str args))
+        (is (= (str/split-lines cli/usage) (:out r)) (pr-str args))
+        (is (not (fs/exists? (str *dir* "/argv.txt"))) (str "no client ran for " (pr-str args)))))
+    (is (some #(str/includes? % "relay chat [<role>]") (str/split-lines cli/usage)) "chat stays listed as an alias")
+    (is (nil? (cli/command-of ["--help"])))))
+
 (deftest a-conversation-killed-earlier-is-reaped-before-the-next-one-starts
   (let [dead (p/process ["true"])
         _ @dead]

@@ -1680,11 +1680,11 @@ rule TrustFromThePane {
     ensures: TrustRequested(caller: operator, kind: doc_text, ref: path)
 
     @guidance
-        -- The workspace pane in relay chat trusts a shown doc through
+        -- The workspace pane in the dashboard (relay) trusts a shown doc through
         -- relay acp's _relay/trust, with the version and digest of the
         -- text it listed, so a doc changed since is not trusted. It is
         -- taken only when relay acp was started with --approvals, as
-        -- relay chat starts it for the operator's terminal: the same
+        -- the dashboard (relay, or relay chat) starts it for the operator's terminal: the same
         -- presence an answer to a permission request needs. Without it
         -- the pane shows the relay trust doc command instead. The log
         -- records that the trust came from the chat.
@@ -2162,7 +2162,7 @@ rule OpenConversation {
         -- earlier ones, so no conversation carries on another's history
         -- or labels.
         -- A conversation runs over ACP, so any ACP client can hold one;
-        -- relay chat is one such client, on the operator's terminal.
+        -- the dashboard (relay, or relay chat) is one such client, on the operator's terminal.
         -- Its system prompt says when the conversation started, with the
         -- weekday, in the operator's time zone (a public role's too: the
         -- zone is not private), and points the role at the clock tool for
@@ -2453,7 +2453,7 @@ rule AskTheClient {
         -- In a conversation agentloop asks its ACP client about a held
         -- call. Its client is relay's hub (ConversationService), which
         -- sends the request to every attached client started with
-        -- --approvals, as relay chat starts it for the operator's
+        -- --approvals, as the dashboard starts it for the operator's
         -- terminal, each under an id of its own. The first answer goes
         -- to the agent, and only if it picks an option the agent offered,
         -- or cancels; anything else, and a request still open when the
@@ -4121,7 +4121,7 @@ surface ConversationBoundary {
         -- A display block's own text reaches the client inert (hidden
         -- characters escaped, links defanged, fenced), made from the
         -- display under _meta, which a capable client shows apart.
-        -- relay, agentloop and acp-tui read every line by one strict
+        -- relay, agentloop and relay-tui read every line by one strict
         -- JSON rule: one object in valid UTF-8, no byte order mark,
         -- only whitespace after it, no member name twice at any depth,
         -- no unpaired surrogate, nesting at most 128, number literals at

@@ -19,3 +19,29 @@ working.
 - README, `resources/AGENTS.md` and `spec/relay.allium` say `relay`.
 
 ## Log
+
+- 2026-10-23, rename: acp-tui is relay-tui everywhere live in relay (src,
+  test, pentest, scripts, bb.edn, docs, spec). Old `.issues/` records keep
+  the old name. `src/relay/staging.clj` guards both `~/code/projects/relay-tui`
+  and `~/code/projects/acp-tui` as live checkouts, because the old one stays
+  on disk until the main session moves it.
+- Config: `:client` (default `["relay-tui"]`). `:chat-client` is read as its
+  old name only when `:client` is absent, in `config/resolve-config`, and is
+  dropped from the resolved config. Reason: the tick reads the same live
+  relay.edn. Validation messages name `:client`, also when the bad value came
+  from `:chat-client`, so there is one name to fix. A present-but-bad
+  `:client` is not rescued by a good `:chat-client`.
+- Bare `relay` printed the usage (exit 0) before; nothing relied on it beyond
+  `relay help`, `-h` and `--help`, which still print it. The no-command case
+  now maps to `chat` in `cli/parse-line` unless a help flag is given. Judgment:
+  doing it in the parser makes `command-of` say "chat" for a bare relay, so
+  the scenario runner refuses it like `relay chat`. A bare `relay` with no
+  data directory fails with the usual "Which data directory?" message rather
+  than the usage.
+- `relay <role>` is not added, as the issue says; `relay clerk` still prints
+  the usage as an unknown command.
+- `resources/AGENTS.md` never mentioned `relay chat`, so it has no change.
+  The README, `spec/relay.allium` comments, the `relay` usage and the
+  "no-approvals" hint now say the dashboard / `relay`. The notification text
+  "Open relay chat <role>" is kept: the alias stays and it names the role.
+- `:via "chat"` on trust events is log data, not a command name, so it stays.
