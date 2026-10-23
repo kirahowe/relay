@@ -691,15 +691,27 @@
       (refuse h rid -32602 (str "There is no live conversation " (pr-str s)
                                 ". relay does not reopen a conversation that has ended.")))))
 
-(defn- list-sessions [h rid msg]
+(defn- under?
+  "Whether directory `dir` is `filter` or inside it, by path segments."
+  [filter dir]
+  (let [f (str/replace filter #"/+$" "")]
+    (or (= f dir) (str/starts-with? dir (str f "/")))))
+
+(defn- list-sessions
+  "The live conversations, filtered as ACP asks by working directory. A
+  conversation is a role's, opened from whatever directory its first
+  client ran in, so the filter takes a directory and everything under
+  it: a phone that lists with \"/\" sees the conversation acp-tui opened
+  in ~/code, and a directory no conversation is in or under lists none."
+  [h rid msg]
   (let [cwd (get (params-of msg) "cwd")]
     (answer h rid
             {"sessions" (vec (for [{:keys [id title conversation]} (:roster h)
-                                   :let [c (get-in h [:convs id])]
+                                   :let [c (get-in h [:convs id])
+                                         dir (or (:cwd c) "/")]
                                    :when (and (:session c) (not= :ending (:status c))
-                                              ;; ACP's filter by working directory.
-                                              (or (not (string? cwd)) (= cwd (:cwd c))))]
-                               (cond-> {"sessionId" (:session c) "cwd" (or (:cwd c) "/") "title" title
+                                              (or (not (string? cwd)) (under? cwd dir)))]
+                               (cond-> {"sessionId" (:session c) "cwd" dir "title" title
                                         "_meta" {"relay/role" id}}
                                  (:last-activity conversation) (assoc "updatedAt" (str (:last-activity conversation))))))})))
 

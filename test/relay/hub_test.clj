@@ -201,7 +201,19 @@
                                                           :unread? false :approvals 0}) (roster-entry "hub")])
         [_ fx] (say h 1 (req 9 "session/list" {}))]
     (is (= {"sessions" [{"sessionId" "s1" "cwd" "/w" "title" "Clerk" "updatedAt" (str t0) "_meta" {"relay/role" "clerk"}}]}
-           (get (first (writes fx 1)) "result")))))
+           (get (first (writes fx 1)) "result")))
+    (testing "whatever directory the client lists by"
+      ;; Regression: the list kept only conversations opened from the
+      ;; client's own cwd, so a phone listing with "/" never saw the one
+      ;; acp-tui had opened from /w.
+      (let [ids (fn [cwd] (let [[_ fx] (say h 1 (req 10 "session/list" {:cwd cwd}))]
+                            (mapv (juxt #(get % "sessionId") #(get % "cwd"))
+                                  (get-in (first (writes fx 1)) ["result" "sessions"]))))]
+        (is (= [["s1" "/w"]] (ids "/")) "a directory lists what is under it")
+        (is (= [["s1" "/w"]] (ids "/w")) "and what is in it")
+        (is (= [["s1" "/w"]] (ids "/w/")))
+        (is (= [] (ids "/w/x")) "but not what is above it")
+        (is (= [] (ids "/wx")) "and matches by path segment, not by text")))))
 
 (deftest session-close-detaches-without-ending
   (let [[h fx] (say (live) 1 (req 9 "session/close" {:sessionId "s1"}))]
