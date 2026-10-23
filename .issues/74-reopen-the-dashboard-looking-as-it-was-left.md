@@ -27,3 +27,90 @@ Kira's answers (2026-10-23):
 - No environment variable chooses the path.
 
 ## Log
+
+2026-10-23, phase 3 (relay-tui):
+
+- Shape: `core.View` holds the hub's part (focus, list cursor, whether
+  the list has the keys, whether the pane was opened from the list), the
+  app's part (pane has the keys, board or items, selected card, card
+  open with its line and column) and the drafts (role, text with its
+  placeholders, the pastes those placeholders name, next paste number).
+  Single-agent mode saves the app's part and one draft with no role.
+  "Pane open" is `App.PaneFocus`: on a wide screen the pane is always
+  beside the conversation, so having the keys is what open means.
+- Functional core: `SaveHub`/`SaveSingle` derive it; `RestoreHub`/
+  `RestoreSingle` hand a loaded one to the reducers, which put it back
+  part by part. Board-or-items is put back at once. The focus, cursor,
+  list, pane and drafts wait for the first successful roster (against a
+  single agent, for the session); the card waits for the board
+  (`_relay/cards` answered). A roster that failed does not count.
+  Whichever of roster and board comes first, the other part waits.
+- Fallbacks: a role gone is not focused, the list gets the keys, the
+  pane does not; its draft is dropped and the status line says "a saved
+  draft could not be put back" (dropping typed text silently seemed
+  worse than a note). A card gone leaves the default selection. A role
+  whose conversation ended is focused and shows none; nothing is opened.
+  A live one attaches, as picking it from the list does.
+- A key pressed before a part is back drops that part (layout and card)
+  but not the drafts: the operator has moved on, and should not see the
+  screen jump. A restored draft goes ahead of anything typed since. If
+  pastes were made meanwhile for that role, its saved draft with pastes
+  is not put back (their numbers would clash) and the note says so.
+- --open wins over the saved focus, list and pane; the card and drafts
+  still come back.
+- Closing before a part came back saves the loaded part, not the
+  defaults shown meanwhile, so a quick open and close forgets nothing.
+- Paste trust: in the file a trusted paste carries a seal, sha256 over
+  its number and text; no seal, or one that does not match, means
+  untrusted, with a note. The view's bytes carry a digest, so any damage
+  in the file means the defaults. In the core, `restoredDraft` drops a
+  paste with no number, no text, a shared number, or no placeholder in
+  the draft, and makes a paste untrusted when either the paste or its
+  placeholder says untrusted. Property tests: round trip exact; random
+  byte damage gives defaults or the same view; pastes edited with the
+  digest made again never gain trust; damaged drafts in the core never
+  send as trusted text what was not before. Bytes that are not UTF-8
+  are saved replaced (the JSON encoder needs UTF-8), so such a paste
+  comes back untrusted rather than failing the save.
+- Not saved: queued messages, permission answers, doc or card trust in
+  flight, the archive confirm, the end question, the board's one-line
+  input, the session's labels (relay sends those again).
+- File: one per agent argv, `view-<sha256 of the argv's JSON, 32 hex>.json`
+  under `~/.local/state/relay-tui/` or `--state-dir`, with the argv in
+  it; a mismatch means defaults. Read with strictjson, capped at 8 MiB
+  (a view too large is saved without its drafts, with a note). Written
+  with a temp file and rename in the same directory, 0600, directory
+  made 0700 when missing (an existing --state-dir is left as it is).
+- The default dir comes from the user database (`os/user`), not
+  `$HOME`, so no environment variable picks it.
+- Writes: a background saver, at most every 500 ms while the view
+  changes, and once on exit; the UI only hands it the view. Encoding
+  happens in the saver too.
+- Notes about the file go to the status line at start and to the agent
+  log (the stderr tail); none quotes the file.
+- Single-agent mode: ctrl+c on a non-empty input clears it, and ctrl+d
+  quits only from an empty one, so a clean quit there never keeps a
+  draft; a kill or a closed terminal does (debounced save). Hub mode
+  keeps per-role drafts across a quit from the list.
+- relay needs a change (not made): two relay tests run the real
+  relay-tui (`relay.acp-test/chat-with-the-real-relay-tui-on-a-pty`,
+  `relay.display-test/the-pane-in-relay-chat-shows-a-display-and-trusts-it`)
+  with no --state-dir, so they would write Kira's
+  ~/.local/state/relay-tui. Their client vector should add
+  `"--state-dir" (str *dir* "/relay-tui-state")`. With that change made
+  in a scratch copy of relay, both pass.
+- Verified live: scratch data dir, roles gardener and writer (agent
+  /usr/bin/false), two cards via `relay card add`; `relay-tui
+  --state-dir <tmp> -- relay acp --approvals --data <dir> --run-dir
+  <dir>` in a pty at 170x40. Run 1: alt+2, a draft with two pastes,
+  ctrl+y on the second, ctrl+x, open the first card, j, ctrl+g, ctrl+c.
+  The file was 0600 and held the view, with a seal on the trusted paste
+  only. Run 2: the list over Writer, the draft with "untrusted #1" and
+  "trusted #2", esc to the pane with the card open. Run 3, after `relay
+  remove writer`: the note, the list, ctrl+x to the board with no role
+  in focus, j, x; `relay cards` showed the item ticked.
+
+2026-10-23, main session: relay's tests and pentest that run the real
+relay-tui now pass it `--state-dir` under their temp directory, so no
+test writes the operator's `~/.local/state/relay-tui`. Phase 3's agent
+found the gap and left the relay change to the main session.

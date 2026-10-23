@@ -687,7 +687,7 @@
     (with-world {} (fn [body] {:text (str "You said: " (str/includes? (pr-str body) "hello relay"))})
       (fn []
         ;; The sibling build, never the relay-tui on PATH (support/relay-tui-bin).
-        (set-client! [support/relay-tui-bin])
+        (set-client! [support/relay-tui-bin "--state-dir" (str *dir* "/relay-tui-state")])
         (let [proc (p/process ["script" "-q" "/dev/null" relay-bin "--open" "clerk" "--data" (data)]
                               {:out :string :err :string :dir *dir*})
               keys! (fn [s] (doto ^java.io.OutputStream (:in proc) (.write (.getBytes ^String s)) (.flush)))

@@ -83,3 +83,37 @@ own selection.
   showed beside the roles before any conversation opened; alt+1, ctrl+x,
   enter, j, x ticked an item, and `relay cards` showed it done, with no
   conversation opened (the role's agent was /usr/bin/false).
+
+2026-10-23, phase 3 (the list hands the keys to the board):
+
+- ctrl+x on the list gives the pane the keys, with or without a role in
+  focus; the board's ops and trust then work with no role focused.
+  esc, ctrl+x or ctrl+g on the pane gives the keys back to the list,
+  with its cursor where it was. `Hub.PaneFromList` remembers that the
+  keys came from the list, since with a role in focus esc would
+  otherwise go to its conversation.
+- Opening a role from there (alt+N, ctrl+n) gives the keys to its
+  conversation, as moving to a role always does.
+- A permission request in the focused conversation that takes the keys
+  from a pane opened from the list keeps them, rather than handing them
+  to the list, which would cover the request.
+- With nothing to show (no board and no conversation in focus) ctrl+x
+  on the list does nothing.
+- Narrow screens: the list is the screen there, so the board opened from
+  it takes the list's place (header "‹ ctrl+x roles"), and esc brings the
+  list back. This matches how the pane covers the conversation on a
+  narrow screen, and the phone would see the same.
+- With no role in focus, the conversation panel now says "No role in
+  focus" and offers no input, where it said "No conversation with  yet."
+  On a wide screen whose pane cannot stand beside the conversation
+  (73 to about 120 columns), the pane opened from the list fills the
+  conversation panel and the hint row is left empty, since the pane
+  lists its keys itself; before, it showed the conversation's keys.
+- The list's hint row names ctrl+x when the pane has something to show,
+  and the list's key help lists it.
+
+2026-10-23, main session: Codex round 1 over phase 2 (relay
+xuykkxwz..ypznwzkz, relay-tui qyukvsxm..sxtryuoz) found no in-scope
+defect. It traced trust authorization and rev/digest binding, the arm
+delay across focus changes, defanging, stale cards, plain-ACP fallback
+and unknown-parameter refusal. The loop stops at a clean round.

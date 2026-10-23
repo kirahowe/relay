@@ -412,7 +412,7 @@
     (with-world asks-venues
       (fn []
         (let [cfg (read-string (slurp (str (data) "/relay.edn")))
-              _ (spit (str (data) "/relay.edn") (pr-str (assoc cfg :client [support/relay-tui-bin])))
+              _ (spit (str (data) "/relay.edn") (pr-str (assoc cfg :client [support/relay-tui-bin "--state-dir" (str *dir* "/relay-tui-state")])))
               transcript (str *dir* "/pty.out")
               plan {:rows 50 :cols 160 :timeout 90
                     :steps [{:wait "ready" :timeout 60}
