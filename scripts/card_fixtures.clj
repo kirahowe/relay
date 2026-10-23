@@ -19,12 +19,11 @@
   (spit (str out "/" name ".json") (str (json/generate-string m {:pretty true}) "\n")))
 
 (defn- exchange
-  "A request and relay's response, as one fixture. The params carry the
-  sessionId relay-tui sends; relay ignores it."
+  "A request and relay's response, as one fixture. The board's methods
+  are the connection's, so the params name no session."
   [c method params]
-  (let [params (assoc params :sessionId "fixture-session")]
-    {:request {:method method :params params}
-     :response (client/request! c method params)}))
+  {:request {:method method :params params}
+   :response (client/request! c method params)})
 
 (defn -main [out]
   (fs/create-dirs out)

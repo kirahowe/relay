@@ -251,11 +251,13 @@
             h (sort-by key (:conns h)))))
 
 (defn- cards-request [h rid msg]
-  (let [cid (:conn (record h rid))]
-    (if-let [state (:state h)]
-      (-> h (assoc-in [:conns cid :board] (workspace/subscribed {} state))
-          (answer rid (workspace/cards-answer state (params-of msg))))
-      (refuse h rid -32000 "relay has not read the board yet. Try again."))))
+  (let [cid (:conn (record h rid))
+        state (:state h)]
+    (cond
+      (workspace/cards-params-error (params-of msg)) (refuse h rid -32602 (workspace/cards-params-error (params-of msg)))
+      (nil? state) (refuse h rid -32000 "relay has not read the board yet. Try again.")
+      :else (-> h (assoc-in [:conns cid :board] (workspace/subscribed {} state))
+                (answer rid (workspace/cards-answer state (params-of msg)))))))
 
 (defn- card-op [h rid msg]
   (let [{:keys [command error]} (workspace/card-op-command (params-of msg))]

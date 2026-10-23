@@ -72,10 +72,16 @@
     (let [{:keys [command error]} (workspace/card-op-command params)]
       (is (nil? command))
       (is (str/includes? (str error) (str "no parameter " typo)) error)))
-  (testing "sessionId, which relay-tui sends, is accepted and not passed on"
-    (is (= {:card 1 :op "edit" :item 2 :text "x" :seen 5}
-           (get-in (workspace/card-op-command {"sessionId" "s1" "card" 1 "op" "edit" "item" 2 "text" "x" "seen" 5})
-                   [:command :args])))))
+  (testing "the board is the connection's, so a sessionId is refused like any parameter it does not know"
+    (let [{:keys [command error]} (workspace/card-op-command {"sessionId" "s1" "card" 1 "op" "tick" "item" 2})]
+      (is (nil? command))
+      (is (str/includes? (str error) "no parameter sessionId") error))))
+
+(deftest a-cards-request-with-a-parameter-it-does-not-know-is-refused
+  (is (nil? (workspace/cards-params-error {})))
+  (is (nil? (workspace/cards-params-error {"archived" true})))
+  (doseq [bad ["sessionId" "archive"]]
+    (is (str/includes? (str (workspace/cards-params-error {bad "x"})) (str "no parameter " bad)))))
 
 (deftest the-board-over-relay-acp
   (with-relay
@@ -282,8 +288,12 @@
       (is (nil? command))
       (is (str/includes? (str error) (str "no parameter " bad)) error)))
   (is (= {:kind "card" :ref "7" :version 9 :sha256 (apply str (repeat 64 "a")) :via "chat"}
-         (get-in (workspace/card-trust-command {"sessionId" "s" "card" 7 "rev" 9 "sha256" (apply str (repeat 64 "a"))})
+         (get-in (workspace/card-trust-command {"card" 7 "rev" 9 "sha256" (apply str (repeat 64 "a"))})
                  [:command :args])))
+  (testing "a sessionId is refused: the board is the connection's"
+    (let [{:keys [command error]} (workspace/card-trust-command {"sessionId" "s" "card" 7 "rev" 9 "sha256" (apply str (repeat 64 "a"))})]
+      (is (nil? command))
+      (is (str/includes? (str error) "no parameter sessionId") error)))
   (is (= "operator" (get-in (workspace/card-trust-command {"card" 7 "rev" 9 "sha256" (apply str (repeat 64 "a"))})
                             [:command :actor])))
   (doseq [params [{"rev" 9 "sha256" "x"} {"card" 7 "sha256" (apply str (repeat 64 "a"))} {"card" 7 "rev" 9}
@@ -340,3 +350,40 @@
             (client/close-input! c)
             (is (= 0 (client/wait! c 20000)))
             (finally (client/sever! c))))))))
+
+;; relay#73: relay acp with no role, the hub in this process, opens no
+;; conversation, and its client works the board all the same: the board
+;; is the connection's.
+(deftest the-board-over-relay-acp-with-no-conversation
+  (with-relay
+    (fn [dir sys]
+      (let [plain (add-card! sys)
+            tainted (tainted-card! sys)
+            c (client/start! [support/relay-bin "acp" "--approvals" "--data" (:data-dir sys)] {:dir dir})]
+        (try
+          (is (contains? (get-in (client/request! c "initialize" {:protocolVersion 1 :clientCapabilities {}})
+                                 ["result" "_meta"])
+                         "relay/hub"))
+          (let [cards (get-in (client/request! c "_relay/cards" {}) ["result" "cards"])
+                card (first (filter #(= tainted (get % "id")) cards))]
+            (is (= #{plain tainted} (set (map #(get % "id") cards))))
+            (testing "an op is taken, as the operator's"
+              (let [r (client/request! c "_relay/cards/op" {:card plain :op "tick" :item 1})]
+                (is (true? (get-in r ["result" "changed"])) (pr-str r))))
+            (testing "a trust is taken"
+              (let [r (client/request! c "_relay/cards/trust" {:card tainted :rev (get card "rev") :sha256 (get card "sha256")})]
+                (is (true? (get-in r ["result" "trusted"])) (pr-str r))))
+            (testing "a change elsewhere reaches the client"
+              (inbound/submit! sys {:type :card/op :actor "clerk" :labels [] :args {:card plain :op "add" :text "Pay"}})
+              (is (client/await! c #(= "_relay/cards/changed" (get % "method")) 10000)))
+            (testing "a sessionId is refused on each board method"
+              (doseq [[method params] [["_relay/cards" {:sessionId "s"}]
+                                       ["_relay/cards/op" {:sessionId "s" :card plain :op "tick" :item 2}]
+                                       ["_relay/cards/trust" {:sessionId "s" :card tainted :rev 1 :sha256 (apply str (repeat 64 "a"))}]]]
+                (let [r (client/request! c method params)]
+                  (is (= -32602 (get-in r ["error" "code"])) (pr-str method r))
+                  (is (str/includes? (str (get-in r ["error" "message"])) "no parameter sessionId") (pr-str r))))))
+          (is (nil? (core/open-conversation (inbound/current-state sys) "clerk")) "and no conversation opened")
+          (client/close-input! c)
+          (is (= 0 (client/wait! c 20000)))
+          (finally (client/sever! c)))))))

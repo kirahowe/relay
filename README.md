@@ -1311,7 +1311,7 @@ trust card <id>` does, for the card as the client was sent it: it answers
 `{"trusted": true, "card": <wire form, now clean>}`, or a JSON-RPC error
 with relay's refusal ("Nothing was trusted; look again." when the card
 changed since, or when `rev` or `sha256` is not the card's current one).
-It refuses an unknown parameter (`sessionId` aside), and, as
+It refuses an unknown parameter, `sessionId` included, and, as
 `_relay/trust`, refuses unless relay acp was started with `--approvals`.
 The card's `rev` moves, so every subscribed client is sent
 `_relay/cards/changed` with the clean card.
@@ -1319,7 +1319,9 @@ The card's `rev` moves, so every subscribed client is sent
 seen}` and answers `{"card": <wire form>, "changed": true|false}`, or a
 JSON-RPC error whose message is relay's refusal. It refuses a parameter
 it does not know, naming it, so a typo such as `iten` or `sen` fails
-instead of passing as success; `sessionId` is accepted and ignored. An op from the client is
+instead of passing as success. The board's methods are the connection's
+and refuse a `sessionId`, as `_relay/cards` refuses any parameter but
+`archived`. An op from the client is
 yours, with no labels, whether or not relay acp was started with
 `--approvals`.
 

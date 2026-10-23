@@ -3451,8 +3451,9 @@ rule RemoveDoc {
 -- event's seq as their rev. An op that changes nothing (ticking an item
 -- already done, writing the text already there) records nothing and says
 -- so. An op naming a card, item, row or column that does not exist is
--- refused, saying so. So is an op with a parameter it does not know (a
--- client's sessionId aside), so a misspelled seen cannot pass unchecked.
+-- refused, saying so. So is an op with a parameter it does not know,
+-- sessionId included, so a misspelled seen cannot pass unchecked. The
+-- board's methods are the connection's, about no conversation.
 --
 -- seen: an op that changes text may carry the rev the client last saw.
 -- It is refused when the text it changes was written after that rev, so
@@ -4186,9 +4187,11 @@ surface ConversationService {
         -- conversation takes a bounded number of them, orphans included,
         -- and a connection a bounded number too. session/cancel cancels
         -- for the session, whichever attached connection sends it: every
-        -- waiting prompt and the running turn. The board is relay's: it
-        -- sends each subscribed connection the cards that changed since
-        -- what it was last sent. An end of a turn relay could not record
+        -- waiting prompt and the running turn. The board is relay's and
+        -- the connection's, open to a client with no conversation: its
+        -- methods take no sessionId and refuse one, and relay sends each
+        -- subscribed connection the cards that changed since what it was
+        -- last sent. An end of a turn relay could not record
         -- is tried again until it is; until then no other turn of the role
         -- starts, and the operator is told once.
         -- _relay/roles gives every role's status (relay.roster, plus a

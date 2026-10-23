@@ -300,6 +300,14 @@
   [conv state]
   (assoc conv :cards (cards/revs (:cards state))))
 
+(defn cards-params-error
+  "Why relay refuses a _relay/cards request's params, or nil. The board
+  is the connection's, so the method takes no sessionId; like every
+  parameter it does not know, one is refused rather than ignored."
+  [params]
+  (when-let [unknown (seq (sort (remove #{"archived"} (keys params))))]
+    (str "_relay/cards has no parameter " (str/join ", " unknown) ". It takes archived.")))
+
 (defn cards-answer
   "The _relay/cards answer: the board's cards as wire forms, the
   archived ones too when asked."
@@ -326,8 +334,9 @@
   [params]
   (let [{:strs [card]} params
         ;; A typo must not pass as success: a misspelled seen would turn
-        ;; off the stale-edit check. sessionId is what relay-tui sends.
-        known (into #{"card" "sessionId"} (map name) cards/op-fields)
+        ;; off the stale-edit check. The board is the connection's, so a
+        ;; sessionId is refused like any other unknown parameter.
+        known (into #{"card"} (map name) cards/op-fields)
         unknown (sort (remove known (keys params)))]
     (cond
       (seq unknown)
@@ -347,7 +356,7 @@
   anything else is not told it trusted a card."
   [params]
   (let [{:strs [card rev sha256]} params
-        unknown (sort (remove #{"card" "rev" "sha256" "sessionId"} (keys params)))]
+        unknown (sort (remove #{"card" "rev" "sha256"} (keys params)))]
     (cond
       (seq unknown)
       {:error (str "_relay/cards/trust has no parameter " (str/join ", " unknown) ". It takes card, rev, sha256.")}

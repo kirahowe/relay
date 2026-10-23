@@ -571,7 +571,7 @@
   ;; second, here one relay answers itself.
   (let [[h fx] (say (live) 1 (req 77 "slow" {:sessionId "s1"}))
         [sent] (map parse (sends fx "clerk"))
-        [h fx] (say h 1 (req 77 "_relay/cards" {:sessionId "s1"}))]
+        [h fx] (say h 1 (req 77 "_relay/cards" {}))]
     (is (= [{"jsonrpc" "2.0" "id" 77 "error" {"code" -32600 "message" "Request id 77 is already in use on this connection."}}]
            (writes fx 1)))
     (is (empty? (sends fx "clerk")) "nothing goes on")
@@ -691,6 +691,38 @@
             [h] (run h {:event :log-changed :roster roster :state s1})
             [_ fx] (run h {:event :log-changed :roster roster :state s1})]
         (is (empty? fx))))))
+
+;; relay#73: the board's methods are the connection's. A client with no
+;; conversation open uses them, and a sessionId is refused like any
+;; parameter they do not take.
+(deftest the-board-needs-no-conversation
+  (let [[s0 s1 card] (board-states)
+        h (-> (fresh) (assoc :state s0) (opened 1 :approvals true))
+        [h] (say h 1 (req 1 "initialize" {:protocolVersion 1 :clientCapabilities {}}))
+        [h fx] (say h 1 (req 2 "_relay/cards" {}))]
+    (is (empty? (get-in h [:conns 1 :attached])) "no conversation is open")
+    (is (= [card] (map #(get % "id") (get-in (first (writes fx 1)) ["result" "cards"]))))
+    (testing "an op is taken and answered"
+      (let [[h fx] (say h 1 (req 3 "_relay/cards/op" {:card card :op "tick" :item 1}))
+            [{:keys [tag command]}] (submits fx)
+            [_ fx] (run h {:event :submit-result :tag tag :ok true :changed true :state s1})]
+        (is (= ["operator" {:card card :op "tick" :item 1}] [(:actor command) (:args command)]))
+        (is (= [true false] (mapv #(get % "done") (get-in (first (writes fx 1)) ["result" "card" "items"]))))))
+    (testing "a trust is taken from a client with approvals"
+      (let [[_ fx] (say h 1 (req 4 "_relay/cards/trust" {:card card :rev 1 :sha256 (apply str (repeat 64 "a"))}))]
+        (is (= [:label/trust] (map #(get-in % [:command :type]) (submits fx))))))
+    (testing "and a change elsewhere is sent with no conversation open"
+      (let [[_ fx] (run h {:event :log-changed :roster roster :state s1})]
+        (is (= [[true false]] (map board-items (filter #(= "_relay/cards/changed" (get % "method")) (writes fx 1)))))))
+    (testing "a sessionId is refused on every board method"
+      (doseq [[method params] [["_relay/cards" {:sessionId "s1"}]
+                               ["_relay/cards/op" {:sessionId "s1" :card card :op "tick" :item 1}]
+                               ["_relay/cards/trust" {:sessionId "s1" :card card :rev 1 :sha256 (apply str (repeat 64 "a"))}]]]
+        (let [[_ fx] (say h 1 (req 9 method params))
+              [w] (writes fx 1)]
+          (is (empty? (submits fx)) method)
+          (is (= -32602 (get-in w ["error" "code"])) method)
+          (is (str/includes? (str (get-in w ["error" "message"])) "no parameter sessionId") method))))))
 
 ;; --- Codex round 3
 
