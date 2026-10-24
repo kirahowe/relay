@@ -177,7 +177,9 @@ are `retitle`, `archive` and `restore` for any card; `add`, `tick`,
 archived card is refused, except `restore`. An op that changes nothing
 appends nothing and says so. `seen` is the card's rev when the client
 last read it, which the header of its text form shows: an edit of text that changed after `seen` is refused, so a
-stale edit cannot overwrite a newer one. A `seen` past the card's rev
+stale edit cannot overwrite a newer one, and an archive of a card that
+changed in any way after `seen` is refused, so the card archived is the
+one the client showed. A `seen` past the card's rev
 is refused too, since no client can have read it. Ticks and cell states go to
 whoever wrote last.
 

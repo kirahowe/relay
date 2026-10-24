@@ -330,3 +330,42 @@ each fixed as a rule in the core with property tests.
   roles removed and back, conversations ended, failed attaches, turns
   ending and requests settled; none may change a typing surface, and it
   fails without the rule. The model property archives cards too.
+
+2026-10-24, Codex round 4 (sxtryuoz..qtzrpukq): three structural gaps,
+each closed with a rule and a property that fails without it.
+
+- A question's identity is the version of what it shows (relay-tui
+  zqplpotu). An armed archive question kept archive/<card> while another
+  device changed the card, and y archived it at once. Identities are now
+  (kind, object, version): request id; card id and rev for archive, plus
+  digest for trust; doc path, version and digest; the end question's
+  session. A change is a new identity, drawn and armed afresh, and the
+  question whose object changed is cancelled with a note ("The card
+  changed, so it was not archived…", "The doc changed, so nothing was
+  trusted…"). The archive op also carries the rev shown (Seen), so relay
+  checks it is a rev it had (it applies staleness only to text edits, so
+  the client's cancelling is what protects; relay could apply it to
+  archive too). Property: questions opened, drawn,
+  objects changed and y pressed at random; a yes only goes out for the
+  object as drawn ArmDelay before, with its rev.
+- Arm only what the renderer drew in full (relay-tui nwrvpmro). Drawn
+  came from the surface enum, so a trust or archive question clipped
+  away at 60x10 (a tall draft and a waiting request left the pane no
+  room) could be confirmed, and a request behind "Window too small" kept
+  its drawn time. Frames now return Armable: the identities they drew in
+  full and readable (the request box with its options; a question with
+  its subject and yes and, for a trust, the whole card or doc; the end
+  question; the input). The shell's Drawn carries exactly that set:
+  what a frame no longer shows is forgotten at once (OnlyForget), what
+  it newly shows is armed a frame later, and a report overtaken by a
+  later frame is dropped. A y on something not shown in full says "not
+  all of it is on screen: make the window larger…". Judgment call: a
+  trust needs its whole card or doc on screen, so a doc too long for the
+  window cannot be trusted there; widen it or use relay trust. The
+  shell now renders the frame once per update to know the set (the ui
+  tests take about 30% longer). Property: sizes, draft heights,
+  requests, questions, waits and resizes at random in both modes; an
+  authorization only happens for what the screen itself (read as text,
+  not the renderer's own report) showed in full for the whole delay. It
+  fails if the pane reports a clipped question or a too-small frame its
+  request.

@@ -265,3 +265,26 @@ in the move from single-agent state to the hub's.
 authorizes nothing, not even a refusal (relay-tui qpkkqkyv, see
 relay#77's Log for the rule). A held ctrl+y no longer trusts the paste
 it follows; the operator presses it again once the input is on screen.
+
+2026-10-24, Codex round 4, finding C (relay-tui kvnyrysn): a role owns
+its draft. Pastes lived in the role's conversation (or a "blank" before
+it had one) and were carried between them; ending the conversation on
+another device dropped them and the paste counter while the input kept
+the placeholders, so the next paste reused #1. Now Hub.Drafts holds one
+Draft per role (text, pastes, counter, this run's paste order) and
+Single.Draft one, apart from any conversation. The textarea is a view
+of the focused role's draft; its text reaches the core through one path
+(SetDraftText), and every text effect names its role (the shell applies
+it to the box when it shows that role, else to the core draft).
+Messages take their pastes when sent or queued (Queued{Text, Pastes})
+and give them back with the text when not sent (failed turn, failed
+attach, conversation ended, exited), to that role's draft even when it
+is not in focus (it used to become a "not sent" note). Removed: Blanks,
+adoptBlanks, adoptWaiting, State.Pastes/NextPaste; the replay-first
+attach now merges only the queue, as the two are one conversation.
+SaveHub/SaveSingle read the core's drafts. Property: random pastes,
+ctrl+y, typing, sends, role switches, attaches answered/failed/overtaken
+by a replay, conversations ended here or elsewhere, roles removed and
+back, turns ending; every placeholder names the paste it was given for
+with its trust, and no number repeats. Fails if ending a conversation
+takes the draft's pastes. Codex's case is a test.

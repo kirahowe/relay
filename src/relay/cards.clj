@@ -217,8 +217,8 @@
       (refuse! :not-found (str "Card " (:id card) " has no " (name arg) " " id "."))))
 
 (defn- stale!
-  "Refuses a text edit made by a client that last saw rev `seen`, when
-  the text it changes was written after that."
+  "Refuses a text edit or an archive made by a client that last saw rev
+  `seen`, when what it acts on was written after that."
   [what {:keys [rev]} seen]
   (when (some? seen)
     (when (> rev seen)
@@ -236,8 +236,10 @@
   as its card/changed event records it, with any id it assigns written
   in; {:unchanged message :labels} when it would change nothing; or a
   refusal. `seen`, a rev, makes an edit of text written after it a
-  refusal, so a stale edit never overwrites a newer one. Ticks and cell
-  states are last writer wins."
+  refusal, so a stale edit never overwrites a newer one, and an archive
+  of a card changed in any way after it a refusal, so the card archived
+  is the one the client showed. Ticks and cell states are last writer
+  wins."
   [cards id {:keys [op item row column state text seen]}]
   (let [card (get cards id)
         spec (get ops op)]
@@ -265,7 +267,7 @@
                     (if (= t (get-in card [:title :text]))
                       (unchanged (str "Card " id " already has that title.") (get-in card [:title :labels]))
                       (decided {:text t})))
-        "archive" (decided {})
+        "archive" (do (stale! (str "Card " id) card seen) (decided {}))
         "restore" (if (active? card)
                     (unchanged (str "Card " id " is already on the board."))
                     (do (room! cards) (decided {})))

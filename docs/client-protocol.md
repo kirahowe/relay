@@ -105,8 +105,9 @@ command line instead.
   op would change nothing, and then nothing is recorded.
 - Errors: -32602 for the params; -32000 for relay's refusal, such as a
   card or item that does not exist, a limit, or a stale edit: an op that
-  changes text is refused when that text was written after `seen`, and a
-  `seen` past every rev in the log is refused too.
+  changes text is refused when that text was written after `seen`, an
+  archive is refused when the card changed in any way after `seen`, and
+  a `seen` past every rev in the log is refused too.
 - The op is the operator's, with no labels, whether or not the
   connection takes approvals. Every other subscribed connection is sent
   the card in `_relay/cards/changed`; this one gets it in the answer.

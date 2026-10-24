@@ -132,6 +132,16 @@
     (is (some? (cards/decide (:cards w) 1 {:op "edit" :item 2 :text "b3" :seen shown})))
     (is (= :conflict (refusal #(cards/decide (:cards w) 1 {:op "edit" :item 2 :text "b3" :seen (dec shown)}))))))
 
+(deftest an-archive-with-seen-refuses-a-card-changed-since
+  ;; relay-tui sends the rev it showed with an archive, so a card another
+  ;; device or a role changed meanwhile is not the one archived.
+  (let [w (new-card {:kind "checklist" :title "T" :items ["a" "b"]})
+        shown (:rev (card w))
+        w2 (op! w {:op "tick" :item 1})]
+    (is (some? (cards/decide (:cards w2) 1 {:op "archive" :seen (:rev (card w2))})))
+    (is (= :conflict (refusal #(cards/decide (:cards w2) 1 {:op "archive" :seen shown}))))
+    (is (some? (cards/decide (:cards w2) 1 {:op "archive"})) "without seen, as a role may, it archives")))
+
 (defn- refold
   "The cards folded again from the events alone, after a JSON round trip,
   as replay reads them from the log."
