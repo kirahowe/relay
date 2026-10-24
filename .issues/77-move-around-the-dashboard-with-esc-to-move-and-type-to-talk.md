@@ -194,3 +194,90 @@ a random seed, a thought entry with "AAAA" and U+FE0F (emoji
 presentation) measured 9 wide at width 8. It is in the entry renderer,
 unrelated to navigation and older than this work; the failing input is
 kept in the scratchpad, not in the repo. It should be an issue.
+
+2026-10-24, the surface redesign (relay-tui xprupxzl), after Codex
+round 2 over krxzsrto..orqotqox kept finding the screen and the key
+router disagreeing. Kira approved removing the class rather than the
+cases.
+
+- One pure function decides what has the keys: `core.HubSurface` and
+  `core.SingleSurface` return a `Surface` (kind, the kind under the
+  help, and the column). Kinds: conversation (moving), input, editor
+  (the board's one-line editor), request, confirm (archive, card trust,
+  doc trust), pane, list, end, help, transcript. `Typing()` is input or
+  editor. The renderer draws that surface as active (frames report
+  `Active`, which a property test compares) and only draws an overlay
+  when it is the surface; the shell's `routeKey` classifies a key
+  against that surface's keys alone; and `ReduceHub`/`ReduceSingle` drop
+  any operator event the surface does not take (`Surface.takes`), so a
+  misrouted key still cannot act elsewhere. The old `Moving` guards on
+  answers, `answerable`, `inputInPlay`'s request check and `PaneAsking`
+  are gone.
+- Judgment call: a request arriving never moves the keys, in any
+  surface, not only while typing (the brief's "never moves focus" read
+  literally). It used to take the keys from the pane. Now the pane keeps
+  them and keeps working (ops, trusts and the archive question all work
+  with a request waiting, each its own surface), the conversation and
+  the status line say how to get to the request ("h to answer", "esc,
+  then h to answer" from the editor or a question), and `l` may enter
+  the pane while one waits. The request is answered only as the surface,
+  and its delay starts when it becomes the surface: esc, moving to its
+  role or column, what covered it closing, or arriving while its
+  conversation has the keys. A request arriving also no longer drops an
+  unsent doc trust: it closes nothing.
+- Against a plain agent a request still closes the transcript and the
+  help, as before. Ctrl-T and Ctrl-O no longer open the transcript while
+  a request waits (it could not be drawn with it); the status line says
+  to answer it first (Codex finding 5). Help while typing with a request
+  waiting is drawn, and the request shows as its note under it.
+- In hub mode the end question and the help cannot be opened over the
+  request surface (the shell never sent X or ? there; now the core
+  refuses them too). Two old core tests that did so were changed to
+  paths the shell can take (list, pane, another role).
+- The card editor is typing: the mode row says TYPING. A paste while it
+  is open is refused with a note ("a card's editor takes no paste: type
+  the text"): a card's text is the operator's own words, and a paste
+  could carry anyone's in as such. Esc and ctrl+c in the editor still
+  cancel it; the property counts them as deliberate discards, as ctrl+c
+  clearing an idle input already was.
+- The core keeps `PaneKey{PaneToggle}` takeable where Move is and from
+  the input, for core callers and tests; the shell only ever sends Move.
+- Status line: the mode is kept ahead of the other optional parts and
+  shown while a request waits too, never cut. At 40 columns the newline
+  hint, a retry's reason or "no output for" give way to it (two e2e
+  tests now check those at 80 columns only). Only a line too narrow for
+  the labels and the mode drops the mode; the labels win. A property
+  test checks it. Codex's "TYPI" and TestNewlineKeys failing at baseline:
+  both reproduce here with RUNEWIDTH_EASTASIAN=1, where the emulator
+  counts `·` and the box characters as two cells; the renderer never cut
+  the mode word. Not a relay-tui bug; the sandbox's locale.
+- Tests: a property through the real model (hub and single) over random
+  keys, macros that reach the editor, the questions, the help and the
+  list, pastes, requests on and off screen, board changes and clock
+  steps, checking (a) the routed surface equals the drawn one, (b)
+  nothing typed answers, trusts, confirms or sends a card op but the
+  editor's enter, (c) no request answered within ArmDelay of becoming
+  the surface, (d) no draft or editor text lost but by sending or a
+  deliberate clear, and that an event never takes the keys from a typing
+  surface. A core property runs every operator event at random through
+  the reducers with the same (b), (c) and the event rule; it fails if
+  `takes` lets an answer through anywhere. Regression tests for
+  findings 1 and 5. Reverting finding 1's fix fails the model property
+  and the regression test.
+- Also fixed: `TestRestoredDraftIsNeverMoreTrusted` failed on a seed
+  where two pastes had the same words; it now compares by words.
+  `TestNoKeyAnswersARequestWhileTypingOrUnarmed` counted a cancel (esc,
+  any time) as an answer and tracked arming by the old rule.
+- Not fixed, for the main session: `fakehub.TestSecondPromptWhileATurnRunsIsRefused`
+  fails now and then under -race (it sleeps 200 ms for a turn to start).
+  It predates this work.
+
+2026-10-24, main session's follow-up (relay-tui lvpwunqp): the fakehub
+flake was not the 200 ms sleep. The ACP SDK cancels a session's running
+prompt context when another prompt for it arrives, so the fake's slow
+turn could end on that just before the second prompt checked whether
+the conversation was busy. The slow turn now ends on session/cancel, a
+finish, or the connection ending, as relay's hub refuses the second
+prompt; the test waits on a channel the fake signals once the first
+prompt has the conversation. 50 runs under -race passed. Key replay
+timing changes are in relay#74's Log.

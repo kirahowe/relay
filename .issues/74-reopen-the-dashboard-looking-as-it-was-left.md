@@ -169,3 +169,94 @@ the two restore defects, each with a test that failed before the fix:
   failed on a random seed because its damage changed a paste's number or
   text and kept its trust, which the file's seal cannot do. The damage
   now drops the trust. No change to the restore.
+
+2026-10-24, holding input until the agent's kind is known (relay-tui
+vrumumwo, lrkzokvt), after Codex round 2 found three more lost drafts
+in the move from single-agent state to the hub's.
+
+- The shell handles no input until initialize answers. It holds keys
+  and pastes in order with their times (`ui/connect.go`) and draws
+  "connecting…" with how many wait. `HubConnected`, or the new
+  `core.Initialized` that the agent emits for a plain agent right after
+  initialize (before session/new, so a slow session does not hold
+  typing back), says the kind; `Connected` counts too, for callers that
+  skip it. The shell then builds that kind's state, runs RestoreHub or
+  RestoreSingle on the saved view, and replays the terminal size, the
+  event and the held input through the normal Update, each key at the
+  time it was pressed, so every guard applies (a test runs held y and
+  enter before a request).
+- Judgment calls: at most 4096 keys are held; more are dropped and the
+  status line says how many. Ctrl-C is the one key handled while
+  connecting: it quits, saving nothing, so an agent that never answers
+  cannot trap the operator.
+- If the agent exits before it answers, nothing was handled and the
+  saved view file is left byte for byte (`Saver.Stop`; `Model.Known`).
+  A pty test checks it (finding 2).
+- Enter before the hub is known is replayed after it: with --open it
+  queues in the role's conversation and goes when the attach is
+  answered (finding 3, test).
+- Finding 4 was a move inside hub mode too: a paste into a conversation
+  waiting for its attach, then relay's replay making the conversation
+  first. `attached` now folds the waiting conversation's queue, pastes
+  and paste counter into the replay's (`adoptWaiting`), a failed attach
+  leaves the pastes in the role's blank, and `adoptBlanks` merges rather
+  than dropping a blank's pastes when the conversation has some. A
+  property runs pastes, submits, the replay and the attach in any order
+  and checks every paste goes out and no number repeats.
+- Deleted: `HubFromSingle` and `hubRestore`, `Hub.Loose`,
+  `placeLoose`, `RestoreDraft.After` and the shell's `placed`,
+  `RestoreSingle` holding a hub's layout, `carry`'s Loose exception and
+  `SaveHub`'s Loose draft, and their tests. The paste counter no longer
+  needs carrying from one state to the other.
+- A view saved against the other kind of agent puts back what it can; a
+  draft with nowhere to go (a role's against a plain agent, one with no
+  role against the hub) is not put back, with the "could not be put
+  back" note.
+- Unsure, for the main session: with no --open, the hub starts on the
+  list, so keys typed while connecting replay as the list's keys, as if
+  typed just after, and the first one cancels the saved layout (the
+  pvourwxz rule). Typing a message straight after reopening therefore
+  lands as list keys ("i to type") and the saved role does not come back
+  into focus; the saved drafts do. That follows the brief, but holding
+  until the roster (when the layout is resolved) may be what Kira wants.
+- Cosmetic: the "connecting…" line is drawn inline before the hub's
+  alternate screen, so it stays in the terminal after quitting from the
+  hub.
+- Verified live: scratch data dir (notify none), roles gardener and
+  writer with agentloop's bin /usr/bin/false, a checklist via `relay
+  card add`; `relay-tui --state-dir <tmp> [--open writer] -- relay acp
+  --approvals --data <dir> --run-dir <dir>` in a private tmux at 170x40
+  and 100x30. Keys sent at once showed "connecting… · 9 typed, kept for
+  when it answers"; with --open writer they landed in Writer's input
+  after the saved draft; without it they acted on the list and the
+  saved draft came back under Writer. Walked esc, l to the board, enter,
+  j, e: the editor showed TYPING and took "ab"; esc, h, ? showed the
+  moving keys and x closed them without ticking.
+
+2026-10-24, main session's follow-ups (relay-tui mvvuktxk, qkntqrtl):
+
+- Kira's decision on the question above: input is held until the screen
+  it lands on is known, not just until initialize. Against the hub that
+  is the first roster answer, by which time the saved layout has been
+  put back (or found nothing to put back); against a plain agent, its
+  session (Connected), so `core.Initialized` is gone again. Keys typed
+  while connecting then replay onto the restored screen and do not
+  cancel the restore; a key after the roster and before the board still
+  cancels only the card, as before. A roster that fails releases the
+  keys onto the default screen, with "no roster: …; what you typed went
+  to the list". The bound, ctrl+c quitting while connecting, and a
+  failed start saving nothing are kept; the view counts as known (and
+  is saved) only once the input has been released.
+- Consequence, by design: a replayed key types on where a restored
+  draft ends ("old draftn"), as a key typed just then would, where the
+  old merge put a newline between them.
+- The "connecting…" line is drawn on the alternate screen, so nothing
+  is left in the terminal after quitting from the hub. A pty test runs
+  a failed start, a plain agent and the fake hub; it failed before. The
+  pty harness had a hang of its own, now fixed: the goroutine copying
+  the emulator's answers stopped when the pty closed, and the emulator
+  then blocked writing an answer with the screen lock held.
+- Verified live as before: keys sent at once showed "connecting… · 6
+  typed"; without --open the saved focus (Writer) came back and the keys
+  typed on after its saved draft; quitting left only relay-tui's exit
+  line.
