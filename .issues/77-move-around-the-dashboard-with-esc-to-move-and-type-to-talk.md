@@ -281,3 +281,52 @@ finish, or the connection ending, as relay's hub refuses the second
 prompt; the test waits on a channel the fake signals once the first
 prompt has the conversation. 50 runs under -race passed. Key replay
 timing changes are in relay#74's Log.
+
+2026-10-24, Codex round 3 over sxtryuoz..qkntqrtl: two HIGH defects,
+each fixed as a rule in the core with property tests.
+
+- Authorization needs a live key after the surface was drawn (relay-tui
+  qpkkqkyv, core/authority.go). A replayed esc then y could approve a
+  request that arrived before the roster, before any frame showed it;
+  a held t then y could trust a card. The shell now sends `Drawn` a
+  frame (50 ms) after the surface with the keys changes, naming it by
+  `HubSurfaceID`/`SingleSurfaceID`; the core keeps it as `App.Shown` and
+  forgets it the moment the surface changes. Every key's `KeyPressed`
+  says whether it is replayed. Allow (y, or enter on an allow), archive
+  y, card and doc trust y, the end question's y and ctrl+y are taken
+  only from a live key ArmDelay after the surface they land on was
+  drawn. Judgment call: no, cancel (esc) and the end question's n are
+  safe, so they need a live key only, no delay; a replayed key answers
+  nothing at all, safe or not, since the operator never saw the
+  question. Card ops (tick, edit's enter) and sending a message are not
+  authorizations here: replayed, they act, as typing does; they are the
+  operator's own words and recoverable. The archive and end questions
+  gain the delay they lacked; ctrl+y needs the input drawn 600 ms
+  first (pty tests now wait). A refused key says why on the status line
+  ("too soon…", "a key typed while connecting answers nothing…"). The
+  renderer arms the request box and the trust and archive hints from
+  the same drawn time (`RequestArmed`, `ConfirmArmed`). Core tests'
+  helpers draw after every event, as a renderer would; render goldens
+  use states drawn long ago, so none changed. Properties: in the core,
+  operator events after live or replayed keys, agent events and Drawn
+  at random, no authorization but by a live key ArmDelay after its
+  surface was drawn (fails if the gate is removed); through the model,
+  random held keys over a restored view with a request and a board
+  arriving before the roster authorize nothing; Codex's two cases as a
+  test.
+- Only the operator moves the keys out of typing (relay-tui qtzrpukq,
+  core/keeptyping.go). After any event that is not the operator's, if a
+  typing surface became one that is not, the column, the mode and the
+  board's editor with its text are put back. An editor whose card has
+  gone stays open with "card N left the board · enter does nothing · esc
+  to discard", enter sends nothing, esc discards. An input whose role
+  was removed keeps its focus and text, says "no role X any more: what
+  you typed stays · esc to move", and a Submit there sends nothing and
+  gives the text back. Judgment call: before the operator's first key
+  (`App.Pressed`) the start may still place the keys (the saved view,
+  --open, the first roster), since nothing has been typed; with input
+  held until the roster, replayed keys come after that. The core
+  property now also runs cards changed and archived, the board resent,
+  roles removed and back, conversations ended, failed attaches, turns
+  ending and requests settled; none may change a typing surface, and it
+  fails without the rule. The model property archives cards too.

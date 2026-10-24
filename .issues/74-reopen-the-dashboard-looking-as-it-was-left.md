@@ -260,3 +260,8 @@ in the move from single-agent state to the hub's.
   typed"; without --open the saved focus (Writer) came back and the keys
   typed on after its saved draft; quitting left only relay-tui's exit
   line.
+
+2026-10-24, Codex round 3: replayed input now types and moves only; it
+authorizes nothing, not even a refusal (relay-tui qpkkqkyv, see
+relay#77's Log for the rule). A held ctrl+y no longer trusts the paste
+it follows; the operator presses it again once the input is on screen.
