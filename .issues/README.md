@@ -21,6 +21,7 @@
 | [60](60-let-relay-acp-start-agentloop-with-a-relative-data-path.edn) | Let relay acp start agentloop with a relative --data path | bug | P3 |
 | [67](67-merge-the-proxy-s-request-bookkeeping-into-the-hub.md) | Merge the proxy's request bookkeeping into the hub | feature | P3 |
 | [78](78-keep-an-emoji-with-a-variation-selector-inside-the-width.md) | Keep an emoji with a variation selector inside the width relay-tui draws | bug | P3 |
+| [80](80-fix-the-labels-test-property-that-fails-on-seed.md) | Fix the labels-test property that fails on seed 1792892445485 | bug | P3 |
 
 ### Ready
 
