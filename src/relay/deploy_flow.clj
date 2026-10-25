@@ -366,18 +366,21 @@
 (defmethod handle :rec0-written [{:keys [o] :as run} {:keys [thrown]}]
   (cond
     thrown (end run {:refused (str "Nothing was changed.\n  The record file " (:record o) " could not be written: " thrown)})
-    ;; A pause that was already there (a failed deploy's) is not this
-    ;; run's to lift: the machine may be mixed.
-    (:inherited o) (start-waiting (assoc run :record-open? true :pause :inherited :notice? true))
-    ;; Looked at again just before pausing: the operator may have paused
-    ;; relay by hand while the commits were tested or the code was asked.
+    ;; The pause is looked at again just before pausing: the operator may
+    ;; have made or lifted one by hand while the commits were tested or
+    ;; the code was asked.
     :else (emit (assoc run :record-open? true) :pause-reason {} :pre-pause)))
 
-(defmethod handle :pre-pause [{:keys [o kind] :as run} {:keys [reason]}]
-  (if reason
-    (start-waiting (-> run (assoc-in [:o :inherited] reason) (assoc :pause :inherited :notice? true)))
-    (emit (assoc run :pause :ours :notice? true) :pause
-          {:why (str "bb " (name kind) " at " (:at o)) :gated true} :paused)))
+(defmethod handle :pre-pause [{:keys [o kind] :as run} {:keys [reason thrown]}]
+  (cond
+    ;; Not knowing is not the same as not paused: making a pause here
+    ;; could overwrite, and later lift, the operator's.
+    thrown (abort-refusal run [(str "The pause file " (:pause-file o) " could not be read: " thrown)])
+    ;; A pause that is already there (a failed deploy's, or the
+    ;; operator's) is not this run's to lift: the machine may be mixed.
+    reason (start-waiting (-> run (assoc-in [:o :inherited] reason) (assoc :pause :inherited :notice? true)))
+    :else (emit (-> run (assoc-in [:o :inherited] nil) (assoc :pause :ours :notice? true)) :pause
+                {:why (str "bb " (name kind) " at " (:at o)) :gated true} :paused)))
 
 (defmethod handle :paused [run {:keys [thrown]}]
   (if thrown

@@ -635,3 +635,24 @@
       (is (str/includes? (text outcome) "ROLLBACK DONE, BUT its record could not be written (disk full)"))
       (is (not (:ok outcome)))
       (is (nil? (:paused w))))))
+
+;; --- what the second review found
+
+(deftest a-pause-lifted-by-hand-during-a-rollback-is-made-again-before-anything-moves
+  ;; A failed deploy left relay paused; the operator lifts the pause by hand
+  ;; while the rollback asks for the code.
+  (let [w (dissoc (:world (deploy (status-fails (world)))) :on)
+        {:keys [outcome] w2 :world} (rollback (assoc w :on (at-confirm #(assoc % :paused nil))))
+        after (drop (count (:effects w)) (:effects w2))
+        index (fn [op] (first (keep-indexed (fn [i e] (when (= op (:op e)) i)) after)))]
+    (is (:ok outcome))
+    (is (some? (index :pause)) "the rollback made its own pause")
+    (is (< (index :pause) (index :jj-new)) "before the first move")
+    (is (nil? (:paused w2)) "and lifted it once it worked")))
+
+(deftest a-pause-file-that-cannot-be-read-stops-the-run-before-it-pauses
+  (let [unreadable (fn [w e] (when (= :pause-reason (:op e)) [{:thrown "denied"} w]))
+        {:keys [outcome] w :world} (deploy (assoc (world) :paused nil :on unreadable))]
+    (is (str/includes? (text outcome) "could not be read: denied"))
+    (is (not-any? #(#{:pause :resume :jj-new} (:op %)) (:effects w)) "no pause made, none lifted, nothing moved")
+    (is (= :failed (:status (latest w))) "and the record is closed")))
