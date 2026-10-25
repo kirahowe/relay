@@ -107,3 +107,21 @@ of ~/code/projects/.next/DASHBOARD.md.
   before). Like preview-markdown, it names every non-ASCII character, not
   only known confusables: relay has no confusables table, and naming an
   accented letter costs a line while missing a lookalike costs consent.
+- Codex round 1, finding 3 (CLI trust signed a digest of text it never
+  showed): every CLI consent that authorizes now shows a review text
+  itself, verbatim (a new confirm-review! that fails closed if the text
+  holds anything a review may not), then relay's own notes through
+  visible-line. `relay trust` shows core/trust-text and signs that
+  text's digest. `relay approve` and `relay deny` show the held call's
+  review (render/hold-review: relay.review/request-lines headed "Held
+  call", no options) and relay's notes (hold, why held, label sources
+  with their tool and call as JSON strings, a settings change). The
+  "where it would go" line is left out of approve/deny: the input and
+  the characters to check say it, and the line quoted role text bare.
+  A hold's approval binds to the hold's exact input, so it names no
+  digest. `relay holds` (browsing) is unchanged. Left as they are, since
+  they authorize nothing a role wrote or bind to a fixed version: fact
+  and doc revert (restore a stored version), release, fresh,
+  trust-level, finding decisions and connect. Declassify does show a
+  role's memo before it reaches a public role; it is a candidate for a
+  review of its own and is not converted here.

@@ -16,6 +16,7 @@
             [relay.config :as config]
             [relay.core :as core]
             [relay.reports :as reports]
+            [relay.review :as review]
             [relay.spend :as spend]
             [relay.text :as text]
             [relay.week :as week])
@@ -458,6 +459,45 @@
         (cons "    set by your settings, not by the role:"
               (for [[k v] (sort-by (comp str key) fixed-args)]
                 (str "      " (name k) " = " (text/defang (json/generate-string v))))))))))
+
+(defn hold-review
+  "A held call as the review the operator approves or denies it from
+  (relay.review/request-lines, headed Held call, with no options): the
+  role, the tool and its class, its preview, the whole input it would run
+  on, the arguments the operator's settings fix, the session's labels and
+  the characters to check."
+  [{:keys [role tool labels fixed-args preview] :as h} config]
+  (let [input (if (map? fixed-args) (or (:effective-input h) (:input h)) (:input h))
+        inner (when (= core/reader-tool tool) (core/held-tool tool input))
+        t (get-in config [:tools (or inner tool)])
+        class (or (some-> (:class t) name) (when-not t "one of relay's own"))]
+    (review/request-lines {:heading "Held call" :role role :tool tool :class class
+                           :preview (when preview {:text (str (:content preview)) :labels (vec (:labels preview))
+                                                   :error (boolean (:is-error preview))})
+                           :input input :labels (vec labels) :fixed-args fixed-args :options nil})))
+
+(defn hold-notes
+  "relay's own notes beside a held call's review: which hold it is, why it
+  was held, where its labels came from, and whether the operator's
+  settings changed since."
+  [{:keys [id tool session call labels label-sources] :as h} config]
+  (let [input (:input h)
+        inner (when (= core/reader-tool tool) (core/held-tool tool input))
+        t (get-in config [:tools (or inner tool)])
+        q #(json/generate-string (str %))]
+    (concat
+     [(str "Hold " id ", session " (q session) ", call " (q call)
+           (when inner (str ", through the reader for " (q inner))))
+      (str "Held because " (why-held t labels) ".")]
+     (for [[label src] (sort-by key label-sources)]
+       (str (name label) " from "
+            (case (get src :kind (get src "kind"))
+              "tool" (str "the tool " (q (or (:tool src) (get src "tool"))) " (call " (q (or (:call_id src) (get src "call_id"))) ")")
+              "seed" "what relay put in its prompt"
+              "prompt" "a prompt it was given"
+              (q (pr-str src)))))
+     (when (and config (core/fixed-args-changed? config h))
+       ["Your settings for this tool changed since it was held, so it will not run as shown: deny it."]))))
 
 (defn holds
   ([hs] (holds hs nil))

@@ -701,10 +701,26 @@
         (let [id (:seq (first (inbound/submit! sys {:type :card/add :actor "hub" :labels ["contaminated"]
                                                     :args {:kind "checklist" :title "From the web" :items ["a"]}})))]
           (is (core/contaminated? (core/card-labels (core/card (state) id))))
-          (binding [relay.cli/*tty* (fn [] {:say #(swap! shown str %)
-                                            :ask (fn [] (second (re-find #"Type (\w{4}) to" @shown)))})]
-            (is (= 0 (:exit (relay "trust" "card" (str id))))))
+          (let [t (core/trust-text (state) "card" (str id))]
+            (binding [relay.cli/*tty* (fn [] {:say #(swap! shown str %)
+                                              :ask (fn [] (second (re-find #"Type (\w{4}) to" @shown)))})]
+              (is (= 0 (:exit (relay "trust" "card" (str id))))))
+            (is (str/starts-with? @shown (str t "\n\n")) "the terminal shows the review text itself"))
           (is (str/includes? @shown "From the web"))
+          (testing "a doc's trust shows its review, so two docs that differ never look alike"
+            (let [shown-for (fn [path content]
+                              (inbound/submit! sys {:type :doc/put :actor "hub" :labels ["contaminated"]
+                                                    :args {:path path :content content}})
+                              (let [seen (atom "") t (core/trust-text (state) "doc" path)]
+                                (binding [relay.cli/*tty* (fn [] {:say #(swap! seen str %)
+                                                                  :ask (fn [] (second (re-find #"Type (\w{4}) to" @seen)))})]
+                                  (is (= 0 (:exit (relay "trust" "doc" path)))))
+                                (is (str/starts-with? @seen (str t "\n\n")))
+                                (is (not (core/contaminated? (:labels (core/trusted-version (state) "doc" path))))
+                                    "trusted with the digest of what it showed")
+                                (second (str/split (first (str/split @seen #"\n\nCharacters")) #"\n" 2))))]
+              (is (not= (shown-for "a.md" "https://evil.example/upload")
+                        (shown-for "b.md" "hxxps://evil.example/upload")))))
           (is (not (core/contaminated? (core/card-labels (core/card (state) id)))))
           (testing "a clean card is refused"
             (reset! shown "")

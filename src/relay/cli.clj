@@ -19,6 +19,7 @@
             [relay.pause :as pause]
             [relay.render :as render]
             [relay.reports :as reports]
+            [relay.review :as review]
             [relay.roster :as roster]
             [relay.serve :as serve]
             [relay.setup :as setup]
@@ -353,6 +354,21 @@ and --instructions marks the id public too.")
     (when-not (= code (some-> (ask) str/trim str/upper-case))
       (fail! "That is not the code. Nothing was changed."))))
 
+(defn- confirm-review!
+  "confirm! for a consent relay wrote a review of (relay.review): shows the
+  review text `t` itself, as it is, since it is safe to print by
+  construction, then relay's own `notes`, and asks for a fresh code. Fails,
+  changing nothing, when t holds anything a review may not."
+  [verb t notes & [tty]]
+  (when-not (every? #(or (= 10 %) (text/printable? %)) (iterator-seq (.iterator (.codePoints (str t)))))
+    (fail! "relay could not show this safely. Nothing was changed."))
+  (let [{:keys [say ask]} (or tty (tty! verb))
+        code (confirmation-code)]
+    (say (str t (when (seq notes) (str "\n\n" (str/join "\n" (map text/visible-line notes))))
+              "\n\nType " code " to " verb ": "))
+    (when-not (= code (some-> (ask) str/trim str/upper-case))
+      (fail! "That is not the code. Nothing was changed."))))
+
 (defn- labels-line [labels]
   (str "Labels: " (if (seq labels) (str/join ", " labels) "none")))
 
@@ -363,7 +379,8 @@ and --instructions marks the id public too.")
     ;; Asking for a code to do nothing would only teach typing codes.
     (when-not (= :open (:status h))
       (fail! (str "Hold " hold-id " was already decided: " (name (:status h)) ".")))
-    (confirm! verb (concat (render/hold h (:config sys) (core/approved-hosts st))
+    (confirm-review! verb (review/text-of (render/hold-review h (:config sys)))
+                     (concat (render/hold-notes h (:config sys))
                            (when end ["" "The session will not be carried on: the role's next wake starts afresh."])
                            ;; The role is shown the reason, and may send it out.
                            (when (and (= "deny" verdict) (core/public-role? (:config sys) (:role h)))
@@ -695,19 +712,16 @@ and --instructions marks the id public too.")
                      (result 0 (str "Declassified memo " id "; " (:to m) " is shown it at its next wake.")))
       "trust" (let [[kind ref] more
                     st (state)
-                    v (core/trusted-version st kind ref)]
+                    v (core/trusted-version st kind ref)
+                    t (when v (core/trust-text st kind ref))]
                 (when-not v (fail! "usage: relay trust <kind> <ref>, naming something relay keeps"))
-                ;; Shown with its URLs broken, like anything contaminated;
-                ;; only what is shown is changed, not what is trusted.
-                (confirm! "trust" (concat [(str kind " " ref ":")]
-                                          (text/block ["contaminated"] (:text v))
-                                          ["" (labels-line (:labels v))
-                                           "Trusting it clears contaminated from what it says now."]))
-                ;; What was shown, so a change while the operator read it
-                ;; trusts nothing: the digest of its review text
-                ;; (relay.review), which every trust names.
+                ;; The review text itself (relay.review), and its digest is
+                ;; what is signed: what the operator read is exactly what
+                ;; they vouch for, and a change since trusts nothing.
+                (confirm-review! "trust" t [(labels-line (:labels v))
+                                            "Trusting it clears contaminated from what it says now."])
                 (submit! sys :label/trust {:kind kind :ref ref :version (:version v)
-                                           :sha256 (core/trust-digest st kind ref)})
+                                           :sha256 (review/digest t)})
                 (result 0 (str "Trusted " kind " " ref ".")))
       "trust-level" (let [[role level] more
                           level (some-> level parse-long)

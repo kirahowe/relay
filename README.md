@@ -537,15 +537,18 @@ it and notifies the operator (with the role, the tool and its class,
 never the input). That session keeps the memos it carried, without
 counting the wake against them, until every hold in it is decided. The
 role's other memos go on meanwhile, in fresh sessions, one wake at a
-time as ever. `relay holds` lists the held calls, and `relay approve` and `relay deny`
-show the same before asking for the code: why the call was held, what
+time as ever. `relay holds` lists the held calls: why each was held, what
 the tool is, where its data would go, what the session has seen and
 where each label came from, any characters in the input that could pass
-for others (a Cyrillic `а` in `pаypal`), the tool's preview, and the whole input.
-Every link in what they show of the input is defanged (`hxxps://`, `[.]`
-for a dot), whatever the session has seen: you read the input to judge
-it, and a defanged link still says where it goes. The input is marked
-contaminated when the session or the preview is. The approval is still
+for others (a Cyrillic `а` in `pаypal`), the tool's preview, and the
+whole input, its links defanged (`hxxps://`, `[.]` for a dot). `relay
+approve` and `relay deny` show the held call's review instead, the text
+relay writes for every consent (see the client protocol's Reviews): the
+role, the tool and its class, the preview, the whole input as JSON, the
+fixed arguments, the labels and the characters to check, every value from
+the role quoted or behind a gutter and its links broken by escapes when
+contaminated. relay's own notes follow it: which hold, why it was held,
+where its labels came from. The approval is still
 bound to the exact input. `relay approve
 <hold>` or `relay deny <hold> [why]` decides one. Once every call in a
 held session is decided, the next tick that finds the role free carries
@@ -560,7 +563,8 @@ passes the request through.
 `relay approve`, `deny`, `fresh`, `release`, `declassify` and `trust` print what
 they are about on the terminal (`/dev/tty`, never stdin) and ask for a
 four-character code to be typed back there, so no harness or pipe can
-answer for the operator. Trusting from the workspace pane in the dashboard (`relay`)
+answer for the operator. `relay trust` shows the subject's review text
+itself and signs the digest of exactly that text. Trusting from the workspace pane in the dashboard (`relay`)
 is the one other way to trust (see the dashboard).
 
 #### What you are shown

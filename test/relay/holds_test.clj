@@ -14,7 +14,8 @@
             [relay.harness.agentloop :as agentloop]
             [relay.inbound :as inbound]
             [relay.log :as log]
-            [relay.render :as render])
+            [relay.render :as render]
+            [relay.review :as review])
   (:import (java.time Instant)))
 
 (def t0 (Instant/parse "2026-10-14T12:00:00Z"))
@@ -202,6 +203,9 @@
             (binding [cli/*tty* (tty shown (constantly "ZZZZ"))]
               (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not the code" (relay data "approve" (str id)))))
             (is (str/includes? @shown "post"))
+            (is (str/starts-with? @shown (str (review/text-of (render/hold-review (core/hold (inbound/current-state sys) id) (:config sys)))
+                                              "\n\nHold " id))
+                "the terminal shows the held call's review itself, then relay's notes")
             (is (not (str/includes? @shown "\u001b")) "escape sequences are shown, not sent")
             (is (not (str/includes? @shown "‮")))
             (is (str/includes? (str/lower-case @shown) "u001b"))
