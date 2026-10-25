@@ -664,3 +664,20 @@
     (is (= [:ended "ran" true] ((juxt :status :outcome :crashed) wake)))
     (is (str/includes? (:said wake) "\"bogus\""))
     (is (not (core/open? (state) "clerk")))))
+
+(deftest relay-runs-its-own-code-from-inside-another-checkout
+  ;; bb reads the bb.edn of the current directory first, so bin/relay run
+  ;; inside another checkout once ran that checkout's code: a workspace's
+  ;; relay against live data, or the live relay's code from a workspace.
+  (let [other (str (fs/create-temp-dir {:prefix "relay-other-checkout"}))]
+    (try
+      (fs/create-dirs (fs/path other "src" "relay"))
+      (spit (str (fs/path other "bb.edn")) (pr-str {:paths ["src"]}))
+      (spit (str (fs/path other "src" "relay" "cli.clj"))
+            "(ns relay.cli) (defn -main [& _] (println \"THE OTHER CHECKOUT\"))")
+      (doseq [argv [[relay-bin "help"] ["bb" relay-bin "help"]]]
+        (let [{:keys [out exit]} @(p/process argv {:dir other :out :string :err :string})]
+          (is (zero? exit) (pr-str argv))
+          (is (not (str/includes? out "THE OTHER CHECKOUT")) (pr-str argv))
+          (is (str/includes? out "open the dashboard") (pr-str argv))))
+      (finally (fs/delete-tree other)))))

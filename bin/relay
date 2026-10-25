@@ -2,12 +2,26 @@
 ;; The relay command. Run `relay help` for usage.
 
 (require '[babashka.classpath :as cp]
-         '[babashka.fs :as fs])
+         '[babashka.fs :as fs]
+         '[babashka.process :as p]
+         '[clojure.java.io :as io])
 
 (let [script (fs/real-path *file*)
-      root (fs/parent (fs/parent script))]
+      root (fs/parent (fs/parent script))
+      config (str (fs/path root "bb.edn"))
+      cli (str (fs/path root "src" "relay" "cli.clj"))
+      found #(some-> (io/resource "relay/cli.clj") io/file fs/real-path str)]
   (System/setProperty "relay.bin" (str script))
-  (cp/add-classpath (str (fs/path root "src") ":" (fs/path root "resources"))))
+  (cp/add-classpath (str (fs/path root "src") ":" (fs/path root "resources")))
+  ;; bb puts the :paths of the bb.edn in the current directory ahead of
+  ;; what this adds, so inside another checkout relay would run that
+  ;; checkout's code. Run again under this checkout's own bb.edn then.
+  (when (not= cli (found))
+    (when (= config (System/getProperty "babashka.config"))
+      (binding [*out* *err*]
+        (println (str "relay cannot load its own code from " root "."))
+        (System/exit 1)))
+    (apply p/exec "bb" "--config" config (str script) *command-line-args*)))
 
 (require '[relay.cli :as cli])
 

@@ -406,3 +406,42 @@ of quota), over ulqspnmk..sztnmxpv:
    (y)" and "▸ 2 reject_once (n)" both fit a 40-column window ("Fit a
    request's two answers on a 40-column row"). On narrower windows y
    says the option is not on screen, and tab brings it into view.
+
+2026-10-25, QA: t on a contaminated card on a real relay said "Trust
+needs relay chat. In a terminal, run: relay trust card 7" (c.Review ==
+nil). Cause: the repro ran bare `relay acp`, and `relay` on PATH is
+~/.local/bin/relay, which links to the live checkout
+~/code/projects/relay. That checkout predates #79 and sends no "review"
+member (its workspace.clj has none). Against relay-board's bin/relay
+the same steps trust the card. I checked every step on the client:
+wire.Cards and agent.Cards both keep the review from relay-board's real
+answer, and an end-to-end run trusts the card. The trustRelay gate
+(mzpskxkt) applies only to permission requests, never to the board,
+whose cards are the App's. So relay-tui dropped nothing. What it got
+wrong was the message.
+- "Say why a card cannot be trusted, and name bare relay": a card with
+  no review now says "relay sent no review of this card, so it cannot be
+  trusted here" and keeps the relay trust command. The doc trust note
+  and the README name relay's dashboard as `relay`, not `relay chat`.
+- "Drive the review against the real relay": two e2e tests run
+  relay-tui against `relay acp --approvals` itself, on a scratch data
+  directory that testdata/relay/setup.clj (bb, relay's inbound/submit!)
+  fills with a role, a contaminated card (link, Cyrillic а, 12.50) and a
+  plain one. Card trust: relay's own review text is read to the end, y
+  is pressed, relay takes the digest, and `relay cards` no longer shows
+  it contaminated. Card archive: archived at the rev shown. Doc trust
+  needs a conversation, and so a model, so it is not covered. The relay
+  checkout is the -relay flag, by default ../relay; they skip without
+  it or bb. In .next there is no relay link, so make check skips them
+  here unless run with -relay=../../../relay-board.
+
+2026-10-25, main session: QA found that a card arrived in relay-tui
+with no review, though relay-board's workspace/card-wire made one. The
+cause was not relay-tui: bin/relay ran the code of whatever checkout the
+current directory was in, because bb puts the cwd bb.edn's :paths ahead
+of what the script adds. Run from the live checkout, the workspace's
+relay ran the live code (no reviews); the reverse, the live relay run
+inside a workspace, would run workspace code against live data.
+bin/relay now checks where relay.cli loads from and, if it isn't its own
+checkout, runs again under its own bb.edn. Regression test in
+dispatch_test.
