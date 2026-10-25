@@ -20,9 +20,9 @@
   and that every checkout has an empty working copy on a single commit that
   jj can read. It names the bookmark's commit in each repository and from
   then on uses only those ids. It builds and tests them in fresh jj
-  workspaces in a temporary directory (relay's `bb test` and `bb scenarios`
-  against agentloop built from the same commits), shows what it will do and
-  asks for a code typed on the terminal.
+  workspaces in a temporary directory (relay's `bb test`, the mock
+  scenarios among them, against agentloop built from the same commits),
+  shows what it will do and asks for a code typed on the terminal.
 
   Then it pauses relay (relay.pause), so `relay tick` starts nothing, waits
   until no wake or tick is running, writes the record, and moves each
@@ -208,10 +208,10 @@
 
 (defn- verify!
   "Builds the planned commits of every repo in fresh jj workspaces under a
-  temporary directory, then runs relay's tests and scenarios there against
-  agentloop built from its commit. Nothing is changed in the live
-  checkouts but jj's list of workspaces, which is put back; if that cannot
-  be, this throws and says how to put it back by hand."
+  temporary directory, then runs relay's tests, scenarios included,
+  there against agentloop built from its commit. Nothing is changed in
+  the live checkouts but jj's list of workspaces, which is put back; if
+  that cannot be, this throws and says how to put it back by hand."
   [{:keys [sh paths test-cmds say]} steps]
   (let [commit-of (into {} (for [{:keys [repo to]} steps] [repo (:commit to)]))
         tmp (str (fs/create-temp-dir {:prefix "relay-deploy-check-"}))
@@ -541,7 +541,7 @@
    :record (str home "/Library/Application Support/relay/deploys.edn")
    :pause-file (pause/default-file home)
    :bookmark "main"
-   :test-cmds [["bb" "test"] ["bb" "scenarios"]]
+   :test-cmds [["bb" "test"]]
    :poll-ms 2000 :settle-ms 3000 :quiet-timeout-ms 600000})
 
 (defn default-status-cmd

@@ -24,8 +24,7 @@ not whatever is on PATH.
 | agentloop | `make test && make build` | The harness enforces the label rule, the reader, the workbench sandbox, MCP and the display channel by itself, with the race detector on. |
 | relay-tui | `make check && make build` | The dashboard renders only what relay sent, strip control characters, and take approvals only from the operator. |
 | webtool | `make test && make build && make fixture` | Search, ask and fetch refuse anything not plainly on the public internet. The fixture build is the one the pentests use. |
-| relay | `bb test --agentloop …` | relay's own rules, the model-based property over random command sequences, and the agentloop integration against a mock model. |
-| scenarios | `bb scenarios --agentloop …` | Every end-to-end scenario plays through on staging data against the mock model. |
+| relay | `bb test --agentloop …` | relay's own rules, the model-based property over random command sequences, the agentloop integration against a mock model, and every end-to-end scenario played through on staging data against the mock model. |
 | pentest | `bb pentest --jobs 4 …` | The built system holds up when attacked from outside, on artificial data, assuming the model obeys the attacker perfectly. |
 | eval | `bb eval --live …` | Roles do their jobs well on the real model: they cite, keep skills, speak plainly, and keep quiet when nothing needs the operator. |
 

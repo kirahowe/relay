@@ -11,7 +11,7 @@
   "usage: bb verify [options]
 
 Runs, in order: agentloop, relay-tui and webtool's own tests and builds,
-relay's tests, the mock scenarios and the pentests. With --live it also
+relay's tests (the mock scenarios among them) and the pentests. With --live it also
 runs the behaviour evals against the real model, which costs a little.
 
   --agentloop-dir <dir>  agentloop checkout (default ../agentloop)
@@ -58,10 +58,8 @@ runs the behaviour evals against the real model, which costs a little.
                 :cmd ["sh" "-c" "make check && make build"]}
                {:id "webtool" :what "webtool's tests, then its release and fixture builds" :dir wt
                 :cmd ["sh" "-c" "make test && make build && make fixture"]}
-               {:id "relay" :what "relay's tests against that agentloop" :dir root
+               {:id "relay" :what "relay's tests and the mock scenarios against that agentloop" :dir root
                 :cmd ["bb" "test" "--agentloop" al-bin]}
-               {:id "scenarios" :what "every scenario against the mock model" :dir root
-                :cmd ["bb" "scenarios" "--agentloop" al-bin]}
                {:id "pentest" :what "the whole system attacked on artificial data" :dir root
                 :cmd (cond-> ["bb" "pentest" "--jobs" "4"
                               "--agentloop" al-bin

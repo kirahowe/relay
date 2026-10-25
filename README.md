@@ -1594,7 +1594,7 @@ three different directories. `--data` defaults to the data directory in
 wakes. A deploy names the
 commit `main` points to in each repository and uses only those commits from
 then on. It builds them in fresh jj workspaces in a temporary directory and
-runs `bb test` and `bb scenarios` there, lists what it will do, and asks you
+runs `bb test` there (the mock scenarios too), lists what it will do, and asks you
 to type a code on the terminal.
 
 After you confirm, it pauses relay: while

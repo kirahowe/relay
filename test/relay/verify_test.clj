@@ -8,18 +8,18 @@
 (defn- step-ids [opts] (mapv :id (verify/plan opts root)))
 
 (deftest the-plan-runs-every-suite-in-order-and-evals-only-when-live
-  (is (= ["agentloop" "relay-tui" "webtool" "relay" "scenarios" "pentest"] (step-ids {})))
+  (is (= ["agentloop" "relay-tui" "webtool" "relay" "pentest"] (step-ids {})))
   (is (= "eval" (peek (step-ids {:live true}))))
   (testing "--only can name the live step without --live"
     (is (= ["eval"] (step-ids {:only "eval"}))))
   (is (= ["relay" "pentest"] (step-ids {:only "relay,pentest"})))
-  (is (= ["agentloop" "relay-tui" "webtool" "scenarios"] (step-ids {:skip "relay,pentest"}))))
+  (is (= ["agentloop" "relay-tui" "webtool"] (step-ids {:skip "relay,pentest"}))))
 
 (deftest every-relay-step-uses-the-agentloop-the-plan-built
   (let [steps (verify/plan {:agentloop-dir "/x/al"} root)
         bin "/x/al/bin/agentloop"]
     (is (= "/x/al" (:dir (first steps))))
-    (doseq [id ["relay" "scenarios" "pentest"]]
+    (doseq [id ["relay" "pentest"]]
       (is (some #{bin} (:cmd (first (filter #(= id (:id %)) steps)))) id))))
 
 (deftest siblings-default-next-to-the-checkout
