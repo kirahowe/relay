@@ -12,8 +12,11 @@ started through Claude Code's `!` hit its 120-second limit while still in
 - [x] Timings measured for `bb test`, `bb scenarios` and `bb pentest`,
       with the slowest tests named.
   - Receipt: the Measurements section below.
-- [ ] A target agreed with Kira, and the suites brought under it without
+- [x] A target agreed with Kira, and the suites brought under it without
       dropping coverage.
+  - Receipt: Kira accepted about 60s for `bb test` on 2026-10-25; it runs
+    in 59 to 64s with every test kept (914 tests on the landed main).
+    The next namespaces are relay#83.
 
 ## Measurements
 
@@ -47,8 +50,7 @@ eval shards):
 - `bb deploy` runs `bb test` only: about 90s of tests.
 - `bb pentest --jobs 4` (from `bb verify`): 130s. s5-acp-wrong-request-id
   takes 92s and fails, as does s5-acp-disconnect; both fail the same
-  way on pristine main, so they are not from this work (another
-  workspace filed them). s8-contaminated-routine takes 65s; no other
+  way on pristine main, so they are not from this work (relay#76). s8-contaminated-routine takes 65s; no other
   scenario passes 14s. The four s3 mail pentests skip without a
   cleanroom binary.
 - `bb verify`: agentloop 110s, acp-tui 58s, webtool 97s, relay 94s,
@@ -84,7 +86,7 @@ After the second pass (deploy as a pure state machine):
 6. Make deploy's run a pure state machine, so its tests need no jj.
    Done (Kira, 2026-10-24: tests are about relay's own concerns, pure
    functions that test fast; jj is a side effect at the margin).
-7. Agree a target with Kira.
+7. Agree a target with Kira. Done: about 60s; relay#83 for the rest.
 
 ## Judgment calls
 
@@ -166,3 +168,8 @@ After the second pass (deploy as a pure state machine):
 - 2026-10-25: three review rounds on the rewrite (fresh agents; Codex out
   of quota), the first two fixed, the third clean. `bb test` 872 tests,
   all passing. Waiting on Kira for the target.
+- 2026-10-25: Kira accepted about 60s. Rebased onto main (acp-tui is now
+  relay-tui), fixed a gate test that could lose a race with the hook,
+  and ran the full `bb verify`: agentloop, relay-tui, webtool and relay
+  (914 tests, 61s) pass; pentest fails only relay#76's two scenarios.
+  Filed relay#83 for the next namespaces. Moved to review.

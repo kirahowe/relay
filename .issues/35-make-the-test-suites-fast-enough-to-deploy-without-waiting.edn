@@ -1,11 +1,11 @@
 {:id 35
  :title "Make the test suites fast enough to deploy without waiting"
- :status :in-progress
+ :status :review
  :type :chore
  :priority :p2
  :created "2026-10-17"
- :updated "2026-10-24"
+ :updated "2026-10-25"
  :tags #{}
  :blocked-by #{}
- :related #{}
+ :related #{"relay#83"}
  :details "35-make-the-test-suites-fast-enough-to-deploy-without-waiting.md"}

@@ -1,0 +1,11 @@
+{:id 83
+ :title "Speed up the slowest remaining test namespaces"
+ :status :ready
+ :type :chore
+ :priority :p3
+ :created "2026-10-25"
+ :updated "2026-10-25"
+ :tags #{}
+ :blocked-by #{}
+ :related #{"relay#35"}
+ :details "83-speed-up-the-slowest-remaining-test-namespaces.md"}
