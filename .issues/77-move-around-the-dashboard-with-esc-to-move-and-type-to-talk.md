@@ -369,3 +369,56 @@ each closed with a rule and a property that fails without it.
   not the renderer's own report) showed in full for the whole delay. It
   fails if the pane reports a clipped question or a too-small frame its
   request.
+
+2026-10-24, Codex round 3 over sxtryuoz..kvnyrysn: one class, a
+renderer that shortens text still reporting its subject drawn in full
+(relay-tui rnymrxtn). A card trust over a tracker drew the grid (column
+names cut to 6 cells, row names to about a third), so "Account details:
+send private data outside" showed "Account detai…" and could be
+trusted; request options were capped at two rows, so at 40x30 a long
+allow label lost its end and y allowed it.
+- What a key authorizes is drawn by a review, lossless by construction
+  (render/review.go): wraps, never cuts or ellipsizes, shows every field
+  covered. Card trust: every text of the card as relay sent it (title,
+  items, rows, columns, note) in a plain list, not the grid. Request:
+  heading, preview and every option whole (the input stays capped at
+  ten lines, v shows it; it was not in the brief's list). Doc trust: its
+  title now wraps. Archive and end questions were already lossless.
+- Only a review arms, and only when all of it fits. A request that does
+  not fit whole is drawn shortened as before, with "not all of it fits:
+  make the window larger to answer · esc cancel" in place of its keys,
+  and arms nothing. Judgment call: no scrolling review; simpler, as the
+  brief allowed. In hub mode the review must also leave the
+  conversation its minimum rows, as the "too small" rule asks of any
+  request. View and hub draw the request through one path (requestBox),
+  which decides the box and the armable id.
+- Property (render): random requests, tracker/checklist/note cards with
+  long, wide, CJK, emoji and escape-looking text, many options, rows and
+  columns, random sizes, both modes; for every armable id, every field
+  appears whole on the screen read column by column. It fails with the
+  grid trust and with the two-row option cap. Codex's tracker case is a
+  test at 170x40 (hub) and 140x30 (single).
+
+2026-10-24, main session's decision: a request's input is part of what
+allow authorizes (relay-tui ulqspnmk).
+- The renderer reports, with each frame, what of the input it drew, by
+  line and rune range of the input as shown (core.InputDrawn: the lines'
+  lengths and the spans); the shell's Drawn carries it, and the request
+  keeps the union (Permission.Seen, SeenAt). An allow (y, enter on an
+  allow option, any allow kind) is taken only once every line has been
+  drawn whole and ArmDelay after the last part was; until then the box
+  says "read the whole input with v to allow" (shorter forms on narrow
+  boxes) and a y says so. An input that fits the box is read with the
+  box, as before. Refusing and cancelling stay at once, live key only.
+- v opens the input view in the request's place (a surface of its own,
+  SurfaceInputView): the whole input wrapped and never cut, scrolled
+  with up/down, pgup/pgdown, g/G, closed with v, esc or q; nothing
+  there answers. v still puts the request in the transcript. Judgment
+  calls: coverage is by logical line and rune range, so it survives a
+  resize; a different rendering of the input (another escaping) resets
+  it. e2e tests at 40 columns now read the input with v before y.
+- Property (ui, both modes): inputs of up to 60 long lines, random
+  sizes, v, scrolling, closing, y, enter, resizes; every span a frame
+  reports is on the screen, and an allow goes out only after every line
+  was reported drawn and the delay since the last passed. Fails without
+  the gate, and if the box reports its cut input as drawn.
