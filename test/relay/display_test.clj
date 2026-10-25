@@ -402,7 +402,7 @@
     (is (not (str/includes? (tools/envelope (assoc result :error "e" :ok nil)) "display"))
         "an error carries no display")))
 
-;; --- the pane in relay chat, with the real relay-tui on a pseudo-terminal
+;; --- the pane in the dashboard, with the real relay-tui on a pseudo-terminal
 
 (def drive-py (str (fs/absolutize "pentest/pty/drive.py")))
 

@@ -96,7 +96,7 @@
   "Each way relay asks the operator for something, in the order shown,
   with what answers it."
   [["hold" "held calls" "relay approve, relay deny"]
-   ["permission" "calls asked in a conversation" "the chat client"]
+   ["permission" "calls asked in a conversation" "the dashboard"]
    ["quarantine" "quarantined memos" "relay release"]
    ["declassify" "memos for a public role" "relay declassify"]
    ["fresh" "changed MCP tools" "relay fresh"]

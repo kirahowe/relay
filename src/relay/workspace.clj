@@ -1,5 +1,5 @@
 (ns relay.workspace
-  "What `relay acp` tells a chat client's workspace pane, through ACP
+  "What `relay acp` tells a client's workspace pane, through ACP
   extension methods (their names start with _, as ACP requires):
 
     _relay/items     what the operator was shown in a session, and the

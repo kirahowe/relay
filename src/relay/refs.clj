@@ -20,7 +20,7 @@
     [[file:/Users/kira/x.pdf]]   a file on the operator's disk
     [[web:https://example.org/]] a web page
 
-  `resolve` is the lookup a chat client uses to check a ref and open it."
+  `resolve` is the lookup a client uses to check a ref and open it."
   (:refer-clojure :exclude [ref resolve])
   (:require [clojure.string :as str]
             [relay.cards :as cards]

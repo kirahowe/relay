@@ -609,7 +609,7 @@
         (is (not (str/blank? err)))
         (is (= [:ended true] ((juxt :status :crashed) (first (chat-wakes)))))))))
 
-;; --- relay chat: a chat client on the terminal, running relay acp
+;; --- the dashboard: relay-tui on the terminal, running relay acp
 
 (defn- fake-tui!
   "A stand-in for relay-tui: it writes its argv to argv.json, runs the agent
@@ -680,7 +680,7 @@
             (recur))))))
 
 (deftest chat-with-the-real-relay-tui-on-a-pty
-  ;; script(1) gives relay chat a pseudo-terminal, as a person's terminal
+  ;; script(1) gives the dashboard a pseudo-terminal, as a person's terminal
   ;; would; the keys go in through its stdin.
   (if-not (and bin support/relay-tui-bin (fs/which "script"))
     (println "SKIPPED: needs agentloop, ../relay-tui/bin/relay-tui with --open (relay#65) and script(1)")

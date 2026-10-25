@@ -466,7 +466,7 @@
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #":client" (cfg bad)) (pr-str bad)))))
 
 (deftest chat-client-is-not-a-setting
-  ;; acp-tui's old name for the setting is gone. A relay.edn that still
+  ;; :chat-client, the setting's old name, is gone. A relay.edn that still
   ;; has it must not stop the tick: the key is ignored, as any unknown
   ;; top-level key is, and the client is the default.
   (let [cfg (config/resolve-config {:timezone "UTC" :default-harness :a :notify {:kind :none}

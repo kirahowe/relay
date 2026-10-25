@@ -151,7 +151,7 @@ command line instead.
 - Answer: `{}` once the conversation has ended. A running turn is
   cancelled first.
 - Errors: -32602 when there is no live conversation by that id.
-- relay-tui: ctrl+s, after asking.
+- relay-tui: X while moving, then y to confirm.
 
 ### `_relay/items`
 

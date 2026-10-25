@@ -205,7 +205,7 @@
     (testing "whatever directory the client lists by"
       ;; Regression: the list kept only conversations opened from the
       ;; client's own cwd, so a phone listing with "/" never saw the one
-      ;; acp-tui had opened from /w.
+      ;; relay-tui had opened from /w.
       (let [ids (fn [cwd] (let [[_ fx] (say h 1 (req 10 "session/list" {:cwd cwd}))]
                             (mapv (juxt #(get % "sessionId") #(get % "cwd"))
                                   (get-in (first (writes fx 1)) ["result" "sessions"]))))]

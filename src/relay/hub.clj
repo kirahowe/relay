@@ -752,7 +752,7 @@
   "The live conversations, filtered as ACP asks by working directory. A
   conversation is a role's, opened from whatever directory its first
   client ran in, so the filter takes a directory and everything under
-  it: a phone that lists with \"/\" sees the conversation acp-tui opened
+  it: a phone that lists with \"/\" sees the conversation relay-tui opened
   in ~/code, and a directory no conversation is in or under lists none."
   [h rid msg]
   (let [cwd (get (params-of msg) "cwd")]

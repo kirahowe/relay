@@ -22,7 +22,7 @@
 
 (def relay-tui-bin
   "relay-tui built in the sibling checkout (make -C ../relay-tui build), when it
-  can open a role's conversation (--open, relay#65), which relay chat asks
+  can open a role's conversation (--open, relay#65), which the dashboard asks
   of it; nil otherwise, which skips the tests that need it. Never the
   relay-tui on PATH: that is the live install, which bb deploy moves only
   after the tests pass, so it can be older than the commit under test. bb

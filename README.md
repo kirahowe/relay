@@ -1169,7 +1169,7 @@ the keys.
 
 Give `:client` an absolute path, and likewise `:bin` in the harness
 settings for agentloop. A bare name is looked up on PATH, so whatever
-comes first on PATH would run as your chat client, see your
+comes first on PATH would run as your dashboard, see your
 conversations and answer permission requests for you.
 
 ### ACP clients
