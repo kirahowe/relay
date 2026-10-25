@@ -1681,8 +1681,8 @@ rule TrustFromThePane {
 
     @guidance
         -- The workspace pane in the dashboard (relay) trusts a shown doc through
-        -- relay acp's _relay/trust, with the version and digest of the
-        -- text it listed, so a doc changed since is not trusted. It is
+        -- relay acp's _relay/trust, with the version and the digest of
+        -- the review it listed, so a doc changed since is not trusted. It is
         -- taken only when relay acp was started with --approvals, as
         -- the dashboard (bare relay) starts it for the operator's terminal: the same
         -- presence an answer to a permission request needs. Without it
@@ -1706,7 +1706,9 @@ rule TrustText {
         -- the operator saw: a card changed since is refused, and a chat
         -- client does it with _relay/cards/trust, only with approvals,
         -- which moves the card's rev). relay trust shows it on the terminal and asks
-        -- for a fresh code typed back there. It clears contaminated
+        -- for a fresh code typed back there. Every trust names the
+        -- digest of the subject's review text (relay.review), so what
+        -- is trusted is the text as relay showed it, made safe. It clears contaminated
         -- from what that text says now and never clears private.
         -- Copies already made keep their labels.
 }
@@ -2461,6 +2463,14 @@ rule AskTheClient {
         -- is told it is settled, and an answer from one of them later is
         -- dropped. A client that attaches while the request is open gets
         -- it then. The request and the answer are both recorded.
+        -- Each request carries relay's review of it (relay.review): the
+        -- text the operator consents to and its digest. A client that
+        -- declared relay/review in initialize must send that digest with
+        -- an allow. Without it, or with another, nothing is settled: relay
+        -- sends that client the request again with its reason, at most
+        -- three times, and the request stays open for every client.
+        -- A reject or a cancel needs no digest, and a client that did not
+        -- declare relay/review is not checked.
 }
 
 rule TellTheOperatorAPermissionWaits {

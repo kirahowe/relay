@@ -35,3 +35,48 @@ of ~/code/projects/.next/DASHBOARD.md.
 - Generic ACP clients that do not declare relay/review (Agmente) are
   handled as before: relay cannot know what they show. Known gap, to
   revisit with relay#66.
+- relay side, 2026-10-24. The proxy builds a permission request's
+  review, not the hub. The tool's class is only in the role's manifest,
+  which the proxy holds, and the proxy already rewrites the request with
+  its preview and reads it back, so the review is made from the line
+  every client gets. The hub keeps that line and checks an allow
+  against its H. The proxy replaces any relay/review the agent sent and
+  drops any relay/refused.
+- T is escaped by relay.text/visible-strict, new beside visible: the
+  tab, every space but U+0020 and anything outside the general
+  categories L, M, N, P and S become \u{XXXX} (Go's unicode.IsPrint set,
+  which the pager checks). visible is unchanged, since the command line
+  relies on it keeping tabs.
+- The preview in a request's T is the preview command's own text with
+  the preview's labels, not the markdown clients get. That markdown
+  escapes hidden characters without doubling backslashes, so a real
+  control and its spelled-out escape look the same in it. The notes the
+  markdown adds (placeholders, new link hosts, lookalikes) are left out
+  because the contract does not list them; worth adding if Kira wants.
+- The input is pretty-printed by a new relay.json/pretty: members in name
+  order, two spaces an indent, numbers as generate writes them.
+- Trust digest rule: every trust names the sha256 of the subject's
+  review text, H, for every kind (relay.core/trust-digest). A card's and
+  a doc item's "sha256" are now H, so the relay-tui binary of today,
+  which echoes the sha256 it was sent, keeps working, and a client that
+  declares relay/review matches H with no separate check. `relay trust`
+  names the same digest, computed from the state it showed. Kinds other
+  than card and doc get a review text of their kind, ref and version and
+  their text behind the gutter. The digest of the raw text no longer
+  trusts anything.
+- An allow refused for a missing or wrong digest is not answered with an
+  error (an answer is a response). relay sends the request again to that
+  connection under a new id with params._meta relay/refused. After 3 bad
+  allows from one connection for one request it stops, warns on stderr,
+  and keeps the connection in the request's list, so the request is not
+  unattended and is never refused for it, even in embedded mode. The
+  client can still reject under its last id.
+- Once a connection declares relay/review, a later initialize cannot take
+  it back.
+- A request's own fields (title, toolCall content with relay's preview)
+  are unchanged: generic clients still show them.
+- Known limits: defang is not injective (a contaminated "x.com" and
+  "x[.]com" give the same T), and inside contaminated JSON a quoted
+  number such as "12.50" is defanged, since its word starts with a quote.
+  A code point Java's Unicode tables assign and Go's do not would make the
+  pager fail closed.

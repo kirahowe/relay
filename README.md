@@ -1154,7 +1154,10 @@ when it does not exist. Everything in the pane comes from relay, never
 from the model's text, and anything contaminated is marked untrusted.
 You approve or deny a call as before. Trusting a shown item from the
 pane does what `relay trust doc <path>` does, for the text the pane
-showed you; it needs the dashboard, as approvals do. relay-tui's README has
+showed you; it needs the dashboard, as approvals do. relay writes the
+text you consent to when you allow a call or trust a card or doc (the
+review), and a client that says it shows reviews must send back the
+review's digest, or relay does not take the allow or the trust. relay-tui's README has
 the keys.
 
 Give `:client` an absolute path, and likewise `:bin` in the harness
@@ -1238,8 +1241,14 @@ with `session/request_permission`. relay passes that request on only when
 since its client is the operator's terminal. The client's answer goes
 back only if it picks an option the agent offered, or cancels; anything
 else, and a request still open when the client goes away, is a refusal.
-Without `--approvals` (an editor, say), relay refuses the call itself and
-notifies the operator. Each request and its answer are recorded in the
+Each request carries relay's review of the call under `_meta`: the role,
+the tool and its class, the preview, the whole input, the labels and the
+options, as one text made safe to show, and its sha256. A client that
+declares `relay/review` in `initialize` must send that digest with an
+allow, and relay sends the request again rather than take an allow
+without it ([docs/client-protocol.md](docs/client-protocol.md#reviews)
+has the details). Without `--approvals` (an editor, say), relay refuses
+the call itself and notifies the operator. Each request and its answer are recorded in the
 log with the role, session, tool and a digest of the input.
 
 When the held call's tool has a `:preview`, relay runs it before passing

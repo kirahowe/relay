@@ -119,7 +119,8 @@ command line instead.
 
 - Scope: connection.
 - Params: `{"card": int, "rev": int, "sha256": string}`: the card's rev
-  and the `sha256` relay sent with it. Nothing else, `sessionId` included.
+  and the `sha256` relay sent with it, which is the digest of the card's
+  review (see [Reviews](#reviews)). Nothing else, `sessionId` included.
 - Answer: `{"trusted": true, "card": Card}`, the card now clean.
 - Errors: -32000 when the connection does not take approvals (the message
   names `relay trust card <id>`, to run in a terminal); -32000 "Nothing was
@@ -127,10 +128,8 @@ command line instead.
   is not its current one; -32602 for the params.
 - The log records the trust as the operator's, from the chat. The card's
   rev moves, so every subscribed connection is sent it.
-- relay-tui: `t` on a card with outside text. y does nothing until a
-  short delay has passed, the question closes if the card changes or the
-  screen changes under it, and relay-tui sends the rev and digest of the
-  card as it showed it.
+- relay-tui: `t` on a card with outside text opens the card's review;
+  relay-tui sends the rev and the review's digest.
 
 ## Methods: a session
 
@@ -162,8 +161,9 @@ command line instead.
 - Answer: `{"items": [Item]}`, newest first. A shown doc is `{"kind":
   "shown", "ref", "path", "callId", "at", "title", "text", "sources":
   [{"title", "ref"}], "labels", "version", "sha256", "canTrust": bool,
-  "trustCommand"}`. `text` is what trusting it vouches for and `sha256`
-  its digest. A proposal is `{"kind": "proposal", "callId", "tool",
+  "trustCommand", "review"}`. `text` is the doc's content as it is,
+  `review` the doc as the operator consents to trusting it (see
+  [Reviews](#reviews)), and `sha256` the review's digest. A proposal is `{"kind": "proposal", "callId", "tool",
   "input", "preview", "labels", "status", "at"}` with `"fixedArgs"` when
   the operator's settings fix some of its arguments. `status` is
   `"waiting"`, `"allowed"`, `"rejected"` or `"cancelled"`. `canTrust` is
@@ -188,13 +188,12 @@ command line instead.
 
 - Scope: session, answered by the proxy.
 - Params: `{"sessionId", "path", "version": int, "sha256"}`, as
-  `_relay/items` listed them.
+  `_relay/items` listed them: `sha256` is the digest of the doc's review.
 - Answer: `{"trusted": true, "labels": [string]}`, the doc's labels now.
 - Errors: -32000 when the connection does not take approvals (the message
   names `relay trust doc <path>`), when the doc is not one this
   conversation showed, or when it changed since it was listed.
-- relay-tui: `t` on a contaminated shown item, after the same delay as a
-  card's trust.
+- relay-tui: `t` on a contaminated shown item opens its review.
 
 ## Notifications from relay
 
@@ -229,6 +228,10 @@ speaks these methods to the client.
 | `relay/labels` | the preview's text block | relay | the labels of the preview's text, apart from the session's | defangs the request's input by them too, and labels the proposal |
 | `agentloop/labels` | tool calls and `session_info_update`s | agentloop; relay sends the latest first in a replay | the session's labels | the status line, and defanging once contaminated |
 | `agentloop/fixed_args` | a held call's tool call | agentloop | the arguments the operator's settings fix | marks them "set by your settings" |
+| `relay/review` | `initialize` request, `clientCapabilities._meta` | client | `1`: the client shows relay's reviews and is held to them (see [Reviews](#reviews)) | declares it |
+| `relay/review` | a permission request's `params._meta` | relay | the request's review, `{"text", "sha256"}`; relay replaces whatever the agent put there | the review pager |
+| `relay/review` | a permission answer's `result._meta` | client | the `sha256` of the review the operator saw; an allow from a client that declared `relay/review` needs it | sends it with an allow |
+| `relay/refused` | a permission request's `params._meta` | relay | relay's reason for refusing this client's last allow of the same request; relay drops whatever the agent put there | shows it above the review |
 
 Relay's README describes what relay does with each of these: when it
 passes a permission request on, how it builds a preview, and what it does
@@ -243,7 +246,9 @@ client renders what it gets and works nothing out for itself. `text` is
 the card's text form, for a client that does not know its kind. A card
 with contaminated text also has `"sha256"`, the digest of that text form,
 which is what `_relay/cards/trust` sends back with the card's `rev`. A
-clean card has no `sha256`.
+clean card has no `sha256`. Every card, clean or not, has `"review"`
+(see [Reviews](#reviews)), and a contaminated card's `sha256` is the
+review's.
 
 ```json
 {"id": 1840, "kind": "tracker", "status": "active", "complete": false,
@@ -261,3 +266,100 @@ A checklist has `"items": [{"id", "text", "done", "outsider", "rev"}]`
 and a note `"note": {"text", "outsider", "rev"}`. Only cells that are not
 open are listed, and a note has no `progress`. An element's `rev` is
 when its text was last written, which is what `seen` is checked against.
+
+## Reviews
+
+What the operator consents to (allowing a call, trusting a card or a
+doc) is written by relay, so that every client only has to show a text
+as it is. relay sends each such subject with a review, `{"text": T,
+"sha256": H}`:
+
+- on a permission request, in `params._meta["relay/review"]`;
+- on a card's wire form, as `"review"`, on every card;
+- on a shown doc in `_relay/items`, as `"review"`.
+
+`relay.review` makes them. T is plain text, lines joined by `"\n"`, each
+line through `relay.text/visible-strict` (after `relay.text/defang` when
+its source is contaminated). Every character of T is the space (U+0020),
+`"\n"`, or one of Unicode's general categories L, M, N, P or S, which is
+Go's `unicode.IsPrint` set. Anything else, the tab and every other space
+(no-break, ideographic and so on) included, is written as `\u{XXXX}`,
+and a backslash as two, so two subjects that differ never give the same
+T, except where defanging makes two links look alike. H is the sha256
+hex of T's UTF-8 bytes. Nothing is left out for length. Text from a role
+or an outsider sits behind the gutter `"  │ "`, one gutter line for each
+of its lines (headed `"  [contaminated]"` when defanged), and the
+strings in relay's own lines are written as JSON strings, so nothing in
+the subject can pass for a line of relay's.
+
+A permission request's T holds, in this order: the role; the tool and
+its class (from the role's tools, or "not known to relay"); what the
+call does, as the tool's preview with the preview's labels, or a line
+saying the tool has none; the whole input as JSON, two spaces an
+indent, members in the order of their names; the arguments the
+operator's settings fix, when there are any; the conversation's
+labels; and every option the agent offers, with its kind and id. The
+preview is defanged when its labels are contaminated, and the input
+when the conversation's labels or the preview's are. For example:
+
+```
+Permission request from role "clerk"
+Tool "send", class "act"
+
+What it does, by the tool's preview (its labels ["private"]):
+  │ Send to Everyone
+
+Input, all of it, as JSON:
+  │ {
+  │   "body": "hi",
+  │   "group": "Everyone"
+  │ }
+Set by your settings, not by the role: ["group"]
+
+Labels of the conversation: ["private"]
+
+Options:
+  "Allow once", kind "allow_once", id "allow_once"
+  "Reject", kind "reject_once", id "reject_once"
+```
+
+A card's T is its text form (`relay.cards/text-form`) with each
+element's text marked and defanged by its own labels, as the wire form's
+`text` marks it, made safe line by line:
+
+```
+Card 12: Taxes (checklist, 0 of 2 done, rev 14) [[card:12]]
+[ ] 1 Find the T4
+[ ] 2 [contaminated] Read hxxps://evil[.]example
+```
+
+A doc's T is `Doc "<path>", version <n>` and then its content behind the
+gutter, defanged when its labels are contaminated.
+
+### What relay checks
+
+A client declares that it shows reviews with
+`clientCapabilities._meta["relay/review"]: 1` in `initialize`. Once a
+connection has declared it, a later `initialize` does not take it back.
+On such a connection:
+
+- An answer to a permission request that selects an option of kind
+  `allow_once` or `allow_always` must carry `result._meta["relay/review"]`
+  equal to that request's H. When it carries none, or another, relay does
+  not settle the request and sends the agent nothing. It sends the same
+  `session/request_permission` to that connection again, under a new id,
+  with `params._meta["relay/refused"]` saying why. An answer to the old
+  id is then dropped. After 3 such allows from one connection for one
+  request, relay stops sending it again and tells the operator on stderr.
+  The request stays open for every connection either way: relay neither
+  allows nor refuses a call because of a bad allow. A reject or a cancel
+  needs no digest.
+- `_relay/cards/trust` and `_relay/trust` must name H.
+- An archive keeps `seen`: relay refuses one of a card changed after it.
+
+Trust names H on every connection, since relay sends H as the subject's
+`sha256`, and the CLI's `relay trust` names the same digest. A client
+that does not declare `relay/review` (a generic ACP client such as
+Agmente, or relay-tui before it shows reviews) is handled as before: its
+allow needs no digest, because relay cannot know what it showed. That
+is a known gap (relay#79).
