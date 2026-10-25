@@ -15,6 +15,7 @@
             [relay.cards :as cards]
             [relay.config :as config]
             [relay.core :as core]
+            [relay.json :as strict]
             [relay.reports :as reports]
             [relay.review :as review]
             [relay.spend :as spend]
@@ -461,6 +462,19 @@
               (for [[k v] (sort-by (comp str key) fixed-args)]
                 (str "      " (name k) " = " (text/defang (json/generate-string v))))))))))
 
+(defn exact-input
+  "What a held call would run on, exactly: the input (with the operator's
+  fixed arguments, when there are any) read from the JSON text the hold
+  kept, by relay's strict reader, so every number is as agentloop sent
+  it. A hold recorded before relay kept that text gives the input as the
+  log read it back, its decimals as doubles (hold-notes says so)."
+  [{:keys [fixed-args input-json effective-input-json] :as h}]
+  (let [fixed? (map? fixed-args)
+        text (if fixed? effective-input-json input-json)]
+    (if (string? text)
+      (strict/parse text)
+      (if fixed? (or (:effective-input h) (:input h)) (:input h)))))
+
 (defn hold-review
   "A held call as the review the operator approves or denies it from
   (relay.review/request-lines, headed Held call, with no options): the
@@ -468,7 +482,7 @@
   on, the arguments the operator's settings fix, the session's labels and
   the characters to check."
   [{:keys [role tool labels fixed-args preview] :as h} config]
-  (let [input (if (map? fixed-args) (or (:effective-input h) (:input h)) (:input h))
+  (let [input (exact-input h)
         reader (= core/reader-tool tool)
         inner (when reader (core/held-tool tool input))
         class (if reader (some->> inner (tools/class-of config)) (tools/class-of config tool))]
@@ -497,6 +511,8 @@
               "seed" "what relay put in its prompt"
               "prompt" "a prompt it was given"
               (q (pr-str src)))))
+     (when-not (string? (if (map? (:fixed-args h)) (:effective-input-json h) (:input-json h)))
+       ["relay recorded this hold before it kept inputs exactly: a decimal in it may be shown rounded."])
      (when (and config (core/fixed-args-changed? config h))
        ["Your settings for this tool changed since it was held, so it will not run as shown: deny it."]))))
 

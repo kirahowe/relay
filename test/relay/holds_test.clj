@@ -15,6 +15,7 @@
             [relay.inbound :as inbound]
             [relay.log :as log]
             [relay.render :as render]
+            [relay.json :as strict]
             [relay.review :as review])
   (:import (java.time Instant)))
 
@@ -554,3 +555,40 @@
             (binding [cli/*tty* (fn [] (reset! asked true) {:say identity :ask (constantly "x")})]
               (is (thrown-with-msg? clojure.lang.ExceptionInfo #"already decided" (relay data "approve" (str id)))))
             (is (false? @asked))))))))
+
+(deftest a-held-call-s-review-keeps-its-numbers-exact-through-the-log
+  ;; Codex, relay#79 round 4: the log reads decimals back as doubles, so a
+  ;; review built from the reloaded hold showed 12345678901234567.0 as
+  ;; 1.2345678901234568E16, while approval lets the exact input run.
+  (with-data
+    (fn [data]
+      (let [outcome (fn [n] (str "{\"type\":\"outcome\",\"held\":[{\"id\":\"toolu_" n "\",\"name\":\"post\",\"input_sha256\":\"d" n "\","
+                                 "\"input\":{\"invoice_id\":1234567890123456" n ".0,\"big\":123456789012345678901234567890,"
+                                 "\"fine\":0.1000000000000000055511151231257827,\"e\":1.5e300}}]}"))
+            held (fn [n] (:held (agentloop/parse-outcome (outcome n))))
+            sys (inbound/system data)]
+        (doseq [c [{:type :role/add :actor "operator" :args {:id "clerk" :title "Clerk" :instructions "x"}}]]
+          (inbound/submit! sys c))
+        (doseq [n [7 8]]
+          (inbound/submit! sys {:type :wake/start :actor "operator" :args {:role "clerk" :note "Go."}})
+          (inbound/submit! sys {:type :wake/end :actor "dispatcher"
+                                :args {:wake (:id (support/calling-wake (inbound/current-state sys) "clerk"))
+                                       :outcome "ran" :session (str "s" n) :said ""
+                                       :held (agentloop/held-calls (held n))}}))
+        ;; A fresh system reads every hold back from the log.
+        (let [state (inbound/current-state (inbound/system data))
+              [h7 h8] (sort-by :id (core/open-holds state))
+              t7 (review/text-of (render/hold-review h7 {}))
+              t8 (review/text-of (render/hold-review h8 {}))]
+          (is (str/includes? t7 "\"invoice_id\": 12345678901234567.0") t7)
+          (is (str/includes? t8 "\"invoice_id\": 12345678901234568.0"))
+          (is (str/includes? t7 "\"big\": 123456789012345678901234567890"))
+          (is (str/includes? t7 "\"fine\": 0.1000000000000000055511151231257827"))
+          (is (not= t7 t8) "two inputs that differ in one digit never share a review")
+          (is (= (strict/parse (strict/generate (:input (first (held 7)))))
+                 (render/exact-input h7))
+              "the input the review shows is the one agentloop sent")
+          (is (= "d7" (:input-sha256 h7)) "and approval forwards agentloop's digest of it")
+          (is (not-any? #(str/includes? % "rounded") (render/hold-notes h7 {})))
+          (testing "a hold from before relay kept inputs exactly says so"
+            (is (some #(str/includes? % "rounded") (render/hold-notes (dissoc h7 :input-json) {})))))))))

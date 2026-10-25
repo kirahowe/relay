@@ -325,3 +325,19 @@ without the fix.
    core.TestOnlyRelaysReAskShowsARefusal (hub or plain agent, allowed
    first or not, same call or not, links and controls in the reason). It
    fails without the check.
+- Codex round 4 (a held call's numbers): the log reads decimals back as
+  doubles, so a hold's review built from the reloaded hold rounded
+  12345678901234567.0. hold/opened now also records :input-json (and
+  :effective-input-json with fixed arguments), the input as the strict
+  reader read it from agentloop's outcome, written back by
+  relay.json/generate; the review reads that text with the strict reader
+  (render/exact-input), so decimals and big integers are exact. A hold
+  recorded before this has no text: its review uses the log's input and
+  relay's notes say a decimal may be shown rounded. The digest approval
+  forwards is agentloop's input_sha256, which agentloop computes over its
+  own canonical encoding (Go's encoder over the literal number text) and
+  checks again when it runs the call; relay keeps the value agentloop sent
+  with it but does not recompute that digest, since doing so would mean
+  reproducing Go's encoder and the literal text the strict reader
+  normalizes. The general fix to the log's number reading is relay#82: it
+  needs an audit of every comparison between logged and computed numbers.

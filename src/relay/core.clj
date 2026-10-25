@@ -16,6 +16,7 @@
             [clojure.walk]
             [relay.cards :as cards]
             [relay.config :as config]
+            [relay.json :as strict]
             [relay.reports :as reports]
             [relay.review :as review]
             [relay.schedule :as schedule]
@@ -1088,12 +1089,15 @@
       "card" (update-in state [:cards num] cards/trusted (:seq event)))))
 
 (defmethod evolve* "hold/opened" [state {:keys [seq at data labels]}]
-  (let [{:keys [role wake session call tool input input-sha256 label-sources effective-input fixed-args]} data]
+  (let [{:keys [role wake session call tool input input-sha256 label-sources effective-input fixed-args
+                input-json effective-input-json]} data]
     (cond-> (assoc-in state [:holds seq] {:id seq :role role :wake wake :session session :call call
                                           :tool tool :input input :input-sha256 input-sha256
+                                          :input-json input-json
                                           :label-sources label-sources
                                           :status :open :opened-at (inst at) :labels (union labels)})
-      (map? fixed-args) (update-in [:holds seq] assoc :effective-input effective-input :fixed-args fixed-args))))
+      (map? fixed-args) (update-in [:holds seq] assoc :effective-input effective-input :fixed-args fixed-args
+                                   :effective-input-json effective-input-json))))
 
 (defmethod evolve* "hold/previewed" [state {:keys [data labels]}]
   (let [{:keys [hold content is-error]} data]
@@ -1907,11 +1911,17 @@
     (cond
       (nil? known)
       (let [tx (emit tx "hold/opened" (cond-> {:role (:role wake) :wake (:id wake) :session session
-                                               :call id :tool name :input input :input-sha256 input-sha256}
+                                               :call id :tool name :input input :input-sha256 input-sha256
+                                               ;; The input exactly, as JSON text: the log
+                                               ;; reads its numbers back as doubles, and the
+                                               ;; operator's review must show the input the
+                                               ;; approval lets run, digit for digit.
+                                               :input-json (strict/generate input)}
                                         (map? label-sources) (assoc :label-sources label-sources)
                                         ;; What the call would run on: the digest is of it.
                                         (and (map? effective-input) (map? fixed-args) (seq fixed-args))
-                                        (assoc :effective-input effective-input :fixed-args fixed-args))
+                                        (assoc :effective-input effective-input :fixed-args fixed-args
+                                               :effective-input-json (strict/generate effective-input)))
                      (:said-labels tx))
             hold-id (last-id tx)
             preview (preview-of preview)
