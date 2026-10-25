@@ -1,10 +1,10 @@
 {:id 35
  :title "Make the test suites fast enough to deploy without waiting"
- :status :ready
+ :status :in-progress
  :type :chore
  :priority :p2
  :created "2026-10-17"
- :updated "2026-10-17"
+ :updated "2026-10-24"
  :tags #{}
  :blocked-by #{}
  :related #{}
