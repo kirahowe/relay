@@ -299,13 +299,28 @@ headed by a `"  [contaminated]"` line when its source is. So T can be
 read back into the subject exactly, and two subjects that differ never
 give the same T (relay's tests read every kind of T back).
 
+Every T ends with `Characters to check:`. Each untrusted value with a
+word that mixes scripts, or a character outside ASCII, is named there by
+the field it is in (`preview`, `input ["to"]`, `title`, `item 2`,
+`content`, ...), with the word and each such character's code point and
+Unicode name, as `relay.text/lookalike-findings` finds them. A value
+from a contaminated source has its word escaped the same way. With
+nothing to name, the section reads `Characters to check: none`:
+
+```
+Characters to check:
+  input ["to"]: word "pаypal" mixes Cyrillic and Latin
+  input ["to"]: U+0430 CYRILLIC SMALL LETTER A
+```
+
 A permission request's T holds, in this order: the role; the tool and
 its class (from the role's tools, or "not known to relay"); what the
 call does, as the tool's preview with the preview's labels, or a line
 saying the tool has none; the whole input as JSON, two spaces an
 indent, members in the order of their names; the arguments the
 operator's settings fix, when there are any; the conversation's
-labels; and every option the agent offers, with its kind and id. The
+labels; every option the agent offers, with its kind and id; and the
+characters to check (below). The
 preview's links are broken when its labels are contaminated, and the
 input's when the conversation's labels or the preview's are. For example:
 
@@ -328,6 +343,8 @@ Labels of the conversation: ["private"]
 Options:
   "Allow once", kind "allow_once", id "allow_once"
   "Reject", kind "reject_once", id "reject_once"
+
+Characters to check: none
 ```
 
 A card's T names the card, its kind, rev and state, then its title and
@@ -339,6 +356,8 @@ Card 12 (checklist, rev 14, 0 of 2 done)
 Title: "Taxes"
 Item 1, open: "Find the T4"
 Item 2, open: "Read https\u{003a}//evil\u{002e}example" [contaminated]
+
+Characters to check: none
 ```
 
 A tracker's cells read `Row 1, column 2: done`.

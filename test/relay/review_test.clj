@@ -229,7 +229,9 @@
                            ""
                            "Options:"
                            "  \"Allow once\", kind \"allow_once\", id \"allow_once\""
-                           "  \"Reject\", kind \"reject_once\", id \"reject_once\""])
+                           "  \"Reject\", kind \"reject_once\", id \"reject_once\""
+                           ""
+                           "Characters to check: none"])
            t))))
 
 ;; --- reading a review back: injectivity, by construction
@@ -293,7 +295,8 @@
                                      {"name" (read-json n) "kind" (read-json k) "optionId" (read-json i)})))
                             more])
                          [nil more])]
-    (assert (empty? more))
+    (assert (= "" (first more)))
+    (assert (str/starts-with? (second more) "Characters to check:"))
     {:heading heading :role (read-json role) :tool (read-json tool)
      :class (when-not (= "not known to relay" class) (read-json class))
      :preview preview :input (read-json input-text) :fixed fixed :labels labels :options options}))
@@ -316,7 +319,7 @@
         [title-text title-c] (labelled "Title: " l1)
         [body more] (split-with #(not= "" %) more)
         base {:id (parse-long id) :kind kind :rev (parse-long rev) :archived (some? archived) :title [title-text title-c]}]
-    (assert (empty? more))
+    (assert (str/starts-with? (second more) "Characters to check:"))
     (case kind
       "checklist" (assoc base :items (if (= ["No items yet."] body) []
                                          (vec (for [l body :let [[i st text c] (el "Item (\\d+), (done|open): " l)]]
@@ -345,7 +348,7 @@
   (let [[l0 & more] (str/split t #"\n" -1)
         [_ kind ref version] (re-matches (re-pattern (str "(?s)(\\w+) (" json-string-re "), version (\\d+)")) (unescape l0))
         [content c more] (take-block more)]
-    (assert (empty? more))
+    (assert (= "" (first more)))
     {:kind (str/lower-case kind) :ref (read-json ref) :version (parse-long version) :content content :contaminated c}))
 
 (def gen-el (gen/let [t gen-nasty ls gen-labels] {:text t :labels (vec ls)}))
@@ -389,6 +392,41 @@
                          :columns (vec (map-indexed (fn [i [t ls]] {:id (inc i) :text t :labels ls}) cols)) :rows [] :cells {}})]
     (is (not= (review/card-text (card [["Jan, 2 [contaminated] Feb" ["contaminated"]]]))
               (review/card-text (card [["Jan" []] ["Feb" ["contaminated"]]]))))))
+
+;; --- characters that pass for others
+
+(def confusables [0x430 0x435 0x43e 0x440 0x441 0x3bf 0x3b1 0x456 0xff41 0x217c])
+
+(def gen-with-confusable
+  (gen/let [a gen/string-alphanumeric cp (gen/elements confusables) b gen/string-alphanumeric]
+    (str a (cp-str cp) b)))
+
+(defspec a-confusable-in-the-input-is-always-named 300
+  (prop/for-all [s gen-with-confusable k gen/string-alphanumeric labels gen-labels
+                 nest (gen/elements [:value :key :deep])]
+    (let [[input path] (case nest :value [{k s} [k]] :key [{s 1} [s]] :deep [{k [{"x" s}]} [k 0 "x"]])
+          t (get (review/request-review (assoc clean-request :labels labels :input input)) "text")
+          section (second (str/split t #"\nCharacters to check:\n" 2))
+          cp (first (filter #(> % 127) (iterator-seq (.iterator (.codePoints ^String s)))))]
+      (and section
+           (str/includes? section (format "U+%04X %s" cp (Character/getName (int cp))))
+           (str/includes? section (str "  input " (if (text/contaminated? labels)
+                                                     (text/visible-defanged (strict/generate path))
+                                                     (text/visible-strict (strict/generate path)))))))))
+
+(deftest a-lookalike-recipient-is-named-where-it-is
+  ;; Codex, relay#79 round 1: pаypal with a Cyrillic а.
+  (let [t (get (review/request-review (assoc clean-request :labels ["contaminated"]
+                                             :preview {:text "To: pаypal" :labels ["contaminated"]}
+                                             :input {"to" "pаypal"}))
+               "text")]
+    (is (str/includes? t "  preview: word \"pаypal\" mixes Cyrillic and Latin"))
+    (is (str/includes? t "  input [\"to\"]: word \"pаypal\" mixes Cyrillic and Latin"))
+    (is (str/includes? t "  input [\"to\"]: U+0430 CYRILLIC SMALL LETTER A")))
+  (testing "a card's and a doc's too"
+    (is (str/includes? (review/card-text {:id 1 :kind "checklist" :status :active :rev 3 :title {:id 0 :text "pаy" :labels []} :items []})
+                       "  title: U+0430 CYRILLIC SMALL LETTER A"))
+    (is (str/includes? (review/doc-text "a.md" 1 [] "pаy") "  content: U+0430 CYRILLIC SMALL LETTER A"))))
 
 (deftest pretty-json-reads-back-as-the-value
   (doseq [v [{} [] {"b" [1 2.50M {}] "a" "x\né"} nil "s" [[[]]]]]

@@ -98,3 +98,12 @@ of ~/code/projects/.next/DASHBOARD.md.
   back: test-only parsers turn the T of random requests, held calls,
   cards of every kind and docs back into their fields, and the property
   is parse(T(subject)) = subject. That replaces the pairwise checks.
+- Codex round 1, finding 1 (lookalikes dropped): every review ends with
+  "Characters to check:", naming by field (preview, input [path], tool,
+  option n, title, item n, column n, row n, note, path, content) every
+  untrusted value with a word mixing scripts or any character outside
+  ASCII, with the code point and Unicode name. It reuses relay's
+  detector, now relay.text/lookalike-findings (lookalikes renders it as
+  before). Like preview-markdown, it names every non-ASCII character, not
+  only known confusables: relay has no confusables table, and naming an
+  accented letter costs a line while missing a lookalike costs consent.

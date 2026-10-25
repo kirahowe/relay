@@ -230,23 +230,35 @@
   (let [c (String. (Character/toChars (int cp)))]
     (some (fn [[s re]] (when (re-matches re c) s)) scripts)))
 
-(defn lookalikes
-  "What in a text could pass for something it is not, for a person about
-  to approve it: each word that mixes scripts (Latin with Cyrillic, say),
-  and each character outside ASCII, by its Unicode name. Empty when the
-  text is plain ASCII."
+(defn lookalike-findings
+  "What in a text could pass for something it is not, as data: for each
+  word that mixes scripts (Latin with Cyrillic, say) {:word w :scripts
+  [...]}, then for each distinct character outside ASCII {:cp cp :name
+  its Unicode name, or \"unnamed\"}. Empty when the text is plain ASCII."
   [s]
-  (let [s (str s)
-        cps (iterator-seq (.iterator (.codePoints s)))
-        words (re-seq #"\S+" s)]
-    (concat
-     (for [w words
-           :let [scripts (set (keep script-of (iterator-seq (.iterator (.codePoints ^String w)))))]
-           :when (> (count scripts) 1)]
-       ;; The word as it is: the edge that shows it applies visible once.
-       (str "\"" w "\" mixes " (str/join " and " (sort scripts))))
-     (for [cp (distinct cps) :when (> cp 127)]
-       (format "U+%04X %s" cp (or (Character/getName (int cp)) "unnamed"))))))
+  (let [s (str s)]
+    (if (every? #(< (int %) 128) s)
+      []
+      (vec
+       (concat
+        (for [w (re-seq #"\S+" s)
+              :when (some #(> (int %) 127) w)
+              :let [scripts (set (keep script-of (iterator-seq (.iterator (.codePoints ^String w)))))]
+              :when (> (count scripts) 1)]
+          {:word w :scripts (vec (sort scripts))})
+        (for [cp (distinct (iterator-seq (.iterator (.codePoints s)))) :when (> cp 127)]
+          {:cp cp :name (or (Character/getName (int cp)) "unnamed")}))))))
+
+(defn lookalikes
+  "lookalike-findings as lines for a person about to approve something:
+  each word that mixes scripts, then each character outside ASCII, by its
+  Unicode name. Empty when the text is plain ASCII."
+  [s]
+  (for [{:keys [word scripts cp name]} (lookalike-findings s)]
+    (if word
+      ;; The word as it is: the edge that shows it applies visible once.
+      (str "\"" word "\" mixes " (str/join " and " scripts))
+      (format "U+%04X %s" cp name))))
 
 ;; --- links
 

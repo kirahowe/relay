@@ -21,7 +21,11 @@
     - each line is escaped once: by relay.text/visible-strict, or by
       relay.text/visible-defanged for a value from a contaminated source,
       which breaks its links with escapes. Both show a backslash as two,
-      so the escaping can be undone.
+      so the escaping can be undone;
+    - the review ends with \"Characters to check:\": every untrusted value
+      that holds a word mixing scripts or a character outside ASCII is
+      named there by its field, with each such character's code point and
+      Unicode name (relay.text/lookalike-findings).
 
   Nothing is cut for length."
   (:require [clojure.string :as str]
@@ -82,6 +86,35 @@
 (defn- labels-text [labels]
   (if (nil? labels) "none sent" (strict/generate (vec labels))))
 
+(defn- disclosures
+  "The Characters to check lines for one untrusted value: `field` is
+  relay's name for where it is (already safe), `labels` its source's."
+  [field labels s]
+  (for [{:keys [word scripts cp name]} (text/lookalike-findings s)]
+    (if word
+      (str "  " field ": word " (q labels word) " mixes " (own (str/join " and " scripts)))
+      (str "  " field ": " (own (format "U+%04X %s" cp name))))))
+
+(defn- characters-to-check
+  "The closing section, from [field labels value] for every untrusted
+  value."
+  [values]
+  (let [ls (mapcat (fn [[field labels s]] (disclosures field labels s)) values)]
+    (if (seq ls)
+      (cons "Characters to check:" ls)
+      ["Characters to check: none"])))
+
+(defn- json-strings
+  "Every string in a JSON value, keys included, with its path: [path s]."
+  [x path]
+  (cond
+    (map? x) (mapcat (fn [[k v]] (let [k (if (keyword? k) (subs (str k) 1) (str k))]
+                                   (cons [(conj path k) k] (json-strings v (conj path k)))))
+                     (sort-by (comp str key) x))
+    (sequential? x) (mapcat (fn [i v] (json-strings v (conj path i))) (range) x)
+    (string? x) [[path x]]
+    :else []))
+
 ;; --- a permission request, or a held call
 
 (defn request-lines
@@ -90,7 +123,8 @@
   class, what the call does (relay's preview, under its own labels), the
   whole input as JSON with members in name order, the arguments the
   operator's settings fix, the session's labels, every option the agent
-  offers with its kind (no section when :options is nil).
+  offers with its kind (no section when :options is nil), and the
+  characters to check.
 
   The preview's links are broken when its labels are contaminated, and
   the input's when the session's or the preview's are."
@@ -121,7 +155,14 @@
                     (str "  " (q [] (get o "name")) (own ", kind ") (q [] (get o "kind"))
                          (own ", id ") (q [] (get o "optionId"))))
                   ["  none"])))
-      ))))
+      [""]
+      (characters-to-check
+       (concat [["tool" [] tool]]
+               (when preview [["preview" p-labels p-text]])
+               (for [[path s] (json-strings input [])]
+                 [(str "input " (escaped input-labels (strict/generate path))) input-labels s])
+               (for [[i o] (map-indexed vector options) k ["name" "kind" "optionId"]]
+                 [(str "option " (inc i) " " k) [] (get o k)])))))))
 
 (defn request-review
   "The review of a permission request (request-lines)."
@@ -143,7 +184,8 @@
 (defn card-lines
   "A card as the review's lines: its id, kind, rev and state, its title,
   then each item, column, row and cell that is not open, or its note,
-  each text a JSON string marked by its own labels (a note's a block)."
+  each text a JSON string marked by its own labels (a note's a block),
+  and the characters to check."
   [{:keys [kind title items rows columns cells note] :as card}]
   (vec
    (concat
@@ -166,7 +208,13 @@
       "note" (concat [(if (text/contaminated? (:labels note)) "Note, from a contaminated source:" "Note:")]
                      (block (:labels note) (:text note)))
       [])
-    )))
+    [""]
+    (characters-to-check
+     (concat [["title" (el-labels title) (:text title)]]
+             (for [{:keys [id text labels]} items] [(str "item " id) labels text])
+             (for [{:keys [id text labels]} columns] [(str "column " id) labels text])
+             (for [{:keys [id text labels]} rows] [(str "row " id) labels text])
+             (when note [["note" (:labels note) (:text note)]]))))))
 
 (defn card-text
   "A card's review text (card-lines)."
@@ -178,11 +226,13 @@
 (defn subject-lines
   "Something relay trusts, other than a card, as the review's lines: its
   kind, its ref (a doc's path) and version, then its text behind the
-  gutter."
+  gutter, and the characters to check."
   [kind ref version labels content]
   (vec (concat [(str (own (str (str/capitalize (str kind)) " ")) (q [] ref) (own (str ", version " version)))]
                (block labels content)
-               )))
+               [""]
+               (characters-to-check [[(if (= "doc" kind) "path" "ref") [] ref]
+                                     [(if (= "doc" kind) "content" "text") labels content]]))))
 
 (defn doc-text
   "A doc's review text: its path and version, its content behind the
