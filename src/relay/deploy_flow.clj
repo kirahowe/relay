@@ -179,10 +179,10 @@
   "The builds and tests to run in the check workspaces, in order."
   [{:keys [o] :as run}]
   (concat (for [r [:agentloop :relay-tui]]
-            {:say (str "Building " (name r) " at " (subs (commit-of run r) 0 12) " in a fresh workspace")
+            {:say (str "Building " (name r) " at " (deploy/short-id {:commit (commit-of run r)}) " in a fresh workspace")
              :dir (check-dir run r) :cmd (deploy/builds r) :what (str (name r) " would not build")})
           (for [cmd (:test-cmds o)]
-            {:say (str "Running " (str/join " " cmd) " on relay at " (subs (commit-of run :relay) 0 12))
+            {:say (str "Running " (str/join " " cmd) " on relay at " (deploy/short-id {:commit (commit-of run :relay)}))
              :dir (check-dir run :relay) :cmd cmd :what (str (str/join " " cmd) " on relay")})))
 
 (defn- forget-workspaces
@@ -363,22 +363,35 @@
     (begin-run run)
     (refuse run ["Not confirmed on the terminal."])))
 
-(defmethod handle :rec0-written [{:keys [o kind] :as run} {:keys [thrown]}]
+(defmethod handle :rec0-written [{:keys [o] :as run} {:keys [thrown]}]
   (cond
     thrown (end run {:refused (str "Nothing was changed.\n  The record file " (:record o) " could not be written: " thrown)})
     ;; A pause that was already there (a failed deploy's) is not this
     ;; run's to lift: the machine may be mixed.
     (:inherited o) (start-waiting (assoc run :record-open? true :pause :inherited :notice? true))
-    :else (emit (assoc run :record-open? true :pause :ours :notice? true) :pause
-                {:why (str "bb " (name kind) " at " (:at o)) :gated true} :paused)))
+    ;; Looked at again just before pausing: the operator may have paused
+    ;; relay by hand while the commits were tested or the code was asked.
+    :else (emit (assoc run :record-open? true) :pause-reason {} :pre-pause)))
+
+(defmethod handle :pre-pause [{:keys [o kind] :as run} {:keys [reason]}]
+  (if reason
+    (start-waiting (-> run (assoc-in [:o :inherited] reason) (assoc :pause :inherited :notice? true)))
+    (emit (assoc run :pause :ours :notice? true) :pause
+          {:why (str "bb " (name kind) " at " (:at o)) :gated true} :paused)))
 
 (defmethod handle :paused [run {:keys [thrown]}]
   (if thrown
     (abort (assoc run :pause nil) (str "relay could not be paused: " thrown))
     (start-waiting run)))
 
-(defmethod handle :abort-lifted [run _] (recur-abort run))
-(defmethod handle :abort-closed [run _] (end run {:refused (:abort run)}))
+(defmethod handle :abort-lifted [{:keys [o] :as run} {:keys [thrown]}]
+  (recur-abort (cond-> run
+                 thrown (update :abort str "\n  But relay could not be unpaused (" thrown "): it is still paused. "
+                                "Remove " (:pause-file o) " by hand."))))
+
+(defmethod handle :abort-closed [run {:keys [thrown]}]
+  (end run {:refused (cond-> (:abort run)
+                       thrown (str "\n  The run's record could not be closed either (" thrown ")."))}))
 
 (defmethod handle :busy [{:keys [o wait] :as run} {:keys [busy now thrown]}]
   (let [{:keys [started quiet-since told?]} wait
@@ -427,7 +440,7 @@
       (seq changes)
       (end-under-pause (fail run (str "Stopped before touching " (name repo) ": " (str/join " " changes))))
       moves?
-      (emit (assoc run :touched? true) :say {:text (str "Moving " (name repo) " to " (subs (:commit to) 0 12))
+      (emit (assoc run :touched? true) :say {:text (str "Moving " (name repo) " to " (deploy/short-id to))
                                              :touch repo} :move-said)
       build
       (build-step (assoc run :touched? true) :touch)
@@ -536,9 +549,12 @@
                                    :status :ok :lift-only true :repos {}})]
       (emit (assoc run :final rec) :append-record {:record rec} :lift-written))))
 
-(defmethod handle :lift-written [{:keys [o] :as run} _]
-  (emit run :say {:text (if (:inherited o) "Lifted the pause. Nothing was moved." "Closed the record. Nothing was moved.")}
-        :done-said))
+(defmethod handle :lift-written [{:keys [o] :as run} {:keys [thrown]}]
+  (if thrown
+    (end run {:failed (str "ROLLBACK DONE, BUT its record could not be written (" thrown "). "
+                           (if (:inherited o) "The pause is lifted; nothing was moved." "Nothing was moved."))})
+    (emit run :say {:text (if (:inherited o) "Lifted the pause. Nothing was moved." "Closed the record. Nothing was moved.")}
+          :done-said)))
 
 ;; --- starting
 

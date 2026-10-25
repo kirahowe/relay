@@ -287,3 +287,20 @@
         (is (not (str/includes? shown "paused")) "although the pause file is there")
         (is (str/includes? shown "Roles")))
       (finally (fs/delete-tree dir)))))
+
+(deftest a-step-that-throws-cleans-up-as-a-stop-would
+  ;; A bug in the flow, or a record it cannot read, must not leave relay
+  ;; paused with nothing touched and the record open.
+  (let [world (atom (ft/world))
+        do-effect (world-effects world (fn [_]))
+        real flow/step
+        out (with-redefs [flow/step (fn [run r]
+                                      (if (= :looked (get-in run [:effect :k]))
+                                        (throw (ex-info "boom" {}))
+                                        (real run r)))]
+              (#'run/with-exit-cleanup do-effect
+               #(#'run/drive-main! do-effect (flow/start :deploy (ft/opts @world)))))]
+    (is (str/includes? (:failed out) "Unexpected error: boom"))
+    (is (str/includes? (:failed out) "relay is not paused"))
+    (is (nil? (:paused @world)) "the pause it made is lifted")
+    (is (= :failed (:status (last (:records @world)))) "and the record is closed")))

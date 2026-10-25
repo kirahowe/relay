@@ -599,3 +599,39 @@
             lifted-by-run? (some #(= :resume (:op %)) (:effects world))]
         (is (= (boolean (and touched? (not lifted-by-run?))) (some? (:paused cleaned))) (str "stopped before effect " i))
         (is (empty? (:workspaces cleaned)) (str "stopped before effect " i))))))
+
+;; --- what the review of the pure flow found
+
+(deftest a-pause-made-by-hand-during-the-run-is-not-taken-over
+  ;; The operator pauses relay while the commits are tested; the run must
+  ;; not claim that pause, rewrite it, or lift it when it gives up.
+  (let [by-hand (fn [w e] (when (= ["bb" "test"] (:cmd e)) [{:exit 0} (assoc w :paused "by hand")]))
+        {:keys [outcome] w :world} (deploy (assoc (world) :on by-hand :busy [["hub (wake 3)"]]))]
+    (is (str/includes? (text outcome) "still running"))
+    (is (str/includes? (text outcome) "relay is still paused"))
+    (is (str/includes? (text outcome) "rm '/w/state/paused'"))
+    (is (= "by hand" (:paused w)) "left exactly as the operator made it")
+    (is (not-any? #(#{:pause :resume} (:op %)) (:effects w)))))
+
+(deftest an-abort-whose-pause-will-not-lift-says-relay-is-still-paused
+  (let [stuck (fn [w e] (when (= :resume (:op e)) [{:thrown "disk says no"} w]))
+        {:keys [outcome] w :world} (deploy (assoc (world) :on stuck :busy [["hub (wake 3)"]]))]
+    (is (str/includes? (text outcome) "could not be unpaused (disk says no): it is still paused"))
+    (is (str/includes? (text outcome) "/w/state/paused"))
+    (is (some? (:paused w)))))
+
+(deftest a-record-that-will-not-close-or-write-is-reported
+  (testing "an abort whose record will not close"
+    (let [n (atom 0)
+          flaky (fn [w e] (when (and (= :append-record (:op e)) (= 2 (swap! n inc))) [{:thrown "disk full"} w]))
+          t (text (:outcome (deploy (assoc (world) :on flaky :busy [["hub (wake 3)"]]))))]
+      (is (str/includes? t "still running"))
+      (is (str/includes? t "record could not be closed either (disk full)"))))
+  (testing "a rollback that only lifts the pause, whose record will not write"
+    (let [{w :world} (play (flow/start :deploy (opts (world))) (assoc (world) :busy [["hub (wake 3)"]])
+                           :stop? (fn [e _] (= :sleep (:op e))))
+          lifting (fn [w e] (when (and (= :append-record (:op e)) (:lift-only (:record e))) [{:thrown "disk full"} w]))
+          {:keys [outcome] w :world} (rollback (assoc w :busy [] :on lifting))]
+      (is (str/includes? (text outcome) "ROLLBACK DONE, BUT its record could not be written (disk full)"))
+      (is (not (:ok outcome)))
+      (is (nil? (:paused w))))))

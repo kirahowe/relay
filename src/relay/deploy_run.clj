@@ -203,6 +203,16 @@
       (when-let [text (:print (drive do-effect (flow/interrupt run)))]
         (println text)))))
 
+(defn- crashed
+  "A step that threw is a bug or a record the flow cannot read. Stops as a
+  Ctrl-C would, unless one already did: the cleanup for `run`, the last
+  run the flow made, then a failure that says what happened."
+  [do-effect run ^Throwable t]
+  (let [{:keys [closing?]} (locking gate (first (swap-vals! current assoc :closing? true)))
+        cleanup (when-not closing? (:print (drive do-effect (flow/interrupt run))))]
+    {:failed (str "Unexpected error: " (or (ex-message t) (str (class t))) ". It stopped as a Ctrl-C would."
+                  (when cleanup (str "\n" cleanup)))}))
+
 (defn- drive-main!
   "Runs `run` to its outcome, publishing it to the hook before each
   effect. {:stopped text} when the hook ran first."
@@ -217,10 +227,13 @@
                   ::stopped
                   (do (swap! current assoc :run run)
                       (if (:gated e) (do-effect e) ::outside))))]
-        (case r
-          ::stopped {:stopped (flow/stopped-text run)}
-          ::outside (recur (flow/step run (do-effect e)))
-          (recur (flow/step run r)))))))
+        (if (= ::stopped r)
+          {:stopped (flow/stopped-text run)}
+          (let [result (if (= ::outside r) (do-effect e) r)
+                next-run (try (flow/step run result) (catch Throwable t t))]
+            (if (instance? Throwable next-run)
+              (crashed do-effect run next-run)
+              (recur next-run))))))))
 
 (defn- with-exit-cleanup [do-effect f]
   (let [hook (Thread. ^Runnable run-exit-cleanup!)]
