@@ -82,8 +82,12 @@ Work is in the jj workspace `~/code/projects/.cards/acp-tui` (baseline
   integration test against recorded `relay acp` answers. A follow-up round
   is fixing the selection drifting when a notification reshapes a card, a
   stale "Refused." message, and keys missing from the list hint.
-- Known gap: the global `?` overlay lists no pane keys (this predates the
-  board).
+- 2026-10-25: the follow-up round landed in relay-tui (the renamed
+  acp-tui): a5f9ef3 keeps the cursor on what the operator chose, ac1ecaa
+  names r and b in every board hint, and e1c55d4 and 46422e9 deal with
+  the stale refusal. The `.cards` workspace is gone. Closed.
+- Known gap: the global `?` overlay lists no pane keys. This predates the
+  board and is now relay#87.
 
 - 2026-10-25: Kira accepted it while clearing the review backlog. The
   work is on main in every repo it touched, pushed and deployed.

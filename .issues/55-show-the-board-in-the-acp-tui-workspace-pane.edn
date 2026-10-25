@@ -7,5 +7,5 @@
  :updated "2026-10-25"
  :tags #{}
  :blocked-by #{}
- :related #{}
+ :related #{"relay#85"}
  :details "55-show-the-board-in-the-acp-tui-workspace-pane.md"}

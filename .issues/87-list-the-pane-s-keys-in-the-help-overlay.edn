@@ -1,0 +1,11 @@
+{:id 87
+ :title "List the pane's keys in the help overlay"
+ :status :inbox
+ :type :feature
+ :priority :p3
+ :created "2026-10-25"
+ :updated "2026-10-25"
+ :tags #{}
+ :blocked-by #{}
+ :related #{"relay#55"}
+ :details "87-list-the-pane-s-keys-in-the-help-overlay.md"}
