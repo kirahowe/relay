@@ -341,3 +341,14 @@ without the fix.
   reproducing Go's encoder and the literal text the strict reader
   normalizes. The general fix to the log's number reading is relay#82: it
   needs an audit of every comparison between logged and computed numbers.
+
+2026-10-25, main session: the relay side converged. Codex rounds 1-4
+over rvlyzwyo..lystvulw found 3, 3, 1 and 1 in-scope defects, all fixed
+structurally (reviews built from subjects' own fields, quoted values or
+gutter blocks with a read-back parser, characters section, every CLI
+consent shows T, held-call reviews from agentloop's exact input).
+Codex's quota then ran out until 2026-10-30, so round 5 was an
+independent Claude reviewer (no session context) over
+rvlyzwyo..mqxrywnq: no in-scope defect. Noted, not defects: `relay holds`
+lists inputs from the log's doubles (not a consent surface; relay#82),
+and -0 shows as 0.
