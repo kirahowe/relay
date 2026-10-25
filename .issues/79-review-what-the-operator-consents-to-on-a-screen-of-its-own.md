@@ -136,3 +136,18 @@ of ~/code/projects/.next/DASHBOARD.md.
   :memo/declassify now requires :sha256, the digest of that text, refuses
   (:conflict) when the memo would no longer give it, and records it in
   memo/declassified. Tested by parse(T) = memo.
+- Codex round 2 (findings 1 and 2, one cause: reviews made from a text
+  form, not the subject's fields). Every trust review is now built from
+  the subject's own fields, each under its own labels
+  (core/trust-record, relay.review/record-lines): a doc's path under the
+  labels of whoever chose it (so a role-made `www.example.com/x` path is
+  escaped, in the characters section too) and its content under the
+  version's; a fact's topic, text, valid-from, valid-to, retracted,
+  supersedes and why, each on its own line or block, so topic and text
+  cannot blur and a literal "Why it changed:" stays inside the text's
+  gutter; a memo's from, to, subject and body; a note's and a routine's
+  owner, name, text, schedule, instructions; a role's id, title and
+  instructions; a journal entry's owner and text. Card reviews were
+  already field by field. Tested by reading T back from real fact
+  histories (add, correct, retract through core) and random docs and
+  records.

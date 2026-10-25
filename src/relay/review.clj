@@ -223,29 +223,47 @@
 
 ;; --- a doc, and anything else relay trusts
 
-(defn subject-lines
-  "Something relay trusts, other than a card, as the review's lines: its
-  kind, its ref (a doc's path) and version, then its text behind the
-  gutter, and the characters to check."
-  [kind ref version labels content]
-  (vec (concat [(str (own (str (str/capitalize (str kind)) " ")) (q [] ref) (own (str ", version " version)))]
-               (block labels content)
-               [""]
-               (characters-to-check [[(if (= "doc" kind) "path" "ref") [] ref]
-                                     [(if (= "doc" kind) "content" "text") labels content]]))))
+(defn record-lines
+  "Something relay trusts, other than a card, as the review's lines, made
+  from its own fields: its kind and version, then each field in order,
+  each under its own labels: {:label :labels :value :as}, where :as is
+  :line (a JSON string on a labelled line), :block (behind the gutter)
+  or :plain (a value relay made, such as a date, shown as it is). A nil
+  value reads \"<label>: none\". Then the record's labels and the
+  characters to check."
+  [{:keys [kind version labels fields]}]
+  (vec (concat [(own (str (str/capitalize (str kind)) ", version " version))]
+               (mapcat (fn [{:keys [label value as] ls :labels}]
+                         (cond
+                           (nil? value) [(own (str label ": none"))]
+                           (= :line as) [(quoted (str label ": ") ls value)]
+                           (= :block as) (cons (own (str label (when (text/contaminated? ls) ", from a contaminated source") ":"))
+                                               (block ls value))
+                           :else [(own (str label ": " value))]))
+                       fields)
+               [(own (str "Labels: " (labels-text labels)))
+                ""]
+               (characters-to-check (for [{:keys [label value as] ls :labels} fields
+                                          :when (and (some? value) (not= :plain as))]
+                                      [(str/lower-case label) ls (str value)])))))
+
+(defn record-text
+  "A record's review text (record-lines)."
+  [record]
+  (text-of (record-lines record)))
+
+(defn doc-record
+  "A doc's version as a record for record-lines: its path under the
+  labels of whoever chose it, its content under the version's."
+  [path version path-labels labels content]
+  {:kind "doc" :version version :labels (vec (distinct (concat labels path-labels)))
+   :fields [{:label "Path" :labels (vec path-labels) :value path :as :line}
+            {:label "Content" :labels (vec labels) :value content :as :block}]})
 
 (defn doc-text
-  "A doc's review text: its path and version, its content behind the
-  gutter."
-  [path version labels content]
-  (text-of (subject-lines "doc" path version labels content)))
-
-(defn subject-text
-  "The review text of something relay trusts (relay.core/trusted-version
-  gives :version :labels :text), for any kind but a card, whose is
-  card-text, made from the card."
-  [kind ref {:keys [version labels text]}]
-  (text-of (subject-lines kind ref version labels text)))
+  "A doc's review text (doc-record)."
+  [path version path-labels labels content]
+  (record-text (doc-record path version path-labels labels content)))
 
 ;; --- a memo declassified for a public role
 

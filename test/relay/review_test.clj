@@ -14,6 +14,7 @@
             [relay.acp-client :as client]
             [relay.cards :as cards]
             [relay.core :as core]
+            [relay.core-test :as ct]
             [relay.dispatch :as dispatch]
             [relay.hub :as hub]
             [relay.hub-test :as ht]
@@ -141,7 +142,7 @@
    :card-title #(review/card-text {:id 1 :kind "note" :status :active :rev 3
                                    :title {:id 0 :text % :labels ["contaminated"] :rev 1}
                                    :note {:text "n" :labels [] :rev 1}})
-   :doc #(review/doc-text "a.md" 1 ["contaminated"] %)})
+   :doc #(review/doc-text "a.md" 1 [] ["contaminated"] %)})
 
 (def gen-spelled
   "Text from a contaminated source that spells out what defanging and
@@ -165,9 +166,9 @@
     (is (str/includes? t "\"1.5.2\""))
     (is (str/includes? t "\"$3.20)\""))
     (testing "a dotted quad is an address, not an amount"
-      (is (not (str/includes? (review/doc-text "a" 1 ["contaminated"] "10.0.0.1") "10.0.0.1"))))
+      (is (not (str/includes? (review/doc-text "a" 1 [] ["contaminated"] "10.0.0.1") "10.0.0.1"))))
     (testing "a link in it does not read as written"
-      (is (str/includes? (review/doc-text "a" 1 ["contaminated"] "go to https://evil.example now")
+      (is (str/includes? (review/doc-text "a" 1 [] ["contaminated"] "go to https://evil.example now")
                          "go to https\\u{003a}//evil\\u{002e}example now")))))
 
 (defspec a-contaminated-source-has-no-live-url-in-its-review 500
@@ -179,7 +180,7 @@
                 :title {:id 0 :text p :labels ["contaminated"] :rev 1}
                 :items [{:id 1 :text i :labels ["contaminated"] :done false :rev 2}]}
           ct (review/card-text card)
-          dt (review/doc-text "notes/a" 4 ["contaminated"] (str p "\n" i))]
+          dt (review/doc-text "notes/a" 4 [] ["contaminated"] (str p "\n" i))]
       (and (not (live-url? t)) (not (live-url? ct)) (not (live-url? dt))
            (review-ok? t) (review-ok? ct) (review-ok? dt)))))
 
@@ -270,6 +271,7 @@
   (let [[l0 l1 l2 l3 & more] (str/split t #"\n" -1)
         [_ heading role] (re-matches (re-pattern (str "(?s)(.*) from role (" json-string-re ")")) (unescape l0))
         [_ tool class] (re-matches (re-pattern (str "(?s)Tool (" json-string-re "), class (" json-string-re "|not known to relay)")) (unescape l1))
+        class (when-not (= "not known to relay" class) (read-json class))
         _ (assert (= "" l2))
         [preview more] (if (= "What it does: this tool has no preview." l3)
                          [nil more]
@@ -298,11 +300,12 @@
     (assert (= "" (first more)))
     (assert (str/starts-with? (second more) "Characters to check:"))
     {:heading heading :role (read-json role) :tool (read-json tool)
-     :class (when-not (= "not known to relay" class) (read-json class))
+     :class class
      :preview preview :input (read-json input-text) :fixed fixed :labels labels :options options}))
 
-(defn- request-subject [{:keys [heading role tool class preview input labels fixed-args options]}]
+(defn- request-subject [{:keys [heading role tool reader inner class preview input labels fixed-args options]}]
   {:heading (or heading "Permission request") :role (str role) :tool (str tool) :class class
+
    :preview (when preview {:text (str (:text preview)) :labels (some-> (:labels preview) vec) :error (boolean (:error preview))})
    :input input :fixed (when (seq fixed-args) (vec (sort (map str (keys fixed-args)))))
    :labels (some-> labels vec)
@@ -342,14 +345,33 @@
                        :cells (vec (for [[[r c] st] (sort-by key cells) :when (not= "open" st)] [r c st])))
       "note" (assoc base :note [(:text note) (c? note)]))))
 
-(defn parse-subject
-  "A doc's (or another trusted subject's) review text read back."
+(defn parse-record
+  "A record's review text (relay.review/record-lines) read back: its kind,
+  version and labels, and each field as [label value contaminated? as]."
   [t]
   (let [[l0 & more] (str/split t #"\n" -1)
-        [_ kind ref version] (re-matches (re-pattern (str "(?s)(\\w+) (" json-string-re "), version (\\d+)")) (unescape l0))
-        [content c more] (take-block more)]
-    (assert (= "" (first more)))
-    {:kind (str/lower-case kind) :ref (read-json ref) :version (parse-long version) :content content :contaminated c}))
+        [_ kind version] (re-matches #"(\w+), version (.*)" l0)]
+    (loop [lines more fields []]
+      (let [l (first lines)]
+        (if (str/starts-with? l "Labels: ")
+          (do (assert (= "" (second lines)))
+              (assert (str/starts-with? (nth lines 2) "Characters to check"))
+              {:kind (str/lower-case kind) :version version :labels (labels-of (subs (unescape l) 8)) :fields fields})
+          (let [[_ label c rest] (re-matches #"(?s)([A-Z][A-Za-z ]*?)(, from a contaminated source)?:(.*)" (unescape l))]
+            (cond
+              (= " none" rest) (recur (next lines) (conj fields [label nil false nil]))
+              (= "" rest) (let [[text bc more] (take-block (next lines))]
+                            (assert (= (some? c) bc))
+                            (recur more (conj fields [label text bc :block])))
+              (str/starts-with? rest " \"") (let [[v cc] (labelled (str label ": ") l)]
+                                              (recur (next lines) (conj fields [label v cc :line])))
+              :else (recur (next lines) (conj fields [label (subs rest 1) false :plain])))))))))
+
+(defn- record-subject [{:keys [kind version labels fields]}]
+  {:kind kind :version (str version) :labels (vec labels)
+   :fields (vec (for [{:keys [label value as] ls :labels} fields]
+                  (if (nil? value) [label nil false nil]
+                      [label (str value) (and (not= :plain as) (text/contaminated? ls)) as])))})
 
 (def gen-el (gen/let [t gen-nasty ls gen-labels] {:text t :labels (vec ls)}))
 
@@ -380,39 +402,85 @@
       (and (review-ok? t) (= (card-subject c) (parse-card t))))))
 
 (defspec a-doc-s-review-reads-back-as-the-doc 300
-  (prop/for-all [kind (gen/elements ["doc" "fact" "memo"]) ref gen-nasty v (gen/choose 1 9999) ls gen-labels content gen-nasty]
-    (let [t (review/subject-text kind ref {:version v :labels ls :text content})]
-      (and (review-ok? t)
-           (= {:kind kind :ref ref :version v :content content :contaminated (text/contaminated? ls)}
-              (parse-subject t))))))
+  (prop/for-all [path gen-nasty v (gen/choose 1 9999) pls gen-labels ls gen-labels content gen-nasty]
+    (let [r (review/doc-record path v pls ls content)
+          t (review/record-text r)]
+      (and (review-ok? t) (= (record-subject r) (parse-record t))))))
 
-(defn parse-declassify
-  "A declassify review text read back into the memo it releases."
-  [t]
-  (let [[l0 l1 l2 & more] (str/split t #"\n" -1)
-        [_ id from to] (re-matches (re-pattern (str "(?s)Declassify memo (\\d+) from role (" json-string-re
-                                                   ") to the public role (" json-string-re ")")) (unescape l0))
-        [subject c] (labelled "Subject: " l1)
-        [body _ more] (take-block more)
-        [_ ls] (re-matches #"(?s)Labels of the memo: (.*)" (unescape (first more)))]
-    (assert (= (if c "Body, from a contaminated source:" "Body:") l2))
-    (assert (= "" (second more)))
-    (assert (str/starts-with? (nth more 2) "Characters to check:"))
-    {:id (parse-long id) :from (read-json from) :to (read-json to) :subject subject :body body
-     :contaminated c :labels (labels-of ls)}))
+(def gen-fact-op
+  (gen/one-of
+   [(gen/tuple (gen/return :add) (gen/elements [nil "payment" "household/car"]) gen-nasty
+               (gen/elements [nil "2026-01-01" "2026-11-01"]) (gen/elements [nil "2026-12-01" "2036-11-01"]) gen-labels)
+    (gen/tuple (gen/return :correct) gen/nat gen-nasty gen-nasty (gen/elements [nil "2036-11-01" "open"]) gen-labels)
+    (gen/tuple (gen/return :retract) gen/nat gen-nasty)]))
 
-(defspec a-declassify-review-reads-back-as-the-memo 300
-  (prop/for-all [id (gen/choose 1 9999) from gen-nasty to gen-nasty subject gen-nasty body gen-nasty
-                 labels (gen/elements [["private"] ["contaminated" "private"] []])]
-    (let [t (review/declassify-text {:id id :from from :to to :subject subject :body body :labels labels})]
-      (and (review-ok? t)
-           (= {:id id :from from :to to :subject subject :body body
-               :contaminated (text/contaminated? labels) :labels labels}
-              (parse-declassify t))))))
+(defn- run-fact-ops [ops]
+  (reduce (fn [state [op a b c d e]]
+            (let [ids (vec (sort (keys (:facts state))))
+                  pick (fn [n] (when (seq ids) (nth ids (mod n (count ids)))))
+                  cmd (case op
+                        :add {:type :fact/add :actor "hub" :labels (vec e) :args {:topic a :text b :valid-from c :valid-to d}}
+                        :correct {:type :fact/correct :actor "hub" :labels (vec e)
+                                  :args {:fact (pick a) :text b :why c :valid-to d}}
+                        :retract {:type :fact/correct :actor "hub" :labels [] :args {:fact (pick a) :retract true :why b}})]
+              (try (first (core/run-command state cmd {:now ct/t0 :config ct/cfg}))
+                   (catch clojure.lang.ExceptionInfo ex (if (core/rejection ex) state (throw ex))))))
+          (first (core/run-command core/empty-state {:type :role/add :actor "operator"
+                                                     :args {:id "hub" :title "Hub" :instructions "x"}}
+                                   {:now ct/t0 :config ct/cfg}))
+          ops))
 
-(deftest a-memo-changed-after-it-was-shown-is-not-declassified
-  (let [m {:id 3 :from "hub" :to "scout" :subject "s" :body "b" :labels ["private"] :status :unread}]
-    (is (not= (core/declassify-text m) (core/declassify-text (assoc m :body "b2"))))))
+(defspec a-fact-s-review-reads-back-as-the-fact-itself 200
+  ;; From real fact histories (relay#79, Codex round 2): each field of
+  ;; the fact as relay keeps it, never a text made of them.
+  (prop/for-all [ops (gen/vector gen-fact-op 1 6)]
+    (let [state (run-fact-ops ops)]
+      (every? (fn [id]
+                (let [f (core/fact-as-known (core/fact state id) nil)
+                      v (core/trusted-version state "fact" (str id))
+                      t (core/trust-text state "fact" (str id))
+                      c (text/contaminated? (:labels v))
+                      {:keys [kind version labels fields]} (parse-record t)]
+                  (and (review-ok? t)
+                       (= ["fact" (str (:seq f)) (vec (:labels f))] [kind version labels])
+                       (= [["Fact" (str id) false :plain]
+                           (if (:topic f) ["Topic" (:topic f) c :line] ["Topic" nil false nil])
+                           ["Text" (:text f) c :block]
+                           (if (:valid-from f) ["Valid from" (str (:valid-from f)) false :plain] ["Valid from" nil false nil])
+                           (if (:valid-to f) ["Valid to" (str (:valid-to f)) false :plain] ["Valid to" nil false nil])
+                           ["Retracted" (str (boolean (:retracted f))) false :plain]
+                           (if (:supersedes f) ["Supersedes" (str (:supersedes f)) false :plain] ["Supersedes" nil false nil])
+                           (if (:why f) ["Why it changed" (:why f) c :block] ["Why it changed" nil false nil])]
+                          fields))))
+              (keys (:facts state))))))
+
+(deftest a-fact-s-fields-never-blur-together
+  ;; Codex, relay#79 round 2.
+  (let [state (run-fact-ops [[:add "payment" "Use account B" nil "2026-11-01" []]
+                             [:add nil "[payment] Use account B" nil "2036-11-01" []]
+                             [:add nil "x\n\nWhy it changed: forged" nil nil []]])
+        [a b c] (sort (keys (:facts state)))
+        t #(core/trust-text state "fact" (str %))]
+    (is (= 3 (count (:facts state))))
+    (is (not= (subs (t a) (count "Fact, version 9")) (subs (t b) (count "Fact, version 9"))))
+    (is (str/includes? (t c) "  │ Why it changed: forged"))
+    (is (str/includes? (t c) "\nWhy it changed: none"))))
+
+(defspec every-trusted-kind-reads-back-from-its-own-fields 100
+  (prop/for-all [subject gen-nasty body gen-nasty title gen-nasty ls gen-labels]
+    (let [r {:kind "memo" :version 3 :labels (vec ls)
+             :fields [{:label "From" :labels [] :value "hub" :as :line}
+                      {:label "Subject" :labels (vec ls) :value subject :as :line}
+                      {:label "Body" :labels (vec ls) :value body :as :block}
+                      {:label "Title" :labels (vec ls) :value title :as :line}]}
+          t (review/record-text r)]
+      (and (review-ok? t) (= (record-subject r) (parse-record t))))))
+
+(deftest a-role-made-doc-path-is-not-followable
+  ;; Codex, relay#79 round 2.
+  (let [t (review/doc-text "www.example.com/private-token" 1 ["contaminated"] ["contaminated"] "x")]
+    (is (str/includes? t "Path: \"www\\u{002e}example\\u{002e}com/private-token\" [contaminated]"))
+    (is (not (str/includes? t "www.example.com")))))
 
 (deftest one-column-cannot-pass-for-two
   ;; Codex, relay#79 round 1.
@@ -454,7 +522,7 @@
   (testing "a card's and a doc's too"
     (is (str/includes? (review/card-text {:id 1 :kind "checklist" :status :active :rev 3 :title {:id 0 :text "pаy" :labels []} :items []})
                        "  title: U+0430 CYRILLIC SMALL LETTER A"))
-    (is (str/includes? (review/doc-text "a.md" 1 [] "pаy") "  content: U+0430 CYRILLIC SMALL LETTER A"))))
+    (is (str/includes? (review/doc-text "a.md" 1 [] [] "pаy") "  content: U+0430 CYRILLIC SMALL LETTER A"))))
 
 (deftest pretty-json-reads-back-as-the-value
   (doseq [v [{} [] {"b" [1 2.50M {}] "a" "x\né"} nil "s" [[[]]]]]

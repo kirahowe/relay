@@ -2318,17 +2318,59 @@
                    (.getBytes (str s) java.nio.charset.StandardCharsets/UTF_8))]
     (apply str (map #(format "%02x" (bit-and % 0xff)) d))))
 
+(defn trust-record
+  "What `relay trust <kind> <ref>` vouches for as a record for
+  relay.review/record-lines, made from the subject's own fields, each
+  under its own labels, never from a text form: a memo's subject and
+  body; a fact's topic, text, validity, explanation and whether it is
+  retracted; a doc's path (under the labels of whoever chose it) and
+  content; a note's or routine's owner, name and text, a routine's
+  schedule; a role's id, title and instructions; a journal entry's owner
+  and text. Nil for a card (relay.review/card-text) or when there is
+  nothing to trust."
+  [state kind ref]
+  (when-let [v (trusted-version state kind ref)]
+    (let [num (some-> ref str parse-long)
+          [owner nm] (str/split (str ref) #"/" 2)
+          ls (vec (:labels v))
+          line (fn [label value labels] {:label label :labels (vec labels) :value value :as :line})
+          blk (fn [label value labels] {:label label :labels (vec labels) :value value :as :block})
+          plain (fn [label value] {:label label :labels [] :value (some-> value str) :as :plain})
+          rec (fn [fields] {:kind kind :version (:version v) :labels ls :fields fields})]
+      (case kind
+        "memo" (let [m (memo state num)]
+                 (rec [(plain "Memo" (:id m)) (line "From" (:from m) []) (line "To" (:to m) [])
+                       (line "Subject" (:subject m) ls) (blk "Body" (:body m) ls)]))
+        "fact" (let [f (fact-as-known (fact state num) nil)]
+                 (rec [(plain "Fact" (:id f)) (line "Topic" (:topic f) ls) (blk "Text" (:text f) ls)
+                       (plain "Valid from" (:valid-from f)) (plain "Valid to" (:valid-to f))
+                       (plain "Retracted" (boolean (:retracted f)))
+                       (plain "Supersedes" (:supersedes f))
+                       (blk "Why it changed" (:why f) ls)]))
+        "doc" (let [d (doc-version state ref {})]
+                (review/doc-record ref (:version v) (path-labels state ref) (:labels d) (:content d)))
+        "note" (let [n (get-in state [:notes owner nm])]
+                 (rec [(line "Owner" owner []) (line "Name" nm ls) (blk "Text" (:text n) ls)]))
+        "routine" (let [r (routine state owner nm)]
+                    (rec [(line "Owner" owner []) (line "Name" nm ls) (line "Schedule" (:schedule r) ls)
+                          (blk "Instructions" (:instructions r) ls)]))
+        "role" (let [r (role state ref)]
+                 (rec [(line "Id" ref []) (line "Title" (:title r) ls) (blk "Instructions" (:instructions r) ls)]))
+        "journal" (let [[o e] (first (for [[o es] (:journals state) e es :when (= num (:id e))] [o e]))]
+                    (rec [(plain "Entry" (:id e)) (line "Owner" o []) (blk "Text" (:text e) ls)]))
+        nil))))
+
 (defn trust-text
   "The review text of what `relay trust <kind> <ref>` is about
   (relay.review): for a card relay.review/card-text, for anything else
-  relay.review/subject-text of its trusted-version. Nil when there is
-  none. A trust names the digest of this text: what the operator was
-  shown, made safe, is what they vouch for."
+  relay.review/record-text of its trust-record. Nil when there is none.
+  A trust names the digest of this text: what the operator was shown,
+  made safe, is what they vouch for."
   [state kind ref]
-  (when-let [v (trusted-version state kind ref)]
+  (when (trusted-version state kind ref)
     (if (= "card" kind)
       (review/card-text (card state (parse-long (str ref))))
-      (review/subject-text kind ref v))))
+      (some-> (trust-record state kind ref) review/record-text))))
 
 (defn trust-digest
   "The digest a trust of this kind and ref must name now: the sha256 of
