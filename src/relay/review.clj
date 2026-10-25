@@ -119,8 +119,10 @@
 
 (defn request-lines
   "A permission request (or, with :heading, a held call) as the review's
-  lines, in the order the operator reads them: the role, the tool and its
-  class, what the call does (relay's preview, under its own labels), the
+  lines, in the order the operator reads them: the role, the tool (for
+  relay's quarantined reader, :reader true, the :inner tool it would run)
+  and the class of the tool that would run, or a line saying relay knows
+  none, what the call does (relay's preview, under its own labels), the
   whole input as JSON with members in name order, the arguments the
   operator's settings fix, the session's labels, every option the agent
   offers with its kind (no section when :options is nil), and the
@@ -128,14 +130,21 @@
 
   The preview's links are broken when its labels are contaminated, and
   the input's when the session's or the preview's are."
-  [{:keys [heading role tool class preview input labels fixed-args options]}]
+  [{:keys [heading role tool reader inner class preview input labels fixed-args options]}]
   (let [{p-text :text p-labels :labels p-error :error} preview
         input-labels (vec (concat labels p-labels))]
     (vec
      (concat
-      [(str (own (or heading "Permission request")) (own " from role ") (q [] role))
-       (str (own "Tool ") (q [] tool) (own ", class ") (if class (q [] class) "not known to relay"))
-       ""]
+      [(str (own (or heading "Permission request")) (own " from role ") (q [] role))]
+      (if reader
+        [(str (own "Tool ") (q [] tool) (own ", relay's quarantined reader, to run the tool ")
+              (if inner (q [] inner) "none named"))]
+        [(str (own "Tool ") (q [] tool))])
+      (let [what (if reader "The tool it runs" "The tool")]
+        (if class
+          [(str (own (str what " has class ")) (q [] class))]
+          [(own (str what " has no class relay knows, so relay cannot say what this call can do."))]))
+      [""]
       (if (nil? preview)
         ["What it does: this tool has no preview."]
         (concat [(own (str "What it does, by the tool's preview (its labels " (labels-text p-labels) "):"))]
@@ -158,6 +167,7 @@
       [""]
       (characters-to-check
        (concat [["tool" [] tool]]
+               (when inner [["inner tool" [] inner]])
                (when preview [["preview" p-labels p-text]])
                (for [[path s] (json-strings input [])]
                  [(str "input " (escaped input-labels (strict/generate path))) input-labels s])

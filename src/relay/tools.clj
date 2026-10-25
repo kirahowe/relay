@@ -1139,6 +1139,13 @@
                 (conj (str "Only the operator grants tools and powers. If your work needs one you lack,"
                            " ask whoever you report to, or the operator if you report to nobody.")))))))
 
+(defn class-of
+  "The class relay gives a tool: the operator's setting for a configured
+  tool, else relay's own tool's, as a string. Nil for a tool relay does
+  not know."
+  [config tool]
+  (some-> (or (get-in config [:tools tool :class]) (get-in builtin [tool :class])) name))
+
 (defn manifest
   "What a harness needs to present the tools: names, descriptions and
   parameter schemas (for an MCP tool, its :mcp server and name instead),

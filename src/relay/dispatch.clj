@@ -914,14 +914,19 @@
   role, the tool's class from the role's manifest, the preview's own
   text and labels as the preview command gave them, and the rest from
   the request the client gets."
-  [role-id manifest]
+  [config role-id manifest]
   (let [classes (into {} (keep (fn [{n :name c :class}] (when (and n c) [n (name c)]))) manifest)]
     (fn [{:keys [tool input labels fixed-args options]} p]
+      ;; agentloop's quarantined reader is in no manifest: the class that
+      ;; matters is that of the tool it would run.
+      (let [reader (= core/reader-tool tool)
+            inner (when reader (core/held-tool tool input))]
       (review/request-review
-       {:role role-id :tool tool :class (get classes tool)
+       {:role role-id :tool tool :reader reader :inner inner
+        :class (if reader (some->> inner (tools/class-of config)) (or (get classes tool) (tools/class-of config tool)))
         :preview (when p {:text (str (:content p)) :labels (vec (or (:display-labels p) (:labels p)))
                           :error (boolean (:is-error p))})
-        :input input :labels labels :fixed-args fixed-args :options options}))))
+        :input input :labels labels :fixed-args fixed-args :options options})))))
 
 (defn- oversize-recorder
   "Records an agent line relay dropped for being too long to read, and
@@ -1014,7 +1019,7 @@
                                                   (swap! conv workspace/answered req (:outcome answer)))
                                                 (apply record kind req (when answer [answer])))
                                :preview (permission-previewer sys)
-                               :review (request-reviewer role-id (:tools request))
+                               :review (request-reviewer (:config sys) role-id (:tools request))
                                :on-oversized (oversize-recorder sys (:wake-id request))
                                :extension (extension-handler sys conv approvals)
                                :on-display (fn [session] (keep-session-displays! sys request conv session))})]

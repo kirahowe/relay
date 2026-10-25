@@ -19,6 +19,7 @@
             [relay.review :as review]
             [relay.spend :as spend]
             [relay.text :as text]
+            [relay.tools :as tools]
             [relay.week :as week])
   (:import (java.time Instant ZoneId)
            (java.time.format DateTimeFormatter)))
@@ -468,10 +469,10 @@
   the characters to check."
   [{:keys [role tool labels fixed-args preview] :as h} config]
   (let [input (if (map? fixed-args) (or (:effective-input h) (:input h)) (:input h))
-        inner (when (= core/reader-tool tool) (core/held-tool tool input))
-        t (get-in config [:tools (or inner tool)])
-        class (or (some-> (:class t) name) (when-not t "one of relay's own"))]
-    (review/request-lines {:heading "Held call" :role role :tool tool :class class
+        reader (= core/reader-tool tool)
+        inner (when reader (core/held-tool tool input))
+        class (if reader (some->> inner (tools/class-of config)) (tools/class-of config tool))]
+    (review/request-lines {:heading "Held call" :role role :tool tool :reader reader :inner inner :class class
                            :preview (when preview {:text (str (:content preview)) :labels (vec (:labels preview))
                                                    :error (boolean (:is-error preview))})
                            :input input :labels (vec labels) :fixed-args fixed-args :options nil})))

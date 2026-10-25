@@ -151,3 +151,15 @@ of ~/code/projects/.next/DASHBOARD.md.
   already field by field. Tested by reading T back from real fact
   histories (add, correct, retract through core) and random docs and
   records.
+- Codex round 2, finding 3 (the reader's class): a request or hold for
+  agentloop's read_quarantined names the tool it would run and that
+  tool's class (tools/class-of: the operator's config, else relay's own
+  tool), as "Tool "read_quarantined", relay's quarantined reader, to run
+  the tool "web_fetch"" then "The tool it runs has class "egress"". The
+  class has its own line; a tool relay cannot classify reads "has no
+  class relay knows, so relay cannot say what this call can do". The
+  hold path now also knows relay's own tools' classes, where it said
+  "one of relay's own". Checked the other subjects against the rule:
+  holds, requests and cards come from their records' fields; a
+  declassify review comes from core/declassified, which is the text the
+  public role is given, so that is the effective field, not a lossy one.

@@ -21,6 +21,7 @@
             [relay.inbound :as inbound]
             [relay.json :as strict]
             [relay.log :as log]
+            [relay.render :as render]
             [relay.review :as review]
             [relay.serve-test :as st]
             [relay.test-support :as support]
@@ -214,7 +215,8 @@
                            {"name" "Reject" "kind" "reject_once" "optionId" "reject_once"}]})
                "text")]
     (is (= (str/join "\n" ["Permission request from role \"clerk\""
-                           "Tool \"send\", class \"act\""
+                           "Tool \"send\""
+                           "The tool has class \"act\""
                            ""
                            "What it does, by the tool's preview (its labels [\"private\"]):"
                            "  │ Send to Everyone"
@@ -268,10 +270,17 @@
 (defn parse-request
   "A request's review text read back into what it says."
   [t]
-  (let [[l0 l1 l2 l3 & more] (str/split t #"\n" -1)
+  (let [[l0 l1 lc l2 l3 & more] (str/split t #"\n" -1)
         [_ heading role] (re-matches (re-pattern (str "(?s)(.*) from role (" json-string-re ")")) (unescape l0))
-        [_ tool class] (re-matches (re-pattern (str "(?s)Tool (" json-string-re "), class (" json-string-re "|not known to relay)")) (unescape l1))
-        class (when-not (= "not known to relay" class) (read-json class))
+        [_ tool _ inner] (re-matches (re-pattern (str "(?s)Tool (" json-string-re ")(, relay's quarantined reader, to run the tool ("
+                                                      json-string-re "|none named))?")) (unescape l1))
+        reader (str/includes? (unescape l1) ", relay's quarantined reader, to run the tool ")
+        what (if reader "The tool it runs" "The tool")
+        class (if (= lc (str what " has no class relay knows, so relay cannot say what this call can do."))
+                nil
+                (let [[_ c] (re-matches (re-pattern (str "(?s)" what " has class (" json-string-re ")")) (unescape lc))]
+                  (assert c lc)
+                  (read-json c)))
         _ (assert (= "" l2))
         [preview more] (if (= "What it does: this tool has no preview." l3)
                          [nil more]
@@ -300,12 +309,13 @@
     (assert (= "" (first more)))
     (assert (str/starts-with? (second more) "Characters to check:"))
     {:heading heading :role (read-json role) :tool (read-json tool)
+     :reader reader :inner (when (and inner (not= "none named" inner)) (read-json inner))
      :class class
      :preview preview :input (read-json input-text) :fixed fixed :labels labels :options options}))
 
 (defn- request-subject [{:keys [heading role tool reader inner class preview input labels fixed-args options]}]
   {:heading (or heading "Permission request") :role (str role) :tool (str tool) :class class
-
+   :reader (boolean reader) :inner (when reader inner)
    :preview (when preview {:text (str (:text preview)) :labels (some-> (:labels preview) vec) :error (boolean (:error preview))})
    :input input :fixed (when (seq fixed-args) (vec (sort (map str (keys fixed-args)))))
    :labels (some-> labels vec)
@@ -392,8 +402,9 @@
         (= "note" kind) (assoc :note (assoc note :rev 1))))))
 
 (defspec a-request-s-review-reads-back-as-the-request 500
-  (prop/for-all [r gen-request heading (gen/elements [nil "Held call"]) holds gen/boolean]
-    (let [r (cond-> (assoc r :heading heading) holds (assoc :options nil))]
+  (prop/for-all [r gen-request heading (gen/elements [nil "Held call"]) holds gen/boolean
+                 reader gen/boolean inner (gen/one-of [(gen/return nil) gen-nasty])]
+    (let [r (cond-> (assoc r :heading heading) holds (assoc :options nil) reader (assoc :reader true :inner inner))]
       (= (request-subject r) (parse-request (get (review/request-review r) "text"))))))
 
 (defspec a-card-s-review-reads-back-as-the-card 500
@@ -481,6 +492,27 @@
   (let [t (review/doc-text "www.example.com/private-token" 1 ["contaminated"] ["contaminated"] "x")]
     (is (str/includes? t "Path: \"www\\u{002e}example\\u{002e}com/private-token\" [contaminated]"))
     (is (not (str/includes? t "www.example.com")))))
+
+(deftest the-reader-shows-the-tool-it-would-run-and-its-class
+  ;; Codex, relay#79 round 2.
+  (let [t (get (review/request-review (assoc clean-request :tool "read_quarantined" :reader true :inner "web_fetch"
+                                             :class "egress" :input {"tool" "web_fetch"}))
+               "text")]
+    (is (str/includes? t "Tool \"read_quarantined\", relay's quarantined reader, to run the tool \"web_fetch\"\nThe tool it runs has class \"egress\"")))
+  (is (str/includes? (get (review/request-review (assoc clean-request :class nil)) "text")
+                     "\nThe tool has no class relay knows, so relay cannot say what this call can do.\n")))
+
+(deftest a-held-reader-call-shows-the-tool-it-would-run
+  (let [config {:tools {"web_fetch" {:class :egress}}}
+        h {:id 1 :role "clerk" :tool "read_quarantined" :input {"tool" "web_fetch" "input" {"url" "x"}} :labels ["private"]}
+        t (review/text-of (render/hold-review h config))]
+    (is (str/includes? t "to run the tool \"web_fetch\"\nThe tool it runs has class \"egress\""))
+    (testing "relay's own tools have their class too"
+      (is (str/includes? (review/text-of (render/hold-review (assoc h :tool "inbox" :input {}) config))
+                         "The tool has class \"read\"")))
+    (testing "a tool relay cannot classify says so"
+      (is (str/includes? (review/text-of (render/hold-review (assoc h :input {"tool" "mystery"}) config))
+                         "The tool it runs has no class relay knows")))))
 
 (deftest one-column-cannot-pass-for-two
   ;; Codex, relay#79 round 1.
