@@ -259,3 +259,69 @@ agent wrote appears on the review but in T's body.
 - Test: render.TestNothingAgentWrittenOutsideTheBody, random marked
   agent values in relay's T and in a built one, at random sizes, read
   and unread; no row outside the body holds a mark.
+
+2026-10-24, Codex round 1 over ulqspnmk..zoxosqrk: five in-scope defects
+in four classes, each fixed at its source with a property that fails
+without the fix.
+
+1. Width (relay-tui, "Measure the review as Bubble Tea draws it"). The
+   pager wrapped by grapheme width, but Bubble Tea measures by code
+   point unless the terminal negotiates mode 2027, so a line with
+   skin-toned emoji was cut in Bubble Tea's buffer while all of it was
+   reported drawn. Now one width, render.Method (WcWidth), is used for
+   everything the renderer lays out. The program is held to it:
+   ui.KeepWidthMethod is a tea.WithFilter that drops the terminal's mode
+   2027 report, in main and every test harness. The review also fails
+   closed, naming code points only, on any grapheme whose code-point and
+   grapheme widths differ, since a terminal may draw it either way. The
+   dashboard's wrap cuts a grapheme that is wider than its line on its
+   own (a ZWJ family is 6 cells by code point), so it never draws past
+   its width. Property: render.TestTheBufferShowsWhatTheReviewCertifies
+   draws the review into an ultraviolet buffer under both width methods,
+   and every body row is the line the frame certifies. It fails with the
+   old grapheme wrap.
+2. Content (relay-tui, "Build a plain agent's review from the call's own
+   fields"). callContent kept only text, diff and terminal content, and
+   joined a diff's fields before escaping, so an embedded resource
+   disappeared and two different diffs could read the same. Now
+   wire.CallContent reads the content from the request's params as
+   received, not from the SDK's decoding, so fields the SDK drops are
+   still seen. It returns each piece with its fields apart: a text; a
+   diff's path, old text (none for a new file) and new text; a
+   terminal's id; or an embedded resource's URI, mime type and text, or
+   a blob's size and sha256. Anything else, a variant (image, audio,
+   resource_link, an unknown type) or an unknown field (annotations
+   included), goes in Permission.Unshown, and the review fails closed
+   for allow, naming it; a reject still works. _meta is not shown, as
+   ACP's extension slot. relay's preview text block is still read
+   separately. parse(T) = request now covers every variant, and a test
+   checks that the two diffs Codex gave read differently. Judgment
+   call: image, audio and resource_link fail closed rather than being
+   shown, which is the simplest rule that never shows less than was
+   sent.
+3. Invisible selection (relay-tui, "Send the highlighted option only
+   once it was on screen"). The options row was cut from its end, so at
+   width 20 with allow/reject/allow, tab could put the highlight on the
+   third option with nothing visible changing, and enter sent it. Now
+   the row is a window that always holds the highlighted entry, with ‹
+   and › where more lie. If even that entry cannot fit, the row says to
+   widen the window and does not count as drawing it. Frames report the
+   highlighted entry they drew whole (ReviewDrawn.Pick). Enter on an
+   allow (needsReviewAndPick) is taken only once a frame has drawn that
+   entry, ArmDelay after the highlight last moved: PermissionMove resets
+   it. Enter on a reject is still taken at once, and y and n name their
+   own options, so they need only the review read. Properties:
+   core.TestEnterNeedsTheHighlightOnScreen (fails without the check)
+   and render.TestTheHighlightedOptionIsAlwaysInView.
+4. A forged refusal (relay-tui, "Show a refusal only on relay's own
+   re-ask"). Any agent's _meta["relay/refused"] was shown above T,
+   through VisibleLine, which leaves links live, even when no allow had
+   been refused. Now the core keeps it only on a hub conversation
+   (State.Shared, which relay's hub at initialize gives) and only on a
+   request for the call this client just allowed with relay's digest,
+   arriving with nothing queued ahead. Everywhere else it is cleared on
+   arrival. When shown it is relay's text as a quoted value with the
+   same escapes and broken links as a contaminated value in T. Property:
+   core.TestOnlyRelaysReAskShowsARefusal (hub or plain agent, allowed
+   first or not, same call or not, links and controls in the reason). It
+   fails without the check.
