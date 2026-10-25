@@ -445,3 +445,42 @@ inside a workspace, would run workspace code against live data.
 bin/relay now checks where relay.cli loads from and, if it isn't its own
 checkout, runs again under its own bb.edn. Regression test in
 dispatch_test.
+
+2026-10-25, round 3 (an independent Claude reviewer, Codex still out of
+quota), over relay-tui ulqspnmk..53aa81d4. It found no path to an allow,
+trust or archive without the pager drawing all of exactly this T for the
+arm delay by a live key, and confirmed rounds 1 and 2's fixes. Two
+findings, both fixed in relay-tui:
+
+1. Moving the highlight disabled every allow on a review that fits one
+   page. The move cleared the armed entries, but the next frame's report
+   was the same as the last, so the model sent none: tab then enter
+   never allowed, and a second allow_once could not be sent at all. It
+   failed closed. Fixed in zxwqkytr ("Report the highlight with every
+   drawn review"): a report carries the highlight it drew, so a move is a
+   new report, and a report from a frame drawn before the move arms
+   nothing. ui TestTheMovedHighlightCanAllow fails without it, and
+   core.TestAnAllowSendsOnlyAnEntryOnScreen now sends stale reports too
+   (it fails without the check).
+2. A plain agent's unknown field names reached the fail screen raw
+   (json.Marshal and %q leave bidi overrides, C1 controls and blank
+   glyphs). Fixed in pytkwsvq ("Quote the agent's field names in
+   printable ASCII"), with the property wire.TestUnshownIsPrintableASCII.
+
+Rejected, out of scope: a plain agent's toolCall-level fields (locations,
+rawOutput, status) are neither shown nor named. They are the agent's
+claims about itself, and what runs, rawInput, is shown in full. Also
+noted, not defects: spaces at a soft wrap cannot be seen, and some
+terminals draw combining stacks, bidi runs and ambiguous widths
+differently. Exploiting the last needs knowledge of the terminal, which
+the threat model leaves out.
+
+bb verify over relay 4395bcc9 and relay-tui pytkwsvq: agentloop,
+relay-tui and webtool pass. Pentest fails only relay#76's two scenarios.
+relay's tests passed on the first run. On the second,
+hub-test/requests-stay-bounded-however-clients-come-and-go failed with
+:not-told-settled after a detach and a race, which is relay#81 and
+predates this work.
+
+relay-tui's side has now had three rounds that each found something.
+Per AGENTS.md this stops for Kira. The two fixes have not been reviewed.
