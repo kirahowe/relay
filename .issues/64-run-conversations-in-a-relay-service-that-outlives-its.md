@@ -422,5 +422,13 @@ pass, 12 skipped, ACP-SESSION-002 failing by design.
 
 ## Log
 
+- 2026-10-24, review check: the code and tests match the receipts, but
+  two things keep this in review. (1) yxqurkpz broke the pentests
+  s5-acp-disconnect and s5-acp-wrong-request-id, filed as #85. (2) The
+  Codex criterion is ticked, but no round came back clean: rounds 1 to 3
+  each found in-scope defects, then the independent review. Per AGENTS.md
+  that is Kira's call (accept, or run another round after #85). The
+  receipt cites tossnmsx for the hub; the hub is qsvyryzt.
+
 - 2026-10-25: Kira accepted it while clearing the review backlog. The
   work is on main in every repo it touched, pushed and deployed.

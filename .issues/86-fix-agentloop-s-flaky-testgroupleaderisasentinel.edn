@@ -1,0 +1,11 @@
+{:id 86
+ :title "Fix agentloop's flaky TestGroupLeaderIsASentinel"
+ :status :ready
+ :type :bug
+ :priority :p3
+ :created "2026-10-24"
+ :updated "2026-10-24"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "86-fix-agentloop-s-flaky-testgroupleaderisasentinel.md"}
