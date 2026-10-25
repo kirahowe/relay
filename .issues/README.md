@@ -35,7 +35,7 @@
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
 | [83](83-speed-up-the-slowest-remaining-test-namespaces.md) | Speed up the slowest remaining test namespaces | chore | P3 |
 
-### In progress
+### Review
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |

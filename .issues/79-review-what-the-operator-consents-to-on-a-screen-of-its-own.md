@@ -20,15 +20,27 @@ of ~/code/projects/.next/DASHBOARD.md.
 
 ## Acceptance criteria
 
-- relay attaches review text and digest to permission requests, card
+- [x] relay attaches review text and digest to permission requests, card
   wire forms and doc items, and refuses an allow (or trust) whose digest
   is not the one it sent, for clients that declare relay/review.
-- relay-tui answers and confirms only from the review pager, whose lines
+  - Receipt: relay's side converged after Codex rounds 1-4 and a clean
+    independent round 5 (see Log).
+- [x] relay-tui answers and confirms only from the review pager, whose lines
   are the review text exactly, after every page was drawn, with a live
   key past the arm delay.
-- Plain ACP agents still work: relay-tui builds the review text itself.
-- The inline armable/certification machinery is gone.
-- A Codex loop over the result converges.
+  - Receipt: relay-tui rounds 3 and 4 found no path past the pager;
+    core.TestAnAllowSendsOnlyAnEntryOnScreen, ui
+    TestConsentOnlyFromAReviewReadWhole, TestTheMovedHighlightCanAllow.
+- [x] Plain ACP agents still work: relay-tui builds the review text itself.
+  - Receipt: core.TestNonHubMetaChangesNothing; plain-agent T builder
+    confirmed injective and complete by rounds 2-4.
+- [x] The inline armable/certification machinery is gone.
+  - Receipt: deleted in the relay-tui consent commits; round 3 checked
+    the deletion broke no flow.
+- [x] A review loop over the result converges.
+  - Receipt: Kira chose Claude reviewers over waiting for Codex
+    (2026-10-25). relay-tui round 4 (Opus) found no safety defect, and
+    its one liveness finding is fixed in ulnsmmor.
 
 ## Log
 
@@ -484,3 +496,18 @@ predates this work.
 
 relay-tui's side has now had three rounds that each found something.
 Per AGENTS.md this stops for Kira. The two fixes have not been reviewed.
+
+2026-10-25, round 4 (an Opus reviewer, Kira's choice over waiting for
+Codex), over relay-tui zxwqkytr and pytkwsvq. No safety defect. It
+confirmed both fixes, that both tests fail without them, and that every
+agent-chosen name in a reason goes through the ASCII quoting. One
+finding, fixed in ulnsmmor ("Leave a lone option armed when tab moves
+nothing"): with a single option, tab wrapped the highlight back to
+itself but still disarmed it, so enter could never allow. A move now
+disarms only when the highlight changes. TestTheMovedHighlightCanAllow
+has the case and fails without the fix; the core property's model now
+disarms only on a real move. That fix changes nothing an allow can
+send, so the loop stops here.
+
+bb verify over relay-tui ulnsmmor: agentloop, relay-tui, webtool and
+relay pass. Pentest fails only relay#76's two scenarios.

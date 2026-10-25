@@ -1,6 +1,6 @@
 {:id 79
  :title "Review what the operator consents to on a screen of its own, with text relay made"
- :status :in-progress
+ :status :review
  :type :feature
  :priority :p1
  :created "2026-10-24"
