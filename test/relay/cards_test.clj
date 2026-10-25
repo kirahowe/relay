@@ -677,7 +677,7 @@
             :let [{t "text" h "sha256"} (get w "review")]]
       (is (= (core/sha256 t) h))
       (is (= t (review/card-text (core/card (if (= w dirty) s s') id)))))
-    (is (str/includes? (get-in dirty ["review" "text"]) "[contaminated] Read https\\u{003a}//evil\\u{002e}example"))
+    (is (str/includes? (get-in dirty ["review" "text"]) "Item 2, open: \"Read https\\u{003a}//evil\\u{002e}example\" [contaminated]"))
     (is (str/includes? (get-in clean ["review" "text"]) "Read https://evil.example") "trusted, its links are as written")
     (is (= (get dirty "sha256") (get-in dirty ["review" "sha256"])))
     (testing "the digest of the raw text form trusts nothing"

@@ -89,3 +89,12 @@ of ~/code/projects/.next/DASHBOARD.md.
   says exactly what goes out. Plain numbers and amounts keep their dots,
   now also inside JSON quotes or brackets ("12.50", [1.5]); a dotted quad
   does not. defang itself is unchanged for its other uses.
+- Codex round 1, finding 2 (card T not injective across fields): fixed
+  by one structural rule for every review. No untrusted value stands
+  bare in one of relay's own lines: it is a JSON string on a labelled
+  line (`Column 2: "Feb" [contaminated]`) or a gutter block. A card's T
+  is no longer its text form but labelled lines per element; the wire
+  form's `text` is unchanged. Injectivity is now tested by reading T
+  back: test-only parsers turn the T of random requests, held calls,
+  cards of every kind and docs back into their fields, and the property
+  is parse(T(subject)) = subject. That replaces the pairwise checks.

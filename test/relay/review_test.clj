@@ -4,6 +4,7 @@
   declares relay/review allows only what it was sent."
   (:require [babashka.fs :as fs]
             [cheshire.core :as json]
+            [clojure.data.json :as data-json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [clojure.test.check.clojure-test :refer [defspec]]
@@ -11,6 +12,7 @@
             [clojure.test.check.properties :as prop]
             [relay.acp :as acp]
             [relay.acp-client :as client]
+            [relay.cards :as cards]
             [relay.core :as core]
             [relay.dispatch :as dispatch]
             [relay.hub :as hub]
@@ -102,13 +104,6 @@
 
 (def clean-request {:role "clerk" :tool "post" :class "act" :input {} :labels ["private"] :options []})
 
-(defspec two-different-requests-never-give-the-same-text 500
-  (prop/for-all [a gen-nasty b gen-nasty slot (gen/elements (keys slots))]
-    (let [f (slots slot)
-          ta (get (review/request-review (f clean-request a)) "text")
-          tb (get (review/request-review (f clean-request b)) "text")]
-      (= (= a b) (= ta tb)))))
-
 (deftest a-raw-control-and-its-spelled-out-escape-differ
   (doseq [[raw spelled] [["​" "\\u{200b}"] ["\t" "\\u{0009}"] [" " "\\u{00a0}"] ["\n" "\\u{000a}"]
                          ["‮" "\\u{202e}"] ["\\" "\\\\"]]
@@ -155,12 +150,6 @@
             (gen/vector (gen/elements ["https://" "http" ":" "//" "." "[.]" "[:]" "hxxp" "\\u{002e}" "\\u{003a}"
                                        "\\" "evil" "com" "12.50" "\"" " " "\n" "．" "\\u{ff0e}" "1"])
                         0 8)))
-
-(defspec two-different-contaminated-sources-never-give-the-same-text 500
-  (prop/for-all [a (gen/one-of [gen-spelled gen-urlish gen-nasty]) b (gen/one-of [gen-spelled gen-urlish gen-nasty])
-                 slot (gen/elements (keys contaminated-slots))]
-    (let [f (contaminated-slots slot)]
-      (= (= a b) (= (f a) (f b))))))
 
 (deftest a-link-and-its-defanged-spelling-differ
   (doseq [[a b] [["x.com" "x[.]com"] ["https://e.x" "hxxps://e[.]x"] ["a.b" "a\\u{002e}b"] ["a:b//" "a\\u{003a}//"]]
@@ -242,6 +231,164 @@
                            "  \"Allow once\", kind \"allow_once\", id \"allow_once\""
                            "  \"Reject\", kind \"reject_once\", id \"reject_once\""])
            t))))
+
+;; --- reading a review back: injectivity, by construction
+
+(defn- unescape
+  "One line of a review as it was before escaping."
+  [line]
+  (str/replace line #"\\\\|\\u\{([0-9a-f]+)\}"
+               (fn [[m hex]] (if hex (cp-str (Long/parseLong hex 16)) "\\"))))
+
+(def ^:private json-string-re #"\"(?:[^\"\\]|\\.)*\"")
+
+(defn- read-json [s] (data-json/read-str s :bigdec true))
+
+(defn- labelled
+  "[value contaminated?] of a labelled line `prefix` JSON-string [contaminated], or nil."
+  [prefix line]
+  (let [l (unescape line)]
+    (when (str/starts-with? l prefix)
+      (when-let [[_ js c] (re-matches (re-pattern (str "(?s)(" json-string-re ")( \\[contaminated\\])?")) (subs l (count prefix)))]
+        [(read-json js) (some? c)]))))
+
+(defn- take-block
+  "[text contaminated? rest] of a gutter block at the head of lines."
+  [lines]
+  (let [[c lines] (if (= "  [contaminated]" (first lines)) [true (rest lines)] [false lines])
+        [bl more] (split-with #(str/starts-with? % text/gutter) lines)]
+    (assert (seq bl) "a block has a line")
+    [(str/join "\n" (map #(unescape (subs % (count text/gutter))) bl)) c more]))
+
+(defn- labels-of [s] (if (= "none sent" s) nil (read-json s)))
+
+(defn parse-request
+  "A request's review text read back into what it says."
+  [t]
+  (let [[l0 l1 l2 l3 & more] (str/split t #"\n" -1)
+        [_ heading role] (re-matches (re-pattern (str "(?s)(.*) from role (" json-string-re ")")) (unescape l0))
+        [_ tool class] (re-matches (re-pattern (str "(?s)Tool (" json-string-re "), class (" json-string-re "|not known to relay)")) (unescape l1))
+        _ (assert (= "" l2))
+        [preview more] (if (= "What it does: this tool has no preview." l3)
+                         [nil more]
+                         (let [[_ ls] (re-matches #"(?s)What it does, by the tool's preview \(its labels (.*)\):" (unescape l3))
+                               [err more] (if (= "  The preview command could not say what this call would do." (first more))
+                                            [true (rest more)] [false more])
+                               [text _ more] (take-block more)]
+                           [{:text text :labels (labels-of ls) :error err} more]))
+        [blank head & more] more
+        _ (assert (and (= "" blank) (= "Input, all of it, as JSON:" head)))
+        [input-text _ more] (take-block more)
+        [fixed more] (if-let [[_ ks] (re-matches #"(?s)Set by your settings, not by the role: (.*)" (unescape (first more)))]
+                       [(read-json ks) (rest more)] [nil more])
+        [blank ls & more] more
+        _ (assert (= "" blank))
+        labels (labels-of (second (re-matches #"(?s)Labels of the conversation: (.*)" (unescape ls))))
+        [options more] (if (= ["" "Options:"] (take 2 more))
+                         (let [[os more] (split-with #(str/starts-with? % "  ") (drop 2 more))]
+                           [(if (= ["  none"] os)
+                              []
+                              (vec (for [o os
+                                         :let [[_ n k i] (re-matches (re-pattern (str "(?s)  (" json-string-re "), kind (" json-string-re "), id (" json-string-re ")")) (unescape o))]]
+                                     {"name" (read-json n) "kind" (read-json k) "optionId" (read-json i)})))
+                            more])
+                         [nil more])]
+    (assert (empty? more))
+    {:heading heading :role (read-json role) :tool (read-json tool)
+     :class (when-not (= "not known to relay" class) (read-json class))
+     :preview preview :input (read-json input-text) :fixed fixed :labels labels :options options}))
+
+(defn- request-subject [{:keys [heading role tool class preview input labels fixed-args options]}]
+  {:heading (or heading "Permission request") :role (str role) :tool (str tool) :class class
+   :preview (when preview {:text (str (:text preview)) :labels (some-> (:labels preview) vec) :error (boolean (:error preview))})
+   :input input :fixed (when (seq fixed-args) (vec (sort (map str (keys fixed-args)))))
+   :labels (some-> labels vec)
+   :options (some->> options (mapv #(into {} (map (fn [k] [k (str (get % k))])) ["name" "kind" "optionId"])))})
+
+(defn parse-card
+  "A card's review text read back into what it says."
+  [t]
+  (let [[l0 l1 & more] (str/split t #"\n" -1)
+        [_ id kind rev archived] (re-matches #"Card (\d+) \((\w+), rev (\d+)(?:, \d+ of \d+ done)?(?:, complete)?(, archived)?\)" l0)
+        el (fn [re line] (let [l (unescape line)
+                               [_ a b js c] (re-matches (re-pattern (str "(?s)" re "(" json-string-re ")( \\[contaminated\\])?")) l)]
+                           (when js [a b (read-json js) (some? c)])))
+        [title-text title-c] (labelled "Title: " l1)
+        [body more] (split-with #(not= "" %) more)
+        base {:id (parse-long id) :kind kind :rev (parse-long rev) :archived (some? archived) :title [title-text title-c]}]
+    (assert (empty? more))
+    (case kind
+      "checklist" (assoc base :items (if (= ["No items yet."] body) []
+                                         (vec (for [l body :let [[i st text c] (el "Item (\\d+), (done|open): " l)]]
+                                                [(parse-long i) (= "done" st) text c]))))
+      "tracker" (let [cols (if (= "No columns yet." (first body)) [] (vec (for [l body :let [[i _ text c] (el "Column (\\d+): ()" l)] :when i] [(parse-long i) text c])))
+                      rows (vec (for [l body :let [[i _ text c] (el "Row (\\d+): ()" l)] :when i] [(parse-long i) text c]))
+                      cells (vec (for [l body :let [[_ r c st] (re-matches #"Row (\d+), column (\d+): (\w+)" l)] :when r] [(parse-long r) (parse-long c) st]))]
+                  (assoc base :columns cols :rows rows :cells cells))
+      "note" (let [[head & bl] body
+                   [text _ _] (take-block bl)]
+               (assoc base :note [text (= "Note, from a contaminated source:" head)])))))
+
+(defn- card-subject [{:keys [id kind rev title items rows columns cells note] :as card}]
+  (let [c? #(text/contaminated? (:labels %))
+        base {:id id :kind kind :rev rev :archived (not (cards/active? card)) :title [(:text title) (c? title)]}]
+    (case kind
+      "checklist" (assoc base :items (vec (for [i items] [(:id i) (boolean (:done i)) (:text i) (c? i)])))
+      "tracker" (assoc base :columns (vec (for [x columns] [(:id x) (:text x) (c? x)]))
+                       :rows (vec (for [x rows] [(:id x) (:text x) (c? x)]))
+                       :cells (vec (for [[[r c] st] (sort-by key cells) :when (not= "open" st)] [r c st])))
+      "note" (assoc base :note [(:text note) (c? note)]))))
+
+(defn parse-subject
+  "A doc's (or another trusted subject's) review text read back."
+  [t]
+  (let [[l0 & more] (str/split t #"\n" -1)
+        [_ kind ref version] (re-matches (re-pattern (str "(?s)(\\w+) (" json-string-re "), version (\\d+)")) (unescape l0))
+        [content c more] (take-block more)]
+    (assert (empty? more))
+    {:kind (str/lower-case kind) :ref (read-json ref) :version (parse-long version) :content content :contaminated c}))
+
+(def gen-el (gen/let [t gen-nasty ls gen-labels] {:text t :labels (vec ls)}))
+
+(def gen-card
+  (gen/let [kind (gen/elements ["checklist" "tracker" "note"])
+            id (gen/choose 1 5000) rev (gen/choose 1 9000) status (gen/elements [:active :archived])
+            title gen-el
+            items (gen/vector (gen/let [e gen-el d gen/boolean] (assoc e :done d)) 0 4)
+            cols (gen/vector gen-el 0 3) rows (gen/vector gen-el 0 3)
+            states (gen/vector (gen/elements ["open" "done" "skip"]) 9)
+            note gen-el]
+    (let [ids (fn [els] (vec (map-indexed #(assoc %2 :id (inc %1) :rev 1) els)))
+          cols (ids cols) rows (ids rows)]
+      (cond-> {:id id :kind kind :status status :rev rev :title (assoc title :id 0 :rev 1)}
+        (= "checklist" kind) (assoc :items (ids items))
+        (= "tracker" kind) (assoc :columns cols :rows rows
+                                  :cells (into {} (for [r rows c cols] [[(:id r) (:id c)] (nth states (mod (* (:id r) (:id c)) 9))])))
+        (= "note" kind) (assoc :note (assoc note :rev 1))))))
+
+(defspec a-request-s-review-reads-back-as-the-request 500
+  (prop/for-all [r gen-request heading (gen/elements [nil "Held call"]) holds gen/boolean]
+    (let [r (cond-> (assoc r :heading heading) holds (assoc :options nil))]
+      (= (request-subject r) (parse-request (get (review/request-review r) "text"))))))
+
+(defspec a-card-s-review-reads-back-as-the-card 500
+  (prop/for-all [c gen-card]
+    (let [t (review/card-text c)]
+      (and (review-ok? t) (= (card-subject c) (parse-card t))))))
+
+(defspec a-doc-s-review-reads-back-as-the-doc 300
+  (prop/for-all [kind (gen/elements ["doc" "fact" "memo"]) ref gen-nasty v (gen/choose 1 9999) ls gen-labels content gen-nasty]
+    (let [t (review/subject-text kind ref {:version v :labels ls :text content})]
+      (and (review-ok? t)
+           (= {:kind kind :ref ref :version v :content content :contaminated (text/contaminated? ls)}
+              (parse-subject t))))))
+
+(deftest one-column-cannot-pass-for-two
+  ;; Codex, relay#79 round 1.
+  (let [card (fn [cols] {:id 1 :kind "tracker" :status :active :rev 3 :title {:id 0 :text "T" :labels []}
+                         :columns (vec (map-indexed (fn [i [t ls]] {:id (inc i) :text t :labels ls}) cols)) :rows [] :cells {}})]
+    (is (not= (review/card-text (card [["Jan, 2 [contaminated] Feb" ["contaminated"]]]))
+              (review/card-text (card [["Jan" []] ["Feb" ["contaminated"]]]))))))
 
 (deftest pretty-json-reads-back-as-the-value
   (doseq [v [{} [] {"b" [1 2.50M {}] "a" "x\né"} nil "s" [[[]]]]]

@@ -284,17 +284,20 @@ for text from a contaminated source. visible-defanged breaks links with
 escapes rather than by replacing anything: the colon of every `://`
 becomes `\u{003a}` and every dot inside a word (the fullwidth and
 ideographic ones too) its own `\u{XXXX}`, except in a plain number or
-amount such as `12.50` or `"12.50"`, which reads as written. Every character of T is the space (U+0020),
-`"\n"`, or one of Unicode's general categories L, M, N, P or S, which is
-Go's `unicode.IsPrint` set. Anything else, the tab and every other space
-(no-break, ideographic and so on) included, is written as `\u{XXXX}`,
-and a backslash as two, so T can be read back exactly and two subjects
-that differ never give the same T. H is the sha256
-hex of T's UTF-8 bytes. Nothing is left out for length. Text from a role
-or an outsider sits behind the gutter `"  │ "`, one gutter line for each
-of its lines (headed `"  [contaminated]"` when its source is), and the
-strings in relay's own lines are written as JSON strings, so nothing in
-the subject can pass for a line of relay's.
+amount such as `12.50` or `"12.50"`, which reads as written. Every
+character of T is the space (U+0020), `"\n"`, or one of Unicode's
+general categories L, M, N, P or S, which is Go's `unicode.IsPrint` set.
+Anything else, the tab and every other space (no-break, ideographic and
+so on) included, is written as `\u{XXXX}`, and a backslash as two. H is
+the sha256 hex of T's UTF-8 bytes. Nothing is left out for length.
+
+No value from a role or an outsider ever stands bare in one of relay's
+own lines. It is either a JSON string on a labelled line, such as
+`Column 2: "Feb" [contaminated]`, followed by ` [contaminated]` when its
+source is, or a block whose every line starts with the gutter `"  │ "`,
+headed by a `"  [contaminated]"` line when its source is. So T can be
+read back into the subject exactly, and two subjects that differ never
+give the same T (relay's tests read every kind of T back).
 
 A permission request's T holds, in this order: the role; the tool and
 its class (from the role's tools, or "not known to relay"); what the
@@ -327,15 +330,18 @@ Options:
   "Reject", kind "reject_once", id "reject_once"
 ```
 
-A card's T is its text form (`relay.cards/text-form`) with each
-element's text made safe by its own labels and marked as the wire form's
-`text` marks it:
+A card's T names the card, its kind, rev and state, then its title and
+each item, or each column, row and cell that is not open, or its note
+as a block, each text marked by its own labels:
 
 ```
-Card 12: Taxes (checklist, 0 of 2 done, rev 14) [[card:12]]
-[ ] 1 Find the T4
-[ ] 2 [contaminated] Read https\u{003a}//evil\u{002e}example
+Card 12 (checklist, rev 14, 0 of 2 done)
+Title: "Taxes"
+Item 1, open: "Find the T4"
+Item 2, open: "Read https\u{003a}//evil\u{002e}example" [contaminated]
 ```
+
+A tracker's cells read `Row 1, column 2: done`.
 
 A doc's T is `Doc "<path>", version <n>` and then its content behind the
 gutter, its links broken when its labels are contaminated.
