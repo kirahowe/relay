@@ -1,7 +1,7 @@
 (ns relay.eval-test
-  "The eval grading core, the new scenario matchers and kinds, the
-  stand-in tools, and every eval case's oracle and foils against the mock
-  model."
+  "The eval grading core, the new scenario matchers and kinds, and
+  the stand-in tools. Every eval case's oracle and foils against the mock
+  model are in relay.eval-oracles."
   (:require [babashka.fs :as fs]
             [cheshire.core :as json]
             [clojure.string :as str]
@@ -485,15 +485,6 @@
   (is (seq (et/eval-case-files)))
   (doseq [f (et/eval-case-files)]
     (is (et/read-case f defaults) f)))
-
-(deftest every-oracle-passes-and-every-foil-fails-exactly-its-graders
-  (doseq [f (et/eval-case-files)
-          :let [{:keys [oracle foils]} (et/mock-verdicts f)]]
-    (testing f
-      (is (empty? oracle) (str "oracle: " (str/join "; " oracle)))
-      (is (seq foils) "every case has a foil")
-      (doseq [[nm problems] foils]
-        (is (empty? problems) (str "foil " nm ": " (str/join "; " problems)))))))
 
 ;; --- judges are skipped, the budget decides, the report is data
 
