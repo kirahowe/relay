@@ -1,7 +1,7 @@
 (ns relay.deploy
   "The decisions behind `bb deploy` and `bb rollback`, as pure functions of
-  what was observed. relay.deploy-run observes the checkouts, calls these,
-  and does what they say.
+  what was observed. relay.deploy-flow runs a deploy or rollback on them,
+  and relay.deploy-run does what it asks.
 
   A checkout is described by an observation:
 

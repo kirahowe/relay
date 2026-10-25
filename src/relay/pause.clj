@@ -35,15 +35,17 @@
   "What a person needs to see when relay is paused: that it is, why, where
   the file is and how to lift it. `relay status` prints this whenever the
   file exists, and the deploy commands print it when they refuse because of
-  it. A pause made by bb deploy or bb rollback also names bb rollback."
-  [file]
-  (when-let [why (reason file)]
-    (cond-> [(str "relay is paused: relay tick starts nothing until the pause file is removed. " why)
-             (str "Pause file: " file)
-             (str "To lift it by hand: rm '" file "'")]
-      (str/starts-with? why "bb ")
-      (conj (str "A bb deploy or bb rollback made it. If it stopped partway, run bb rollback from a relay "
-                 "checkout: it puts the checkouts back where the last deploy found them and lifts the pause.")))))
+  it. A pause made by bb deploy or bb rollback also names bb rollback.
+  Given `why`, the file's reason, it reads nothing."
+  ([file] (recovery-lines file (reason file)))
+  ([file why]
+   (when why
+     (cond-> [(str "relay is paused: relay tick starts nothing until the pause file is removed. " why)
+              (str "Pause file: " file)
+              (str "To lift it by hand: rm '" file "'")]
+       (str/starts-with? why "bb ")
+       (conj (str "A bb deploy or bb rollback made it. If it stopped partway, run bb rollback from a relay "
+                  "checkout: it puts the checkouts back where the last deploy found them and lifts the pause."))))))
 
 (defn pause!
   "Creates the file, or rewrites its reason, and returns once it is on
