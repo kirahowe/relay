@@ -163,3 +163,99 @@ of ~/code/projects/.next/DASHBOARD.md.
   holds, requests and cards come from their records' fields; a
   declassify review comes from core/declassified, which is the text the
   public role is given, so that is the effective field, not a lossy one.
+
+2026-10-24, relay-tui side (relay-tui llrtpsrm, uzssyusp, lkswlyro).
+
+- The refusal: a JSON-RPC response cannot itself be refused, so relay
+  re-sends the same session/request_permission under a new id with
+  `_meta["relay/refused"]` (agreed with the main session). relay-tui
+  reopens the review on it when it answered that tool call with an
+  allow carrying a digest and nothing else is queued ahead of it. The
+  re-asked request is a new identity, so it is read again from the
+  start. The fake hub re-asks at most three times, then cancels.
+- What the pager shows: valid UTF-8 where every character is a space,
+  a newline, or passes unicode.IsPrint and is not a blank glyph (the
+  default-ignorables and the braille, Khitan and notehead blanks, as
+  relay.text has them). That is a little stricter than IsPrint alone.
+  A mismatch with relay's tables fails closed, which is safe.
+- Width: ansi.FirstGraphemeCluster with GraphemeWidth, which is what
+  ansi.StringWidth and the emulator tests measure. A line breaks after
+  a space when it can (never one at the line's own start), otherwise
+  between graphemes.
+- "Every page drawn" is tracked as byte ranges of T, so it survives a
+  resize that moves the page breaks. A frame counts only once its
+  report arrives (a frame later, about 50 ms). A page flipped past
+  faster than that does not count, and on the last page the foot names
+  how many pages were not on screen long enough. The core checks
+  ReviewTextOK and relay's digest itself as well, so a faulty renderer
+  still cannot arm a bad T.
+- The header is the subject's kind ("Allow this tool call?", "Trust
+  this card?" and so on) followed by T's first line, cut to the width,
+  as the contract allows. The foot's option row shows the agent's
+  option names through VisibleLine, cut to the width, because the keys
+  need labels. T holds them whole. If the main session reads that row
+  as another rendering of the subject, it can go.
+- Keys: space, pgdown and f page on; pgup and b page back; j, k and
+  the arrows scroll by a row; g and G go to the top and the end; y
+  allows once, trusts or archives; tab, shift+tab, left and right move
+  the option highlight; enter picks it (it starts on a reject); n
+  rejects or cancels; esc cancels (a request answers cancelled, as the
+  contract says); q goes back to the dashboard without answering a
+  request, and cancels the pane's questions; ctrl+c stops the turn.
+  h and l do not move the highlight, so typed letters cannot change
+  the choice. Up and down scroll, because this is a pager.
+- The dashboard summary takes enter (open the review), h, the role
+  keys, the page keys, ctrl+c and ctrl+d. Esc there does nothing:
+  nothing on the summary answers.
+- v is gone. Enter opens the review, which has everything v showed.
+  The transcript's Request entry that v made went with it.
+- The end question and ctrl+y (trust a paste) are not consent subjects
+  under the contract and stay inline. With Drawn now coming only from
+  the pager, they arm ArmDelay after their surface came up
+  (App.Became), from a live key. Both act on nothing outside.
+- The pager closes when its conversation leaves the screen (Blurred),
+  so coming back to the role never lands on a review with the keys.
+  Enter opens it again.
+- A card or doc without a review member fails closed. t on such a card
+  says to run `relay trust card N`, a doc shows its trustCommand, and
+  an archive review says relay sent no review text. Card and doc trust
+  send the review's sha256 as their sha256 param, as the contract
+  says. Card.SHA256 is still read but no longer sent.
+- The text built for a plain agent follows the rules relay adopted
+  after Codex's findings. Every agent value is a quoted string on a
+  labelled line (tool, title, kind, each fixed argument, each option
+  and its kind) or a gutter block ("  │ ") for content, preview and
+  the pretty-printed input. The only escapes are \\, \" (inside
+  quotes), \u{XXXX} and \x{XX}. Contaminated text has the ":" of
+  scheme:// as \u{003a} and dots inside words as \u{002e}, except in
+  plain numbers, so it still reads back. "Characters to check:" names
+  mixed-script words, lookalike letters (a small table of Cyrillic and
+  Greek Latin lookalikes, fullwidth forms and mathematical
+  alphanumerics), and non-ASCII characters in host- or address-like
+  words, by field and code point. Go has no Unicode names, so only
+  code points appear. A test-only parser proves parse(T(request)) ==
+  request.
+- Removed with it: the inline review (render/review.go), the Armable
+  sets and per-frame InputDrawn reports, Permission.Seen/SeenAt and
+  inputseen.go, the v input view, the Request transcript entry, the
+  TooSmall/Viewport rule and RequestFits, TrustPrompt.Since and
+  CardTrust.Since. The shell no longer renders a full frame on every
+  update to learn what it drew. It renders only the pager, and only
+  while a review has the keys.
+- Not carried over: the dashboard's "[new domain]" mark on a request's
+  preview is not in the built T. The pane still marks new domains.
+
+2026-10-24, the main session's decisions on two of those: nothing the
+agent wrote appears on the review but in T's body.
+- The foot's options row shows each option by its number and ACP kind
+  only ("▸ 2 reject_once (n)"), the protocol's own words; the names
+  stay whole in T. The number is the option's place in the list the
+  agent sent (PermOption.N), which is how a review text numbers it, so
+  it matches T even though relay-tui leaves out kinds it never offers.
+  The client-built T numbers options the same way. The highlight and
+  enter work on these entries.
+- The top row shows only the kind in relay-tui's words ("Allow this
+  tool call?", "Trust this card?", ...), not T's first line.
+- Test: render.TestNothingAgentWrittenOutsideTheBody, random marked
+  agent values in relay's T and in a built one, at random sizes, read
+  and unread; no row outside the body holds a mark.
