@@ -801,3 +801,46 @@
         (let [pid (parse-long (str/trim (slurp pidf)))]
           (is (not (.isPresent (java.lang.ProcessHandle/of pid))))))
       (finally (fs/delete-tree tmp)))))
+
+;; --- reviews (relay#79)
+
+(defn- review-flow!
+  "A client that declares relay/review, on a conversation whose agent asks
+  a permission (PERM): its allow without the review's digest is refused
+  and the request sent again; with it, the call is allowed."
+  [c keeps]
+  (is (= keeps (get-in (client/request! c "initialize" {:protocolVersion 1 :clientCapabilities {:_meta {"relay/review" 1}}})
+                       ["result" "_meta" "relay/keeps"]))
+      "the mode this test is about")
+  (client/request! c "session/new" {:cwd *dir* :mcpServers [] :_meta {"relay/role" "clerk"}})
+  (let [id (client/request-async! c "session/prompt" (prompt "PERM please"))
+        req (client/await! c #(= "session/request_permission" (get % "method")) 10000)
+        {t "text" h "sha256"} (get-in req ["params" "_meta" "relay/review"])]
+    (is (str/starts-with? (str t) "Permission request from role \"clerk\"\nTool \"post\"") (pr-str req))
+    (is (= h (core/sha256 t)))
+    (#'client/send! c {:jsonrpc "2.0" :id (get req "id") :result {:outcome {:outcome "selected" :optionId "a"}}})
+    (let [again (client/await! c #(and (= "session/request_permission" (get % "method"))
+                                       (get-in % ["params" "_meta" "relay/refused"]))
+                               10000)]
+      (is again "the allow without the digest is refused, and the request sent again")
+      (is (not-any? #(str/starts-with? (str %) "PERMITTED") (texts c)) "nothing reached the agent")
+      (#'client/send! c {:jsonrpc "2.0" :id (get again "id")
+                         :result {:outcome {:outcome "selected" :optionId "a"} :_meta {"relay/review" h}}})
+      (is (= "end_turn" (get-in (client/response c id 10000) ["result" "stopReason"])))
+      (is (some #{"PERMITTED a"} (texts c))))))
+
+(deftest ^:volley/serial a-reviewing-client-allows-only-what-it-was-sent-through-the-service
+  (with-service
+    (fn [_]
+      (let [c (connect! :role "clerk" :approvals true)]
+        (try (review-flow! c true) (finally (done! c)))))))
+
+(deftest ^:volley/serial a-reviewing-client-allows-only-what-it-was-sent-in-relay-acp-alone
+  (with-service
+    (fn [service]
+      ;; No service for this one: relay acp runs the hub itself.
+      (stop-service! service)
+      (let [c (client/start! [support/relay-bin "acp" "clerk" "--approvals" "--data" (data)
+                              "--socket" (str *socket* ".none")]
+                             {:dir *dir* ::client/manual true})]
+        (try (review-flow! c false) (finally (done! c)))))))

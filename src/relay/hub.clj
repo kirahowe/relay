@@ -27,8 +27,14 @@
                session, which answer is whose) is a query on this table.
                The hub's own request to an agent (initialize) is a record
                with no connection.
-    :perms     per conversation, the agent's permission requests and the
-               id each client was sent it under.
+    :perms     per conversation, the agent's permission requests, the
+               id each client was sent it under, and how many allows
+               without the review's digest each client sent (:bad).
+
+  A connection that declares relay/review in initialize (:review) is held
+  to the review (relay.review) each permission request carries: its
+  allow must name the review's digest, or relay sends it the request
+  again (refused-allow) and settles nothing.
     :awaiting  what to do with the result of each submit made and not yet
                answered, in order. A submit's result is the next event the
                hub sees (drive carries effects out so), so nothing else
@@ -404,6 +410,49 @@
         (-> h (assoc-in [:conns cid :next-id] n)
             (assoc-in [:convs role :perms pkey :sent cid] id)
             (write cid (with-id (:msg perm) id)))))))
+
+(def max-refused-allows
+  "How many allows without the review's digest relay takes from one
+  connection for one permission request before it stops sending the
+  request to it again. The request stays open all the same."
+  3)
+
+(def refused-allow-message
+  "What relay says, in the request it sends again, of an allow it did not take."
+  (str "relay did not take that allow: it did not carry the digest of this request's review, "
+       "so relay cannot tell that you saw it. Nothing was allowed; review the request again."))
+
+(defn- resend-perm
+  "Sends an open permission request to a connection again, under a new id,
+  after relay refused its allow, with relay's reason in
+  params._meta relay/refused. The old id is answered by nothing."
+  [h role pkey cid]
+  (let [perm (get-in h [:convs role :perms pkey])
+        n (inc (get-in h [:conns cid :next-id] 0))
+        id (str "relay-" n)
+        msg (update-in (:msg perm) ["params" "_meta"] #(assoc (if (map? %) % {}) "relay/refused" refused-allow-message))]
+    (-> h (assoc-in [:conns cid :next-id] n)
+        (assoc-in [:convs role :perms pkey :sent cid] id)
+        (write cid (with-id msg id)))))
+
+(defn- refused-allow
+  "A connection that declared relay/review allowed a permission request
+  without the digest of its review, or with another: nothing is settled
+  and nothing reaches the agent. The request is sent to it again, up to
+  max-refused-allows times; past that relay tells the operator and keeps
+  the request open, neither allowed nor refused on that account."
+  [h role pkey cid]
+  (let [h (update-in h [:convs role :perms pkey :bad cid] (fnil inc 0))
+        n (get-in h [:convs role :perms pkey :bad cid])]
+    (cond
+      (< n max-refused-allows) (resend-perm h role pkey cid)
+      (= n max-refused-allows)
+      (fx h {:effect :warn
+             :text (str "relay stopped asking a client about " role "'s call "
+                        (get-in h [:convs role :perms pkey :call])
+                        ": it allowed it " n " times without the digest of the call's review. "
+                        "The request is still open; answer it from another client, or end the conversation.")})
+      :else h)))
 
 (defn- perm-sent
   "The permission request sent to a connection under this id key:
@@ -806,6 +855,13 @@
       (cond-> h
         rid (refuse rid -32600 "relay takes _relay/connect only as the first line of a connection to its socket.")))))
 
+(defn reviews?
+  "Whether initialize's params declare that the client shows relay's
+  reviews: clientCapabilities._meta[\"relay/review\"] is 1."
+  [params]
+  (let [v (get-in params ["clientCapabilities" "_meta" "relay/review"])]
+    (boolean (and (number? v) (== 1 v)))))
+
 (defn- initialize-answer [h]
   {"protocolVersion" 1
    "agentCapabilities" {"loadSession" true
@@ -821,7 +877,11 @@
         method (get msg "method")]
     (case method
       "_relay/connect" (connect h cid rid msg first?)
-      "initialize" (-> h (assoc-in [:conns cid :init] (params-of msg)) (answer rid (initialize-answer h)))
+      "initialize" (-> h (assoc-in [:conns cid :init] (params-of msg))
+                       ;; Once a client says it shows relay's reviews, relay
+                       ;; holds it to that for the rest of the connection.
+                       (update-in [:conns cid :review] #(or % (reviews? (params-of msg))))
+                       (answer rid (initialize-answer h)))
       "authenticate" (answer h rid {})
       "session/new" (new-session h rid msg)
       "session/load" (load-session h rid msg)
@@ -894,11 +954,18 @@
     (if-let [[role pkey] (perm-sent h cid (acp/id-key id))]
       (let [p (get-in h [:convs role :perms pkey])
             a (acp/answer-of {:id id :options (vec (filter map? (get-in p [:msg "params" "options"])))} line)]
-        (if-not a
-          h
+        (cond
+          (not a) h
+          ;; A client that reviews must show it reviewed what relay sent:
+          ;; an allow names the review's digest. A reject or a cancel
+          ;; needs none.
+          (and (get-in h [:conns cid :review]) (:valid a) (acp/allow-kinds (:outcome a))
+               (let [want (acp/review-digest (:msg p))]
+                 (not (and want (= want (acp/answer-digest msg))))))
+          (refused-allow h role pkey cid)
           ;; The answer goes to the proxy under the agent's id; the proxy
           ;; refuses one that picks no option the agent offered.
-          (settle h role pkey cid (with-id msg (get-in p [:msg "id"])) (:outcome a))))
+          :else (settle h role pkey cid (with-id msg (get-in p [:msg "id"])) (:outcome a))))
       (if (hub-id? id)
         ;; An answer to a request already settled for another connection,
         ;; or one the connection stopped holding when it detached.

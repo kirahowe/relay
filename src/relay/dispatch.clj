@@ -22,6 +22,7 @@
             [relay.refs :as refs]
             [relay.render :as render]
             [relay.reports :as reports]
+            [relay.review :as review]
             [relay.tools :as tools]
             [relay.workspace :as workspace])
   (:import (java.time Duration Instant)))
@@ -671,11 +672,17 @@
   {:markdown ...} and the preview relay records, or nil. The request is
   passed on with the markdown added (relay.acp/with-preview), and
   on-permission gets the request as read from that line, so its :preview
-  is the text the client was shown, and the record as :preview-record."
+  is the text the client was shown, and the record as :preview-record.
+
+  (review req p) gives the review (relay.review) of a request the client
+  will see, from the request as read and its preview p, or nil. It goes
+  with the request as params._meta relay/review (relay.acp/with-review),
+  and relay.hub checks an allow against it."
   [{:keys [argv dir env]} {:keys [in out trace stop grace-ms approvals on-permission on-oversized line-limit
-                                  extension on-display preview]
+                                  extension on-display preview review]
                            :or {grace-ms stop-grace-ms on-permission (fn [& _]) on-oversized (fn [_])
-                                line-limit line-limit extension (fn [_]) on-display (fn [_]) preview (fn [_] nil)}}]
+                                line-limit line-limit extension (fn [_]) on-display (fn [_]) preview (fn [_] nil)
+                                review (fn [_ _] nil)}}]
   (let [proc (p/process (vec argv) (cond-> {:err :inherit} dir (assoc :dir (str dir)) env (assoc :env env)))
         ^Process jp (:proc proc)
         ^java.io.OutputStream agent-in (:in proc)
@@ -752,12 +759,16 @@
                                                                 (assoc :labels (vec (or display-labels (:labels p)))))))]
                          (on-permission :asked req)
                          (if passing
-                             (do (swap! outstanding assoc (:id req) req)
-                                 ;; The client may have gone in the meantime.
-                                 (when (and @client-gone (get @outstanding (:id req)))
-                                   (swap! outstanding dissoc (:id req))
-                                   (refuse! req "client-gone"))
-                                 (or line' :pass))
+                             (let [r (review req p)
+                                   ;; Every request a client sees carries
+                                   ;; relay's review, or none an agent made.
+                                   line'' (acp/with-review (or line' (:text line)) r)]
+                               (swap! outstanding assoc (:id req) req)
+                               ;; The client may have gone in the meantime.
+                               (when (and @client-gone (get @outstanding (:id req)))
+                                 (swap! outstanding dissoc (:id req))
+                                 (refuse! req "client-gone"))
+                               (or line'' line' :pass))
                              (do (refuse! req (cond (:unreadable req) "unreadable"
                                                     (not approvals) "no-approvals"
                                                     :else "client-gone"))
@@ -898,6 +909,20 @@
                  :markdown (acp/preview-markdown p (core/approved-hosts (inbound/current-state sys)))
                  :display-labels (core/preview-labels config tool p labels)))))))
 
+(defn- request-reviewer
+  "Makes a conversation's permission requests' reviews (relay.review): the
+  role, the tool's class from the role's manifest, the preview's own
+  text and labels as the preview command gave them, and the rest from
+  the request the client gets."
+  [role-id manifest]
+  (let [classes (into {} (keep (fn [{n :name c :class}] (when (and n c) [n (name c)]))) manifest)]
+    (fn [{:keys [tool input labels fixed-args options]} p]
+      (review/request-review
+       {:role role-id :tool tool :class (get classes tool)
+        :preview (when p {:text (str (:content p)) :labels (vec (or (:display-labels p) (:labels p)))
+                          :error (boolean (:is-error p))})
+        :input input :labels labels :fixed-args fixed-args :options options}))))
+
 (defn- oversize-recorder
   "Records an agent line relay dropped for being too long to read, and
   tells the operator."
@@ -989,6 +1014,7 @@
                                                   (swap! conv workspace/answered req (:outcome answer)))
                                                 (apply record kind req (when answer [answer])))
                                :preview (permission-previewer sys)
+                               :review (request-reviewer role-id (:tools request))
                                :on-oversized (oversize-recorder sys (:wake-id request))
                                :extension (extension-handler sys conv approvals)
                                :on-display (fn [session] (keep-session-displays! sys request conv session))})]

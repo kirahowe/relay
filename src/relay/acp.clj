@@ -507,3 +507,36 @@
         (strict/generate
          (assoc-in msg ["params" "toolCall" "content"]
                    (conj (if (sequential? content) (vec content) []) item)))))))
+
+;; --- reviews
+
+(defn with-review
+  "A session/request_permission line with `review` (relay.review) as
+  params._meta[\"relay/review\"], or nil when the line is not such a
+  request. Only relay says what a review is, or that it refused an
+  answer: whatever the agent put under relay/review or relay/refused is
+  replaced or dropped. Everything else in the request is kept."
+  [line review]
+  (let [msg (message line)]
+    (when (and (map? msg) (= "session/request_permission" (get msg "method")) (map? (get msg "params")))
+      (let [meta (get-in msg ["params" "_meta"])
+            meta (-> (if (map? meta) meta {}) (dissoc "relay/refused") (assoc "relay/review" review))]
+        (strict/generate (assoc-in msg ["params" "_meta"] meta))))))
+
+(defn review-digest
+  "The digest of the review a permission request carries
+  (params._meta[\"relay/review\"][\"sha256\"]), or nil."
+  [msg]
+  (let [h (get-in msg ["params" "_meta" "relay/review" "sha256"])]
+    (when (string? h) h)))
+
+(defn answer-digest
+  "The digest a client's answer to a permission request gives back
+  (result._meta[\"relay/review\"]), or nil."
+  [msg]
+  (let [h (get-in msg ["result" "_meta" "relay/review"])]
+    (when (string? h) h)))
+
+(def allow-kinds
+  "The ACP option kinds that allow a call."
+  #{"allow_once" "allow_always"})
