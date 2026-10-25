@@ -17,14 +17,18 @@ Kira's answers (2026-10-23):
 
 ## Acceptance criteria
 
-- Closing and reopening acp-tui in hub mode against the same agent
+- [x] Closing and reopening acp-tui in hub mode against the same agent
   restores the items above.
-- What is restored is only where the operator was; anything that has
+  - Receipt: core view derive/restore and internal/viewfile (zuzvkvup, zkqxrvnv, sumpsnop), restore order reworked by mvvuktxk; e2e reopen tests; QA 2026-10-24 reopened into the saved role with its draft; state file 0600, written atomically; --state-dir only, no env var.
+- [x] What is restored is only where the operator was; anything that has
   since gone (a role removed, a card archived, a conversation ended)
   falls back quietly to the default.
-- The file is written atomically and a damaged or unreadable file means
+  - Receipt: core view derive/restore and internal/viewfile (zuzvkvup, zkqxrvnv, sumpsnop), restore order reworked by mvvuktxk; e2e reopen tests; QA 2026-10-24 reopened into the saved role with its draft; state file 0600, written atomically; --state-dir only, no env var.
+- [x] The file is written atomically and a damaged or unreadable file means
   defaults, never a crash.
-- No environment variable chooses the path.
+  - Receipt: core view derive/restore and internal/viewfile (zuzvkvup, zkqxrvnv, sumpsnop), restore order reworked by mvvuktxk; e2e reopen tests; QA 2026-10-24 reopened into the saved role with its draft; state file 0600, written atomically; --state-dir only, no env var.
+- [x] No environment variable chooses the path.
+  - Receipt: core view derive/restore and internal/viewfile (zuzvkvup, zkqxrvnv, sumpsnop), restore order reworked by mvvuktxk; e2e reopen tests; QA 2026-10-24 reopened into the saved role with its draft; state file 0600, written atomically; --state-dir only, no env var.
 
 ## Log
 

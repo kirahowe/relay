@@ -15,17 +15,22 @@ own selection.
 
 ## Acceptance criteria
 
-- In hub mode the board belongs to the hub: one copy per connection,
+- [x] In hub mode the board belongs to the hub: one copy per connection,
   asked for once the connection is up, kept current by
   `_relay/cards/changed`.
-- The board shows with no conversation open, and is the same board, with
+  - Receipt: relay-tui core.App holds the board per connection (zxktzzvv); hub e2e tests show the board before any conversation and the same selection across roles; relay refuses sessionId on the board methods (vpzwwvvw); bb verify green 2026-10-25; QA on the real build saw the board with no role in focus.
+- [x] The board shows with no conversation open, and is the same board, with
   the same selection, whichever role is in focus.
-- Card ops and card trust work from the hub's board with no conversation
+  - Receipt: relay-tui core.App holds the board per connection (zxktzzvv); hub e2e tests show the board before any conversation and the same selection across roles; relay refuses sessionId on the board methods (vpzwwvvw); bb verify green 2026-10-25; QA on the real build saw the board with no role in focus.
+- [x] Card ops and card trust work from the hub's board with no conversation
   open.
-- Single-agent mode (a plain ACP agent, or `relay acp <role>` embedded)
+  - Receipt: relay-tui core.App holds the board per connection (zxktzzvv); hub e2e tests show the board before any conversation and the same selection across roles; relay refuses sessionId on the board methods (vpzwwvvw); bb verify green 2026-10-25; QA on the real build saw the board with no role in focus.
+- [x] Single-agent mode (a plain ACP agent, or `relay acp <role>` embedded)
   keeps working as it does.
-- A test that would have caught this: open a hub connection, focus no
+  - Receipt: relay-tui core.App holds the board per connection (zxktzzvv); hub e2e tests show the board before any conversation and the same selection across roles; relay refuses sessionId on the board methods (vpzwwvvw); bb verify green 2026-10-25; QA on the real build saw the board with no role in focus.
+- [x] A test that would have caught this: open a hub connection, focus no
   conversation, and see the cards.
+  - Receipt: relay-tui core.App holds the board per connection (zxktzzvv); hub e2e tests show the board before any conversation and the same selection across roles; relay refuses sessionId on the board methods (vpzwwvvw); bb verify green 2026-10-25; QA on the real build saw the board with no role in focus.
 
 ## Log
 

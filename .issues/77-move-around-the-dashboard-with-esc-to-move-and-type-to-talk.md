@@ -33,12 +33,16 @@ lands on the board as commands).
 
 ## Acceptance criteria
 
-- The keys above, in hub mode and in single-agent mode (where there is
+- [x] The keys above, in hub mode and in single-agent mode (where there is
   no list: conversation and pane only).
-- No key reaches a card op while typing; no typed text is lost on Esc.
-- Card archive and trust keep their confirm, arm delay and rev checks.
-- Help, README and the saved view (relay#74) know the mode: reopening
+  - Receipt: typing/moving (nsptpvlp) then the surface function (xprupxzl) with properties that no typing key reaches a card op or answers a request; README key tables checked against the classifiers by test; QA walked list, conversation and pane.
+- [x] No key reaches a card op while typing; no typed text is lost on Esc.
+  - Receipt: typing/moving (nsptpvlp) then the surface function (xprupxzl) with properties that no typing key reaches a card op or answers a request; README key tables checked against the classifiers by test; QA walked list, conversation and pane.
+- [x] Card archive and trust keep their confirm, arm delay and rev checks.
+  - Receipt: typing/moving (nsptpvlp) then the surface function (xprupxzl) with properties that no typing key reaches a card op or answers a request; README key tables checked against the classifiers by test; QA walked list, conversation and pane.
+- [x] Help, README and the saved view (relay#74) know the mode: reopening
   lands in typing when focus is a conversation, moving otherwise.
+  - Receipt: typing/moving (nsptpvlp) then the surface function (xprupxzl) with properties that no typing key reaches a card op or answers a request; README key tables checked against the classifiers by test; QA walked list, conversation and pane.
 
 ## Log
 

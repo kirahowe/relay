@@ -7,7 +7,6 @@
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
-| [79](79-review-what-the-operator-consents-to-on-a-screen-of-its-own.md) | Review what the operator consents to on a screen of its own, with text relay made | feature | P1 |
 | [48](48-judge-remote-tool-definitions-with-a-decision-model.md) | Judge remote tool definitions with a decision model | feature | P2 |
 | [49](49-haiku-leaves-the-memo-or-journal-undone-before-an-act-call.md) | Haiku leaves the memo or journal undone before an act call | bug | P2 |
 | [62](62-keep-a-live-conversation-with-each-role-that-any-client-can.md) | Keep a live conversation with each role that any client can switch to | feature | P2 |
@@ -15,7 +14,6 @@
 | [71](71-let-bb-deploy-stop-and-restart-relay-serve-itself.md) | Let bb deploy stop and restart relay serve itself | feature | P2 |
 | [72](72-use-the-sidebar-s-empty-space-under-the-roles.md) | Use the sidebar's empty space under the roles | feature | P2 |
 | [76](76-fix-the-s5-acp-disconnect-and-s5-acp-wrong-request-id.md) | Fix the s5-acp-disconnect and s5-acp-wrong-request-id pentest scenarios | bug | P2 |
-| [77](77-move-around-the-dashboard-with-esc-to-move-and-type-to-talk.md) | Move around the dashboard with Esc to move and type to talk | feature | P2 |
 | [81](81-tell-every-connection-a-request-was-settled-after-a-detach.md) | Tell every connection a request was settled after a detach and a race | bug | P2 |
 | [82](82-read-the-log-s-decimals-exactly.md) | Read the log's decimals exactly | bug | P2 |
 | [56](56-serve-the-board-over-http-and-sse-on-the-tailnet-for-a-web.edn) | Serve the board over HTTP and SSE on the tailnet for a web client | feature | P3 |
@@ -35,8 +33,6 @@
 | [53](53-let-the-personal-agent-move-and-rename-my-files.md) | Let the personal agent move and rename my files | feature | P2 |
 | [57](57-make-hidden-characters-visible-in-card-text-that-roles-and.md) | Make hidden characters visible in card text that roles and resolve get | bug | P2 |
 | [61](61-fork-acp-go-sdk-and-decode-with-encoding-json-v2.md) | Fork acp-go-sdk and decode with encoding/json/v2 | feature | P2 |
-| [74](74-reopen-the-dashboard-looking-as-it-was-left.md) | Reopen the dashboard looking as it was left | feature | P2 |
-| [75](75-open-the-dashboard-with-bare-relay-instead-of-relay-chat.md) | Open the dashboard with bare relay instead of relay chat | feature | P2 |
 | [36](36-clean-up-after-an-interrupted-deploy-and-leave-no-check.md) | Clean up after an interrupted deploy, and leave no check dirs in TMPDIR | bug | P3 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
 
@@ -44,7 +40,7 @@
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
-| [73](73-keep-the-board-on-the-dashboard-whether-or-not-a.md) | Keep the board on the dashboard whether or not a conversation is open | bug | P1 |
+| [79](79-review-what-the-operator-consents-to-on-a-screen-of-its-own.md) | Review what the operator consents to on a screen of its own, with text relay made | feature | P1 |
 
 ### Review
 
@@ -53,12 +49,16 @@
 | [54](54-let-roles-keep-cards-on-a-board-that-every-client-renders.md) | Let roles keep cards on a board that every client renders | feature | P1 |
 | [55](55-show-the-board-in-the-acp-tui-workspace-pane.md) | Show the board in the acp-tui workspace pane | feature | P1 |
 | [58](58-forward-only-json-relay-wrote-itself-through-relay-acp.md) | Read JSON with one strict dialect across relay, agentloop and acp-tui | bug | P1 |
+| [73](73-keep-the-board-on-the-dashboard-whether-or-not-a.md) | Keep the board on the dashboard whether or not a conversation is open | bug | P1 |
 | [52](52-show-large-numbers-in-a-permission-request-exactly-in-acp.md) | Show large numbers in a permission request exactly in acp-tui | bug | P2 |
 | [63](63-track-conversations-and-each-role-s-status-in-relay-s-core.md) | Track conversations and each role's status in relay's core | feature | P2 |
 | [64](64-run-conversations-in-a-relay-service-that-outlives-its.md) | Run conversations in a relay service that outlives its clients | feature | P2 |
 | [65](65-switch-between-roles-and-their-conversations-in-acp-tui.md) | Switch between roles and their conversations in acp-tui | feature | P2 |
 | [69](69-board-cards-out-of-sight-in-relay-chat-s-pane.md) | Board cards out of sight in relay chat's pane | bug | P2 |
 | [70](70-let-the-operator-trust-a-card-with-outside-text.md) | Let the operator trust a card with outside text | feature | P2 |
+| [74](74-reopen-the-dashboard-looking-as-it-was-left.md) | Reopen the dashboard looking as it was left | feature | P2 |
+| [75](75-open-the-dashboard-with-bare-relay-instead-of-relay-chat.md) | Open the dashboard with bare relay instead of relay chat | feature | P2 |
+| [77](77-move-around-the-dashboard-with-esc-to-move-and-type-to-talk.md) | Move around the dashboard with Esc to move and type to talk | feature | P2 |
 | [66](66-reach-the-relay-service-from-the-phone-over-the-tailnet.md) | Reach the relay service from the phone over the tailnet | feature | P3 |
 
 ### Blocked

@@ -11,12 +11,16 @@ working.
 
 ## Acceptance criteria
 
-- `relay` with no subcommand (and `relay --data <dir>`) opens the
+- [x] `relay` with no subcommand (and `relay --data <dir>`) opens the
   dashboard, as `relay chat` did.
-- `relay <role>` is not added: a role name would collide with
+  - Receipt: bare relay and relay --open <role> open the dashboard (pmlunxsq, ulnrnynl); dispatch-test bare-relay-opens-the-dashboard and help-prints-the-usage-and-opens-nothing; README, usage and spec updated.
+- [x] `relay <role>` is not added: a role name would collide with
   subcommands.
-- `relay help` and `relay --help` print the usage.
-- README, `resources/AGENTS.md` and `spec/relay.allium` say `relay`.
+  - Receipt: bare relay and relay --open <role> open the dashboard (pmlunxsq, ulnrnynl); dispatch-test bare-relay-opens-the-dashboard and help-prints-the-usage-and-opens-nothing; README, usage and spec updated.
+- [x] `relay help` and `relay --help` print the usage.
+  - Receipt: bare relay and relay --open <role> open the dashboard (pmlunxsq, ulnrnynl); dispatch-test bare-relay-opens-the-dashboard and help-prints-the-usage-and-opens-nothing; README, usage and spec updated.
+- [x] README, `resources/AGENTS.md` and `spec/relay.allium` say `relay`.
+  - Receipt: bare relay and relay --open <role> open the dashboard (pmlunxsq, ulnrnynl); dispatch-test bare-relay-opens-the-dashboard and help-prints-the-usage-and-opens-nothing; README, usage and spec updated.
 
 ## Log
 
