@@ -1,0 +1,11 @@
+{:id 81
+ :title "Tell every connection a request was settled after a detach and a race"
+ :status :inbox
+ :type :bug
+ :priority :p2
+ :created "2026-10-24"
+ :updated "2026-10-24"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "81-tell-every-connection-a-request-was-settled-after-a-detach.md"}

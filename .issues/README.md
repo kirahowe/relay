@@ -16,6 +16,7 @@
 | [72](72-use-the-sidebar-s-empty-space-under-the-roles.md) | Use the sidebar's empty space under the roles | feature | P2 |
 | [76](76-fix-the-s5-acp-disconnect-and-s5-acp-wrong-request-id.md) | Fix the s5-acp-disconnect and s5-acp-wrong-request-id pentest scenarios | bug | P2 |
 | [77](77-move-around-the-dashboard-with-esc-to-move-and-type-to-talk.md) | Move around the dashboard with Esc to move and type to talk | feature | P2 |
+| [81](81-tell-every-connection-a-request-was-settled-after-a-detach.md) | Tell every connection a request was settled after a detach and a race | bug | P2 |
 | [56](56-serve-the-board-over-http-and-sse-on-the-tailnet-for-a-web.edn) | Serve the board over HTTP and SSE on the tailnet for a web client | feature | P3 |
 | [59](59-keep-large-integers-exact-in-mcp-structured-results.md) | Keep large integers exact in MCP structured results | bug | P3 |
 | [60](60-let-relay-acp-start-agentloop-with-a-relative-data-path.edn) | Let relay acp start agentloop with a relative --data path | bug | P3 |
