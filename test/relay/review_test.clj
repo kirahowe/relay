@@ -206,6 +206,16 @@
     (is (str/includes? t "\"end\""))
     (is (review-ok? t))))
 
+(deftest fixed-arguments-are-named-as-the-input-names-them
+  ;; A held call parsed from the log has keyword keys; its fixed
+  ;; arguments once showed as [":group"] while the input said "group".
+  (let [t (get (review/request-review {:role "clerk" :tool "send" :class "act"
+                                       :input {:group "Kira only" :body "hi"} :labels []
+                                       :fixed-args {:group "Kira only"}})
+               "text")]
+    (is (str/includes? t "Set by your settings, not by the role: [\"group\"]") t)
+    (is (str/includes? t "\"group\": \"Kira only\""))))
+
 (deftest a-request-s-review-reads-in-order
   (let [t (get (review/request-review
                 {:role "clerk" :tool "send" :class "act"

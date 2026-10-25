@@ -33,6 +33,10 @@
             [relay.json :as strict]
             [relay.text :as text]))
 
+;; A member name as strict JSON writes it: a keyword without its colon,
+;; as relay.json does, so the fixed arguments read as the input does.
+(defn- json-key [k] (if (keyword? k) (subs (str k) 1) (str k)))
+
 (defn digest
   "The hex sha256 of a text's UTF-8 bytes."
   [s]
@@ -154,7 +158,7 @@
        "Input, all of it, as JSON:"]
       (block input-labels (strict/pretty input))
       (when (seq fixed-args)
-        [(own (str "Set by your settings, not by the role: " (strict/generate (vec (sort (map str (keys fixed-args)))))))])
+        [(own (str "Set by your settings, not by the role: " (strict/generate (vec (sort (map json-key (keys fixed-args)))))))])
       [""
        (own (str "Labels of the conversation: " (labels-text labels)))]
       (when (some? options)
