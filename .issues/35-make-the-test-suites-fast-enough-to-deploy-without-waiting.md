@@ -38,7 +38,8 @@ Before, on main (c28fa0a9):
   runs.
 - So `bb deploy` spent about 5m 15s in tests.
 
-After this work:
+After the first pass (deploy-test split, scenarios once, serve split,
+eval shards):
 
 - `bb test`: 89 to 93s over six runs, 875 tests (two more deftests,
   from sharding), 5406 assertions, no failures. `--workers 12` and `16`
@@ -63,24 +64,51 @@ full syncs across the system. Eight writers get barely more done than
 one. relay's own log forces every append too. The serial phase after
 it is about 22s (relay.serve-websocket-test 20s, relay.connect-test 2s).
 
+After the second pass (deploy as a pure state machine):
+
+- `bb test`: 59 to 64s, 872 tests, 5563 assertions, no failures. The deploy
+  tests went from 81 tests taking 53 to 71s each namespace under load to
+  72 tests: 44 in relay.deploy-flow-test (about 0.2s, no IO), 19 pure
+  decision tests, and 9 edge tests (about 5s, one real deploy and
+  rollback at 3s). The longest namespaces now are relay.scenario-test
+  (34s) and relay.agentloop-qa-test (31s).
+
 ## Plan
 
 1. Measure, find the critical path. Done.
-2. Split relay.deploy-test so volley runs its parts in parallel. Done.
+2. Split relay.deploy-test so volley runs its parts in parallel.
+   Done, then replaced by step 6.
 3. Run the mock scenarios once in deploy and verify. Done.
 4. Take the socket tests out of the serial phase. Done.
 5. Shard the eval oracle checks. Done.
-6. Agree a target with Kira. Going further than about 90s means fewer jj
-   writes in the deploy tests (see the last judgment call).
+6. Make deploy's run a pure state machine, so its tests need no jj.
+   Done (Kira, 2026-10-24: tests are about relay's own concerns, pure
+   functions that test fast; jj is a side effect at the margin).
+7. Agree a target with Kira.
 
 ## Judgment calls
 
-- relay.deploy-test became four namespaces (deploy, deploy-wakes,
-  deploy-interrupt, deploy-kill) along the file's existing review-round
-  sections, with the shared fixture in relay.deploy-world. Each test
-  copies a repo made once per set of make-repo! options instead of
-  running nine jj commands for each of three repos. A copied jj repo
-  works and keeps its commit ids; nothing in `.jj` holds the path.
+- relay.deploy-flow holds the whole deploy and rollback run as data:
+  `start`, `step` (the run and its last effect's result to the next
+  effect or the outcome) and `interrupt` (the run to the cleanup a stop
+  does then). relay.deploy-run performs effects and keeps the lock, the
+  hook and the gate. Effects are in relay's terms (observe a checkout,
+  add a check workspace, append a record, pause), not jj's, so the tests
+  answer them from plain data rather than from a model of jj.
+- An effect marked :gated (making the pause file) is performed inside
+  the gate the hook also takes, and the main thread publishes the run it
+  is about to act on under the same gate. That keeps the relay#24
+  guarantees: a stop either comes before the pause is claimed (and the
+  main thread makes no pause) or after the file exists (and the hook
+  lifts it). The old atom of closures (on-exit, begin-touch!, pause-gate)
+  is gone.
+- After the hook runs, the main thread stops at its next effect rather
+  than carrying on. A real Ctrl-C ends the process there anyway; the old
+  tests that let it carry on were testing an artifact of running in the
+  test process.
+- The first pass's split of relay.deploy-test (four namespaces
+  sharing copied jj repos) was replaced by this, and its commit dropped
+  from the history.
 - `bb scenarios` is out of `bb deploy` and `bb verify`, not out of
   `bb test`. relay.scenario-test plays the same scenario files the same
   way, and in deploy's check workspaces agentloop sits beside relay, so
@@ -102,12 +130,27 @@ it is about 22s (relay.serve-websocket-test 20s, relay.connect-test 2s).
   the test repos (it costs about 25% per jj write, but the live
   checkouts are colocated), and observe's four jj reads per checkout
   (reads do not slow under load; writes do).
-- Not done, for Kira: the deploy tests are bound by jj writes, about 15
-  to 20 per test, most of them deploy's own check workspaces (add and
-  forget for three repos) and moves. Getting `bb test` well under 90s
-  needs fewer of those, which means changing how deploy checks a commit
-  (for example exporting it with `git archive` instead of making a jj
-  workspace). That is a change to deploy, not to the tests.
+- Review: the rewrite moves the operator's live checkouts and decides
+  when the typed code is asked, so it got the adversarial loop. Codex was
+  out of quota until 2026-10-30, so each round was a fresh Claude agent
+  given the brief, the code and the old implementation, and no earlier
+  findings. Round 1: a pause made by hand mid-run was taken over and
+  lifted; an abort whose lift failed, or whose record would not close,
+  and a lift-only rollback whose record would not write, said nothing of
+  it; a step that threw skipped all cleanup. Round 2: a rollback that
+  started paused never read the pause again, so one lifted by hand
+  during the confirmation was not made again before the moves; a pause
+  read that threw counted as not paused. All fixed with tests. Round 3:
+  nothing in scope; its harnesses ran the real gate and hook at every
+  effect of whole deploys and rollbacks.
+- Left as they are (out of scope: precise timing, or messages only): a
+  stop during `jj workspace add` can leave a check workspace the hook
+  did not see; a stop between the Moving line and the move keeps the
+  pause (the safe side); a stop after the final lift leaves the record
+  :started with only a short message; an unreadable live log refuses
+  with the bare error text.
+- The jj write contention measured above no longer matters to the
+  suite: only one test makes jj writes.
 
 ## Log
 
@@ -117,3 +160,9 @@ it is about 22s (relay.serve-websocket-test 20s, relay.connect-test 2s).
   six full runs, all passing. `bb verify` passes every step but
   pentest, whose two failures (s5-acp-wrong-request-id,
   s5-acp-disconnect) fail the same way on pristine main.
+- 2026-10-24: Kira: the deploy tests should not test jj's mechanics.
+  Rewrote deploy's run as relay.deploy-flow, a pure state machine, with
+  relay.deploy-run as its shell. `bb test` 59s, 866 tests, all passing.
+- 2026-10-25: three review rounds on the rewrite (fresh agents; Codex out
+  of quota), the first two fixed, the third clean. `bb test` 872 tests,
+  all passing. Waiting on Kira for the target.
