@@ -341,7 +341,7 @@
                           v (core/trusted-version (inbound/current-state sys) "card" (str id2))]
                       (inbound/submit! sys {:type :label/trust :actor "operator" :labels []
                                             :args {:kind "card" :ref (str id2) :version (:version v)
-                                                   :sha256 (core/sha256 (:text v))}})
+                                                   :sha256 (core/trust-digest (inbound/current-state sys) "card" (str id2))}})
                       (is (client/await! c #(and (= "_relay/cards/changed" (get % "method"))
                                                  (some (fn [x] (and (= id2 (get x "id")) (not (contains? x "sha256"))
                                                                     (> (get x "rev") (:version v))))

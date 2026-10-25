@@ -16,6 +16,7 @@
             [relay.log :as log]
             [relay.prompt :as prompt]
             [relay.refs :as refs]
+            [relay.review :as review]
             [relay.tools :as tools]
             [relay.cli]
             [relay.workspace :as workspace]))
@@ -580,7 +581,7 @@
 
 (defn- trust-args [state id]
   (let [v (core/trusted-version state "card" (str id))]
-    {:kind "card" :ref (str id) :version (:version v) :sha256 (core/sha256 (:text v))}))
+    {:kind "card" :ref (str id) :version (:version v) :sha256 (core/trust-digest state "card" (str id))}))
 
 (deftest only-the-operator-trusts-a-card
   (let [[s id] (tainted-world)
@@ -660,9 +661,28 @@
         dirty (workspace/card-wire (core/card s id))
         [s' _] (run s "operator" :label/trust (trust-args s id))
         clean (workspace/card-wire (core/card s' id))]
-    (is (= (core/sha256 (cards/text-form (core/card s id))) (get dirty "sha256")))
+    (is (= (core/sha256 (get-in dirty ["review" "text"])) (get dirty "sha256"))
+        "the digest of the card's review text, which the client was sent")
     (is (= (:sha256 (trust-args s id)) (get dirty "sha256")) "the digest the command line sends")
     (is (not (contains? clean "sha256")))))
+
+(deftest every-card-carries-its-review
+  ;; relay#79: the text the operator consents to is relay's, for every
+  ;; card, and trusting names its digest.
+  (let [[s id] (tainted-world)
+        dirty (workspace/card-wire (core/card s id))
+        [s' _] (run s "operator" :label/trust (trust-args s id))
+        clean (workspace/card-wire (core/card s' id))]
+    (doseq [w [dirty clean]
+            :let [{t "text" h "sha256"} (get w "review")]]
+      (is (= (core/sha256 t) h))
+      (is (= t (review/card-text (core/card (if (= w dirty) s s') id)))))
+    (is (str/includes? (get-in dirty ["review" "text"]) "[contaminated] Read hxxps://evil[.]example"))
+    (is (str/includes? (get-in clean ["review" "text"]) "Read https://evil.example") "trusted, its links are as written")
+    (is (= (get dirty "sha256") (get-in dirty ["review" "sha256"])))
+    (testing "the digest of the raw text form trusts nothing"
+      (let [v (core/trusted-version s "card" (str id))]
+        (is (= :conflict (:rejected (run s "operator" :label/trust (assoc (trust-args s id) :sha256 (core/sha256 (:text v)))))))))))
 
 (deftest relay-trust-card-works-on-the-command-line
   (let [dir (str (fs/create-temp-dir {:prefix "relay-cards-trust"}))

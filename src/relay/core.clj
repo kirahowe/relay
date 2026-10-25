@@ -17,6 +17,7 @@
             [relay.cards :as cards]
             [relay.config :as config]
             [relay.reports :as reports]
+            [relay.review :as review]
             [relay.schedule :as schedule]
             [relay.search :as search]
             [relay.skills :as skills]
@@ -2303,6 +2304,24 @@
                    (.getBytes (str s) java.nio.charset.StandardCharsets/UTF_8))]
     (apply str (map #(format "%02x" (bit-and % 0xff)) d))))
 
+(defn trust-text
+  "The review text of what `relay trust <kind> <ref>` is about
+  (relay.review): for a card relay.review/card-text, for anything else
+  relay.review/subject-text of its trusted-version. Nil when there is
+  none. A trust names the digest of this text: what the operator was
+  shown, made safe, is what they vouch for."
+  [state kind ref]
+  (when-let [v (trusted-version state kind ref)]
+    (if (= "card" kind)
+      (review/card-text (card state (parse-long (str ref))))
+      (review/subject-text kind ref v))))
+
+(defn trust-digest
+  "The digest a trust of this kind and ref must name now: the sha256 of
+  its trust-text. Nil when there is nothing to trust."
+  [state kind ref]
+  (some-> (trust-text state kind ref) review/digest))
+
 (defmethod decide* :label/trust [{:keys [state] :as tx} {{:keys [kind ref version via] digest :sha256} :args}]
   ;; The operator has read it and vouches for it. That clears
   ;; contaminated from what it says now, and never private.
@@ -2314,8 +2333,9 @@
     (when-not (contaminated? (:labels v))
       (reject! :invalid (str "The " kind " " ref " is not contaminated.")))
     ;; The operator vouches for the text they were shown, and only that:
-    ;; if it changed since, nothing is trusted.
-    (when-not (and (= version (:version v)) (= digest (sha256 (:text v))))
+    ;; the digest is of its review text, so if it changed since, or
+    ;; would be shown differently, nothing is trusted.
+    (when-not (and (= version (:version v)) (string? digest) (= digest (trust-digest state kind ref)))
       (reject! :conflict (str "The " kind " " ref " changed since you read it. Nothing was trusted; look again.")))
     (emit tx "label/trusted" (cond-> {:kind kind :ref (str ref) :version version}
                                ;; Trusted from the workspace pane in the dashboard.

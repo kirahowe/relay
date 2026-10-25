@@ -23,13 +23,14 @@
   permission request: it is taken only when relay acp was started with
   --approvals, which the dashboard does because its client is the operator's
   terminal. Without it the pane is told to show the command instead. A
-  trust names the version and the digest of the text the pane showed, so
-  a doc that changed since is not trusted."
+  trust names the version and the digest of the doc's review
+  (relay.review), so a doc that changed since is not trusted."
   (:require [clojure.string :as str]
             [relay.acp :as acp]
             [relay.cards :as cards]
             [relay.core :as core]
             [relay.json :as strict]
+            [relay.review :as review]
             [relay.text :as text]))
 
 ;; --- what a conversation has learned
@@ -202,9 +203,10 @@
   (:shown (first (filter :shown (get-in state [:docs path :versions])))))
 
 (defn shown-item
-  "A shown doc as the pane lists it, or nil when it is gone. `text` is what
-  trusting it vouches for, and `sha256` its digest, which _relay/trust
-  must give back."
+  "A shown doc as the pane lists it, or nil when it is gone. `text` is the
+  doc's content as it is; `review` is what the operator consents to when
+  trusting it (relay.review/doc-text) with its digest, and `sha256` is
+  that digest too, which _relay/trust must give back."
   [state {:keys [call ref path]} approvals?]
   (let [v (core/doc-version state path {})
         t (core/trusted-version state "doc" path)]
@@ -216,7 +218,9 @@
          "title" (or title path) "text" (:text t)
          "sources" (vec (for [{t :title r :ref} sources] {"title" t "ref" r}))
          "labels" labels
-         "version" (:version t) "sha256" (core/sha256 (:text t))
+         "version" (:version t)
+         "review" (review/review (core/trust-text state "doc" path))
+         "sha256" (core/trust-digest state "doc" path)
          "canTrust" (boolean (and approvals? (core/contaminated? labels)))
          "trustCommand" (str "relay trust doc " path)}))))
 
@@ -282,12 +286,14 @@
 ;; line is. A card change never wakes a role.
 
 (defn card-wire
-  "A card as a client is sent it (relay.cards/wire). A card with
-  contaminated text also carries the \"sha256\" of its text form, which is
-  the digest a client sends back to trust it (_relay/cards/trust)."
+  "A card as a client is sent it (relay.cards/wire), with its review
+  (relay.review/card-text and its digest), which every card carries. A
+  card with contaminated text also carries that digest as \"sha256\":
+  what a client sends back to trust it (_relay/cards/trust)."
   [c]
-  (cond-> (cards/wire c (core/card-labels c))
-    (text/contaminated? (cards/text-labels c)) (assoc "sha256" (core/sha256 (cards/text-form c)))))
+  (let [{h "sha256" :as r} (review/review (review/card-text c))]
+    (cond-> (assoc (cards/wire c (core/card-labels c)) "review" r)
+      (text/contaminated? (cards/text-labels c)) (assoc "sha256" h))))
 
 (defn log-rev
   "The seq of the log's last event, which a client can compare revs with."

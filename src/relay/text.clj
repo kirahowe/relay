@@ -50,16 +50,22 @@
              (= t Character/LINE_SEPARATOR) (= t Character/PARAGRAPH_SEPARATOR)
              (blank-glyph? cp)))))
 
-(defn- escape
-  [s line?]
+(defn- escape-by
+  "s with every code point `escape?` picks shown as \\u{XXXX} and every
+  backslash as two."
+  [s escape?]
   (let [s (str s)
         sb (StringBuilder.)]
     (doseq [cp (iterator-seq (.iterator (.codePoints s)))]
       (cond
-        (or (hidden? cp) (and line? (= 10 cp))) (.append sb (format "\\u{%04x}" cp))
+        (escape? cp) (.append sb (format "\\u{%04x}" cp))
         (= 92 cp) (.append sb "\\\\")
         :else (.appendCodePoint sb (int cp))))
     (str sb)))
+
+(defn- escape
+  [s line?]
+  (escape-by s (fn [cp] (or (hidden? cp) (and line? (= 10 cp))))))
 
 (defn visible
   "Text with every control, format, separator, private-use or unassigned
@@ -76,6 +82,40 @@
   shows every line it prints through this, once."
   [s]
   (escape s true))
+
+(def ^:private printable-types
+  "The general categories a review's text may hold as they are: letters,
+  marks, numbers, punctuation and symbols. Go's unicode.IsPrint takes the
+  same set, plus the ASCII space, so relay-tui's review pager can check
+  a review text by it."
+  #{Character/UPPERCASE_LETTER Character/LOWERCASE_LETTER Character/TITLECASE_LETTER
+    Character/MODIFIER_LETTER Character/OTHER_LETTER
+    Character/NON_SPACING_MARK Character/ENCLOSING_MARK Character/COMBINING_SPACING_MARK
+    Character/DECIMAL_DIGIT_NUMBER Character/LETTER_NUMBER Character/OTHER_NUMBER
+    Character/CONNECTOR_PUNCTUATION Character/DASH_PUNCTUATION Character/START_PUNCTUATION
+    Character/END_PUNCTUATION Character/INITIAL_QUOTE_PUNCTUATION Character/FINAL_QUOTE_PUNCTUATION
+    Character/OTHER_PUNCTUATION
+    Character/MATH_SYMBOL Character/CURRENCY_SYMBOL Character/MODIFIER_SYMBOL Character/OTHER_SYMBOL})
+
+(defn printable?
+  "Whether a code point may stand as it is in one line of a review text:
+  the space (U+0020), or a letter, mark, number, punctuation or symbol
+  that visible would not escape. Tabs, newlines and every other space
+  (no-break, ideographic, ...) are not."
+  [^long cp]
+  (or (= 32 cp)
+      (and (not (hidden? cp))
+           (contains? printable-types (Character/getType (int cp))))))
+
+(defn visible-strict
+  "visible for one line of a review text (relay.review): every code point
+  that is not printable? shown as \\u{XXXX}, the tab, the newline and
+  spaces other than U+0020 included, and a backslash as two. What it
+  returns holds only printable? code points, and no two lines give the
+  same result. visible itself keeps tabs and other spaces, which the
+  command line relies on."
+  [s]
+  (escape-by s (fn [cp] (not (printable? cp)))))
 
 (defn defang
   "Text with every URL broken so it cannot be followed: http becomes

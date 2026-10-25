@@ -181,7 +181,7 @@
     (testing "trusted, the skill is back"
       (let [v (core/trusted-version (:state w) "doc" "skills/hub/tainted.md")
             w (run w "operator" :label/trust {:kind "doc" :ref "skills/hub/tainted.md" :version (:version v)
-                                              :sha256 (core/sha256 (:text v))})]
+                                              :sha256 (core/trust-digest (:state w) "doc" "skills/hub/tainted.md")})]
         (is (= 2 (count (:shown (core/prompt-skills (:state w) ct/cfg "hub")))))))
     (testing "a role with none is told how to start"
       (is (str/includes? (prompt/instructions {:shared "S"} {:id "x" :title "X" :instructions "i"})

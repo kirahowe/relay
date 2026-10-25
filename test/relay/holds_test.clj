@@ -431,7 +431,7 @@
           (testing "the operator can trust what they have read"
             (let [v (core/trusted-version (inbound/current-state sys) "doc" "web.md")]
               (inbound/submit! sys {:type :label/trust :actor "operator"
-                                    :args {:kind "doc" :ref "web.md" :version (:version v) :sha256 (core/sha256 (:text v))}})
+                                    :args {:kind "doc" :ref "web.md" :version (:version v) :sha256 (core/trust-digest (inbound/current-state sys) "doc" "web.md")}})
               (is (= ["private"] (:labels (core/doc-version (inbound/current-state sys) "web.md" {})))))))))))
 
 (deftest a-hold-says-what-the-operator-needs-to-decide

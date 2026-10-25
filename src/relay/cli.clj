@@ -694,7 +694,8 @@ and --instructions marks the id public too.")
                        (submit! sys :memo/declassify {:memo id}))
                      (result 0 (str "Declassified memo " id "; " (:to m) " is shown it at its next wake.")))
       "trust" (let [[kind ref] more
-                    v (core/trusted-version (state) kind ref)]
+                    st (state)
+                    v (core/trusted-version st kind ref)]
                 (when-not v (fail! "usage: relay trust <kind> <ref>, naming something relay keeps"))
                 ;; Shown with its URLs broken, like anything contaminated;
                 ;; only what is shown is changed, not what is trusted.
@@ -703,9 +704,10 @@ and --instructions marks the id public too.")
                                           ["" (labels-line (:labels v))
                                            "Trusting it clears contaminated from what it says now."]))
                 ;; What was shown, so a change while the operator read it
-                ;; trusts nothing.
+                ;; trusts nothing: the digest of its review text
+                ;; (relay.review), which every trust names.
                 (submit! sys :label/trust {:kind kind :ref ref :version (:version v)
-                                           :sha256 (core/sha256 (:text v))})
+                                           :sha256 (core/trust-digest st kind ref)})
                 (result 0 (str "Trusted " kind " " ref ".")))
       "trust-level" (let [[role level] more
                           level (some-> level parse-long)

@@ -29,7 +29,8 @@
             [relay.log :as log]
             [relay.report-support :as report-support]
             [relay.reports :as reports]
-            [relay.tools :as tools])
+            [relay.tools :as tools]
+            [relay.workspace :as workspace])
   (:import (java.time Instant)))
 
 (def t0 (Instant/parse "2026-10-14T12:00:00Z"))
@@ -314,7 +315,7 @@
             ref (nth-or refs n)
             v (when ref (core/trusted-version s kind ref))
             w' (if v (run w "operator" [] :label/trust {:kind kind :ref ref :version (:version v)
-                                                        :sha256 (core/sha256 (:text v))})
+                                                        :sha256 (core/trust-digest s kind ref)})
                    w)]
         ;; The operator vouched for what it says now: its markers no longer
         ;; need to carry contaminated wherever they turn up from here on.
@@ -767,11 +768,30 @@
       (is (= [(:id m)] (:memos wake)))
       (is (= ["contaminated" "private"] (get-in request [:policy :labels]))))))
 
+(deftest a-doc-s-trust-names-the-digest-of-its-review
+  ;; relay#79: what is trusted is the doc as its review showed it.
+  (let [w (-> (seed) (run "clerk" ["contaminated" "private"] :doc/put {:path "web.md" :content "See https://evil.example\tnow"}))
+        s (:state w)
+        v (core/trusted-version s "doc" "web.md")
+        conv (workspace/shown workspace/conversation "s1" [{:session "s1" :call "c1" :ref "shown:1" :path "web.md"}])
+        [item] (get (workspace/items s conv "s1" true) "items")
+        {t "text" h "sha256"} (get item "review")]
+    (is (= (str "Doc \"web.md\", version " (:version v) "\n  [contaminated]\n  │ See hxxps://evil[.]example\\u{0009}now") t))
+    (is (= h (core/sha256 t) (get item "sha256") (core/trust-digest s "doc" "web.md")))
+    (is (= "See https://evil.example\tnow" (get item "text")) "the doc's own text stays for a generic client")
+    (testing "the digest of the raw content trusts nothing"
+      (is (= s (:state (run w "operator" [] :label/trust {:kind "doc" :ref "web.md" :version (:version v)
+                                                            :sha256 (core/sha256 (:text v))})))))
+    (testing "the review's digest does, through the pane's _relay/trust"
+      (let [{:keys [command]} (workspace/trust-command conv true {"sessionId" "s1" "path" "web.md"
+                                                                  "version" (:version v) "sha256" h})]
+        (is (= ["private"] (:labels (core/doc-version (:state (run* w command)) "web.md" {}))))))))
+
 (deftest trust-clears-contaminated-and-only-that
   (let [w (-> (seed) (run "clerk" ["contaminated" "private"] :doc/put {:path "a.md" :content "x"}))
         trust (fn [w who] (let [v (core/trusted-version (:state w) "doc" "a.md")]
                             (run w who [] :label/trust {:kind "doc" :ref "a.md" :version (:version v)
-                                                        :sha256 (core/sha256 (:text v))})))
+                                                        :sha256 (core/trust-digest (:state w) "doc" "a.md")})))
         w' (trust w "operator")]
     (is (= ["private"] (:labels (core/doc-version (:state w') "a.md" {}))))
     (testing "a role cannot vouch for anything"
@@ -782,7 +802,7 @@
       (let [v (core/trusted-version (:state w) "doc" "a.md")
             w2 (run w "clerk" ["contaminated"] :doc/put {:path "a.md" :content "y"})]
         (is (= (:state w2) (:state (run w2 "operator" [] :label/trust {:kind "doc" :ref "a.md" :version (:version v)
-                                                                          :sha256 (core/sha256 (:text v))}))))
+                                                                          :sha256 (core/trust-digest (:state w) "doc" "a.md")}))))
         (is (= (:state w) (:state (run w "operator" [] :label/trust {:kind "doc" :ref "a.md" :version (:version v)
                                                                         :sha256 (core/sha256 "other text")}))))))))
 

@@ -326,3 +326,37 @@
   (if (odd-decimal? x)
     (let [sb (StringBuilder.)] (write! sb x) (str sb))
     (cheshire/generate-string x)))
+
+(defn- pretty! [^StringBuilder sb x ^String indent]
+  (let [inner (str indent "  ")]
+    (cond
+      (and (map? x) (seq x))
+      (do (.append sb "{\n")
+          (doseq [[i [k v]] (map-indexed vector (sort-by first (map (fn [[k v]] [(if (keyword? k) (subs (str k) 1) (str k)) v]) x)))]
+            (when (pos? i) (.append sb ",\n"))
+            (.append sb inner)
+            (.append sb (cheshire/generate-string k))
+            (.append sb ": ")
+            (pretty! sb v inner))
+          (.append sb "\n") (.append sb indent) (.append sb "}"))
+
+      (and (or (sequential? x) (set? x)) (seq x))
+      (do (.append sb "[\n")
+          (doseq [[i v] (map-indexed vector x)]
+            (when (pos? i) (.append sb ",\n"))
+            (.append sb inner)
+            (pretty! sb v inner))
+          (.append sb "\n") (.append sb indent) (.append sb "]"))
+
+      (map? x) (.append sb "{}")
+      (or (sequential? x) (set? x)) (.append sb "[]")
+      (decimal? x) (.append sb (number-text x))
+      :else (.append sb (cheshire/generate-string x)))))
+
+(defn pretty
+  "x as JSON text for a person to read: what generate writes, with every
+  member on a line of its own, indented two spaces a level, and members
+  in the order of their names, so the same value always gives the same
+  text, whatever order it was read in."
+  [x]
+  (let [sb (StringBuilder.)] (pretty! sb x "") (str sb)))
