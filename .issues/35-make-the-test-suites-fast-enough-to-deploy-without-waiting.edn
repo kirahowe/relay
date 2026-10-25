@@ -1,6 +1,6 @@
 {:id 35
  :title "Make the test suites fast enough to deploy without waiting"
- :status :review
+ :status :done
  :type :chore
  :priority :p2
  :created "2026-10-17"

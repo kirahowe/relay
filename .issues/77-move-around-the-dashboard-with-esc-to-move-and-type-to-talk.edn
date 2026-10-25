@@ -1,6 +1,6 @@
 {:id 77
  :title "Move around the dashboard with Esc to move and type to talk"
- :status :review
+ :status :done
  :type :feature
  :priority :p2
  :created "2026-10-23"

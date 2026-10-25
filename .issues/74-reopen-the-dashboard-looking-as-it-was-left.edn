@@ -1,6 +1,6 @@
 {:id 74
  :title "Reopen the dashboard looking as it was left"
- :status :review
+ :status :done
  :type :feature
  :priority :p2
  :created "2026-10-23"

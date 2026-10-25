@@ -206,3 +206,7 @@ The code is deployed and relay.serve has run under launchd since
   the two criteria above.
 
 ## Log
+
+- 2026-10-25: Kira closed it as built. The phone setup steps and the
+  two unticked criteria (Agmente, ntfy links) moved to #84, since only
+  Kira's phone can check them.

@@ -1,10 +1,10 @@
 {:id 58
  :title "Read JSON with one strict dialect across relay, agentloop and acp-tui"
- :status :review
+ :status :done
  :type :bug
  :priority :p1
  :created "2026-10-20"
- :updated "2026-10-21"
+ :updated "2026-10-25"
  :tags #{}
  :blocked-by #{}
  :related #{}

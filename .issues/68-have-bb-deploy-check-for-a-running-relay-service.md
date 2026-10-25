@@ -18,3 +18,6 @@ start it after, which ends live conversations.
 ## Plan
 
 ## Log
+
+- 2026-10-25: Dropped as a duplicate of #71, which now carries these
+  criteria.

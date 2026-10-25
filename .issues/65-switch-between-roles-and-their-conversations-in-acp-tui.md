@@ -342,3 +342,8 @@ answering requests; say what quitting does".
   and e2e `TestHubPromptsAcrossTheRosterLagAreNotRefused`.
 - **N1 `Hub.Ended`.** Bounded to 64 (`noteEnded`) and pruned of sessions the
   roster no longer lists on every roster update. Test `TestHubEndedSessionsAreBounded`.
+
+## Log
+
+- 2026-10-25: Kira accepted it while clearing the review backlog. The
+  work is on main in every repo it touched, pushed and deployed.

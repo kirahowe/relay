@@ -1,0 +1,11 @@
+{:id 84
+ :title "Try relay from the phone with Agmente"
+ :status :ready
+ :type :chore
+ :priority :p2
+ :created "2026-10-25"
+ :updated "2026-10-25"
+ :tags #{}
+ :blocked-by #{}
+ :related #{"relay#66"}
+ :details "84-try-relay-from-the-phone-with-agmente.md"}

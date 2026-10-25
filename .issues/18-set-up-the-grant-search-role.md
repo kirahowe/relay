@@ -13,3 +13,5 @@ A second research role, set up the way the job search role was.
 ## Plan
 
 ## Log
+
+- 2026-10-25: Kira dropped it while clearing the backlog.

@@ -421,3 +421,6 @@ pass, 12 skipped, ACP-SESSION-002 failing by design.
   conversation is not a resume: the session never closed.
 
 ## Log
+
+- 2026-10-25: Kira accepted it while clearing the review backlog. The
+  work is on main in every repo it touched, pushed and deployed.

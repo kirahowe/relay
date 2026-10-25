@@ -9,8 +9,6 @@
 | --- | --- | --- | --- |
 | [48](48-judge-remote-tool-definitions-with-a-decision-model.md) | Judge remote tool definitions with a decision model | feature | P2 |
 | [49](49-haiku-leaves-the-memo-or-journal-undone-before-an-act-call.md) | Haiku leaves the memo or journal undone before an act call | bug | P2 |
-| [62](62-keep-a-live-conversation-with-each-role-that-any-client-can.md) | Keep a live conversation with each role that any client can switch to | feature | P2 |
-| [68](68-have-bb-deploy-check-for-a-running-relay-service.md) | Have bb deploy check for a running relay service | feature | P2 |
 | [71](71-let-bb-deploy-stop-and-restart-relay-serve-itself.md) | Let bb deploy stop and restart relay serve itself | feature | P2 |
 | [72](72-use-the-sidebar-s-empty-space-under-the-roles.md) | Use the sidebar's empty space under the roles | feature | P2 |
 | [76](76-fix-the-s5-acp-disconnect-and-s5-acp-wrong-request-id.md) | Fix the s5-acp-disconnect and s5-acp-wrong-request-id pentest scenarios | bug | P2 |
@@ -32,6 +30,7 @@
 | [53](53-let-the-personal-agent-move-and-rename-my-files.md) | Let the personal agent move and rename my files | feature | P2 |
 | [57](57-make-hidden-characters-visible-in-card-text-that-roles-and.md) | Make hidden characters visible in card text that roles and resolve get | bug | P2 |
 | [61](61-fork-acp-go-sdk-and-decode-with-encoding-json-v2.md) | Fork acp-go-sdk and decode with encoding/json/v2 | feature | P2 |
+| [84](84-try-relay-from-the-phone-with-agmente.md) | Try relay from the phone with Agmente | chore | P2 |
 | [36](36-clean-up-after-an-interrupted-deploy-and-leave-no-check.md) | Clean up after an interrupted deploy, and leave no check dirs in TMPDIR | bug | P3 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
 | [83](83-speed-up-the-slowest-remaining-test-namespaces.md) | Speed up the slowest remaining test namespaces | chore | P3 |
@@ -41,33 +40,6 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [79](79-review-what-the-operator-consents-to-on-a-screen-of-its-own.md) | Review what the operator consents to on a screen of its own, with text relay made | feature | P1 |
-
-### Review
-
-| ID | Title | Type | Priority |
-| --- | --- | --- | --- |
-| [54](54-let-roles-keep-cards-on-a-board-that-every-client-renders.md) | Let roles keep cards on a board that every client renders | feature | P1 |
-| [55](55-show-the-board-in-the-acp-tui-workspace-pane.md) | Show the board in the acp-tui workspace pane | feature | P1 |
-| [58](58-forward-only-json-relay-wrote-itself-through-relay-acp.md) | Read JSON with one strict dialect across relay, agentloop and acp-tui | bug | P1 |
-| [73](73-keep-the-board-on-the-dashboard-whether-or-not-a.md) | Keep the board on the dashboard whether or not a conversation is open | bug | P1 |
-| [35](35-make-the-test-suites-fast-enough-to-deploy-without-waiting.md) | Make the test suites fast enough to deploy without waiting | chore | P2 |
-| [52](52-show-large-numbers-in-a-permission-request-exactly-in-acp.md) | Show large numbers in a permission request exactly in acp-tui | bug | P2 |
-| [63](63-track-conversations-and-each-role-s-status-in-relay-s-core.md) | Track conversations and each role's status in relay's core | feature | P2 |
-| [64](64-run-conversations-in-a-relay-service-that-outlives-its.md) | Run conversations in a relay service that outlives its clients | feature | P2 |
-| [65](65-switch-between-roles-and-their-conversations-in-acp-tui.md) | Switch between roles and their conversations in acp-tui | feature | P2 |
-| [69](69-board-cards-out-of-sight-in-relay-chat-s-pane.md) | Board cards out of sight in relay chat's pane | bug | P2 |
-| [70](70-let-the-operator-trust-a-card-with-outside-text.md) | Let the operator trust a card with outside text | feature | P2 |
-| [74](74-reopen-the-dashboard-looking-as-it-was-left.md) | Reopen the dashboard looking as it was left | feature | P2 |
-| [75](75-open-the-dashboard-with-bare-relay-instead-of-relay-chat.md) | Open the dashboard with bare relay instead of relay chat | feature | P2 |
-| [77](77-move-around-the-dashboard-with-esc-to-move-and-type-to-talk.md) | Move around the dashboard with Esc to move and type to talk | feature | P2 |
-| [66](66-reach-the-relay-service-from-the-phone-over-the-tailnet.md) | Reach the relay service from the phone over the tailnet | feature | P3 |
-
-### Blocked
-
-| ID | Title | Type | Priority |
-| --- | --- | --- | --- |
-| [17](17-set-up-the-job-search-role.md) | Set up the job search role | feature | P2 |
-| [18](18-set-up-the-grant-search-role.md) | Set up the grant search role | feature | P3 |
 
 ## Done
 
@@ -92,6 +64,10 @@
 | [46](46-codify-verification-in-bb-verify-with-new-evals-and-pentests.md) | Codify verification in bb verify, with new evals and pentests | chore | P1 |
 | [47](47-treat-a-remote-mcp-tool-s-description-as-outside-text.md) | Treat a remote MCP tool's description as outside text | feature | P1 |
 | [51](51-keep-preview-labels-and-fixed-arguments-in-the-approval.md) | Keep preview labels and fixed arguments in the approval | bug | P1 |
+| [54](54-let-roles-keep-cards-on-a-board-that-every-client-renders.md) | Let roles keep cards on a board that every client renders | feature | P1 |
+| [55](55-show-the-board-in-the-acp-tui-workspace-pane.md) | Show the board in the acp-tui workspace pane | feature | P1 |
+| [58](58-forward-only-json-relay-wrote-itself-through-relay-acp.md) | Read JSON with one strict dialect across relay, agentloop and acp-tui | bug | P1 |
+| [73](73-keep-the-board-on-the-dashboard-whether-or-not-a.md) | Keep the board on the dashboard whether or not a conversation is open | bug | P1 |
 | [3](3-run-agentloop-s-live-smoke-tests-from-a-flag-not-an-env-var.md) | Run agentloop's live smoke tests from a flag, not an env var | chore | P2 |
 | [5](5-support-reminder-sections-in-rem.md) | Support reminder sections in rem | feature | P2 |
 | [7](7-add-bb-deploy-and-bb-rollback-for-kira-to-run.md) | Add bb deploy and bb rollback for Kira to run | feature | P2 |
@@ -100,6 +76,17 @@
 | [19](19-read-the-calendar.md) | Read the calendar | feature | P2 |
 | [20](20-send-one-morning-brief.md) | Send one morning brief | feature | P2 |
 | [27](27-show-findings-again-when-their-hidden-match-is-rejected-as.md) | Show findings again when their hidden match is rejected as fake | bug | P2 |
+| [35](35-make-the-test-suites-fast-enough-to-deploy-without-waiting.md) | Make the test suites fast enough to deploy without waiting | chore | P2 |
+| [52](52-show-large-numbers-in-a-permission-request-exactly-in-acp.md) | Show large numbers in a permission request exactly in acp-tui | bug | P2 |
+| [62](62-keep-a-live-conversation-with-each-role-that-any-client-can.md) | Keep a live conversation with each role that any client can switch to | feature | P2 |
+| [63](63-track-conversations-and-each-role-s-status-in-relay-s-core.md) | Track conversations and each role's status in relay's core | feature | P2 |
+| [64](64-run-conversations-in-a-relay-service-that-outlives-its.md) | Run conversations in a relay service that outlives its clients | feature | P2 |
+| [65](65-switch-between-roles-and-their-conversations-in-acp-tui.md) | Switch between roles and their conversations in acp-tui | feature | P2 |
+| [69](69-board-cards-out-of-sight-in-relay-chat-s-pane.md) | Board cards out of sight in relay chat's pane | bug | P2 |
+| [70](70-let-the-operator-trust-a-card-with-outside-text.md) | Let the operator trust a card with outside text | feature | P2 |
+| [74](74-reopen-the-dashboard-looking-as-it-was-left.md) | Reopen the dashboard looking as it was left | feature | P2 |
+| [75](75-open-the-dashboard-with-bare-relay-instead-of-relay-chat.md) | Open the dashboard with bare relay instead of relay chat | feature | P2 |
+| [77](77-move-around-the-dashboard-with-esc-to-move-and-type-to-talk.md) | Move around the dashboard with Esc to move and type to talk | feature | P2 |
 | [21](21-make-agentloop-cleanroom-s-reader.md) | Make agentloop cleanroom's reader | feature | P3 |
 | [22](22-show-spend-per-role-per-week-in-relay-status.md) | Show spend per role per week in relay status | feature | P3 |
 | [23](23-decide-who-syncs.md) | Decide who syncs ~/Sync/relay | chore | P3 |
@@ -113,10 +100,14 @@
 | [32](32-close-the-last-gaps-in-echo-labels-push-cuts-and-tool.md) | Close the last gaps in echo labels, push cuts and tool timeouts | bug | P3 |
 | [33](33-tidy-the-deploy-cleanup-message-and-tool-start-failures.md) | Tidy the deploy cleanup message and tool start failures | chore | P3 |
 | [50](50-mark-placeholders-left-in-a-draft-that-a-send-preview-shows.md) | Mark placeholders left in a draft that a send preview shows | feature | P3 |
+| [66](66-reach-the-relay-service-from-the-phone-over-the-tailnet.md) | Reach the relay service from the phone over the tailnet | feature | P3 |
 
 ## Dropped
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [2](2-trust-the-legacy-contaminated-items.md) | Trust the legacy contaminated items | chore | P2 |
+| [17](17-set-up-the-job-search-role.md) | Set up the job search role | feature | P2 |
 | [34](34-give-the-quarantined-reader-a-read-only-fetch-that-takes-no.md) | Give the quarantined reader a read-only fetch that takes no free URLs | feature | P2 |
+| [68](68-have-bb-deploy-check-for-a-running-relay-service.md) | Have bb deploy check for a running relay service | feature | P2 |
+| [18](18-set-up-the-grant-search-role.md) | Set up the grant search role | feature | P3 |

@@ -1,6 +1,6 @@
 {:id 75
  :title "Open the dashboard with bare relay instead of relay chat"
- :status :review
+ :status :done
  :type :feature
  :priority :p2
  :created "2026-10-23"

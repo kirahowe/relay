@@ -21,8 +21,16 @@ terminal. acp-tui's ctrl+s or stopping the service are the only ways.
 
 ## Acceptance criteria
 
-- [ ] 
+- [ ] `bb deploy` sees the service's lock for the live data directory and
+  does not sit waiting on its conversations until it times out.
+- [ ] Kira chooses between two behaviours: the deploy says at once to stop
+  relay.serve, or it stops the service itself (saying which conversations
+  that ends) and starts it again after the deploy or rollback.
+- [ ] Deploying stays Kira's to run.
 
 ## Plan
 
 ## Log
+
+- 2026-10-25: #68 asked for the same check and left Kira the same choice.
+  It was dropped as a duplicate, and its criteria are merged above.

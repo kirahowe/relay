@@ -1,6 +1,6 @@
 {:id 73
  :title "Keep the board on the dashboard whether or not a conversation is open"
- :status :review
+ :status :done
  :type :bug
  :priority :p1
  :created "2026-10-23"

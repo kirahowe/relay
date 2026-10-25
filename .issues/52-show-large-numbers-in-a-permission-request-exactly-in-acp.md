@@ -25,3 +25,8 @@ SDK's decoding.
   - Receipt: acp-tui zwrrpnsy (relay#58 QA round) reads rawInput from the raw line, not the SDK's float64 decode.
 - [x] A wire test with a number above 2^53.
   - Receipt: acp-tui internal/wire/wire_test.go, rawInput 9007199254740993 and a 34-digit decimal shown exactly.
+
+## Log
+
+- 2026-10-25: Kira accepted it while clearing the review backlog. The
+  work is on main in every repo it touched, pushed and deployed.

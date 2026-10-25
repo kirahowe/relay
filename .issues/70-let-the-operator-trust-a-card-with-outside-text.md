@@ -76,3 +76,6 @@ Done in two commits: core+cards+cli path, then wire/hub/docs.
   the acp-tui workspace .next/acp-tui-boardfix, commit cc94f035.
   scripts/card_fixtures.clj now records the trust exchanges for its
   tests.
+
+- 2026-10-25: Kira accepted it while clearing the review backlog. The
+  work is on main in every repo it touched, pushed and deployed.

@@ -172,3 +172,6 @@ says so.
   role, which the model-based property test covers.
 
 ## Log
+
+- 2026-10-25: Kira accepted it while clearing the review backlog. The
+  work is on main in every repo it touched, pushed and deployed.

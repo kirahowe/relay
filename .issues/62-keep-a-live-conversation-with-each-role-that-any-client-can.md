@@ -67,3 +67,7 @@ Mine, 2026-10-21 (Kira can overrule):
 the Codex review loop. Kira installs launchd jobs and deploys.
 
 ## Log
+
+- 2026-10-25: Kira closed it as delivered. #63, #64 and #65 built it,
+  and #66 the listener for the phone. Trying it on the phone moved to
+  #84. A web client stays with #56.

@@ -59,3 +59,6 @@ or hints only.
   acp-tui README's board section is updated.
 - No Codex review: the change is display and when the client reads the
   board. It touches no label, hold, approval or outside network call.
+
+- 2026-10-25: Kira accepted it while clearing the review backlog. The
+  work is on main in every repo it touched, pushed and deployed.

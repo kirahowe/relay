@@ -426,3 +426,6 @@ allow authorizes (relay-tui ulqspnmk).
   reports is on the screen, and an allow goes out only after every line
   was reported drawn and the delay since the last passed. Fails without
   the gate, and if the box reports its cut input as drawn.
+
+- 2026-10-25: Kira accepted it while clearing the review backlog. The
+  work is on main in every repo it touched, pushed and deployed.

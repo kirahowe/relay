@@ -122,3 +122,6 @@ xuykkxwz..ypznwzkz, relay-tui qyukvsxm..sxtryuoz) found no in-scope
 defect. It traced trust authorization and rev/digest binding, the arm
 delay across focus changes, defanging, stale cards, plain-ACP fallback
 and unknown-parameter refusal. The loop stops at a clean round.
+
+- 2026-10-25: Kira accepted it while clearing the review backlog. The
+  work is on main in every repo it touched, pushed and deployed.

@@ -216,3 +216,6 @@ approved by Kira on 2026-10-20. The acp-tui board is #55; `relay serve` is
   #58's QA (cards end to end, a forged answer to a client's _relay/ id
   dropped). Ready for review.
 
+
+- 2026-10-25: Kira accepted it while clearing the review backlog. The
+  work is on main in every repo it touched, pushed and deployed.

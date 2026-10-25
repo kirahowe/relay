@@ -49,3 +49,6 @@ working.
   "no-approvals" hint now say the dashboard / `relay`. The notification text
   "Open relay chat <role>" is kept: the alias stays and it names the role.
 - `:via "chat"` on trust events is log data, not a command name, so it stays.
+
+- 2026-10-25: Kira accepted it while clearing the review backlog. The
+  work is on main in every repo it touched, pushed and deployed.

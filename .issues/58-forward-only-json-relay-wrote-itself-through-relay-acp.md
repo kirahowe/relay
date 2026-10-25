@@ -438,3 +438,8 @@ line in each direction. bb test passes (761 tests).
 - 2026-10-21: fixed the permission-id comparison from the last Codex
   round (ed095f19). Filed #59 (MCP structured results round large
   integers) and #60 (relay acp with a relative --data). bb test 764/764.
+
+## Log
+
+- 2026-10-25: Kira accepted it while clearing the review backlog. The
+  work is on main in every repo it touched, pushed and deployed.

@@ -13,3 +13,5 @@ The first research role in use. It needs a brief from Kira.
 ## Plan
 
 ## Log
+
+- 2026-10-25: Kira dropped it while clearing the backlog.

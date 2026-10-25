@@ -1,10 +1,10 @@
 {:id 62
  :title "Keep a live conversation with each role that any client can switch to"
- :status :inbox
+ :status :done
  :type :feature
  :priority :p2
  :created "2026-10-21"
- :updated "2026-10-21"
+ :updated "2026-10-25"
  :tags #{"conversations"}
  :blocked-by #{}
  :related #{}

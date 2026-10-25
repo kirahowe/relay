@@ -292,3 +292,6 @@ by a replay, conversations ended here or elsewhere, roles removed and
 back, turns ending; every placeholder names the paste it was given for
 with its trust, and no number repeats. Fails if ending a conversation
 takes the draft's pastes. Codex's case is a test.
+
+- 2026-10-25: Kira accepted it while clearing the review backlog. The
+  work is on main in every repo it touched, pushed and deployed.

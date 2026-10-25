@@ -173,3 +173,6 @@ After the second pass (deploy as a pure state machine):
   and ran the full `bb verify`: agentloop, relay-tui, webtool and relay
   (914 tests, 61s) pass; pentest fails only relay#76's two scenarios.
   Filed relay#83 for the next namespaces. Moved to review.
+
+- 2026-10-25: Kira accepted it while clearing the review backlog. The
+  work is on main in every repo it touched, pushed and deployed.
