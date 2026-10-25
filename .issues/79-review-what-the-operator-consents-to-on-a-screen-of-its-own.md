@@ -352,3 +352,57 @@ independent Claude reviewer (no session context) over
 rvlyzwyo..mqxrywnq: no in-scope defect. Noted, not defects: `relay holds`
 lists inputs from the log's doubles (not a consent surface; relay#82),
 and -0 shows as 0.
+
+2026-10-25, round 2 (an independent Claude reviewer, since Codex was out
+of quota), over ulqspnmk..sztnmxpv:
+
+1. A forged review (relay-tui, "Trust relay's request keys only from
+   relay's hub"). Any agent's _meta["relay/review"] was used as T, so a
+   plain agent could show a harmless T' for a call that was really
+   send_mail and have y allow it. Now wire reads relay's request keys
+   (relay/review, relay/refused, and relay/preview with relay/labels on
+   a content block) only as claims (Permission.Claims,
+   CallContent.Preview). One function, core.trustRelay, applied when a
+   request arrives, decides by connection kind. In a conversation of
+   relay's hub (State.Shared) the claims count. Anywhere else they are
+   cleared: T is built from the call's own fields, a "preview" block is
+   plain content, and Unshown still fails closed. Nothing else reads
+   the claims. Judgment call: a single-agent connection to relay
+   without the hub loses relay's preview and review too, because
+   relay-tui cannot tell relay from any other agent there.
+   Property: core.TestNonHubMetaChangesNothing. It fails if the claims
+   count off the hub.
+2. (test) TestEnterNeedsTheHighlightOnScreen counted only option "a" as an
+   allow, though its options hold a second allow_once "b", so it flaked
+   and missed regressions on "b". It now counts every answer but the
+   reject and a cancel ("Count every allow in the enter property").
+3. y and the highlight (relay-tui, "Send with y the option its mark is
+   on"). y sent the first allow_once although the foot marked every
+   allow_once "(y)", the highlighted one included. Now y and n send the
+   highlighted option when it is of their kind, and the first of their
+   kind otherwise (core.KeyOption). Only that entry is marked (y) or
+   (n). Frames report every option entry they drew whole
+   (ReviewDrawn.Options), and the pager keeps, for each, since when it
+   has been on screen; a move of the highlight resets them all, since it
+   can change what y sends. An allow by enter or y is taken only once the
+   entry of the option it sends has been on screen whole ArmDelay.
+   Refusals are still taken at once. Property:
+   core.TestAnAllowSendsOnlyAnEntryOnScreen. It fails if y sends
+   PickKind's option, or without the entry check.
+   render.TestTheHighlightedOptionIsAlwaysInView now also checks that
+   every entry reported drawn is on the row with its marks, and that at
+   most one entry is marked per key.
+4. Wrapped rows (relay-tui, "Mark the rows that carry on a wrapped
+   line"). A wrapped row lost its line's gutter, so a wrapped piece of
+   an agent's value could look like one of T's own lines. Now T's rows
+   start two columns in. A row that carries on a line too wide for the
+   window has "↪ " in those columns, and every other row has "  ". T
+   never reaches those columns, so the mark is always the pager's. It
+   is decoration: Drawn counts only T's bytes, and certification is
+   unchanged. Property: render.TestWrappedRowsAreMarked. Goldens: the
+   TestReviewGolden set and TestPermissionBoxShowsThePreview.
+   Follow-up to 3: since y now needs its own entry drawn whole, the
+   options row's gap went from three spaces to two, so "1 allow_once
+   (y)" and "▸ 2 reject_once (n)" both fit a 40-column window ("Fit a
+   request's two answers on a 40-column row"). On narrower windows y
+   says the option is not on screen, and tab brings it into view.
