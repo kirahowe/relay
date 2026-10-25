@@ -137,6 +137,50 @@
       (re-find #"(?i)[a-z][.。．｡][a-z0-9]" t)
       (seq (text/link-hosts t))))
 
+(def contaminated-slots
+  "Where one string goes in a contaminated request, card or doc."
+  {:preview #(get (review/request-review (assoc clean-request :labels ["contaminated"]
+                                                :preview {:text % :labels ["contaminated"]})) "text")
+   :input-value #(get (review/request-review (assoc clean-request :labels ["contaminated"] :input {"k" %})) "text")
+   :input-key #(get (review/request-review (assoc clean-request :labels ["contaminated"] :input {% 1})) "text")
+   :card-title #(review/card-text {:id 1 :kind "note" :status :active :rev 3
+                                   :title {:id 0 :text % :labels ["contaminated"] :rev 1}
+                                   :note {:text "n" :labels [] :rev 1}})
+   :doc #(review/doc-text "a.md" 1 ["contaminated"] %)})
+
+(def gen-spelled
+  "Text from a contaminated source that spells out what defanging and
+  escaping would make of a link."
+  (gen/fmap (fn [parts] (apply str parts))
+            (gen/vector (gen/elements ["https://" "http" ":" "//" "." "[.]" "[:]" "hxxp" "\\u{002e}" "\\u{003a}"
+                                       "\\" "evil" "com" "12.50" "\"" " " "\n" "．" "\\u{ff0e}" "1"])
+                        0 8)))
+
+(defspec two-different-contaminated-sources-never-give-the-same-text 500
+  (prop/for-all [a (gen/one-of [gen-spelled gen-urlish gen-nasty]) b (gen/one-of [gen-spelled gen-urlish gen-nasty])
+                 slot (gen/elements (keys contaminated-slots))]
+    (let [f (contaminated-slots slot)]
+      (= (= a b) (= (f a) (f b))))))
+
+(deftest a-link-and-its-defanged-spelling-differ
+  (doseq [[a b] [["x.com" "x[.]com"] ["https://e.x" "hxxps://e[.]x"] ["a.b" "a\\u{002e}b"] ["a:b//" "a\\u{003a}//"]]
+          [slot f] contaminated-slots]
+    (is (not= (f a) (f b)) (pr-str slot a))))
+
+(deftest amounts-read-as-written-even-from-a-contaminated-source
+  (let [t (get (review/request-review (assoc clean-request :labels ["contaminated"]
+                                             :input {"amount" "12.50" "n" 12.50M "v" "1.5.2" "p" "$3.20)"}))
+               "text")]
+    (is (str/includes? t "\"amount\": \"12.50\","))
+    (is (str/includes? t "\"n\": 12.50,"))
+    (is (str/includes? t "\"1.5.2\""))
+    (is (str/includes? t "\"$3.20)\""))
+    (testing "a dotted quad is an address, not an amount"
+      (is (not (str/includes? (review/doc-text "a" 1 ["contaminated"] "10.0.0.1") "10.0.0.1"))))
+    (testing "a link in it does not read as written"
+      (is (str/includes? (review/doc-text "a" 1 ["contaminated"] "go to https://evil.example now")
+                         "go to https\\u{003a}//evil\\u{002e}example now")))))
+
 (defspec a-contaminated-source-has-no-live-url-in-its-review 500
   (prop/for-all [p gen-urlish i gen-urlish k gen-urlish]
     (let [r (assoc clean-request :labels ["contaminated"] :preview {:text p :labels ["contaminated"]}

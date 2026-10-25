@@ -279,16 +279,20 @@ as it is. relay sends each such subject with a review, `{"text": T,
 - on a shown doc in `_relay/items`, as `"review"`.
 
 `relay.review` makes them. T is plain text, lines joined by `"\n"`, each
-line through `relay.text/visible-strict` (after `relay.text/defang` when
-its source is contaminated). Every character of T is the space (U+0020),
+line through `relay.text/visible-strict`, or `relay.text/visible-defanged`
+for text from a contaminated source. visible-defanged breaks links with
+escapes rather than by replacing anything: the colon of every `://`
+becomes `\u{003a}` and every dot inside a word (the fullwidth and
+ideographic ones too) its own `\u{XXXX}`, except in a plain number or
+amount such as `12.50` or `"12.50"`, which reads as written. Every character of T is the space (U+0020),
 `"\n"`, or one of Unicode's general categories L, M, N, P or S, which is
 Go's `unicode.IsPrint` set. Anything else, the tab and every other space
 (no-break, ideographic and so on) included, is written as `\u{XXXX}`,
-and a backslash as two, so two subjects that differ never give the same
-T, except where defanging makes two links look alike. H is the sha256
+and a backslash as two, so T can be read back exactly and two subjects
+that differ never give the same T. H is the sha256
 hex of T's UTF-8 bytes. Nothing is left out for length. Text from a role
 or an outsider sits behind the gutter `"  │ "`, one gutter line for each
-of its lines (headed `"  [contaminated]"` when defanged), and the
+of its lines (headed `"  [contaminated]"` when its source is), and the
 strings in relay's own lines are written as JSON strings, so nothing in
 the subject can pass for a line of relay's.
 
@@ -299,8 +303,8 @@ saying the tool has none; the whole input as JSON, two spaces an
 indent, members in the order of their names; the arguments the
 operator's settings fix, when there are any; the conversation's
 labels; and every option the agent offers, with its kind and id. The
-preview is defanged when its labels are contaminated, and the input
-when the conversation's labels or the preview's are. For example:
+preview's links are broken when its labels are contaminated, and the
+input's when the conversation's labels or the preview's are. For example:
 
 ```
 Permission request from role "clerk"
@@ -324,17 +328,17 @@ Options:
 ```
 
 A card's T is its text form (`relay.cards/text-form`) with each
-element's text marked and defanged by its own labels, as the wire form's
-`text` marks it, made safe line by line:
+element's text made safe by its own labels and marked as the wire form's
+`text` marks it:
 
 ```
 Card 12: Taxes (checklist, 0 of 2 done, rev 14) [[card:12]]
 [ ] 1 Find the T4
-[ ] 2 [contaminated] Read hxxps://evil[.]example
+[ ] 2 [contaminated] Read https\u{003a}//evil\u{002e}example
 ```
 
 A doc's T is `Doc "<path>", version <n>` and then its content behind the
-gutter, defanged when its labels are contaminated.
+gutter, its links broken when its labels are contaminated.
 
 ### What relay checks
 

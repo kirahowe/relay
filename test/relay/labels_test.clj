@@ -776,7 +776,7 @@
         conv (workspace/shown workspace/conversation "s1" [{:session "s1" :call "c1" :ref "shown:1" :path "web.md"}])
         [item] (get (workspace/items s conv "s1" true) "items")
         {t "text" h "sha256"} (get item "review")]
-    (is (= (str "Doc \"web.md\", version " (:version v) "\n  [contaminated]\n  │ See hxxps://evil[.]example\\u{0009}now") t))
+    (is (= (str "Doc \"web.md\", version " (:version v) "\n  [contaminated]\n  │ See https\\u{003a}//evil\\u{002e}example\\u{0009}now") t))
     (is (= h (core/sha256 t) (get item "sha256") (core/trust-digest s "doc" "web.md")))
     (is (= "See https://evil.example\tnow" (get item "text")) "the doc's own text stays for a generic client")
     (testing "the digest of the raw content trusts nothing"

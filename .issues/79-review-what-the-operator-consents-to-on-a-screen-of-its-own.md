@@ -80,3 +80,12 @@ of ~/code/projects/.next/DASHBOARD.md.
   number such as "12.50" is defanged, since its word starts with a quote.
   A code point Java's Unicode tables assign and Go's do not would make the
   pager fail closed.
+- 2026-10-24, after the main session's review: a review no longer uses
+  defang. In contaminated text, relay.text/visible-defanged escapes the
+  colon of every :// as \u{003a} and every dot inside a word (fullwidth
+  and ideographic dots too) as its own \u{XXXX}, in the same pass as
+  visible-strict. Since a backslash still shows as two, T can be read
+  back exactly, so "x.com" and "x[.]com" give different T and the input
+  says exactly what goes out. Plain numbers and amounts keep their dots,
+  now also inside JSON quotes or brackets ("12.50", [1.5]); a dotted quad
+  does not. defang itself is unchanged for its other uses.

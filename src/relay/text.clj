@@ -117,6 +117,55 @@
   [s]
   (escape-by s (fn [cp] (not (printable? cp)))))
 
+(def ^:private amount-pattern
+  ;; A plain number or amount, as defang keeps it: 12.50, $1.5, 1.5.2,
+  ;; also inside quotes or brackets as JSON writes it ("12.50", [1.5]).
+  #"[\"'(\[{]*[$€£¥+\-]?\d+(\.\d+){1,2}[\"')\]},.;:%]*")
+
+(def ^:private dot-cps
+  "The full stops a host can be written with: the ASCII one and the
+  fullwidth and ideographic ones a browser reads as dots."
+  #{0x2E 0x3002 0xFF0E 0xFF61})
+
+(defn- unfollowable-indexes
+  "The char indexes in s whose character visible-defanged escapes to break
+  a link: the colon of every :// and every dot with something other than
+  whitespace on both sides inside a word, unless the word is a plain
+  number (amount-pattern) and not a dotted quad."
+  [^String s]
+  (let [found (fn [re] (let [m (re-matcher re s)]
+                         (loop [acc []] (if (.find m) (recur (conj acc [(.start m) (.group m)])) acc))))
+        colons (map first (found #"://"))
+        dots (for [[start ^String w] (found #"\S+")
+                   :when (not (and (re-matches amount-pattern w)
+                                   (not (re-find #"\d+\.\d+\.\d+\.\d+" w))))
+                   i (range 1 (dec (count w)))
+                   :when (contains? dot-cps (int (.charAt w (int i))))]
+               (+ start i))]
+    (set (concat colons dots))))
+(defn visible-defanged
+  "visible-strict for one line of a review text from a contaminated
+  source: links made unfollowable by escapes rather than by replacing
+  anything. The colon of every :// is shown as \\u{003a}, and every dot
+  inside a word (the fullwidth and ideographic ones too) as its own
+  \\u{XXXX}, except in a plain number or amount such as 12.50 or
+  \"12.50\", which reads as written. Since a backslash is shown as two,
+  the text can be read back exactly: no two lines give the same result,
+  whatever they spell out."
+  [s]
+  (let [s (str s)
+        marked (unfollowable-indexes s)
+        sb (StringBuilder.)]
+    (loop [i 0]
+      (when (< i (count s))
+        (let [cp (.codePointAt s (int i))]
+          (cond
+            (or (contains? marked i) (not (printable? cp))) (.append sb (format "\\u{%04x}" cp))
+            (= 92 cp) (.append sb "\\\\")
+            :else (.appendCodePoint sb (int cp)))
+          (recur (+ i (Character/charCount cp))))))
+    (str sb)))
+
 (defn defang
   "Text with every URL broken so it cannot be followed: http becomes
   hxxp, https hxxps and ftp fxp, any other scheme's :// becomes [:]//, and

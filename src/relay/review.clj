@@ -3,10 +3,10 @@
   verbatim: a permission request, a card, a doc. Pure.
 
   A review is {\"text\" T \"sha256\" H}. T is plain text whose every line
-  went through relay.text/visible-strict, after relay.text/defang when its
-  source is contaminated, so it holds only printable characters
-  (relay.text/printable?), the space and \"\\n\". H is the sha256 hex of
-  T's UTF-8 bytes. A client that declares relay/review sends H back with
+  went through relay.text/visible-strict, or relay.text/visible-defanged
+  where its source is contaminated, so it holds only printable characters
+  (relay.text/printable?), the space and \"\\n\", and can be read back
+  exactly. H is the sha256 hex of T's UTF-8 bytes. A client that declares relay/review sends H back with
   an allow or a trust, and relay takes it only when it is the H of the
   subject as relay has it now (relay.hub, relay.core :label/trust).
 
@@ -27,12 +27,30 @@
                    (.getBytes (str s) java.nio.charset.StandardCharsets/UTF_8))]
     (apply str (map #(format "%02x" (bit-and % 0xff)) d))))
 
+(defn- own
+  "One of the review's own lines, from raw text: through visible-strict. A
+  newline in it is escaped with the rest, so it stays one line."
+  [s]
+  (text/visible-strict s))
+
+(defn- safe
+  "Text from a source with these labels, for one line: visible-defanged
+  when they are contaminated, else visible-strict."
+  [labels s]
+  (if (text/contaminated? labels) (text/visible-defanged s) (text/visible-strict s)))
+
+(defn- block
+  "Text from a source with these labels as the review's lines: each line
+  behind relay.text/gutter, headed by a [contaminated] line when
+  contaminated."
+  [labels s]
+  (concat (when (text/contaminated? labels) ["  [contaminated]"])
+          (map #(str text/gutter (safe labels %)) (str/split (str s) #"\n" -1))))
+
 (defn text-of
-  "Raw lines as a review text: each line through visible-strict, joined by
-  newlines. A newline left inside a line is escaped with the rest, so the
-  lines stay the lines given."
+  "Lines already made safe, as a review text."
   [lines]
-  (str/join "\n" (map text/visible-strict lines)))
+  (str/join "\n" lines))
 
 (defn review
   "A review text and its digest, as clients are sent them."
@@ -56,34 +74,34 @@
   with members in name order, the arguments the operator's settings fix,
   the session's labels, and every option the agent offers with its kind.
 
-  The preview is defanged when its labels are contaminated, and the input
-  when the session's or the preview's are, as a client shows them."
+  The preview's links are broken (visible-defanged) when its labels are
+  contaminated, and the input's when the session's or the preview's are."
   [{:keys [role tool class preview input labels fixed-args options]}]
   (let [{p-text :text p-labels :labels p-error :error} preview
         input-labels (concat labels p-labels)]
     (vec
      (concat
-      [(str "Permission request from role " (q role))
-       (str "Tool " (q tool) ", class " (if class (q class) "not known to relay"))
+      [(own (str "Permission request from role " (q role)))
+       (own (str "Tool " (q tool) ", class " (if class (q class) "not known to relay")))
        ""]
       (cond
         (nil? preview) ["What it does: this tool has no preview."]
-        :else (concat [(str "What it does, by the tool's preview (its labels "
-                            (labels-text p-labels) "):")]
+        :else (concat [(own (str "What it does, by the tool's preview (its labels "
+                                 (labels-text p-labels) "):"))]
                       (when p-error ["  The preview command could not say what this call would do."])
-                      (text/block p-labels p-text)))
+                      (block p-labels p-text)))
       [""
        "Input, all of it, as JSON:"]
-      (text/block input-labels (strict/pretty input))
+      (block input-labels (strict/pretty input))
       (when (seq fixed-args)
-        [(str "Set by your settings, not by the role: " (strict/generate (vec (sort (map str (keys fixed-args))))))])
+        [(own (str "Set by your settings, not by the role: " (strict/generate (vec (sort (map str (keys fixed-args)))))))])
       [""
-       (str "Labels of the conversation: " (labels-text labels))
+       (own (str "Labels of the conversation: " (labels-text labels)))
        ""
        "Options:"]
       (if (seq options)
         (for [o options]
-          (str "  " (q (get o "name")) ", kind " (q (get o "kind")) ", id " (q (get o "optionId"))))
+          (own (str "  " (q (get o "name")) ", kind " (q (get o "kind")) ", id " (q (get o "optionId")))))
         ["  none"])))))
 
 (defn request-review
@@ -95,19 +113,21 @@
 
 (defn card-text
   "A card's review text: its text form (relay.cards/text-form) with each
-  element's text marked and defanged by its own labels, as the wire form
-  marks it, then each line through visible-strict."
+  element's text made safe by its own labels, and marked [contaminated]
+  when they are. The rest of the text form is relay's: ids, the kind,
+  counts and states, which need no escaping."
   [card]
-  (text-of (cards/text-lines card {:mark text/for-operator :block text/block})))
+  (text-of (cards/text-lines card {:mark (fn [ls s] (str (when (text/contaminated? ls) "[contaminated] ") (safe ls s)))
+                                   :block block})))
 
 ;; --- a doc, and anything else relay trusts
 
 (defn doc-text
   "A doc's review text: its path and version, and its content behind the
-  gutter, defanged when its labels are contaminated."
+  gutter, made unfollowable when its labels are contaminated."
   [path version labels content]
-  (text-of (concat [(str "Doc " (q path) ", version " version)]
-                   (text/block labels content))))
+  (text-of (concat [(own (str "Doc " (q path) ", version " version))]
+                   (block labels content))))
 
 (defn subject-text
   "The review text of something relay trusts (relay.core/trusted-version
@@ -117,5 +137,5 @@
   [kind ref {:keys [version labels text]}]
   (if (= "doc" kind)
     (doc-text ref version labels text)
-    (text-of (concat [(str (str/capitalize (str kind)) " " (q ref) ", version " version)]
-                     (text/block labels text)))))
+    (text-of (concat [(own (str (str/capitalize (str kind)) " " (q ref) ", version " version))]
+                     (block labels text)))))
