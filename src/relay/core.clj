@@ -2241,15 +2241,29 @@
         (update :subject #(fix (str/replace (plain-spacing %) "\n" " ")))
         (update :body fix))))
 
-(defmethod decide* :memo/declassify [{:keys [state config] :as tx} {{id :memo} :args}]
+(defn declassify-text
+  "The review text (relay.review) of declassifying memo m: the memo as
+  declassifying makes it, which is what the public role gets."
+  [m]
+  (review/declassify-text (declassified m)))
+
+(defn declassify-digest
+  "The digest a declassify of memo `id` must name now, or nil."
+  [state id]
+  (some-> (memo state id) declassify-text review/digest))
+
+(defmethod decide* :memo/declassify [{:keys [state config] :as tx} {{id :memo digest :sha256} :args}]
   ;; The operator has read the memo, its sender's id included, and says it
   ;; may leave this machine. Only a person at the terminal does that.
   (operator-only! tx "declassifies a memo")
   (let [m (open-memo! tx id)]
     (when-not (awaiting-declassification? config m)
       (reject! :invalid (str "Memo " id " is not waiting to be declassified.")))
+    ;; Only the memo the operator was shown: the digest of its review.
+    (when-not (and (string? digest) (= digest (review/digest (declassify-text m))))
+      (reject! :conflict (str "Memo " id " is not what you were shown. Nothing was declassified; look again.")))
     (let [{:keys [subject body]} (declassified m)]
-      (emit tx "memo/declassified" {:memo id :subject subject :body body
+      (emit tx "memo/declassified" {:memo id :subject subject :body body :sha256 digest
                                     :from-labels (vec (remove #{private-label} (second (shown-id state (:from m)))))}
             ;; It holds the memo's text, without the private it vouches away.
             (remove #{private-label} (:labels m))))))

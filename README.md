@@ -631,8 +631,11 @@ on `relay wake --note` marks what the operator writes as public: it may
 leave this machine in a web search. A memo, routine, note, journal entry
 or wake note for a public role is refused without it. A memo to a public
 role from anyone else waits, and the operator is told who sent it to
-whom. `relay declassify <memo>` shows it in full and, with the code,
-makes it public, minus `private`; `contaminated` stays. The role gets
+whom. `relay declassify <memo>` shows the memo's review (its id, sender
+and recipient, subject, body behind the gutter, labels and the
+characters to check) and, with the code, makes it public, minus
+`private`; `contaminated` stays. relay declassifies it only if it still
+gives the review you were shown. The role gets
 exactly what you were shown, less the `[contaminated]` marker: the memo
 with its URLs broken if it is contaminated, its spacing made plain (runs
 of spaces, tabs and anything else that draws as an empty space become one

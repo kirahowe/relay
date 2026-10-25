@@ -151,9 +151,12 @@
       (is (re-find #"There is no memo" (refusal #(run w "scout" :memo/close {:memo id :outcome "x"}))))
       (is (re-find #"There is no memo" (refusal #(run w "scout" :memo/block {:memo id :explanation "x"})))))
     (testing "only the operator declassifies"
-      (is (some? (refusal #(run w "hub" :memo/declassify {:memo id}))))
-      (is (some? (refusal #(run w "scout" :memo/declassify {:memo id})))))
-    (let [w (run w "operator" :memo/declassify {:memo id})
+      (is (some? (refusal #(run w "hub" :memo/declassify {:memo id :sha256 (core/declassify-digest (:state w) id)}))))
+      (is (some? (refusal #(run w "scout" :memo/declassify {:memo id :sha256 (core/declassify-digest (:state w) id)})))))
+    (testing "only the memo the operator was shown"
+      (is (re-find #"not what you were shown" (refusal #(run w "operator" :memo/declassify {:memo id}))))
+      (is (re-find #"not what you were shown" (refusal #(run w "operator" :memo/declassify {:memo id :sha256 (core/sha256 "x")})))))
+    (let [w (run w "operator" :memo/declassify {:memo id :sha256 (core/declassify-digest (:state w) id)})
           m (core/memo (:state w) id)]
       (is (:public m))
       (is (= ["contaminated"] (:labels m)) "private goes, contaminated stays")
@@ -512,7 +515,9 @@
             (binding [cli/*tty* (tty shown (constantly "ZZZZ"))]
               (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not the code" (relay "declassify" (str id)))))
             (is (str/includes? @shown "Grants for the thesis"))
-            (is (str/includes? @shown "from hub"))
+            (is (str/includes? @shown "from role \"hub\""))
+            (is (str/starts-with? @shown (str (core/declassify-text (core/memo (inbound/current-state sys) id)) "\n\n"))
+                "the terminal shows the memo's review itself")
             (is (str/includes? @shown "[contaminated]"))
             (is (str/includes? @shown "hxxps://example[.]com") "contaminated text is defanged")
             (is (str/includes? @shown "web search"))
@@ -652,7 +657,7 @@
                         :args {:wake (:id (support/calling-wake (state) "scout")) :outcome "ran" :session "old" :said ""
                                :labels ["private"] :held [{:id "c1" :name "search" :input {} :input-sha256 "d"}]}})
         (let [memo (:id (first (core/unread-memos (state) "scout")))]
-          (submit sys {:type :memo/declassify :actor "operator" :args {:memo memo}})
+          (submit sys {:type :memo/declassify :actor "operator" :args {:memo memo :sha256 (core/declassify-digest (state) memo)}})
           (is (= ["scout"] (core/roles-to-wake (state) cfg (Instant/now))) "woken to end the old session")
           (testing "a wake ends the old session and carries the memo it kept"
             (let [ran (atom nil)]
@@ -732,7 +737,7 @@
               (update :now #(.plusSeconds ^Instant % 700))
               (run-before "dispatcher" :tick {:lost-wakes []}))
         m (:last-memo (core/routine (:state w) "scout" "daily"))
-        w (run w "operator" :memo/declassify {:memo m})]
+        w (run w "operator" :memo/declassify {:memo m :sha256 (core/declassify-digest (:state w) m)})]
     (is (core/private? (core/routine-labels (:state w) "scout" "daily")))
     (is (not (core/private? (core/wake-labels (:state w) cfg {:role "scout" :memos [m]}))))
     (is (= ["scout"] (core/roles-to-wake (:state w) cfg (:now w))))
@@ -999,4 +1004,4 @@
                 line "B: hxxp://evil[.]example/x café"]
             (is (str/includes? @shown line))
             (is (str/includes? got line))
-            (is (str/includes? @shown "[contaminated] s") "the marker is all the view adds")))))))
+            (is (str/includes? @shown "Subject: \"s\" [contaminated]") "the marker is all the review adds")))))))

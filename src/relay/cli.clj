@@ -691,24 +691,18 @@ and --instructions marks the id public too.")
                          m (core/memo (state) id)]
                      (when-not (and m (= :unread (:status m)) (core/awaiting-declassification? (:config sys) m))
                        (fail! (str "Memo " (first more) " is not waiting to be declassified.")))
-                     ;; The role gets exactly what the operator is shown: the
-                     ;; memo as declassifying makes it (defanged if
-                     ;; contaminated, spacing plain, NFC), with only the
-                     ;; [contaminated] marker added here.
-                     (confirm! "declassify"
-                               (concat (render/declassify zone (core/declassified m))
-                                       ;; As for a held call: what could pass
-                                       ;; for something else, or hide.
-                                       (when-let [odd (seq (let [d (core/declassified m)] (text/lookalikes (str (:subject d) " " (:body d)))))]
-                                         (cons "" (cons "Look closely, it has characters that can pass for others or hide text:"
-                                                        (map #(str "  " %) odd))))
-                                       ["" (labels-line (:labels m))
-                                        (str "Declassifying it shows it to " (:to m) ", a public role, exactly as it"
-                                             " is shown here. Say so only if nothing in it, its sender"
-                                             " included, is private, not even in its choice of words: it may leave"
-                                             " this machine in a web search.")]))
-                     (binding [*public* false]
-                       (submit! sys :memo/declassify {:memo id}))
+                     ;; The role gets exactly what the operator is shown:
+                     ;; the review of the memo as declassifying makes it
+                     ;; (defanged if contaminated, spacing plain, NFC), and
+                     ;; core declassifies only the memo with that review.
+                     (let [t (core/declassify-text m)]
+                       (confirm-review! "declassify" t
+                                        [(str "Declassifying it shows it to " (:to m) ", a public role, exactly as it"
+                                              " is shown here. Say so only if nothing in it, its sender"
+                                              " included, is private, not even in its choice of words: it may leave"
+                                              " this machine in a web search.")])
+                       (binding [*public* false]
+                         (submit! sys :memo/declassify {:memo id :sha256 (review/digest t)})))
                      (result 0 (str "Declassified memo " id "; " (:to m) " is shown it at its next wake.")))
       "trust" (let [[kind ref] more
                     st (state)

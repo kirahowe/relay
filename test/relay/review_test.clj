@@ -386,6 +386,34 @@
            (= {:kind kind :ref ref :version v :content content :contaminated (text/contaminated? ls)}
               (parse-subject t))))))
 
+(defn parse-declassify
+  "A declassify review text read back into the memo it releases."
+  [t]
+  (let [[l0 l1 l2 & more] (str/split t #"\n" -1)
+        [_ id from to] (re-matches (re-pattern (str "(?s)Declassify memo (\\d+) from role (" json-string-re
+                                                   ") to the public role (" json-string-re ")")) (unescape l0))
+        [subject c] (labelled "Subject: " l1)
+        [body _ more] (take-block more)
+        [_ ls] (re-matches #"(?s)Labels of the memo: (.*)" (unescape (first more)))]
+    (assert (= (if c "Body, from a contaminated source:" "Body:") l2))
+    (assert (= "" (second more)))
+    (assert (str/starts-with? (nth more 2) "Characters to check:"))
+    {:id (parse-long id) :from (read-json from) :to (read-json to) :subject subject :body body
+     :contaminated c :labels (labels-of ls)}))
+
+(defspec a-declassify-review-reads-back-as-the-memo 300
+  (prop/for-all [id (gen/choose 1 9999) from gen-nasty to gen-nasty subject gen-nasty body gen-nasty
+                 labels (gen/elements [["private"] ["contaminated" "private"] []])]
+    (let [t (review/declassify-text {:id id :from from :to to :subject subject :body body :labels labels})]
+      (and (review-ok? t)
+           (= {:id id :from from :to to :subject subject :body body
+               :contaminated (text/contaminated? labels) :labels labels}
+              (parse-declassify t))))))
+
+(deftest a-memo-changed-after-it-was-shown-is-not-declassified
+  (let [m {:id 3 :from "hub" :to "scout" :subject "s" :body "b" :labels ["private"] :status :unread}]
+    (is (not= (core/declassify-text m) (core/declassify-text (assoc m :body "b2"))))))
+
 (deftest one-column-cannot-pass-for-two
   ;; Codex, relay#79 round 1.
   (let [card (fn [cols] {:id 1 :kind "tracker" :status :active :rev 3 :title {:id 0 :text "T" :labels []}

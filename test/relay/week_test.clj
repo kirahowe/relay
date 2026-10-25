@@ -74,7 +74,7 @@
   (let [w (-> (seeded) (ct/run "hub" :memo/send {:to "courier" :subject "s" :body "b"}))
         _ (is (= 1 (:pending (kind (report w) "declassify"))))
         id (:id (first (core/unread-memos (:state w) "courier")))
-        w (-> w (ct/advance 60) (ct/run "operator" :memo/declassify {:memo id}))]
+        w (-> w (ct/advance 60) (ct/run "operator" :memo/declassify {:memo id :sha256 (core/declassify-digest (:state w) id)}))]
     (is (= {"declassified" 1} (:decisions (kind (report w) "declassify"))))))
 
 (def qcfg (config/resolve-config {:timezone "UTC" :default-harness :agentloop

@@ -420,7 +420,7 @@
       (let [m (nth-or (sort-by :id (filter #(and (= :unread (:status %)) (core/awaiting-declassification? cfg %))
                                            (vals (:memos s))))
                       (first args))
-            w' (if m (run w "operator" [] :memo/declassify {:memo (:id m)}) w)]
+            w' (if m (run w "operator" [] :memo/declassify {:memo (:id m) :sha256 (core/declassify-digest s (:id m))}) w)]
         (if (and m (not= (:state w) (:state w')))
           (as-> w' w
             (reduce (fn [w mk] (-> w

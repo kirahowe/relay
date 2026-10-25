@@ -246,3 +246,27 @@
   card-text, made from the card."
   [kind ref {:keys [version labels text]}]
   (text-of (subject-lines kind ref version labels text)))
+
+;; --- a memo declassified for a public role
+
+(defn declassify-lines
+  "A memo about to be declassified, as the review's lines: `d` is the memo
+  as declassifying makes it (relay.core/declassified), which is exactly
+  what the public role is given, so its text is escaped by visible-strict
+  alone (core already defanged it when contaminated) and marked by the
+  memo's labels: its id, from and to roles, subject, body, labels, and
+  the characters to check."
+  [{:keys [id from to subject body labels]}]
+  (let [mark (when (text/contaminated? labels) " [contaminated]")]
+    (vec (concat [(str (own (str "Declassify memo " id " from role ")) (q [] from) (own " to the public role ") (q [] to))
+                  (str (own "Subject: ") (q [] subject) mark)
+                  (if mark "Body, from a contaminated source:" "Body:")]
+                 (block [] body)
+                 [(own (str "Labels of the memo: " (labels-text labels)))
+                  ""]
+                 (characters-to-check [["subject" [] subject] ["body" [] body]])))))
+
+(defn declassify-text
+  "A memo's declassify review text (declassify-lines)."
+  [d]
+  (text-of (declassify-lines d)))

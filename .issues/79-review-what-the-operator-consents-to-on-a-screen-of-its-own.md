@@ -125,3 +125,14 @@ of ~/code/projects/.next/DASHBOARD.md.
   trust-level, finding decisions and connect. Declassify does show a
   role's memo before it reaches a public role; it is a candidate for a
   review of its own and is not converted here.
+- relay declassify gets a review (main session's request): its
+  confirmation is confirm-review! of relay.review/declassify-text, the
+  memo as declassifying makes it (the exact text the public role gets):
+  id, from and to roles as JSON strings, subject as a labelled JSON
+  string, body as a gutter block, the memo's labels and the characters
+  to check. The memo's text is escaped by visible-strict alone, not
+  visible-defanged: core/declassified already defanged it when
+  contaminated, and the review must show exactly what the role is given.
+  :memo/declassify now requires :sha256, the digest of that text, refuses
+  (:conflict) when the memo would no longer give it, and records it in
+  memo/declassified. Tested by parse(T) = memo.
