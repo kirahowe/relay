@@ -63,8 +63,8 @@
                      :labels ["contaminated"]})
       (notify/push! {:kind :ntfy :url url :topic "t"} {:title "Fine" :body "https://ok.example" :labels []})
       (let [[bad ok] (map :body @seen)]
-        (is (= "[contaminated] Open hxxps://evil[.]example" (:title bad)))
-        (is (= "[contaminated] Go to www[.]evil[.]example/x \\u{202e}now" (:message bad)))
+        (is (= "[from outside] Open hxxps://evil[.]example" (:title bad)))
+        (is (= "[from outside] Go to www[.]evil[.]example/x \\u{202e}now" (:message bad)))
         (is (= "https://ok.example" (:message ok)))))))
 
 (deftest the-file-notifier-appends-a-line-and-reaches-nobody
@@ -75,7 +75,7 @@
     (notify/push! settings {:title "Second" :body "Two https://evil.example now" :labels ["contaminated"]})
     (let [lines (map #(json/parse-string % true) (str/split-lines (slurp file)))]
       (is (= [{:title "First" :body "One" :labels []}
-              {:title "[contaminated] Second" :body "[contaminated] Two hxxps://evil[.]example now"
+              {:title "[from outside] Second" :body "[from outside] Two hxxps://evil[.]example now"
                :labels ["contaminated"]}]
              (map #(select-keys % [:title :body :labels]) lines))
           "marked and defanged, as for any other kind")

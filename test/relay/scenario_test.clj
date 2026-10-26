@@ -48,8 +48,7 @@
 
 (def world
   {:state {:memos {3 {:id 3 :from "operator" :to "hub" :subject "A" :status :read}
-                   4 {:id 4 :from "hub" :to "operator" :subject "B" :status :unread}}
-           :holds {9 {:id 9 :role "clerk" :tool "post" :status :open}}}
+                   4 {:id 4 :from "hub" :to "operator" :subject "B" :status :unread}}}
    :events [{:seq 1 :type "memo/sent" :data {:to "hub"}}]
    :sent [{:title "Memo for you"}]})
 
@@ -57,13 +56,13 @@
   (is (nil? (scenario/check world [:has :memo {:subject "A" :status :read}])))
   (is (nil? (scenario/check world [:none :memo {:subject "A" :status :unread}])))
   (is (nil? (scenario/check world [:count :memo {:to "operator"} 1])))
-  (is (nil? (scenario/check world [:has :hold {:tool "post"}])))
   (is (nil? (scenario/check world [:has :event {:type "memo/sent" :data {:to "hub"}}])))
   (is (nil? (scenario/check world [:has :sent {:title [:includes "Memo"]}])))
   (let [msg (scenario/check world [:has :memo {:subject "Z"}])]
     (is (str/includes? msg "Expected a memo matching") msg)
     (is (str/includes? msg ":subject \"A\"") "it shows what there was"))
-  (is (some? (scenario/check world [:none :hold {:role "clerk"}])))
+  (is (some? (scenario/check world [:none :memo {:to "hub"}])))
+  (is (str/includes? (scenario/check world [:has :hold {}]) "Unknown") "held calls are gone")
   (is (some? (scenario/check world [:count :memo {} 3])))
   (is (str/includes? (scenario/check world [:has :wombat {}]) "Unknown")))
 
@@ -100,15 +99,6 @@
   (is (= "clerk" (scenario/role-of {:system "Your id is `clerk`"})))
   (is (nil? (scenario/role-of {:system []}))))
 
-(deftest the-readers-requests-have-a-script-of-their-own
-  (let [reader-body {:system "You answer one question about one document.\n\nThe user message holds..."}
-        script (scenario/script {"hub" [{:text "h"}]} [{:text "{\"answer\": true}"}])]
-    (is (= scenario/reader (scenario/requester reader-body)))
-    (is (= "hub" (scenario/requester {:system "Your id is `hub`"})))
-    (is (= {:text "{\"answer\": true}"} (first (scenario/next-reply script {} scenario/reader))))
-    (is (= {:text "h"} (first (scenario/next-reply script {} "hub"))))
-    (is (= {"hub" [{:text "h"}]} (scenario/script {"hub" [{:text "h"}]} nil)))))
-
 (deftest a-malformed-scenario-is-described
   (let [ok {:steps [{:tick 1}] :assert [[:has :memo {}]]}]
     (is (empty? (scenario/problems ok)))
@@ -117,13 +107,9 @@
     (is (seq (scenario/problems (assoc ok :steps [{:tick 1 :run ["x"]}]))))
     (is (seq (scenario/problems (assoc ok :assert [[:has :wombat {}]]))))
     (is (seq (scenario/problems (assoc ok :model {"hub" {:text "x"}}))))
-    (is (seq (scenario/problems (assoc ok :reader {:text "x"}))))
-    (is (empty? (scenario/problems (assoc ok :reader [{:text "x"}]))))
-    (testing ":tty goes with :run, as strings"
-      (is (empty? (scenario/problems (assoc ok :steps [{:run ["release" "1"] :tty ["y" "n"]}]))))
-      (is (seq (scenario/problems (assoc ok :steps [{:tick 1 :tty ["a"]}]))))
-      (is (seq (scenario/problems (assoc ok :steps [{:run ["release" "1"] :tty "y"}]))))
-      (is (seq (scenario/problems (assoc ok :steps [{:run ["release" "1"] :tty [:y]}])))))))
+    (testing "the commands for holds and trust are not a scenario's"
+      (doseq [c ["holds" "approve" "deny" "release" "trust" "declassify"]]
+        (is (seq (scenario/problems (assoc ok :steps [{:run [c "1"]}]))) c)))))
 
 ;; --- whole scenarios
 

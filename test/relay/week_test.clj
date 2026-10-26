@@ -1,14 +1,12 @@
 (ns relay.week-test
   "relay week's report and relay flag: each kind of interruption arising
   and being decided, the health checks, the window, and properties over
-  logs made by core-test's model of relay, with held calls, flags and
-  conversation permissions added."
+  logs made by core-test's model of relay, with flags added."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
-            [relay.config :as config]
             [relay.core :as core]
             [relay.test-support :as support]
             [relay.core-test :as ct]
@@ -32,80 +30,7 @@
       (ct/run "operator" :role/add {:id "clerk" :instructions "c"})
       (ct/run "operator" :role/add {:id "courier" :instructions "c"} true)))
 
-(defn- held
-  "A wake of `role` the operator starts with a note, which ends with one
-  call held."
-  [w role]
-  (let [w (ct/run w "operator" :wake/start {:role role :note "go"})
-        wake (core/working-wake (:state w) role)]
-    (if-not wake
-      w
-      (ct/run w "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :session (str "h" (:id wake)) :said ""
-                                        :held [{:id (str "call" (:id wake)) :name "post" :input {}
-                                                :input-sha256 "abc"}]}))))
-
-(defn- open-hold [w n] (nth-or (sort-by :id (core/open-holds (:state w))) n))
-
 ;; --- each kind
-
-(deftest a-held-call-arises-and-is-decided
-  (let [w (-> (seeded) (held "clerk"))
-        h (open-hold w 0)]
-    (testing "pending until the operator decides"
-      (let [r (report w)]
-        (is (= {:arose 1 :decided 0 :pending 1} (select-keys (kind r "hold") [:arose :decided :pending])))
-        (is (= [{:kind "hold" :ref (:id h) :role "clerk" :arose-at (:opened-at h)}] (get-in r [:interruptions :pending])))))
-    (let [w (-> w (ct/advance 3600) (ct/run "operator" :hold/resolve {:hold (:id h) :verdict "allow"}))
-          k (kind (report w) "hold")]
-      (is (= {:arose 1 :decided 1 :pending 0 :decisions {"approved" 1} :median-seconds 3600 :max-seconds 3600}
-             (select-keys k [:arose :decided :pending :decisions :median-seconds :max-seconds]))))))
-
-(deftest a-decision-after-the-window-is-pending-in-it
-  (let [w (-> (seeded) (held "clerk"))
-        h (open-hold w 0)
-        w (-> w (ct/advance 7200) (ct/run "operator" :hold/resolve {:hold (:id h) :verdict "deny"}))
-        win {:from nil :until (.plusSeconds ct/t0 3600)}
-        k (kind (report w win) "hold")]
-    (is (= {:arose 1 :decided 0 :pending 1 :oldest-pending-seconds 3600}
-           (select-keys k [:arose :decided :pending :oldest-pending-seconds])))
-    (is (= {"denied" 1} (:decisions (kind (report w) "hold"))))))
-
-(deftest a-memo-to-a-public-role-waits-to-be-declassified
-  (let [w (-> (seeded) (ct/run "hub" :memo/send {:to "courier" :subject "s" :body "b"}))
-        _ (is (= 1 (:pending (kind (report w) "declassify"))))
-        id (:id (first (core/unread-memos (:state w) "courier")))
-        w (-> w (ct/advance 60) (ct/run "operator" :memo/declassify {:memo id :sha256 (core/declassify-digest (:state w) id)}))]
-    (is (= {"declassified" 1} (:decisions (kind (report w) "declassify"))))))
-
-(def qcfg (config/resolve-config {:timezone "UTC" :default-harness :agentloop
-                                  :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"]}}
-                                  :notify {:kind :none}
-                                  :tools {"post" {:class :egress :labels [] :description "Post." :command ["true"]}}
-                                  :grants {"clerk" {:tools ["post"]}}}))
-
-(defn- qrun [w actor type args & [labels]]
-  (let [[s events] (core/run-command (:state w) {:type type :actor actor :args args :labels labels}
-                                     {:now (:now w) :config qcfg})]
-    (-> w (assoc :state s) (update :events into events))))
-
-(deftest a-quarantined-memo-waits-for-release
-  (let [w (-> {:state core/empty-state :now ct/t0 :events []}
-              (qrun "operator" :role/add {:id "clerk" :instructions "c"})
-              (qrun "operator" :memo/send {:to "clerk" :subject "s" :body "b"} ["contaminated"]))
-        id (:id (first (vals (:memos (:state w)))))
-        _ (is (= 1 (:pending (kind (report w) "quarantine"))))
-        w (-> w (ct/advance 120) (qrun "operator" :memo/release {:memo id}))]
-    (is (= {:decided 1 :decisions {"released" 1} :median-seconds 120}
-           (select-keys (kind (report w) "quarantine") [:decided :decisions :median-seconds])))))
-
-(deftest a-changed-tool-waits-for-relay-fresh
-  (let [w (-> (seeded)
-              (#'ct/step [:wake "hub" false "ran" [] false false "t1" (apply str (repeat 64 "a")) (apply str (repeat 64 "a"))])
-              (ct/run "operator" :memo/send {:to "hub" :subject "s" :body "b"})
-              (#'ct/step [:wake "hub" true "tools-changed" [] false false "t1" (apply str (repeat 64 "a")) (apply str (repeat 64 "b"))]))]
-    (is (= 1 (:pending (kind (report w) "fresh"))) (pr-str (:interruptions (report w))))
-    (let [w (ct/run w "operator" :role/fresh {:role "hub" :expect (core/fresh-expectation (:state w) "hub")})]
-      (is (= {"accepted" 1} (:decisions (kind (report w) "fresh")))))))
 
 (deftest a-harness-that-needs-the-operator-waits-until-it-runs-again
   (let [w (-> (seeded) (ct/run "operator" :memo/send {:to "hub" :subject "s" :body "b"})
@@ -123,14 +48,6 @@
         _ (is (= 1 (:pending (kind (report w) "dead-letter"))))
         w (ct/run w "operator" :memo/retry {:role "hub"})]
     (is (= {"retried" 1} (:decisions (kind (report w) "dead-letter"))))))
-
-(deftest a-conversation-asks-its-client
-  (let [w (-> (seeded) (ct/run "operator" :wake/start {:role "hub" :chat true}))
-        wake (:id (support/calling-wake (:state w) "hub"))
-        w (ct/run w "dispatcher" :permission/asked {:wake wake :session "s" :call "c1" :tool "post" :input-sha256 "x"})
-        _ (is (= 1 (:pending (kind (report w) "permission"))))
-        w (ct/run w "dispatcher" :permission/answered {:wake wake :session "s" :call "c1" :outcome "allow_once" :by "client"})]
-    (is (= {"allow_once" 1} (:decisions (kind (report w) "permission"))))))
 
 ;; --- notifications and wakes
 
@@ -233,45 +150,30 @@
            (week/window zone now nil (LocalDate/parse "2026-10-12"))) "to the end of the day")))
 
 (deftest the-text-report-has-every-section
-  (let [lines (render/week-report (report (-> (seeded) (held "clerk"))) zone)]
-    (doseq [h ["Interruptions: each time relay asked you for something" "Notifications: 1" "Wakes by role"
+  (let [lines (render/week-report (report (-> (seeded) (ct/run "operator" :memo/send {:to "hub" :subject "s" :body "b"})
+                                               (#'ct/step [:wake "hub" true "needs-attention" [] false false "t1" "a" "a"])))
+                                  zone)]
+    (doseq [h ["Interruptions: each time relay needed you" "Notifications: 1" "Wakes by role"
                "Health checks: wakes that look wrong" "Flags"]]
       (is (some #{h} lines) h))
-    (is (some #(str/starts-with? % "    hold ") lines) "what still waits")))
+    (is (some #(str/starts-with? % "    harness ") lines) "what still waits")
+    (is (not-any? #(re-find #"(?i)\bhold|approv|quarantin|declassif|relay fresh" %) lines))))
 
 ;; --- properties over generated logs
 
 (def gen-extra
   (gen/frequency
-   [[3 (gen/tuple (gen/return :held) (gen/elements ["hub" "clerk"]))]
-    [3 (gen/tuple (gen/return :resolve) gen/nat (gen/elements ["allow" "deny"]) gen/boolean)]
-    [2 (gen/tuple (gen/return :flag) gen/nat (gen/elements ["good" "bad" "meh"]))]
-    [1 (gen/tuple (gen/return :permission) (gen/elements ["hub" "clerk"]) gen/boolean)]]))
+   [[2 (gen/tuple (gen/return :flag) gen/nat (gen/elements ["good" "bad" "meh"]))]]))
 
 (defn- extra-step [w [k & args]]
   (case k
-    :held (held w (first args))
-    :resolve (let [[n verdict end] args]
-               (if-let [h (open-hold w n)]
-                 (ct/run w "operator" :hold/resolve {:hold (:id h) :verdict verdict :end end})
-                 w))
     :flag (let [[n value] args
                 ids (sort (keys (:wakes (:state w))))]
-            (ct/run w "operator" :wake/flag {:wake (or (nth-or ids n) n) :value value :note "n"}))
-    :permission (let [[r answer?] args
-                      w (ct/run w "operator" :wake/start {:role r :chat true})
-                      chat (core/open-conversation (:state w) r)]
-                  (if-not chat
-                    w
-                    (cond-> (ct/run w "dispatcher" :permission/asked {:wake (:id chat) :session "s" :call "c"
-                                                                      :tool "post" :input-sha256 "x"})
-                      answer? (ct/run "dispatcher" :permission/answered {:wake (:id chat) :session "s" :call "c"
-                                                                         :outcome "reject_once" :by "client"})
-                      true (ct/run "dispatcher" :wake/end {:wake (:id chat) :outcome "ran"}))))))
+            (ct/run w "operator" :wake/flag {:wake (or (nth-or ids n) n) :value value :note "n"}))))
 
 (def gen-log
   (gen/fmap (fn [steps]
-              (reduce (fn [w s] (if (#{:held :resolve :flag :permission} (first s))
+              (reduce (fn [w s] (if (#{:flag} (first s))
                                   (extra-step w s)
                                   (#'ct/step (dissoc w :problem) s)))
                       (seeded) steps))
@@ -287,7 +189,6 @@
       (and (every? #(= (:arose %) (+ (:decided %) (:pending %))) ks)
            (every? #(= (:decided %) (reduce + (vals (:decisions %)))) ks)
            (every? #(= (:pending %) (get pending (:kind %) 0)) ks)
-           (= (:arose (kind r "hold")) (count (filter #(= "hold/opened" (:type %)) (:events w))))
            (= (get-in r [:notifications :total]) (count (filter #(= "notification/created" (:type %)) (:events w))))
            (every? #(or (nil? (:median-seconds %)) (<= 0 (:median-seconds %) (:max-seconds %))) ks)))))
 

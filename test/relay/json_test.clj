@@ -180,10 +180,6 @@
       (is (= (cheshire/generate-string v) (json/generate v))))))
 
 (deftest a-rewritten-line-keeps-a-number-past-the-bound-by-value
-  (let [request "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"session/request_permission\",\"params\":{\"sessionId\":\"s\",\"toolCall\":{\"toolCallId\":\"c\",\"rawInput\":{\"n\":0.1e-9999}},\"options\":[{\"optionId\":\"allow\",\"name\":\"Allow\",\"kind\":\"allow_once\"}]}}"
-        out (acp/with-preview request "md" [])]
-    (is (= 1E-10000M (get-in (json/parse out) ["params" "toolCall" "rawInput" "n"])))
-    (is (= 7 (:id (acp/permission-request out)))))
   (is (= 1E-10000M (get-in (json/parse (workspace/result-line 0.1E-9999M {})) ["id"])))
   (is (= {:n 1E-10000M} (:input (tools/parse-envelope "{\"input\":{\"n\":0.1e-9999},\"labels\":[],\"call_id\":\"c\"}")))))
 

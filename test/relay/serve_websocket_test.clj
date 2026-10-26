@@ -80,24 +80,18 @@
 (deftest ^:volley/serial a-phone-and-a-terminal-share-one-conversation
   (with-websocket-service
     (fn [_ port]
-      (let [a (connect! :role "clerk" :approvals true)
+      (let [a (connect! :role "clerk")
             b (ws-connect! port)]
         (try
           (new-session! a "clerk")
           (client/request! b "initialize" {:protocolVersion 1} 5000)
           (is (= {"sessionId" "s1" "_meta" {"relay/attached" true}}
                  (get (client/request! b "session/new" {:cwd *dir* :mcpServers [] :_meta {"relay/role" "clerk"}} 5000) "result")))
-          (let [id (client/request-async! a "session/prompt" (prompt "PERM please"))
-                req-a (client/await! a #(= "session/request_permission" (get % "method")) 5000)
-                req-b (client/await! b #(= "session/request_permission" (get % "method")) 5000)]
-            (is (and req-a req-b) "the phone can approve, and is asked as the terminal is")
-            (is (some #{"PERM please"} (texts b)) "the phone sees the terminal's prompt")
-            (#'client/send! b {:jsonrpc "2.0" :id (get req-b "id") :result {:outcome {:outcome "selected" :optionId "a"}}})
+          (let [id (client/request-async! a "session/prompt" (prompt "Hello from the terminal"))]
             (is (= "end_turn" (get-in (client/response a id 5000) ["result" "stopReason"])))
-            (is (= {"sessionId" "s1" "toolCallId" "c1" "outcome" "allow_once"}
-                   (get (client/await! a #(= "_relay/permission/settled" (get % "method")) 5000) "params"))
-                "the terminal is told the phone answered")
-            (is (client/await! b #(= "PERMITTED a" (get-in % ["params" "update" "content" "text"])) 5000)))
+            (is (some #{"Hello from the terminal"} (texts b)) "the phone sees the terminal's prompt")
+            (is (client/await! b #(= "REPLY" (get-in % ["params" "update" "content" "text"])) 5000)
+                "and the reply"))
           (testing "and the other way: the phone prompts, the terminal sees it"
             (is (= "end_turn" (get-in (client/request! b "session/prompt" (prompt "From the phone") 10000) ["result" "stopReason"])))
             (is (client/await! a #(= "From the phone" (get-in % ["params" "update" "content" "text"])) 5000)))
@@ -223,10 +217,10 @@
           nil (ws-settings port {:token-command command}))))))
 
 (deftest the-websocket-and-the-socket-share-the-connection-cap
-  (let [eng (#'serve/engine nil :service false {:max-conns 2})
+  (let [eng (#'serve/engine nil :service {:max-conns 2})
         stream #(#'serve/add-connection! eng {:in (java.io.PipedInputStream. (java.io.PipedOutputStream.))
                                               :out (java.io.ByteArrayOutputStream.) :origin :socket})
-        other #(#'serve/open-connection! eng {:write! (constantly true) :origin :websocket :approvals true})]
+        other #(#'serve/open-connection! eng {:write! (constantly true) :origin :websocket})]
     (is (some? (stream)))
     (is (some? (other)))
     (is (nil? (stream)) "the socket's third is refused")
@@ -235,7 +229,7 @@
 (deftest a-connection-whose-client-stops-reading-is-closed-past-the-backlog
   ;; The WebSocket's writer blocks on a client that does not read, as the
   ;; socket's does, so what waits for it is bounded the same way.
-  (let [eng (#'serve/engine nil :service false)
+  (let [eng (#'serve/engine nil :service)
         closed (promise)
         stuck (promise)]
     (with-redefs [serve/write-backlog 1000]
@@ -251,7 +245,7 @@
   "The WebSocket listener of an engine with no system, on a port the OS
   picks: [engine port server]."
   []
-  (let [eng (#'serve/engine nil :service false)
+  (let [eng (#'serve/engine nil :service)
         server (#'serve/websocket-listener! eng {:port 0 :token ws-token :allowed-origins [] :default-role "hub"})]
     [eng (.getLocalPort ^java.net.ServerSocket server) server]))
 

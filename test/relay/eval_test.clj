@@ -3,7 +3,6 @@
   the stand-in tools. Every eval case's oracle and foils against the mock
   model are in relay.eval-oracles."
   (:require [babashka.fs :as fs]
-            [cheshire.core :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [clojure.test.check :as tc]
@@ -184,26 +183,26 @@
                               :usage {:input_tokens 1000 :output_tokens 200 :cache_read_tokens 5000 :cache_write_tokens 100}
                               :model "claude-haiku-5-5"}}
    {:type "decision" :decision {:call_id "a" :tool "memo_close" :verdict "allow"}}
-   {:type "decision" :decision {:call_id "b" :tool "remind-demo" :verdict "hold" :reason "contaminated"}}
+   {:type "decision" :decision {:call_id "b" :tool "remind-demo" :verdict "deny" :reason "refused"}}
    {:type "tool_result" :tool_result {:result {:call_id "a" :content "Closed memo 3."}}}
    {:type "message" :message {:message {:role "assistant"
                                         :parts [{:type "tool_call" :tool_call {:id "c" :name "journal_write" :input {:text "x"}}}]}
                               :usage {:input_tokens 10 :output_tokens 20} :model "claude-haiku-5-5"}}
    {:type "decision" :decision {:call_id "c" :tool "journal_write" :verdict "allow"}}
    {:type "tool_result" :tool_result {:result {:call_id "c" :content "Written."}}}
-   {:type "run_ended" :run_ended {:reason "held"}}])
+   {:type "run_ended" :run_ended {:reason "completed"}}])
 
 (deftest a-transcript-gives-calls-usage-and-cost
   (let [calls (transcript/tool-calls entries)
         u (transcript/run-usage entries)]
     (is (= ["memo_close" "remind-demo" "journal_write"] (map :name calls)))
-    (is (= "hold" (:verdict (second calls))))
-    (is (nil? (:result (second calls))) "a held call has no result")
+    (is (= "deny" (:verdict (second calls))))
+    (is (nil? (:result (second calls))) "a refused call has no result")
     (is (= 2 (:requests u)))
     (is (= {:input 1010 :output 220 :cache-read 5000 :cache-write 100} (:usage u)))
     ;; 1010 x 0.1 + 220 x 0.5 + 5000 x 0.01 + 100 x 0.125, per million
     (is (< (Math/abs (- (:cost-usd u) 2.735e-4)) 1e-12))
-    (is (= "held" (transcript/end-reason entries)))
+    (is (= "completed" (transcript/end-reason entries)))
     (is (true? (scenario/journal-at-end? calls)))
     (is (nil? (transcript/cost "some-unpriced-model" (:usage u))) "an unknown price is unknown, not zero")
     (is (= (transcript/cost "claude-haiku-5-5" (:usage u)) (transcript/cost "claude-haiku-5-5-20261001" (:usage u)))
@@ -215,7 +214,7 @@
     (is (scenario/journal-at-end? [(c "journal_write")]))
     (is (not (scenario/journal-at-end? [(c "journal_write") (c "memo_block")])))
     (is (not (scenario/journal-at-end? [(c "memo_close") (c "journal_write" :error true)])))
-    (is (not (scenario/journal-at-end? [(c "memo_close") (c "journal_write" :verdict "hold")])))
+    (is (not (scenario/journal-at-end? [(c "memo_close") (c "journal_write" :verdict "deny")])))
     (is (not (scenario/journal-at-end? [])))))
 
 ;; --- metrics
@@ -261,9 +260,9 @@
     (is (some #(str/includes? % "judge") (problems (update ok :graders conj {:id :j :judge {:rubric :x}}))))
     (is (some #(str/includes? % "not graders") (problems (assoc-in ok [:foils "no-end-date" :fails] #{:nope}))))
     (is (some #(str/includes? % "skip-defaults") (problems (assoc ok :skip-defaults #{:nope}))))
-    (is (empty? (problems (assoc ok :skip-defaults #{:no-held-calls}))))
+    (is (empty? (problems (assoc ok :skip-defaults #{:journal-each-wake}))))
     (is (= (dec (count (eval/graders ok defaults)))
-           (count (eval/graders (assoc ok :skip-defaults #{:no-held-calls}) defaults))))))
+           (count (eval/graders (assoc ok :skip-defaults #{:journal-each-wake}) defaults))))))
 
 (deftest settings-may-only-grant-stand-in-tools
   (is (empty? (scenario/settings-problems {:grants {"clerk" {:tools ["remind-demo" "fail-demo"]}}})))
@@ -274,7 +273,7 @@
                                                         {:grants {"clerk" {:tools ["fail-demo"]}}})
                                [:grants "clerk" :tools])))
   (is (true? (get-in (scenario/merge-settings (staging/settings {:data-dir "/s"})
-                                              {:grants {"hub" {:tools ["mail-demo"]}}})
+                                              {:grants {"hub" {:tools ["campaign-draft-demo"]}}})
                      [:grants "hub" :may-add]))
       "a grant's other keys stay"))
 
@@ -282,27 +281,15 @@
   (is (seq (scenario/settings-problems {:grants {"scout" {:reports {:kinds ["grant"]}}}})))
   (is (empty? (scenario/settings-problems {:grants {"scout" {:tools ["web-demo"]}}}))))
 
-(deftest settings-may-grant-the-reader-over-stand-in-tools
-  (is (empty? (scenario/settings-problems {:grants {"hub" {:tools ["web-demo"] :quarantine ["web-demo"]}}})))
-  (is (seq (scenario/settings-problems {:grants {"hub" {:tools ["web-demo"] :quarantine ["rem"]}}}))
-      "only staging's own tools")
-  (is (seq (scenario/settings-problems {:grants {"hub" {:quarantine "web-demo"}}})))
-  (is (seq (scenario/settings-problems {:grants {"hub" {:quarantine ["web-demo"] :public true}}}))
-      "an unknown key beside it is still refused")
-  (let [merged (scenario/merge-settings (staging/settings {:data-dir "/s"})
-                                        {:grants {"hub" {:tools ["web-demo"] :quarantine ["web-demo"]}}})]
-    (is (= {:may-add true :tools ["web-demo"] :quarantine ["web-demo"]} (get-in merged [:grants "hub"])))
-    (is (config/resolve-config merged) "relay accepts what it makes"))
-  (testing "a tool the role lacks in :tools is reader-only, and relay accepts it"
-    (is (config/resolve-config (scenario/merge-settings (staging/settings {:data-dir "/s"})
-                                                        {:grants {"hub" {:quarantine ["web-demo"]}}}))))
-  (testing "relay itself refuses the reader over a tool that changes things"
-    (doseq [grant [{:quarantine ["fail-demo"]} {:tools ["fail-demo"] :quarantine ["fail-demo"]}
-                   {:quarantine ["campaign-send-demo"]}]]
-      (is (thrown? clojure.lang.ExceptionInfo
-                   (config/resolve-config (scenario/merge-settings (staging/settings {:data-dir "/s"})
-                                                                   {:grants {"hub" grant}})))
-          (pr-str grant)))))
+(deftest settings-no-longer-grant-the-reader
+  (is (seq (scenario/settings-problems {:grants {"hub" {:tools ["web-demo"] :quarantine ["web-demo"]}}}))))
+
+(deftest a-stand-in-egress-tool-goes-only-to-the-scout
+  (is (config/resolve-config (scenario/merge-settings (staging/settings {:data-dir "/s"})
+                                                      {:grants {"scout" {:tools ["web-ask-demo"]}}})))
+  (is (thrown? clojure.lang.ExceptionInfo
+               (config/resolve-config (scenario/merge-settings (staging/settings {:data-dir "/s"})
+                                                               {:grants {"hub" {:tools ["web-ask-demo"]}}})))))
 
 (deftest a-foil-must-fail-exactly-what-it-says
   (let [scores {:a {:value :pass} :b {:value :fail :explanation "b broke"} :c {:value :fail :explanation "c broke"}}]
@@ -373,14 +360,12 @@
       (is (str/includes? out "\n=== page 2 0123456789abcdef ===\nresult_title: b.html\nresult_url: https://pages.example.org/b.html\n"))
       (is (str/starts-with? out "2 pages for \"q\"")))
     (is (= "No results for \"q\"." (staging-tools/render-ask "q" [] "t"))))
-  (testing "mail-demo appends inside the data directory"
-    (is (= "/d/outbox.log" (:append (second (staging-tools/answer "mail-demo" "/d" {:to "a@example.com" :subject "s" :body "b"})))))))
+  (testing "nothing in staging sends mail"
+    (is (:is_error (first (staging-tools/answer "mail-demo" "/d" {:to "a@example.com" :subject "s" :body "b"}))))))
 
-(deftest the-campaign-stand-ins-keep-versions-and-send-only-what-is-stored
+(deftest the-campaign-stand-in-keeps-versions-and-never-sends
   (let [[c1 env] (staging-tools/save-draft nil {:subject "S1" :body "B1" :group "Mailing list"})
-        [c2 env2] (staging-tools/save-draft c1 {:draft "c1" :subject "S2" :body "B2" :group "Mailing list"})
-        groups {"Mailing list" 287}
-        send {:draft "c1" :version 1 :group "Mailing list" :send_at "2026-11-13 09:00"}]
+        [c2 env2] (staging-tools/save-draft c1 {:draft "c1" :subject "S2" :body "B2" :group "Mailing list"})]
     (is (str/includes? (:content env) "draft c1, version 1"))
     (is (str/includes? (:content env2) "draft c1, version 2"))
     (testing "a revision keeps the earlier version"
@@ -390,40 +375,15 @@
         (let [[saved e] (staging-tools/save-draft c2 bad)]
           (is (nil? saved) (pr-str bad))
           (is (:is_error e) (pr-str bad)))))
-    (testing "the preview shows the stored version, its group's size and the time"
-      (let [{:keys [content is_error]} (staging-tools/preview-send c2 groups send)]
-        (is (not is_error))
-        (is (every? #(str/includes? content %) ["S1" "B1" "287 people" "2026-11-13 09:00"]))
-        (is (not (str/includes? content "B2")))))
-    (testing "a send goes out as stored, or not at all"
-      (is (= {:draft "c1" :version 2 :group "Mailing list" :members 287 :send_at "2026-11-13 09:00"
-              :subject "S2" :body "B2"}
-             (json/parse-string (second (staging-tools/send-draft c2 groups (assoc send :version 2))) true)))
-      (doseq [bad [(assoc send :group "Board") (assoc send :version 3) (assoc send :version "1")
-                   (assoc send :draft "c2") (assoc send :send_at "now") (dissoc send :send_at)]]
-        (is (nil? (second (staging-tools/send-draft c2 groups bad))) (pr-str bad))
-        (is (:is_error (staging-tools/preview-send c2 groups bad)) (pr-str bad))))
-    (testing "whatever a send carries, what goes out is a stored version"
-      (let [r (tc/quick-check
-               200
-               (prop/for-all [draft (gen/elements ["c1" "c2" nil])
-                              version (gen/one-of [(gen/choose 0 3) gen/string-alphanumeric])
-                              group (gen/elements ["Mailing list" "Board" "mailing list"])
-                              body gen/string-alphanumeric]
-                 (let [line (second (staging-tools/send-draft c2 groups {:draft draft :version version :group group
-                                                                         :send_at "2026-11-13 09:00" :body body}))]
-                   (or (nil? line)
-                       (contains? #{"B1" "B2"} (:body (json/parse-string line true)))))))]
-        (is (:pass? r) (pr-str (:shrunk r)))))
-    (is (= {:campaign "campaign-send-demo" :input send} (second (staging-tools/answer "campaign-send-demo" "/d" send))))))
+    (testing "there is no send and no preview of one"
+      (doseq [t ["campaign-send-demo" "campaign-preview-demo"]]
+        (is (:is_error (first (staging-tools/answer t "/d" {:draft "c1"}))) t)))))
 
 (deftest the-stand-in-tools-are-defined-but-granted-to-nobody
   (let [s (staging/settings {:data-dir "/s" :repo-root "/r" :bb-bin "/bin/bb"})]
-    (is (= :egress (get-in s [:tools "mail-demo" :class])))
     (is (= :edit (get-in s [:tools "campaign-draft-demo" :class])))
-    (is (= :act (get-in s [:tools "campaign-send-demo" :class])))
-    (is (= ["/bin/bb" "--classpath" "/r/src" "-m" "relay.staging-tools" "campaign-preview-demo" "/s"]
-           (get-in s [:tools "campaign-send-demo" :preview])))
+    (is (not-any? #(get-in s [:tools %]) ["mail-demo" "campaign-send-demo"]) "nothing in staging can send")
+    (is (= #{:read :edit :egress} (set (map :class (vals (:tools s))))))
     (is (= ["contaminated"] (get-in s [:tools "web-demo" :labels])))
     (is (= ["/bin/bb" "--classpath" "/r/src" "-m" "relay.staging-tools" "fail-demo" "/s"]
            (get-in s [:tools "fail-demo" :command])))

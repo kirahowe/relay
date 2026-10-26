@@ -19,8 +19,8 @@
                                  :notify {:kind :none}
                                  :max-attempts 3
                                  :runaway-wakes 6
-                                 ;; courier is public: memos to it from anyone
-                                 ;; but itself wait for the operator.
+                                 ;; courier is public: memos to it from the
+                                 ;; house are refused.
                                  ;; Two MCP tools, granted to nobody: relay
                                  ;; keeps their accepted definitions all the same.
                                  :mcp-servers {"srv" {:command ["srv"]}}
@@ -447,9 +447,8 @@
           (let [w (turn-end w chat)]
             (is (not (core/busy? (:state w) "clerk")))
             (is (nil? (:rejected (run w "dispatcher" :wake/start {:role "clerk" :dispatched true}))))))))
-    (testing "an open conversation still keeps the role from being removed or started afresh"
-      (is (= :busy (:rejected (run w "operator" :role/remove {:id "clerk"}))))
-      (is (= :busy (:rejected (run w "operator" :role/fresh {:role "clerk" :expect {}})))))))
+    (testing "an open conversation still keeps the role from being removed"
+      (is (= :busy (:rejected (run w "operator" :role/remove {:id "clerk"})))))))
 
 (deftest a-conversation-may-open-while-a-wake-works-but-only-one-at-a-time
   (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "a" :body "b"})
@@ -529,24 +528,6 @@
       (testing "seeing an earlier turn again records nothing"
         (is (= [] (:last (seen w 1))))
         (is (= [] (:last (seen w 2))))))))
-
-(deftest an-unattended-permission-request-tells-the-operator
-  (let [w (run (seed) "operator" :wake/start {:role "clerk" :chat true})
-        chat (:id (core/open-conversation (:state w) "clerk"))
-        w (run w "dispatcher" :permission/asked {:wake chat :session "s" :call "c1" :tool "post" :input-sha256 "x"})
-        ask #(run %1 "dispatcher" :permission/unattended {:wake chat :call %2})
-        w' (ask w "c1")
-        [n] (:last w')]
-    (is (= "notification/created" (:type n)))
-    (is (= {:kind "permission-waiting" :role "clerk" :wake chat} (select-keys (:data n) [:kind :role :wake])))
-    (is (not (str/includes? (get-in n [:data :body]) "post")) "the request's own text is the agent's")
-    (testing "only for a request still open, in a running conversation, and only from the dispatcher"
-      (is (= [] (:last (ask w "c2"))))
-      (is (= [] (:last (ask (run w "dispatcher" :permission/answered {:wake chat :session "s" :call "c1"
-                                                                      :outcome "allow_once" :by "client"})
-                            "c1"))))
-      (is (= [] (:last (ask (run w "dispatcher" :wake/end {:wake chat :outcome "ran"}) "c1"))))
-      (is (= :forbidden (:rejected (run w "operator" :permission/unattended {:wake chat :call "c1"})))))))
 
 (deftest one-wake-at-a-time
   (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "a" :body "b"})
@@ -652,8 +633,6 @@
                   ;; The MCP tool a run pinned or saw change, and digests.
                   (gen/elements ["t1" "t2"]) (gen/elements mcp-digests) (gen/elements mcp-digests))]
     [1 (gen/tuple (gen/return :start-only) (gen/elements role-pool))]
-    [2 (gen/tuple (gen/return :fresh) (gen/elements (into ["operator" "operator"] actors)) (gen/elements role-pool)
-                  (gen/frequency [[5 (gen/return false)] [1 (gen/return true)]]))]
     [1 (gen/tuple (gen/return :chat) (gen/elements role-pool)
                   (gen/elements ["ran" "limited" "unreachable" "needs-attention"])
                   (gen/one-of [(gen/return nil) (gen/vector (gen/elements ["s1" "s2" "s3"]) 0 3)]))]
@@ -678,7 +657,6 @@
     [3 (gen/tuple (gen/return :note) (gen/elements actors) (gen/elements role-pool)
                   (gen/elements ["a" "b"]) (gen/elements ["x" "y" nil]))]
     [1 (gen/tuple (gen/return :journal) (gen/elements actors) (gen/elements role-pool))]
-    [3 (gen/tuple (gen/return :declassify) (gen/elements ["operator" "operator" "hub" "courier" "dispatcher"]) gen/nat)]
     [2 (gen/tuple (gen/return :send-public) (gen/elements (conj role-pool "operator")))]
     [2 (gen/tuple (gen/return :doc) (gen/elements actors) (gen/elements ["a.md" "dir/b.md"])
                   (gen/elements ["one" "two" nil]))]]))
@@ -695,14 +673,6 @@
       :send (let [[from to] args]
               (run w from :memo/send {:to to :subject (str "s" (count ids)) :body "b"}))
       :send-public (run w "operator" :memo/send {:to (first args) :subject (str "s" (count ids)) :body "b"} true)
-      :declassify (let [[actor n] args
-                        waiting (filter #(core/awaiting-declassification? cfg %) (core/unread-memos (:state w) "courier"))
-                        id (if (seq waiting) (:id (nth-or (vec waiting) n)) (nth-or ids n))
-                        w' (run w actor :memo/declassify {:memo id})]
-                    ;; A declassified memo is deliverable from then on.
-                    (if (and (seq (:last w')) (not (some #(= id (:id %)) (core/deliverable-memos (:state w') cfg "courier"))))
-                      (assoc w' :problem [:declassified-not-deliverable id])
-                      w'))
       :close (let [[actor n] args] (run w actor :memo/close {:memo (nth-or ids n) :outcome "done"}))
       :block (let [[actor n] args] (run w actor :memo/block {:memo (nth-or ids n) :explanation "can't"}))
       :retry (let [[actor r] args] (run w actor :memo/retry {:role r}))
@@ -816,16 +786,11 @@
                           "tools-down" {:outcome "needs-attention" :crashed false :cut-short false
                                         :session (str "s" (:id wake-row))
                                         :tools-error {:server "srv" :message "did not start"}}
-                          {}))))))
-      ;; relay fresh with what the operator was shown, or something stale.
-      :fresh (let [[actor r stale?] args
-                   expect (cond-> (core/fresh-expectation (:state w) r) stale? (assoc :got "stale"))]
-               (run w actor :role/fresh {:role r :expect expect})))))
+                          {})))))))))
 
 (def legal-transitions
   #{[:unread :read] [:unread :dead] [:dead :unread]})
 
-(defn- cfg-mcp-tool? [tool] (config/mcp-tool? (get-in cfg [:tools tool])))
 
 (defn- new-event?
   "Whether an event of a world's last batch was written after `before`: a
@@ -879,7 +844,8 @@
                               (rest (drop-while #(not (identical? ended %)) batch)))
           w (when ended (get-in s [:wakes (get-in ended [:data :wake])]))]
       (when (and w (not started-after) (not (:chat w)))
-        (let [kept? (boolean (or (not= "ran" (:outcome w)) (:cut-short w)))
+        (let [kept? (boolean (and (or (not= "ran" (:outcome w)) (:cut-short w))
+                                  (not (core/definition-changed? (get-in ended [:data :tools-error])))))
               held (:interrupted-wake (core/role s (:role w)))]
           (when-not (= kept? (= (:id w) held)) (fail! [:interrupted-wake (:id w) kept? held])))))
     ;; A wake cut short at its deadline leaves a journal entry written
@@ -939,50 +905,37 @@
     (doseq [w wakes :when (and (:chat w) (core/in-turn? w))]
       (when-not (core/busy? s (:role w)) (fail! [:turn-not-holding (:id w)])))
     (when-let [p (:problem after)] (fail! p))
-    ;; A tool whose definition changed under a session is never taken
-    ;; without the operator: while the role waits for relay fresh, no wake
-    ;; of it starts a fresh session, and only the operator ends one.
-    (doseq [e batch :when (= "wake/started" (:type e))
-            :let [r (get-in e [:data :role])]
-            :when (get-in (:state before) [:roles r :tools-unavailable :fresh])]
-      (fail! [:wake-while-tools-changed r (:seq e)]))
-    ;; Only relay fresh lifts such a block, by the operator: in the batch
-    ;; that lifts it the operator accepts that very change of that tool.
-    (doseq [[r {:keys [fresh tool got]}] (keep #(when-let [b (get-in % [1 :tools-unavailable])] [(key %) b])
-                                               (:roles (:state before)))
-            :when (and fresh (not (get-in s [:roles r :tools-unavailable :fresh])))]
-      (when-not (and (some #(and (= "hold/session-ended" (:type %)) (= "operator" (:actor %))
-                                 (get-in % [:data :fresh]))
-                           batch)
-                     (or (not (cfg-mcp-tool? tool))
-                         (some #(and (= "tool/pinned" (:type %)) (= "operator" (:actor %))
-                                     (= {:tool tool :digest got} (:data %)))
-                               batch)))
-        (fail! [:tools-block-lifted-without-fresh r])))
-    ;; An accepted definition changes only by relay fresh, and never to
-    ;; one a role was stopped for unless the operator accepts it.
+    ;; A tool whose definition changed under a session is taken for the
+    ;; next one, and the operator is told once: the pin moves only to the
+    ;; definition agentloop saw, and never while relay.edn's :digest pins
+    ;; the tool.
     (doseq [e batch :when (= "tool/pinned" (:type e))
             :let [{:keys [tool digest]} (:data e)
                   was (core/tool-pin (:state before) tool)]
             :when (and was (not= was digest))]
-      (when-not (= "operator" (:actor e)) (fail! [:accepted-digest-moved tool])))
-    (doseq [e batch :when (and (= "hold/session-ended" (:type e))
-                               (= "the operator started it afresh" (get-in e [:data :why])))]
-      (when-not (= "operator" (:actor e)) (fail! [:fresh-by (:actor e)])))
-    ;; OnlyTheOperatorDeclassifies, and only a memo that was waiting.
-    (doseq [e batch :when (and (= "memo/declassified" (:type e)) (not= (:state before) s))]
-      (when-not (and (= "operator" (:actor e))
-                     (core/awaiting-declassification? cfg (core/memo (:state before) (get-in e [:data :memo]))))
-        (fail! [:declassified-by (:actor e)])))
-    (doseq [m memos :when (:declassified m)]
-      (when-not (some #(and (= "memo/declassified" (:type %)) (= (:id m) (get-in % [:data :memo]))
-                            (= "operator" (:actor %)))
-                      (:events after))
-        (fail! [:declassified-without-the-operator (:id m)])))
-    ;; A memo waiting to be declassified is never carried in a wake.
-    (doseq [e batch :when (= "wake/started" (:type e)) m (get-in e [:data :memos])]
-      (when (core/awaiting-declassification? cfg (core/memo s m)) (fail! [:pending-memo-carried m])))
-    ;; NoSessionOfAPublicRoleHoldsPrivate: a public role's wake starts
+      (when-not (or (= "operator" (:actor e))
+                    (some #(and (= "wake/ended" (:type %)) (= digest (get-in % [:data :tools-error :got]))
+                                (= tool (get-in % [:data :tools-error :tool])))
+                          batch))
+        (fail! [:accepted-digest-moved tool]))
+      ;; A second change before the role has run since is not told again:
+      ;; the role waits instead (one notification per streak).
+      (let [role (get-in e [:data :role])
+            again (and role (= tool (get-in (:state before) [:roles role :tool-changed])))]
+        (if again
+          (when-not (some #(and (= "role/tools-unavailable" (:type %)) (= role (get-in % [:data :role]))) batch)
+            (fail! [:tool-changed-again-without-backoff tool]))
+          (when-not (or (= "operator" (:actor e))
+                        (some #(and (= "notification/created" (:type %)) (= "tool-changed" (get-in % [:data :kind]))) batch))
+            (fail! [:tool-changed-untold tool])))))
+    ;; A memo from the house never reaches a public role.
+    (doseq [e batch :when (and (= "memo/sent" (:type e)) (= "courier" (get-in e [:data :to]))
+                               (#{"hub" "clerk" "scribe"} (get-in e [:data :from])))]
+      (when-not (:public e) (fail! [:house-memo-to-public (:seq e)])))
+    ;; A public role is never carried a memo it may not see.
+    (doseq [e batch :when (and (= "wake/started" (:type e)) (= "courier" (get-in e [:data :role]))) m (get-in e [:data :memos])]
+      (when-not (core/shown-to-public? (core/memo s m) (core/memo-labels s (core/memo s m))) (fail! [:private-memo-carried m])))
+    ;; NoSessionOfAPublicRoleHoldsPrivate    ;; NoSessionOfAPublicRoleHoldsPrivate: a public role's wake starts
     ;; with nothing private.
     (doseq [e batch :when (and (= "wake/started" (:type e)) (core/public-role? cfg (get-in e [:data :role])))]
       (when (core/private? (core/wake-labels s cfg (get-in s [:wakes (:seq e)]))) (fail! [:public-wake-private (:seq e)])))

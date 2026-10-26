@@ -10,7 +10,6 @@
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
             [relay.cli :as cli]
-            [relay.core :as core]
             [relay.test-support :as support]
             [relay.inbound :as inbound]
             [relay.log :as log]
@@ -78,10 +77,11 @@
                                        "‮" "​" ":" "//" "。" "．" "｡"])
                         1 15)))
 
-(defspec contaminated-text-for-the-operator-has-no-followable-url 500
+(defspec text-from-outside-for-the-operator-has-no-followable-url 500
   (prop/for-all [s gen-urlish]
     (let [out (text/visible (text/for-operator ["contaminated"] s))]
-      (and (str/starts-with? out "[contaminated] ")
+      (and (str/starts-with? out "[from outside] ")
+           (not (str/includes? out "contaminated"))
            (not (re-find #"(?i)\b(https?|ftp)://" out))
            ;; Only the defanged schemes keep their ://.
            (every? #{"hxxp" "hxxps" "fxp"}
@@ -93,12 +93,12 @@
 (deftest clean-text-is-only-made-visible
   (is (= "see https://example.com é \\u{202e}" (text/visible (text/for-operator ["private"] "see https://example.com é ‮")))))
 
-(deftest the-operator-s-inbox-marks-contaminated-memos
+(deftest the-operator-s-inbox-marks-memos-from-outside
   (let [lines (render/inbox java.time.ZoneOffset/UTC
                             [{:id 3 :from "clerk" :subject "Click https://evil.example/x" :body "www.evil.example"
                               :sent-at (java.time.Instant/now) :labels ["contaminated" "private"]}])
         out (str/join "\n" lines)]
-    (is (str/includes? out "[3] [contaminated] Click hxxps://evil[.]example/x"))
+    (is (str/includes? out "[3] [from outside] Click hxxps://evil[.]example/x"))
     (is (str/includes? out "www[.]evil[.]example"))))
 
 
@@ -174,7 +174,7 @@
 
 (deftest variation-selectors-cannot-hide-text
   ;; Regression: bytes of a secret as variation selectors passed visible
-  ;; untouched, so relay declassify showed nothing of them.
+  ;; untouched, so the operator was shown nothing of them.
   (let [hide (fn [b] (String. (Character/toChars (if (< b 16) (+ 0xFE00 b) (+ 0xE0100 (- b 16))))))
         s (str "arts grants" (apply str (map #(hide (int %)) "PIN 0912")))]
     (is (= (count (re-seq #"\\u\{" (text/visible s))) 8))
@@ -194,49 +194,18 @@
             (pr-str {:timezone "UTC" :default-harness :agentloop
                      :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}}
                      :notify {:kind :none}
-                     :tools {"post" {:class :egress :labels [] :description "Post." :command ["true"]}}
+                     :tools {"post" {:class :edit :labels [] :description "Post." :command ["true"]}}
                      :grants {"clerk" {:tools ["post"]}}}))
       (let [sys (inbound/system data)
             s "zw​bs\\end"
             once "zw\\u{200b}bs\\\\end"
             twice "\\\\u{200b}"
-            state #(inbound/current-state sys)
-            out (fn [& args] (str/join "\n" (:out (cli/execute (concat ["--data" data] args)))))
-            confirm (fn [& args]
-                      (let [shown (atom "")]
-                        (binding [cli/*tty* (fn [] {:say #(swap! shown str %)
-                                                    :ask #(second (re-find #"Type (\w{4}) to" @shown))})]
-                          (cli/execute (concat ["--data" data] args)))
-                        @shown))]
+            out (fn [& args] (str/join "\n" (:out (cli/execute (concat ["--data" data] args)))))]
         (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "clerk" :title s :instructions s}})
         (inbound/submit! sys {:type :memo/send :actor "clerk" :args {:to "operator" :subject s :body s}})
         (doseq [[what text] [["inbox" (out "inbox")] ["status" (out "status")] ["roles" (out "roles")]]]
           (is (str/includes? text once) what)
-          (is (not (str/includes? text twice)) what))
-        (inbound/submit! sys {:type :wake/start :actor "operator" :args {:role "clerk" :note "go"}})
-        (inbound/submit! sys {:type :wake/end :actor "dispatcher"
-                              :args {:wake (:id (support/calling-wake (state) "clerk")) :outcome "ran" :session "s1" :said ""
-                                     :held [{:id "c1" :name "post" :input {:text s} :input-sha256 "d1"}
-                                            {:id "c2" :name "post" :input {:text s} :input-sha256 "d2"}]}})
-        (let [[h1 h2] (map :id (core/open-holds (state)))]
-          (doseq [[what text] [["holds" (out "holds")] ["approve" (confirm "approve" (str h1))]
-                               ["deny" (confirm "deny" (str h2))]]]
-            (is (str/includes? text "\\u{200b}") what)
-            (is (not (str/includes? text twice)) what)))
-        (inbound/submit! sys {:type :memo/send :actor "clerk" :labels ["contaminated"]
-                              :args {:to "clerk" :subject "web" :body s}})
-        (let [id (:id (last (sort-by :id (core/unread-memos (state) "clerk"))))]
-          (doseq [[what text] [["release" (confirm "release" (str id))] ["trust" (confirm "trust" "memo" (str id))]]]
-            (is (str/includes? text once) what)
-            (is (not (str/includes? text twice)) what)))))))
-
-(deftest a-held-call-s-lookalikes-are-escaped-once
-  ;; Regression: lookalikes applied visible itself, and the edge again, so
-  ;; an escape in a mixed-script word showed doubled.
-  (let [h {:id 1 :role "clerk" :tool "post" :input {:text "pаy\u001bpal \\x"} :session "s" :call "c" :labels []}
-        shown (str/join "\n" (map text/visible (render/hold h {:tools {"post" {:class :egress}}})))]
-    (is (str/includes? shown "\"pаy\\u{001b}pal\" mixes Cyrillic and Latin"))
-    (is (not (str/includes? shown "\\\\u{001b}")))))
+          (is (not (str/includes? text twice)) what))))))
 
 ;; --- a role's text never decides where a line starts
 
@@ -245,14 +214,13 @@
   (gen/fmap #(str/join "\n" %)
             (gen/vector (gen/elements ["Memo 12: urgent" "flags: none" "[3] Lunch" "    from hub, 2026-10-15 12:00"
                                        "  | fake" "Fact 9, holds from 2026-01-01" "Hold 4: clerk wants to use post"
-                                       "## plan" "Harness x: available" "  [contaminated]" "" "Roles"
-                                       "Labels: none" "Type ABCD to approve: " "\t- version 3" "zz"])
+                                       "## plan" "Harness x: available" "  [from outside]" "" "Roles"
+                                       "Labels: none" "\t- version 3" "zz"])
                         1 6)))
 
 (defn- screens
   "Every operator view of a world whose role-written text is `t`, as the
-  terminal shows it: the command line's own output and the confirmation
-  screens."
+  terminal shows it."
   [t]
   (let [dir (str (fs/create-temp-dir {:prefix "relay-forge"}))
         data (str dir "/data")]
@@ -262,17 +230,12 @@
             (pr-str {:timezone "UTC" :default-harness :agentloop
                      :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}}
                      :notify {:kind :none}
-                     :tools {"post" {:class :egress :labels [] :description "Post." :command ["true"]}}
+                     :tools {"post" {:class :edit :labels [] :description "Post." :command ["true"]}}
                      :grants {"clerk" {:tools ["post"]}}}))
       (let [sys (inbound/system data)
             submit (fn [actor type args & [labels]] (inbound/submit! sys {:type type :actor actor :args args :labels labels}))
             state #(inbound/current-state sys)
-            out (fn [& args] (:out (cli/execute (concat ["--data" data] args))))
-            confirm (fn [answer & args]
-                      (let [shown (atom "")]
-                        (binding [cli/*tty* (fn [] {:say #(swap! shown str %) :ask (constantly answer)})]
-                          (try (cli/execute (concat ["--data" data] args)) (catch clojure.lang.ExceptionInfo _ nil)))
-                        (str/split @shown #"\n" -1)))]
+            out (fn [& args] (:out (cli/execute (concat ["--data" data] args))))]
         (submit "operator" :role/add {:id "clerk" :title t :instructions t})
         (submit "clerk" :memo/send {:to "operator" :subject "s" :body t})
         (submit "clerk" :memo/send {:to "clerk" :subject "web" :body t} ["contaminated"])
@@ -282,20 +245,13 @@
         (submit "clerk" :journal/write {:text t})
         (submit "clerk" :routine/write {:name "r" :schedule "every 1d" :instructions t})
         (submit "operator" :wake/start {:role "clerk" :note "go"})
-        (submit "dispatcher" :wake/end {:wake (:id (support/calling-wake (state) "clerk")) :outcome "ran" :session "s" :said t
-                                        :held [{:id "c1" :name "post" :input {:text t} :input-sha256 "d"}]})
-        (let [hold (str (:id (first (core/open-holds (state)))))
-              memo (str (:id (last (sort-by :id (core/unread-memos (state) "clerk")))))
-              fact (str (first (keys (:facts (state)))))]
+        (submit "dispatcher" :wake/end {:wake (:id (support/calling-wake (state) "clerk")) :outcome "ran" :session "s" :said t})
+        (let [fact (str (first (keys (:facts (state)))))]
           (into (sorted-map)
-                (concat
-                 (for [args [["inbox"] ["status"] ["roles"] ["routines"] ["notes" "clerk"] ["journal" "clerk"]
-                             ["facts" "--all"] ["fact" fact] ["docs"] ["doc" "a.md"] ["doc" "a.md" "--history"]
-                             ["holds"] ["log"]]]
-                   [(str/join " " args) (apply out args)])
-                 [["approve" (confirm "NOPE" "approve" hold)]
-                  ["release" (confirm "NOPE" "release" memo)]
-                  ["trust" (confirm "NOPE" "trust" "memo" memo)]]))))
+                (for [args [["inbox"] ["status"] ["roles"] ["routines"] ["notes" "clerk"] ["journal" "clerk"]
+                            ["facts" "--all"] ["fact" fact] ["docs"] ["doc" "a.md"] ["doc" "a.md" "--history"]
+                            ["log"]]]
+                  [(str/join " " args) (apply out args)]))))
       (finally (fs/delete-tree dir)))))
 
 (defn- structure
@@ -304,7 +260,7 @@
   [lines t]
   (->> lines
        (remove #(str/starts-with? % text/gutter))
-       (map #(-> % (str/replace (text/visible-line t) "<T>") (str/replace #"Type \w{4} to" "Type CODE to")
+       (map #(-> % (str/replace (text/visible-line t) "<T>")
                  (str/replace #"\d+" "9")))))
 
 (defspec a-role-s-text-never-starts-a-line-of-an-operator-s-screen 12

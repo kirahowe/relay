@@ -20,10 +20,6 @@
   little money, so scenarios that cannot work against a real model say
   :live? false.
 
-  The operator's terminal confirmations (release, approve, trust) are
-  answered by the runner, since a scenario is the operator. Anything else
-  the terminal asks is answered from the step's :tty.
-
   A tick runs in this process, or as `relay wake` subprocesses it waits for
   when the step says :spawn :process."
   (:require [babashka.cli :as cli]
@@ -76,20 +72,6 @@
       (throw (ex-info (str (scenario-name file) ": " (str/join " " problems)) {:relay/usage true})))
     s))
 
-;; --- the operator at the terminal
-
-(defn- operator-tty
-  "A terminal that types back whatever code it is asked for, and to any
-  other question the next of `answers`, a step's :tty. Once they run out
-  it types nothing, as a closed terminal does."
-  [answers]
-  (let [last-said (atom "")
-        left (atom (seq answers))]
-    {:say (fn [text] (reset! last-said text))
-     :ask (fn []
-            (or (second (re-find #"Type ([A-Z0-9]{4}) to [^\n]*$" @last-said))
-                (ffirst (swap-vals! left next))))}))
-
 ;; --- a run
 
 (defn- json-lines [file]
@@ -121,11 +103,10 @@
 
 (defn run-command!
   "A relay command line as the operator, in this process, with an explicit
-  --data. Returns {:exit :out :err}. The operator's terminal is answered
-  automatically, so before that is bound the data directory the command
-  would really use is worked out the way relay works it out, and the
-  command is refused unless it is this scenario's own."
-  [{:keys [dir clock]} args stdin & [tty-answers]]
+  --data. Returns {:exit :out :err}. Before it runs, the data directory the
+  command would really use is worked out the way relay works it out, and
+  the command is refused unless it is this scenario's own."
+  [{:keys [dir clock]} args stdin]
   (let [line (into ["--data" dir] args)
         ;; No config file to fall back on, whatever the arguments say.
         no-config (str (fs/path dir "no-operator-config.edn"))
@@ -148,8 +129,7 @@
                                   (pr-str effective) ", not the scenario's data directory " dir ".")]}
 
       :else
-      (binding [relay/*tty* #(operator-tty tty-answers)
-                relay/*stdin* stdin
+      (binding [relay/*stdin* stdin
                 relay/*clock* clock
                 relay/*config-file* no-config
                 ;; status reads the pause file; not the operator's real one.
@@ -208,7 +188,7 @@
     (:run step)
     (let [state (:state (world dir))
           args (mapv str (scenario/resolve-refs state (:run step)))
-          {:keys [exit out err]} (run-command! ctx args (:stdin step) (:tty step))
+          {:keys [exit out err]} (run-command! ctx args (:stdin step))
           expected (:exit step 0)]
       {:log [(str "relay " (str/join " " args) " -> exit " exit)]
        :failures (when (not= expected exit)
@@ -326,7 +306,7 @@
                            fixed (assoc :clock clock)))
         dir (staging/canonical dir (System/getProperty "user.home"))
         ctx {:dir dir :clock clock :offset offset :stopped-clock? (some? fixed)}
-        mock-model (when-not live? (scripted-model (scenario/script model (:reader s)) dir))
+        mock-model (when-not live? (scripted-model (scenario/script model) dir))
         server (when mock-model (mock/start! (:responder mock-model)))
         before (System/getProperty "relay.bin")
         log-lines (atom [])

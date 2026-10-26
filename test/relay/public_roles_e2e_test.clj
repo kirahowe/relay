@@ -1,13 +1,12 @@
 (ns relay.public-roles-e2e-test
   "A public role's wake with the real agentloop binary against the stand-in
   for the Anthropic API: what the model is sent never holds anything
-  private, its egress runs unheld, and a result carrying private is
+  private, its egress runs, and a result carrying private is
   refused, by relay's tool command and by agentloop itself."
   (:require [babashka.fs :as fs]
             [cheshire.core :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
-            [relay.core :as core]
             [relay.dispatch :as dispatch]
             [relay.harness :as harness]
             [relay.inbound :as inbound]
@@ -69,13 +68,14 @@
       (not (called "memo_close")) {:tool-uses [{:name "memo_close" :input {:memo memo :outcome "Found two."}}]}
       :else {:text "Done."})))
 
-(deftest a-public-role-browses-unheld-and-never-holds-private
+(deftest a-public-role-browses-and-never-holds-private
   (if-not bin
     (println "SKIPPED: agentloop is not built; run make -C ../agentloop build")
     (with-world browses
       (fn [sys mock _]
-        (inbound/submit! sys {:type :memo/send :actor "hub" :labels ["private"]
-                              :args {:to "scout" :subject "Kira's thesis" :body "SECRET-THESIS topic."}})
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"was not sent"
+                              (inbound/submit! sys {:type :memo/send :actor "hub" :labels ["private"]
+                                                    :args {:to "scout" :subject "Kira's thesis" :body "SECRET-THESIS topic."}})))
         (inbound/submit! sys {:type :memo/send :actor "operator" :public true
                               :args {:to "scout" :subject "Find arts grants" :body "Open ones, this spring."}})
         (let [result (dispatch/wake! sys "scout" {})
@@ -88,8 +88,7 @@
           (testing "agentloop is told the session may not hold private"
             (is (= ["private"] (get-in request [:policy :forbid_labels])))
             (is (= [] (get-in request [:policy :labels]))))
-          (testing "its egress ran unheld, contaminated as it became"
-            (is (empty? (core/open-holds state "scout")))
+          (testing "its egress ran, contaminated as it became"
             (is (= 2 (count (filter #(= "search" (:name %))
                                     (mapcat mock/last-tool-results (map :body @(:requests mock))))))))
           (testing "what it wrote through relay's tool command is public"
@@ -97,14 +96,13 @@
           (testing "the session ended without private"
             (is (= ["contaminated"] (:labels wake))))
           (testing "the model was sent nothing private"
-            (is (not-any? #(str/includes? % "SECRET-THESIS") bodies) "the hub's memo waits for the operator")
+            (is (not-any? #(str/includes? % "SECRET-THESIS") bodies) "the hub's memo was never sent")
             (is (not-any? #(str/includes? % "SECRET-BANK") bodies) "nor the operator's AGENTS.md")
             (is (not-any? #(str/includes? % "SECRET-FROM-THE-TOOL") bodies) "nor a result carrying private")
             (is (some #(str/includes? % "This result was refused") bodies)))
-          (testing "the operator is told of the refused result and the waiting memo"
+          (testing "the operator is told of the refused result"
             (let [kinds (set (map :kind (vals (:notifications state))))]
-              (is (contains? kinds "result-refused"))
-              (is (contains? kinds "memo-awaiting-declassification")))))))))
+              (is (contains? kinds "result-refused")))))))))
 
 (def private-tool
   "A tool command that answers every call with a result carrying private,
@@ -140,5 +138,5 @@
             (is (= [] (:labels report)) "the session never took the label")
             (is (not-any? #(str/includes? (json/generate-string (:body %)) "SECRET-FROM-AGENTLOOP") @(:requests mock)))
             (inbound/submit! sys {:type :wake/end :actor "dispatcher" :args (dispatch/wake-end-args wake-id report)})
-            (is (some #(and (= "result-refused" (:kind %)) (str/includes? (:body %) "agentloop refused"))
+            (is (some #(and (= "result-refused" (:kind %)) (str/includes? (:body %) "lookup returned your private things"))
                       (vals (:notifications (inbound/current-state sys)))))))))))

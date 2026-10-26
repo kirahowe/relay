@@ -39,10 +39,10 @@
 (deftest only-a-read-only-hint-proposes-read
   (is (:pass? (tc/quick-check 300
                               (prop/for-all [a (gen/one-of [(gen/return nil) gen-annotations])]
-                                (= (if (true? (:readOnlyHint a)) :read :act)
+                                (= (if (true? (:readOnlyHint a)) :read :edit)
                                    (connect/propose-class {:annotations a}))))))
   (testing "nothing else is ever proposed, whatever the hints"
-    (is (= #{:read :act} (set (map #(connect/propose-class {:annotations %})
+    (is (= #{:read :edit} (set (map #(connect/propose-class {:annotations %})
                                    (gen/sample gen-annotations 200)))))))
 
 (deftest tools-that-delete-start-off
@@ -69,37 +69,26 @@
     :annotations {:readOnlyHint true}}
    {:name "delete_subscriber" :description "Delete one." :digest digest :annotations {:destructiveHint true}}])
 
-(deftest consent-survives-a-new-connect-and-reaches-relay-edn
-  (let [previous {:tools {"mail_send_campaign" {:tool "send_campaign" :class :act :always-hold true
-                                                :consent [{"group" "Kira only"}] :preview ["mail-preview"]}}}
-        p (connect/propose "mail" listed previous)
-        send (first (filter #(= "send_campaign" (:tool %)) p))]
-    (is (nil? (:always-hold send)) "an :always-hold an earlier connect proposed for an act tool is dropped")
-    (is (= [{"group" "Kira only"}] (:consent send)))
-    (is (= ["mail-preview"] (:preview send)))
-    (let [conn (connect/connection {:url "https://mcp.example/mcp" :credentials-command ["true"] :connected "x"} p)
-          tool (get-in conn [:tools "mail_send_campaign"])]
-      (is (= [{"group" "Kira only"}] (:consent tool)))
-      (is (= {:consent [{"group" "Kira only"}] :preview ["mail-preview"]}
-             (select-keys (get-in (connections/->settings "mail" (assoc-in conn [:tools "mail_send_campaign" :on] true))
-                                  [:tools "mail_send_campaign"])
-                          [:consent :preview]))))))
+(deftest a-class-relay-no-longer-has-is-not-carried-over
+  (let [previous {:tools {"mail_send_campaign" {:tool "send_campaign" :class :act :on true}}}
+        send (first (filter #(= "send_campaign" (:tool %)) (connect/propose "mail" listed previous)))]
+    (is (= [:edit false] ((juxt :class :on) send)) "proposed afresh, and off")))
 
 (deftest the-proposal-and-its-summary
   (let [p (connect/propose "mail" listed nil)
         by (into {} (map (juxt :tool identity) p))]
     (is (= ["delete_subscriber" "list_subscribers" "send_campaign"] (map :tool p)))
     (is (= :read (get-in by ["list_subscribers" :class])))
-    (is (= [:act nil true] ((juxt :class :always-hold :on) (by "send_campaign")))
-        "an act tool asks every time by its class, so it gets no :always-hold, which would shut out :consent")
+    (is (= [:edit false] ((juxt :class :on) (by "send_campaign")))
+        "a tool that is not read-only starts off, for the operator to turn on")
     (is (false? (get-in by ["delete_subscriber" :on])))
     (is (every? #(= ["contaminated" "private"] (:labels %)) p))
     (let [text (str/join "\n" (connect/summary p))]
-      (is (str/includes? text "List subscribers (list_subscribers)\n    Reads only. It runs without asking."))
-      (is (str/includes? text "send_campaign\n    Acts for you, and asks you first every time."))
+      (is (str/includes? text "List subscribers (list_subscribers)\n    Reads only."))
+      (is (str/includes? text "send_campaign\n    Off. It may change things there."))
       (is (str/ends-with? text "The server says: Send a campaign to a group. It goes out at once.")
           "the operator reads all the model will")
-      (is (str/includes? text "delete_subscriber\n    Off: nothing can use it."))
+      (is (str/includes? text "delete_subscriber\n    Off."))
       (is (not-any? #(re-find #"(?i)\b(role|grant|label|contaminated|hold)\b" %) (connect/summary p))
           "the summary speaks in the operator's terms"))
     (testing "an earlier connect's choices are kept"
@@ -124,12 +113,10 @@
             labels (gen/elements [[] ["private"] ["contaminated" "private"]])
             on gen/boolean
             fixed (gen/map (gen/fmap #(str "f" %) gen/string-alphanumeric) gen-json {:max-elements 3})
-            hidden (gen/fmap #(vec (distinct %)) (gen/vector (gen/fmap #(str "h" %) gen/string-alphanumeric) 0 3))
-            hold (gen/elements [nil true false])]
+            hidden (gen/fmap #(vec (distinct %)) (gen/vector (gen/fmap #(str "h" %) gen/string-alphanumeric) 0 3))]
     (cond-> {:tool (str "x" tool) :class class :labels labels :digest digest :on on}
       (seq fixed) (assoc :fixed-args fixed)
-      (seq hidden) (assoc :hidden-args hidden)
-      (some? hold) (assoc :always-hold hold))))
+      (seq hidden) (assoc :hidden-args hidden))))
 
 (def gen-connection
   (gen/let [tools (gen/map gen-name gen-tool {:min-elements 1 :max-elements 5})
@@ -153,7 +140,7 @@
 
 (deftest a-bad-connection-file-is-refused
   (let [good {:format 1 :url "https://mcp.example.com/mcp" :credentials-command ["x"]
-              :tools {"mail_send" {:tool "send" :class :act :labels ["private"] :digest digest :on true}}}
+              :tools {"mail_send" {:tool "send" :class :edit :labels ["private"] :digest digest :on true}}}
         problem (fn [f] (try (connections/check "mail" (f good) opts) nil
                              (catch clojure.lang.ExceptionInfo e (ex-message e))))]
     (is (nil? (problem identity)))
@@ -162,6 +149,8 @@
              ["a password in the url" #(assoc % :url "https://u:p@mcp.example.com/mcp") "password"]
              ["no token command" #(dissoc % :credentials-command) ":credentials-command"]
              ["an unknown class" #(assoc-in % [:tools "mail_send" :class] :magic) ":class"]
+             ["a class that acts as the operator" #(assoc-in % [:tools "mail_send" :class] :act) ":class"]
+             ["a hold" #(assoc-in % [:tools "mail_send" :always-hold] true) "does not know"]
              ["an unknown label" #(assoc-in % [:tools "mail_send" :labels] ["secret"]) ":labels"]
              ["no digest" #(update-in % [:tools "mail_send"] dissoc :digest) ":digest"]
              ["no on" #(update-in % [:tools "mail_send"] dissoc :on) ":on"]
@@ -182,10 +171,10 @@
 
 (def mail-connection
   {:format 1 :url "https://mcp.example.com/mcp" :credentials-command ["/bin/relay" "mcp-token" "mail" "--data" "/d"]
-   :tools {"mail_send" {:tool "send_campaign" :class :act :labels ["contaminated" "private"] :digest digest :on true
-                        :always-hold true :fixed-args {"send_now" false} :hidden-args ["reply_to"]}
+   :tools {"mail_send" {:tool "send_campaign" :class :edit :labels ["contaminated" "private"] :digest digest :on true
+                        :fixed-args {"send_now" false} :hidden-args ["reply_to"]}
            "mail_list" {:tool "list_subscribers" :class :read :labels ["contaminated" "private"] :digest digest :on true}
-           "mail_delete" {:tool "delete_subscriber" :class :act :labels ["private"] :digest digest :on false}}})
+           "mail_delete" {:tool "delete_subscriber" :class :edit :labels ["private"] :digest digest :on false}}})
 
 (defn- data-with [conn & [s]]
   (let [data (str (fs/create-temp-dir {:prefix "relay-connect"}))]
@@ -268,14 +257,11 @@
    :wait-ms 20000})
 
 (defn- terminal
-  "A terminal that answers each question in turn; :code types the code
-  shown."
+  "A terminal that answers each question in turn."
   [shown answers]
   (let [left (atom answers)]
     (fn [] {:say (fn [t] (swap! shown str t))
-            :ask (fn [] (let [a (first @left)]
-                          (swap! left rest)
-                          (if (= :code a) (second (re-find #"Type (\w{4}) to" @shown)) a)))})))
+            :ask (fn [] (let [a (first @left)] (swap! left rest) a))})))
 
 (defn- connect-data []
   (let [data (str (fs/create-temp-dir {:prefix "relay-connect"}))]
@@ -299,38 +285,33 @@
           relay #(cli/execute (concat ["--data" data] %&))]
       (try
         (binding [connect/*edges* (edges keychain clock)]
-          (testing "a wrong code changes nothing"
-            (binding [cli/*tty* (terminal shown ["WRONG"])]
-              (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not the code" (relay "connect" "fake" url))))
-            (is (empty? @keychain))
-            (is (not (fs/exists? (connections/file-path data "fake")))))
-          (testing "the operator confirms what relay proposes"
-            (reset! shown "")
-            ;; add_note has no hints, so it is proposed act.
-            (binding [cli/*tty* (terminal shown [:code])]
+          (testing "the operator is shown what relay proposes, and types no code"
+            ;; add_note has no hints, so it is proposed edit, and off.
+            (binding [cli/*terminal* (terminal shown [])]
               (let [r (relay "connect" "fake" url)]
                 (is (= 0 (:exit r)))
                 (is (some #(str/includes? % "add \"fake\" to :connections") (:out r)))))
             (is (str/includes? @shown "Opening your browser"))
             (is (str/includes? @shown "List subscribers (list_subscribers)\n    Reads only."))
-            (is (str/includes? @shown "send_campaign\n    Acts for you, and asks you first every time.")))
+            (is (str/includes? @shown "send_campaign\n    Off. It may change things there."))
+            (is (not (str/includes? @shown "Type "))))
           (let [conn (connections/check "fake" (connections/parse (slurp (str (connections/file-path data "fake")))) opts)
                 tools (into {} (map (fn [[n t]] [(:tool t) (assoc t :name n)]) (:tools conn)))]
             (testing "the file has what relay proposed, pinned"
               (is (= url (:url conn)))
               (is (= ["mcp-token" "fake" "--data" data "--url" url] (rest (:credentials-command conn))))
               (is (= [:read true] ((juxt :class :on) (tools "list_subscribers"))))
-              (is (= [:act true nil] ((juxt :class :on :always-hold) (tools "send_campaign"))))
+              (is (= [:edit false] ((juxt :class :on) (tools "send_campaign"))))
               (is (false? (:on (tools "delete_subscriber"))) "a delete tool starts off")
-              (is (= [:act true] ((juxt :class :on) (tools "add_note"))))
+              (is (= [:edit false] ((juxt :class :on) (tools "add_note"))))
               (is (every? #(re-matches #"[0-9a-f]{64}" (:digest %)) (vals tools)))
               (is (= "rw-------" (java.nio.file.attribute.PosixFilePermissions/toString (fs/posix-file-permissions (connections/file-path data "fake")))))
               (is (not (str/includes? (slurp (str (connections/file-path data "fake"))) "at-")) "no token in the file"))
             (testing "the log pins the tools that are on"
               (let [state (inbound/current-state (inbound/system data))]
-                (is (= (:digest (tools "send_campaign")) (core/tool-pin state "fake_send_campaign")))
-                (is (= (:digest (tools "add_note")) (core/tool-pin state "fake_add_note")))
-                (is (nil? (core/tool-pin state "fake_delete_subscriber")) "a tool that starts off is not pinned")))
+                (is (= (:digest (tools "list_subscribers")) (core/tool-pin state "fake_list_subscribers")))
+                (is (nil? (core/tool-pin state "fake_send_campaign")) "a tool that starts off is not pinned")
+                (is (nil? (core/tool-pin state "fake_delete_subscriber")))))
             (testing "the keychain has the sign-in, and the token works"
               (let [blob (connect/decode-blob (kept keychain data))]
                 (is (str/starts-with? (:refresh-token blob) "rt-"))
@@ -347,8 +328,8 @@
               (spit (str (fs/path data "relay.edn"))
                     (pr-str (-> (read-string (slurp (str (fs/path data "relay.edn"))))
                                 (assoc :connections ["fake"])
-                                (assoc-in [:grants "hub" :tools] ["fake_send_campaign"]))))
-              (is (= :mcp-http (get-in (config/load-config data) [:tools "fake_send_campaign" :protocol]))))
+                                (assoc-in [:grants "hub" :tools] ["fake_list_subscribers"]))))
+              (is (= :mcp-http (get-in (config/load-config data) [:tools "fake_list_subscribers" :protocol]))))
             (testing "a token is given only for the server the command names"
               (is (thrown-with-msg? clojure.lang.ExceptionInfo #"is now for"
                                     (relay "mcp-token" "fake" "--url" "https://elsewhere.example/mcp"))))
@@ -378,7 +359,7 @@
           data (connect-data)]
       (try
         (binding [connect/*edges* (edges keychain (atom (Instant/now)))
-                  cli/*tty* (terminal (atom "") [:code])]
+                  cli/*terminal* (terminal (atom "") [])]
           (is (thrown-with-msg? clojure.lang.ExceptionInfo #"refused"
                                 (cli/execute ["--data" data "connect" "fake" url]))))
         (is (empty? @keychain))
@@ -393,7 +374,7 @@
           shown (atom "")]
       (try
         (binding [connect/*edges* (edges keychain (atom (Instant/now)))
-                  cli/*tty* (terminal shown ["given-id" :code])]
+                  cli/*terminal* (terminal shown ["given-id"])]
           (is (= 0 (:exit (cli/execute ["--data" data "connect" "fake" url])))))
         (is (str/includes? @shown "client id"))
         (is (= "given-id" (get-in (connections/read-file data "fake") [:oauth :client-id])))
@@ -531,7 +512,7 @@
                 data (connect-data)]
             (try
               (binding [connect/*edges* (assoc (edges (atom {}) (atom (Instant/now))) :open-browser #(swap! opened conj %))
-                        cli/*tty* (terminal (atom "") [:code])]
+                        cli/*terminal* (terminal (atom "") [])]
                 (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot be sure an answer is its own"
                                       (cli/execute ["--data" data "connect" "evil" url]))))
               (is (empty? @opened) "the browser was never opened")
@@ -544,7 +525,7 @@
                 data (connect-data)]
             (try
               (binding [connect/*edges* (edges keychain (atom (Instant/now)))
-                        cli/*tty* (terminal (atom "") [:code])]
+                        cli/*terminal* (terminal (atom "") [])]
                 (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did not come from"
                                       (cli/execute ["--data" data "connect" "evil" url]))))
               (is (zero? @token-hits) "the token endpoint was never sent the code")
@@ -555,7 +536,7 @@
                 data (connect-data)
                 shown (atom "")]
             (binding [connect/*edges* (edges keychain (atom (Instant/now)))
-                      cli/*tty* (terminal shown [:code])]
+                      cli/*terminal* (terminal shown [])]
               (is (= 0 (:exit (cli/execute ["--data" data "connect" "fake" (:url honest)])))))
             (is (re-find #"redirect_uri=http%3A%2F%2F127\.0\.0\.1%3A\d+%2Fcallback%2F[A-Za-z0-9_-]{16}" @shown))))
         (finally ((:stop honest)))))))

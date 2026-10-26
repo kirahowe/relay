@@ -8,7 +8,7 @@
 
     {:type \"message\" :message {:message {:role \"assistant\" :parts [...]}
                                 :usage {...} :model \"...\" :stop \"...\"}}
-    {:type \"decision\" :decision {:call_id :tool :verdict \"allow\"|\"deny\"|\"hold\" :reason}}
+    {:type \"decision\" :decision {:call_id :tool :verdict \"allow\"|\"deny\" :reason}}
     {:type \"tool_result\" :tool_result {:result {:call_id :content :is_error}}}
     {:type \"run_ended\" :run_ended {:reason ...}}
 
@@ -81,7 +81,7 @@
 (defn tool-calls
   "Every tool call the model asked for, in order: {:id :name :input :verdict
   :reason :error :result}. :verdict is agentloop's decision (\"allow\",
-  \"deny\", \"hold\"), :error whether the result was an error, :result its
+  \"deny\"), :error whether the result was an error, :result its
   text. A held or denied call has no result."
   [entries]
   (let [decisions (into {} (for [{:keys [type decision]} entries :when (= "decision" type)]

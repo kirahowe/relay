@@ -112,7 +112,7 @@
     (is (= "Filed it." (:outcome (core/memo (state) id))))
     (is (= "operator" (:closed-by (core/memo (state) id))) "the stand-in closes it as the operator")
     (testing "the harness was given the prompt, and its transcript is kept"
-      (is (str/includes? (slurp (str *dir* "/prompt")) "Memo 4: File this"))
+      (is (str/includes? (slurp (str *dir* "/prompt")) "Memo 3: File this"))
       (is (fs/exists? (get-in (state) [:wakes (:wake result) :transcript]))))))
 
 (deftest the-script-harness-gets-one-argument-a-json-file-and-a-clean-environment
@@ -120,7 +120,7 @@
   (let [result (dispatch/wake! *sys* "clerk" {})
         env (into {} (map #(vec (str/split % #"=" 2)) (str/split-lines (slurp (str *dir* "/env")))))
         args (json/parse-string (slurp (str *dir* "/args.json")) true)]
-    (is (= #{:system_prompt :tools_file :report :resume :tool_command :policy :resolve} (set (keys args))))
+    (is (= #{:system_prompt :tools_file :report :resume :tool_command :policy} (set (keys args))))
     (is (= ["private"] (get-in args [:policy :labels])) "the memo it carries is private")
     (is (= {} (get-in args [:policy :tools])) "a script harness gets no tools")
     (is (= [] (json/parse-string (slurp (:tools_file args)))))
@@ -442,7 +442,7 @@
           [before [_ & agent]] (split-with #(not= "--" %) argv)]
       ;; The role is the client's to open first; relay acp serves every role.
       (and (= (concat client (when role ["--open" role])) before)
-           (= (concat [relay "acp" "--approvals"] (when data ["--data" data])) agent)))))
+           (= (concat [relay "acp"] (when data ["--data" data])) agent)))))
 
 (deftest the-dashboard-runs-the-client-with-relay-acp-after-the-double-dash
   (let [result (tc/quick-check 300 the-dashboard-gives-the-client-relay-acp-as-its-agent)]
@@ -485,7 +485,7 @@
     (write-config! {:client [(recording-client!)]})
     (testing "relay --data <dir>, with no subcommand"
       (is (= 0 (:exit (run! ["--data" data]))))
-      (is (= ["--" (dispatch/relay-bin) "acp" "--approvals" "--data" (str (fs/absolutize data))] (argv))))
+      (is (= ["--" (dispatch/relay-bin) "acp" "--data" (str (fs/absolutize data))] (argv))))
     (testing "--open puts a role in focus, before or after --data"
       (is (= 0 (:exit (run! ["--data" data "--open" "clerk"]))))
       (is (= ["--open" "clerk" "--"] (take 3 (argv))))

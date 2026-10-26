@@ -148,41 +148,19 @@
             "a display with a field of its own is no envelope"))
       (finally (fs/delete-tree dir)))))
 
-(deftest the-pane-s-items-and-trust
+(deftest the-pane-s-items
   (let [[dir sys] (world)]
     (try
       (show! sys)
-      (let [conv (-> workspace/conversation
-                     (workspace/shown "s1" [{:call "c1" :ref "shown:2026-10-18/c1" :path "shown/2026-10-18/c1.md"}])
-                     (workspace/asked {:session "s1" :call "c2" :tool "post" :input {"a" 1} :labels ["private"]
-                                       :preview "It posts a."}
-                                      (Instant/parse "2099-01-01T00:00:00Z")))
+      (let [conv (workspace/shown workspace/conversation "s1"
+                                  [{:call "c1" :ref "shown:2026-10-18/c1" :path "shown/2026-10-18/c1.md"}])
             state (inbound/current-state sys)
-            {[proposal shown] "items"} (workspace/items state conv "s1" true)]
-        (is (= ["proposal" "waiting" "It posts a."] (map proposal ["kind" "status" "preview"])) "newest first")
-        (is (= ["shown" "T" "# T\n\nB\n" ["contaminated"] true "relay trust doc shown/2026-10-18/c1.md"]
-               (map shown ["kind" "title" "text" "labels" "canTrust" "trustCommand"])))
-        (is (= [] (get (workspace/items state conv "other" true) "items")) "another session's are not listed")
-        (is (false? (get-in (workspace/items state conv "s1" false) ["items" 1 "canTrust"]))
-            "without approvals the pane shows the command instead")
-        (is (= "rejected" (get-in (workspace/answered conv {:session "s1" :call "c2"} "reject_once")
-                                  [:proposals ["s1" "c2"] :status])))
-        (testing "trust"
-          (let [params {"sessionId" "s1" "path" "shown/2026-10-18/c1.md"
-                        "version" (get shown "version") "sha256" (get shown "sha256")}]
-            (is (re-find #"relay trust doc" (:error (workspace/trust-command conv false params))))
-            (is (re-find #"Only something this conversation showed"
-                         (:error (workspace/trust-command conv true (assoc params "path" "notes/a.md")))))
-            (is (re-find #"Only something"
-                         (:error (workspace/trust-command conv true (assoc params "sessionId" "s2")))))
-            (testing "a digest of something else trusts nothing"
-              (is (thrown-with-msg? Exception #"changed since you read it"
-                                    (inbound/submit! sys (:command (workspace/trust-command conv true (assoc params "sha256" "00")))))))
-            (inbound/submit! sys (:command (workspace/trust-command conv true params)))
-            (let [state (inbound/current-state sys)]
-              (is (= [] (:labels (core/trusted-version state "doc" "shown/2026-10-18/c1.md"))))
-              (is (= "chat" (:via (:data (last (filter #(= "label/trusted" (:type %)) (log/read-events (:data-dir sys)))))))
-                  "the log says the trust came from the chat")))))
+            {[shown :as items] "items"} (workspace/items state conv "s1")]
+        (is (= 1 (count items)))
+        (is (= ["shown" "T" "# T\n\nB\n" ["contaminated"]]
+               (map shown ["kind" "title" "text" "labels"])))
+        (is (not-any? #(contains? shown %) ["canTrust" "trustCommand" "review" "sha256"]) "nothing to consent to")
+        (is (= [] (get (workspace/items state conv "other") "items")) "another session's are not listed"))
       (finally (fs/delete-tree dir)))))
 
 (deftest extension-requests-are-relays-own
@@ -258,15 +236,6 @@
     (is (= "s1" (acp/display-session (line {"relay/display" {:title "t"}}))))
     (is (nil? (acp/display-session (line {"relay/preview" true}))))
     (is (nil? (acp/display-session "{\"relay/display\":1}")))))
-
-(deftest a-permission-request-carries-its-preview
-  (let [req (json/generate-string {:jsonrpc "2.0" :id 9 :method "session/request_permission"
-                                   :params {:sessionId "s" :options []
-                                            :toolCall {:toolCallId "c" :name "post"
-                                                       :content [{:type "content" :content {:type "text" :text "plain"}}
-                                                                 {:type "content" :content {:type "text" :text "It posts."
-                                                                                            :_meta {"relay/preview" true}}}]}}})]
-    (is (= "It posts." (:preview (acp/permission-request req))))))
 
 ;; --- whole wakes and conversations
 
@@ -353,12 +322,11 @@
   (some (fn [u] (when (some #(get-in % ["content" "_meta" "relay/display"]) (get u "content")) u))
         (client/updates c)))
 
-(deftest a-conversation-shows-the-pane-and-takes-trust-only-with-approvals
+(deftest a-conversation-shows-the-pane
   (when bin
-    (doseq [approvals? [true false]]
       (with-world asks-venues
         (fn []
-          (let [c (apply start-relay! (when approvals? ["--approvals"]))
+          (let [c (start-relay!)
                 sid (client/handshake! c *dir*)
                 resp (client/request! c "session/prompt" (client/prompt-params sid "Find venues."))]
             (is (= "end_turn" (get-in resp ["result" "stopReason"])) (pr-str resp))
@@ -371,29 +339,23 @@
                   [item] items]
               (testing "_relay/items lists the shown doc, kept while the conversation runs"
                 (is (= 1 (count items)) (pr-str items))
-                (is (= ["shown" "Venues near the hall" ["contaminated"] approvals?]
-                       (map item ["kind" "title" "labels" "canTrust"])))
+                (is (= ["shown" "Venues near the hall" ["contaminated"]]
+                       (map item ["kind" "title" "labels"])))
                 (is (str/includes? (get item "text") "DISPLAY-BODY")))
               (testing "_relay/resolve looks a ref up"
                 (let [r (get (client/request! c "_relay/resolve" {:sessionId sid :ref (str "[[" (get item "ref") "]]")}) "result")]
                   (is (= ["ok" "shown"] [(get r "status") (get r "kind")]) (pr-str r)))
                 (is (= "missing" (get-in (client/request! c "_relay/resolve" {:ref "[[doc:nowhere.md]]"}) ["result" "status"]))))
-              (let [trust (client/request! c "_relay/trust" {:sessionId sid :path (get item "path")
-                                                             :version (get item "version") :sha256 (get item "sha256")})
-                    labels (:labels (core/trusted-version (state) "doc" (get item "path")))]
-                (if approvals?
-                  (testing "trust from the pane clears contaminated"
-                    (is (= true (get-in trust ["result" "trusted"])) (pr-str trust))
-                    (is (= [] labels)))
-                  (testing "without approvals relay takes no trust from the client, and says what to run"
-                    (is (str/includes? (get-in trust ["error" "message"]) "relay trust doc") (pr-str trust))
-                    (is (= ["contaminated"] labels))))))
+              (testing "there is no trusting it: it keeps where it came from"
+                (is (= -32601 (get-in (client/request! c "_relay/trust" {:sessionId sid :path (get item "path")})
+                                      ["error" "code"])))
+                (is (= ["contaminated"] (:labels (core/doc-version (state) (get item "path") {}))))))
             (testing "an unknown method of relay's is answered as unknown, not passed on"
               (is (= -32601 (get-in (client/request! c "_relay/nope" {}) ["error" "code"]))))
             (client/close-input! c)
             (is (= 0 (client/wait! c 20000)))
             (testing "a conversation's operator saw them as they came, so no notification"
-              (is (not-any? #(= "shown" (:kind %)) (vals (:notifications (state))))))))))))
+              (is (not-any? #(= "shown" (:kind %)) (vals (:notifications (state)))))))))))
 
 (deftest relay-tool-passes-a-display-on-to-agentloop
   (let [result {:ok "x" :labels [] :display {:title "t" :body "b" :labels ["private"] :sources []}}]
@@ -406,7 +368,7 @@
 
 (def drive-py (str (fs/absolutize "pentest/pty/drive.py")))
 
-(deftest the-pane-in-relay-chat-shows-a-display-and-trusts-it
+(deftest the-pane-in-relay-chat-shows-a-display
   (if-not (and bin support/relay-tui-bin (fs/exists? "/usr/bin/python3"))
     (println "SKIPPED: needs agentloop, ../relay-tui/bin/relay-tui with --open (relay#65) and python3")
     (with-world asks-venues
@@ -418,16 +380,6 @@
                     :steps [{:wait "ready" :timeout 60}
                             {:send "Find venues.\r"}
                             {:wait "Venues near the hall" :timeout 60}
-                            {:wait "untrusted" :timeout 10}
-                            {:sleep 1}
-                            {:send "\u001b"}
-                            {:sleep 0.5}
-                            {:send "l"}
-                            {:sleep 1}
-                            {:send "t"}
-                            {:sleep 1.5}
-                            {:send "y"}
-                            {:wait "(?i)trusted" :timeout 20}
                             {:sleep 1}
                             {:send "\u001b"}
                             {:send "\u001b"}
@@ -439,10 +391,9 @@
               result (json/parse-string (last (str/split-lines (:out r))) true)
               [doc] (shown-docs)]
           (is (every? true? (:waits result)) (str (pr-str result) "\n" (subs (slurp transcript) 0 (min 4000 (count (slurp transcript))))))
-          (testing "the shown doc was trusted from the pane"
+          (testing "the shown doc is kept, with where it came from"
             (is doc)
-            (is (= [] (:labels (core/trusted-version (state) "doc" (:path doc)))))
-            (is (some #(= "chat" (get-in % [:data :via])) (filter #(= "label/trusted" (:type %)) (log/read-events (data)))))))))))
+            (is (= ["contaminated"] (:labels (core/doc-version (state) (:path doc) {}))))))))))
 
 ;; --- a display's text for a client that knows nothing of displays
 

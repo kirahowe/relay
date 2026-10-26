@@ -509,8 +509,8 @@
         sys {:config cfg :clock (constantly now)}]
     (is (= :read (:class tool)))
     (is (empty? (:labels tool)) "no static labels")
-    (testing "the policy sees a read with no labels"
-      (is (= {:class "read"} (get-in (tools/policy (tools/manifest cfg "clerk") []) [:tools "clock"]))))
+    (testing "the policy gives it no labels, so no entry"
+      (is (nil? (get-in (tools/policy (tools/manifest cfg "clerk") []) [:tools "clock"]))))
     (testing "a result carries no labels, whatever the session holds"
       (is (= {:ok "2026-10-16T14:05:12-03:00 Friday (America/Halifax)" :labels []}
              (tools/run-tool sys "clerk" tool {:op "now"} ["contaminated" "private"]))))

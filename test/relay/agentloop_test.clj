@@ -36,7 +36,7 @@
 
 (deftest reading-how-a-run-ended
   (testing "runs that got to work, whatever stopped them"
-    (doseq [reason ["completed" "max_tokens" "limit" "held"]]
+    (doseq [reason ["completed" "max_tokens" "limit"]]
       (is (= ["ran" "s-1" "All done." false]
              ((juxt :outcome :session :said :crashed) (classify (ended reason))))
           reason)))
@@ -78,7 +78,7 @@
   (let [text (str (json/generate-string {:seq 1 :type "run_started"}) "\n"
                   "not json\n"
                   (json/generate-string (ended "completed" :text "first")) "\n"
-                  (json/generate-string (ended "held" :text "last")) "\n")]
+                  (json/generate-string (ended "max_tokens" :text "last")) "\n")]
     (is (= "last" (:text (agentloop/parse-outcome text))))
     (is (nil? (agentloop/parse-outcome "")))))
 
@@ -204,7 +204,7 @@
             (is (= "sk-test-key" (get-in (first @(:requests *mock*)) [:headers "x-api-key"]))))
           (testing "the model saw the tool results"
             (is (= 3 (count requests)))
-            (is (= ["Closed memo 3." "Closed memo 4."]
+            (is (= ["Closed memo 2." "Closed memo 3."]
                    (sort (map :text (mock/last-tool-results (last requests)))))))
           (testing "the transcript is kept with the wake"
             (is (fs/exists? (get-in (state) [:wakes (:wake result) :transcript]))))

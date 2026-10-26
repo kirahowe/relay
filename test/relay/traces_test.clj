@@ -17,7 +17,7 @@
 (def row
   {:id 12 :role "hub" :chat false :status :ended :started-at (Instant/parse "2026-10-14T12:00:00Z")
    :ended-at (Instant/parse "2026-10-14T12:01:00Z") :outcome "ran" :crashed false :cut-short false
-   :held 1 :memos 2 :closed 1 :blocked 0 :left-open 0 :dead-lettered 0 :journal true :operator-memos 0
+   :memos 2 :closed 1 :blocked 0 :left-open 0 :dead-lettered 0 :journal true :operator-memos 0
    :cost-usd 0.25 :labels ["private"] :flags [{:id 30 :value "bad" :at (Instant/parse "2026-10-14T13:00:00Z")}]
    :transcript nil})
 
@@ -32,7 +32,7 @@
     (is (= {:stringValue "hub"} (attr s "relay.role")))
     (is (= {:intValue "12"} (attr s "relay.wake.id")))
     (is (= {:doubleValue 0.25} (attr s "relay.wake.cost_usd")))
-    (is (= {:intValue "1"} (attr s "relay.wake.held_calls")))
+    (is (nil? (attr s "relay.wake.held_calls")) "nothing is held")
     (is (= {:arrayValue {:values [{:stringValue "private"}]}} (attr s "relay.wake.labels")))
     (is (nil? (:status s)))
     (is (some #{["relay.check.memos-left-open" "pass"]} evals))

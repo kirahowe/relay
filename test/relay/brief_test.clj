@@ -129,7 +129,7 @@
     :brief {:at "07:30"}
     :tools {"cal" {:class :read :labels ["private" "contaminated"] :command ["cal"]}
             "rem-read" {:class :read :labels ["private"] :command ["rem" "--mode" "read"]}
-            "rem" {:class :act :labels ["private"] :command ["rem" "--mode" "write"]}}}))
+            "rem" {:class :edit :labels ["private"] :command ["rem" "--mode" "write"]}}}))
 
 (def today (day "2026-10-17"))
 
@@ -143,12 +143,9 @@
        "5A1B2C3D\tWork\t2026-10-17 14:00\tSend the draft\t-\n"
        "6B2C3D4E\tWork\t2026-10-15\tFile taxes\t-\n"))
 
-(def a-state
-  ;; One open hold, one settled.
-  {:roles {} :holds {4 {:id 4 :role "hub" :tool "mail" :status :open}
-                     5 {:id 5 :role "hub" :tool "mail" :status :approved}}})
+(def a-state {:roles {}})
 
-(def empty-state {:roles {} :holds {}})
+(def empty-state {:roles {}})
 
 (defn- section [k ran] (brief/tool-section k (brief/source cfg k) ran))
 
@@ -169,7 +166,7 @@
   (let [b (composed a-state {:out cal-out :labels ["contaminated" "private"]} {:out rem-out :labels ["private"]})
         {:keys [title body]} (render/brief b)]
     (is (not (brief/empty-brief? b)))
-    (is (= "Morning brief for 2026-10-17: 3 events, 3 reminders, 1 held call" title))
+    (is (= "Morning brief for 2026-10-17: 3 events, 3 reminders" title))
     (is (= ["Calendar: 3"
             "  all day Holiday (Home)"
             "  09:00-09:30 Standup (Work)"
@@ -177,12 +174,10 @@
             "Reminders due: 3"
             "  Buy milk (Groceries)"
             "  Send the draft (Work, due 14:00)"
-            "  File taxes (Work, due 2026-10-15)"
-            "Held calls: 1"
-            "  Hold 4: hub wants to use mail"]
+            "  File taxes (Work, due 2026-10-15)"]
            (str/split-lines body)))
     (is (= ["contaminated" "private"] (brief/labels b)))
-    (is (= {:calendar 3 :reminders 3 :holds 1} (brief/summary b)))))
+    (is (= {:calendar 3 :reminders 3} (brief/summary b)))))
 
 (deftest a-long-section-is-cut
   (let [out (str/join (for [i (range 12)] (str "E" i "\t2026-10-17 09:00\t2026-10-17 10:00\tMeeting " i "\tWork\t-\n")))
@@ -201,7 +196,7 @@
   (let [b (composed empty-state {:out "" :labels ["contaminated" "private"]} {:out "\n" :labels ["private"]})]
     (is (brief/empty-brief? b))
     (is (= [] (brief/labels b)) "no text from the calendar, so nothing contaminated")
-    (is (= "Calendar: none\nReminders due: none\nHeld calls: none"
+    (is (= "Calendar: none\nReminders due: none"
            (:body (render/brief b)))))
   (testing "a tool that is not configured adds nothing worth sending"
     (let [cfg (update cfg :tools dissoc "cal" "rem-read")
@@ -210,21 +205,22 @@
                            (brief/tool-section :reminders (brief/source cfg :reminders) nil))]
       (is (brief/empty-brief? b))
       (testing "but is said when there is a brief"
-        (let [b (brief/compose a-state today
+        (let [cfg (update cfg :tools dissoc "cal")
+              b (brief/compose a-state today
                                (brief/tool-section :calendar (brief/source cfg :calendar) nil)
-                               (brief/tool-section :reminders (brief/source cfg :reminders) nil))
+                               (section :reminders {:out rem-out :labels ["private"]}))
               {:keys [title body]} (render/brief b)]
           (is (not (brief/empty-brief? b)))
-          (is (= "Morning brief for 2026-10-17: 1 held call" title))
+          (is (= "Morning brief for 2026-10-17: 3 reminders" title))
           (is (str/starts-with? body (str "Calendar: not configured, relay.edn has no tool cal.\n"
-                                          "Reminders due: not configured, relay.edn has no tool rem-read.\n"))))))))
+                                          "Reminders due: 3\n"))))))))
 
 (deftest a-failed-tool-is-said-not-dropped
   (testing "a tool that failed"
     (let [b (composed empty-state {:error "exited 1"} {:out "" :labels ["private"]})
           {:keys [title body]} (render/brief b)]
       (is (not (brief/empty-brief? b)) "a failure is worth telling, even with nothing else")
-      (is (= "Morning brief for 2026-10-17: calendar unavailable, 0 reminders, 0 held calls" title))
+      (is (= "Morning brief for 2026-10-17: calendar unavailable, 0 reminders" title))
       (is (str/starts-with? body "Calendar: unavailable, the tool cal failed.\n"))
       (is (= "unavailable" (:calendar (brief/summary b))))))
   (testing "output that is not cal's"
@@ -250,12 +246,12 @@
         labels (brief/labels b)
         [t body] (as-pushed labels (render/brief b))]
     (is (= ["contaminated" "private"] labels))
-    (is (str/starts-with? t "[contaminated] Morning brief"))
+    (is (str/starts-with? t "[from outside] Morning brief"))
     (is (str/includes? body "hxxps://evil[.]example/x?d=1"))
     (is (not (str/includes? body "https://")))
     (is (str/includes? body "\\u{202e}"))
     (is (str/includes? body "\\u{200b}"))
-    (is (= 4 (count (str/split-lines body))) "one line for the event, as for any other")
+    (is (= 3 (count (str/split-lines body))) "one line for the event, as for any other")
     (testing "and it goes through the log so marked"
       (let [[_ events] (core/run-command core/empty-state
                                           {:type :brief/send :actor core/dispatcher
@@ -363,8 +359,8 @@
      (let [b (composed a-state cal rem)
            {:keys [title body]} (render/brief b)]
        (and (string? title) (not (str/includes? title "\n"))
-            (= 3 (count (filter #(not (str/starts-with? % "  ")) (str/split-lines body))))
-            (<= (count (str/split-lines body)) (+ 3 (* 3 (inc brief/lines-per-section)))))))))
+            (= 2 (count (filter #(not (str/starts-with? % "  ")) (str/split-lines body))))
+            (<= (count (str/split-lines body)) (+ 2 (* 2 (inc brief/lines-per-section)))))))))
 
 ;; --- the record
 
@@ -401,7 +397,7 @@
   (let [base {:timezone "UTC" :default-harness :x :harnesses {:x {:kind :agentloop :api-key-command ["true"]}}
               :notify {:kind :none}
               :tools {"cal" {:class :read :labels [] :command ["cal"]}
-                      "rem" {:class :act :labels [] :command ["rem"]}}}
+                      "rem" {:class :edit :labels [] :command ["rem"]}}}
         ok? (fn [brief] (try (config/resolve-config (assoc base :brief brief)) true
                              (catch clojure.lang.ExceptionInfo _ false)))]
     (is (ok? {:at "07:30"}))
@@ -465,7 +461,7 @@
     (tick! (sys-at cal-out rem-out (at "2026-10-17T07:31")))
     (let [[p & more] (pushed)]
       (is (nil? more))
-      (is (= "[contaminated] Morning brief for 2026-10-17: 3 events, 3 reminders, 0 held calls" (:title p)))
+      (is (= "[from outside] Morning brief for 2026-10-17: 3 events, 3 reminders" (:title p)))
       (is (str/includes? (:body p) "09:00-09:30 Standup (Work)"))
       (is (= ["contaminated" "private"] (:labels p))))
     (is (= ["events --from 2026-10-17 --to 2026-10-17"] (str/split-lines (slurp (str *dir* "/cal.args")))))
@@ -479,8 +475,8 @@
       (is (= 2 (count (pushed)))))
     (testing "the log has each brief"
       (let [events (log/read-events (str *dir* "/data"))]
-        (is (= [{:date "2026-10-17" :sent true :sections {:calendar 3 :reminders 3 :holds 0}}
-                {:date "2026-10-18" :sent true :sections {:calendar 3 :reminders 3 :holds 0}}]
+        (is (= [{:date "2026-10-17" :sent true :sections {:calendar 3 :reminders 3}}
+                {:date "2026-10-18" :sent true :sections {:calendar 3 :reminders 3}}]
                (map :data (filter #(= "brief/composed" (:type %)) events))))
         (is (= #{"delivered"} (set (map #(name (:delivery %)) (vals (:notifications (core/replay events)))))))))))
 

@@ -24,33 +24,31 @@
         opened (:now w)
         w (-> w (ct/advance 60)
               (ct/run "operator" :conversation/turn-start {:wake chat :session "sess-1"})
-              (ct/run "dispatcher" :permission/asked {:wake chat :session "sess-1" :call "c1" :tool "post"
-                                                      :input-sha256 "x"})
               (ct/advance 60))
         later (:now w)
         w (ct/run w "dispatcher" :conversation/turn-end {:wake chat :stop-reason "end_turn"})
         [clerk hub :as r] (roster/roster (:state w) ct/cfg (:now w))]
     (is (= ["clerk" "hub"] (map :id r)) "in relay roles order")
-    (is (= {:id "hub" :title "Hub" :labels [] :working? true :holds 0 :conversation nil} hub))
-    (is (= {:id "clerk" :title "Clerk" :labels [] :working? false :holds 0
+    (is (= {:id "hub" :title "Hub" :labels [] :working? true :conversation nil} hub))
+    (is (= {:id "clerk" :title "Clerk" :labels [] :working? false
             :conversation {:wake chat :session "sess-1" :opened-at opened :last-activity later
-                           :turn :idle :turns 1 :unread? true :approvals 1}}
+                           :turn :idle :turns 1 :unread? true}}
            clerk))
     (testing "seen through the last turn, it is read"
       (let [w (ct/run w "operator" :conversation/seen {:wake chat :turn 1})]
         (is (false? (get-in (roster/roster (:state w) ct/cfg (:now w)) [0 :conversation :unread?])))))
     (testing "the wire form is what _relay/roles sends"
-      (is (= {"roles" [{"id" "clerk" "title" "Clerk" "labels" [] "working" false "holds" 0
+      (is (= {"roles" [{"id" "clerk" "title" "Clerk" "labels" [] "working" false
                         "conversation" {"sessionId" "sess-1" "openedAt" (str opened)
                                         "lastActivity" (str later) "turn" "idle" "turns" 1
-                                        "unread" true "approvals" 1}}
-                       {"id" "hub" "title" "Hub" "labels" [] "working" true "holds" 0 "conversation" nil}]}
+                                        "unread" true}}
+                       {"id" "hub" "title" "Hub" "labels" [] "working" true "conversation" nil}]}
              (roster/wire r))))
     (testing "before its first turn a conversation has no session"
       (let [w (ct/run (seeded) "operator" :wake/start {:role "hub" :chat true})]
-        (is (= {"sessionId" nil "turn" "idle" "turns" 0 "unread" false "approvals" 0}
+        (is (= {"sessionId" nil "turn" "idle" "turns" 0 "unread" false}
                (select-keys (get-in (roster/wire (roster/roster (:state w) ct/cfg (:now w))) ["roles" 1 "conversation"])
-                            ["sessionId" "turn" "turns" "unread" "approvals"])))))))
+                            ["sessionId" "turn" "turns" "unread"])))))))
 
 (deftest a-role-s-labels-are-those-of-its-id-and-title
   (let [as (fn [state actor labels type args]
@@ -85,17 +83,16 @@
       (and
        ;; Every active role once, in relay roles order.
        (= (core/active-role-ids s) (mapv :id r))
-       (every? (fn [{:keys [id working? holds conversation] :as e}]
+       (every? (fn [{:keys [id working? conversation] :as e}]
                  (let [chat (core/open-conversation s id)]
-                   (and (= #{:id :title :labels :working? :holds :conversation} (set (keys e)))
+                   (and (= #{:id :title :labels :working? :conversation} (set (keys e)))
                         ;; Busy iff a wake works or a turn runs.
                         (= (core/busy? s id) (or working? (= :running (:turn conversation))))
                         (= working? (some? (core/working-wake s id)))
-                        (= holds (count (core/open-holds s id)))
                         ;; A conversation is shown iff one is open.
                         (= (some? conversation) (some? chat))
                         (or (nil? conversation)
-                            (let [{:keys [wake turns unread? approvals turn opened-at last-activity]} conversation
+                            (let [{:keys [wake turns unread? turn opened-at last-activity]} conversation
                                   events (:events w)]
                               (and (= wake (:id chat))
                                    (#{:idle :running} turn)
@@ -103,8 +100,6 @@
                                    ;; Unread iff a turn ended after the last one seen.
                                    (= unread? (> (event-max events "conversation/turn-ended" wake)
                                                  (event-max events "conversation/seen" wake)))
-                                   (= approvals (count (filter #(and (= wake (:wake %)) (nil? (:outcome %)))
-                                                               (vals (:permissions s)))))
                                    (not (.isBefore ^java.time.Instant last-activity opened-at))))))))
                r)
        ;; The wire form survives JSON as it is.

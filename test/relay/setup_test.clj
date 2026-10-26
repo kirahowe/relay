@@ -31,7 +31,7 @@
   (let [{:keys [written settings dir]} (create ["" "" "" "" "" "" "" "y"])]
     (is written)
     (is (= {} (:tools settings)) "no webtool found, so no web")
-    (is (= {"hub" {:workbench true}} (:grants settings)) "the hub has the workbench all the same")
+    (is (= {} (:grants settings)))
     (is (= {:kind :macos} (:notify settings)))
     (is (= "anthropic" (get-in settings [:harnesses :agentloop :provider])))
     (is (= "claude-opus-5-5" (get-in settings [:harnesses :agentloop :model])))
@@ -67,7 +67,7 @@
   (let [{:keys [settings]} (create ["" "" "" "" "" "ntfy" "localhost" "http://nas:2586" "alerts" "" "y"])]
     (is (= {:kind :ntfy :url "http://nas:2586" :topic "alerts"} (:notify settings)))))
 
-(deftest the-hub-gets-the-web-when-webtool-is-there
+(deftest the-scout-gets-the-web-when-webtool-is-there
   (let [{:keys [written settings dir io]} (create ["" "" "" "" "" "" "" "" "y"] {:webtool "/opt/webtool/bin/webtool"})
         webtool-file (str (fs/path dir "webtool.json"))
         web (get-in settings [:tools "web"])]
@@ -78,12 +78,12 @@
     (is (= {:class :egress :labels ["contaminated"] :protocol :envelope}
            (select-keys web [:class :labels :protocol])))
     (is (= ["/opt/webtool/bin/webtool" "--config" webtool-file "ask"] (:command web)))
-    (is (= {"hub" {:quarantine ["web"] :workbench true}} (:grants settings))
-        "the web is reader-only for the hub, and it has the workbench")
+    (is (= {"scout" {:public true :tools ["web"]}} (:grants settings))
+        "the web sends searches out, so only a public role has it")
     (is (= {"snapshot_dir" (str dir "/home/Library/Application Support/webtool/snapshots")
             "search" {"backend" "brave" "api_key_command" setup/brave-key-command}}
            (json/parse-string (slurp webtool-file))))
-    (is (= ["web"] (config/quarantine-tools (config/load-config dir) "hub"))))
+    (is (= ["web"] (config/role-tools (config/load-config dir) "scout"))))
   (testing "another key command, and the web left out"
     (let [{:keys [dir]} (create ["" "" "" "" "" "" "" "pass show brave" "y"] {:webtool "/opt/webtool"})]
       (is (= ["pass" "show" "brave"] (get-in (json/parse-string (slurp (str dir "/webtool.json"))) ["search" "api_key_command"]))))

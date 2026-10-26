@@ -79,8 +79,8 @@
             (is (str/ends-with? (get-in c [:harnesses :agentloop :bin]) "/agentloop/bin/agentloop"))
             (is (fs/absolute? (get-in c [:harnesses :agentloop :bin])))
             (is (= :edit (get-in c [:tools "remind-demo" :class])) "the clerk's reminders are its operator's own")
-            (is (core/quarantines? c "clerk") "the clerk holds an edit tool, so contaminated memos to it wait")
-            (is (not (core/quarantines? c "hub")))))
+            (is (not-any? #(= :egress (get-in c [:tools % :class])) (config/role-tools c "clerk"))
+                "nothing the clerk holds can send anything out")))
         (testing "artificial roles and facts"
           (is (= #{"hub" "clerk" "scout"} (set (core/active-role-ids state))))
           (is (= 3 (count (:facts state)))))

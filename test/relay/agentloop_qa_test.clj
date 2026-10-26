@@ -31,7 +31,7 @@
 
 ;; --- classify
 
-(def reasons ["completed" "max_tokens" "limit" "held" "refused" "canceled" "model_error"])
+(def reasons ["completed" "max_tokens" "limit" "refused" "canceled" "model_error"])
 (def kinds ["rate_limited" "overloaded" "unreachable" "unauthorized" "billing" "not_found"
             "invalid_request" "server_error" "unknown"])
 
@@ -86,7 +86,7 @@
     (cond
       (= "timeout" exit) ["ran" true]
       (nil? outcome) ["needs-attention" false]
-      (#{"completed" "max_tokens" "limit" "held"} reason) ["ran" false]
+      (#{"completed" "max_tokens" "limit"} reason) ["ran" false]
       (#{"refused" "canceled"} reason) ["ran" true]
       (= "model_error" reason)
       (cond (= "rate_limited" kind) ["limited" false]
@@ -210,14 +210,9 @@
                    :command [(str (fs/absolutize "test/fixtures/envelope-tool")) "echo"]
                    :parameters {:type "object" :properties {:question {:type "string"}}
                                 :required ["question"] :additionalProperties false}}
-           "post" {:class :egress :labels [] :description "Post a line where others can read it."
-                   :command ["sh" "-c" (str "echo \"$*\" >> " (ledger "posted.txt")) "sh"]}
-           "send" {:class :act :labels [] :description "Send a line to a list of people."
-                   :command ["sh" "-c" (str "echo \"$*\" >> " (ledger "sent.txt")) "sh"]
-                   :consent [{"args" ["to-me"]}]
-                   :preview ["sh" "-c" (str "cat > " (ledger "preview-in.json")
-                                            "; printf '{\"content\":\"PREVIEW: goes to 412 people\",\"labels\":[]}'")]}}
-   :grants {"clerk" {:tools ["printenv" "ledger" "slow-ledger" "ledger-clerk" "boom" "fetch" "post" "mail" "send"]}
+           "post" {:class :edit :labels [] :description "Save a line as a draft in the operator's account."
+                   :command ["sh" "-c" (str "echo \"$*\" >> " (ledger "posted.txt")) "sh"]}}
+   :grants {"clerk" {:tools ["printenv" "ledger" "slow-ledger" "ledger-clerk" "boom" "fetch" "post" "mail"]}
             "auditor" {:tools ["ledger-auditor"]}}
    :notify {:kind :none}})
 
@@ -686,88 +681,20 @@
                     {:name "memo_close" :input {:memo id :outcome "Posted."}})}
       :else {:text "Done."})))
 
-(deftest a-session-that-read-an-outsider-and-holds-private-data-waits-to-post
+(deftest a-session-that-read-an-outsider-and-holds-private-data-runs-its-calls
   (when bin
     (with-world {} reads-then-posts
       (fn []
         (let [id (memo! "Post the news")
-              first-wake (dispatch/wake! *sys* "clerk" {:dispatched true})
-              [hold] (core/open-holds (state) "clerk")]
-          (is (= :ran (:result first-wake)))
-          (testing "the egress call was held, not run"
-            (is (= "post" (:tool hold)))
-            (is (= {:args ["hello"]} (:input hold)))
-            (is (string? (:input-sha256 hold)) "agentloop gave the input's digest")
-            (is (empty? (ledger-lines "posted.txt"))))
-          (testing "the wake recorded the session's labels, and counted nothing against the memo"
-            (is (= ["contaminated" "private"] (get-in (state) [:wakes (:wake first-wake) :labels])))
-            (is (zero? (:attempts (core/memo (state) id))))
-            (is (= :unread (:status (core/memo (state) id)))))
-          (testing "the role is not woken while it waits"
-            (is (empty? (core/roles-to-wake (state) (:config *sys*) (Instant/now))))
-            (is (= :idle (:result (dispatch/wake! *sys* "clerk" {}))) "its memo waits with the held session"))
-          (inbound/submit! *sys* {:type :hold/resolve :actor "operator" :args {:hold (:id hold) :verdict "allow"}})
-          (is (= ["clerk"] (core/roles-to-wake (state) (:config *sys*) (Instant/now))))
-          (let [second-wake (dispatch/wake! *sys* "clerk" {:dispatched true})]
-            (is (= :ran (:result second-wake)))
-            (testing "the resumed session ran the approved call, once"
-              (is (= ["hello"] (ledger-lines "posted.txt"))))
-            (testing "and what it wrote carries everything it had seen"
-              (is (= :read (:status (core/memo (state) id))))
-              (is (= ["contaminated" "private"] (:outcome-labels (core/memo (state) id)))))
-            (is (empty? (core/open-holds (state))))
-            (is (empty? (core/pending-resolutions (state) "clerk")))))))))
-
-(deftest an-act-call-waits-unless-consent-covers-it
-  (when bin
-    (with-world {} (fn [body]
-                     (let [done (answered body)]
-                       (cond (not (done "ledger")) {:tool-uses [{:name "ledger" :input {:args ["edit"]}}]}
-                             (not (done "fetch")) {:tool-uses [{:name "fetch" :input {:args ["x"]}}]}
-                             (not (done "send")) {:tool-uses [{:name "send" :input {:args ["to-me"]}}
-                                                              {:name "send" :input {:args ["to-me "]}}]}
-                             :else {:text "Done."})))
-      (fn []
-        (memo! "Do it")
-        (dispatch/wake! *sys* "clerk" {:dispatched true})
-        (let [[hold :as holds] (core/open-holds (state) "clerk")]
-          (testing "an edit call runs on a clean session"
-            (is (= ["edit"] (ledger-lines "ledger.txt"))))
-          (testing "the call the operator's consent covers runs, contaminated or not"
-            (is (= ["to-me"] (ledger-lines "sent.txt"))))
-          (testing "the near miss is held, with the service's preview"
-            (is (= 1 (count holds)) (pr-str holds))
-            (is (= {:args ["to-me "]} (:input hold)))
-            (is (= "PREVIEW: goes to 412 people" (get-in hold [:preview :content])))
-            (is (= {"args" ["to-me "]} (get (json/parse-string (slurp (ledger "preview-in.json"))) "input"))
-                "the preview command was given the held call's input")))))))
-
-(deftest a-denied-call-never-runs
-  (when bin
-    (with-world {} reads-then-posts
-      (fn []
-        (let [id (memo! "Post the news")
-              _ (dispatch/wake! *sys* "clerk" {:dispatched true})
-              [hold] (core/open-holds (state) "clerk")]
-          (inbound/submit! *sys* {:type :hold/resolve :actor "operator"
-                                  :args {:hold (:id hold) :verdict "deny" :reason "Not to the public."}})
-          (dispatch/wake! *sys* "clerk" {:dispatched true})
-          (is (empty? (ledger-lines "posted.txt")))
-          (is (= :read (:status (core/memo (state) id))) "the model was told and carried on")
-          (is (str/includes? (json/generate-string (:body (last @(:requests *mock*)))) "Not to the public.")))))))
-
-(deftest a-clean-session-posts-without-asking
-  (when bin
-    (with-world {} (fn [body]
-                     (if ((answered body) "post")
-                       {:text "Done."}
-                       {:tool-uses [{:name "post" :input {:args ["hi"]}}]}))
-      (fn []
-        (memo! "Post hi")
-        (dispatch/wake! *sys* "clerk" {:dispatched true})
-        (is (= ["hi"] (ledger-lines "posted.txt")))
-        (is (empty? (core/open-holds (state))))))))
-
+              result (dispatch/wake! *sys* "clerk" {:dispatched true})]
+          (is (= :ran (:result result)))
+          (testing "the call ran, once, with nobody asked"
+            (is (= ["hello"] (ledger-lines "posted.txt"))))
+          (testing "the wake recorded the session's labels, as provenance"
+            (is (= ["contaminated" "private"] (get-in (state) [:wakes (:wake result) :labels]))))
+          (testing "and what it wrote carries everything it had seen"
+            (is (= :read (:status (core/memo (state) id))))
+            (is (= ["contaminated" "private"] (:outcome-labels (core/memo (state) id))))))))))
 
 (deftest an-envelope-tool-s-labels-reach-the-session-and-the-log
   (when bin

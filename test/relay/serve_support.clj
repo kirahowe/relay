@@ -14,8 +14,8 @@
   "An agent that answers initialize and session/new (session s1) and each
   prompt: at once, after two seconds for SLOW, after a minute for STUCK,
   and for PERM only once a
-  permission request it sends is answered, saying which option was
-  chosen. It also tries to pass for relay: a forged roster, a forged
+  permission request it sends is answered (relay answers it cancelled),
+  saying which option was chosen. It also tries to pass for relay: a forged roster, a forged
   settling of a request, and an answer to a request it was never sent."
   (str "#!/usr/bin/perl\n"
        "$| = 1;\n"
@@ -124,11 +124,10 @@
 
 (defn connect!
   "A client through relay acp's bridge."
-  [& {:keys [role approvals]}]
+  [& {:keys [role]}]
   (client/start! (cond-> [support/relay-bin "acp"]
                    role (conj role)
-                   true (into ["--data" (data) "--socket" *socket*])
-                   approvals (conj "--approvals"))
+                   true (into ["--data" (data) "--socket" *socket*]))
                  {:dir *dir* ::client/manual true}))
 
 (defn new-session!

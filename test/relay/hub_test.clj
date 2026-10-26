@@ -16,7 +16,7 @@
 (def t0 (Instant/parse "2026-10-21T12:00:00Z"))
 
 (defn roster-entry [id & [conversation]]
-  {:id id :title (str/capitalize id) :labels [] :working? false :holds 0 :conversation conversation})
+  {:id id :title (str/capitalize id) :labels [] :working? false :conversation conversation})
 
 (def roster [(roster-entry "clerk") (roster-entry "hub")])
 
@@ -38,8 +38,8 @@
 (defn fresh [& [mode]]
   (first (run (hub/hub {:mode (or mode :service)}) {:event :log-changed :roster roster})))
 
-(defn opened [h conn & {:keys [approvals role origin] :or {origin :socket}}]
-  (first (run h {:event :connection-opened :conn conn :origin origin :approvals approvals :role role})))
+(defn opened [h conn & {:keys [role origin] :or {origin :socket}}]
+  (first (run h {:event :connection-opened :conn conn :origin origin :role role})))
 
 (defn say [h conn l] (run h {:event :connection-line :conn conn :line l}))
 (defn agent [h role l] (run h {:event :agent-line :role role :line l}))
@@ -47,8 +47,8 @@
 (defn live
   "A hub with the clerk's conversation live as session s1, connection 1
   having opened it."
-  [& {:keys [mode approvals] :or {mode :service approvals true}}]
-  (let [h (-> (fresh mode) (opened 1 :approvals approvals))
+  [& {:keys [mode] :or {mode :service}}]
+  (let [h (-> (fresh mode) (opened 1))
         [h] (say h 1 (req 1 "initialize" {:protocolVersion 1 :clientCapabilities {}}))
         [h] (say h 1 (req 2 "session/new" {:cwd "/w" :mcpServers [] :_meta {"relay/role" "clerk"}}))
         [h] (run h {:event :conversation-started :role "clerk" :wake 7})
@@ -75,23 +75,21 @@
 
 (deftest relay-connect-counts-only-as-the-first-line-of-a-socket
   (let [h (opened (fresh) 1)
-        [h fx] (say h 1 (req 9 "_relay/connect" {:approvals true :role "clerk"}))]
+        [h fx] (say h 1 (req 9 "_relay/connect" {:role "clerk"}))]
     (is (= {"jsonrpc" "2.0" "id" 9 "result" {}} (first (writes fx 1))))
-    (is (= [true "clerk"] ((juxt :approvals :role) (get-in h [:conns 1])))))
-  (testing "as a later line it is refused and grants nothing"
+    (is (= "clerk" (get-in h [:conns 1 :role]))))
+  (testing "as a later line it is refused and changes nothing"
     (let [h (opened (fresh) 1)
           [h] (say h 1 (req 1 "initialize" {}))
-          [h fx] (say h 1 (req 2 "_relay/connect" {:approvals true}))]
+          [h fx] (say h 1 (req 2 "_relay/connect" {:role "clerk"}))]
       (is (= -32600 (get-in (first (writes fx 1)) ["error" "code"])))
-      (is (false? (get-in h [:conns 1 :approvals])))
-      (let [[h fx] (say h 1 (note "_relay/connect" {:approvals true}))]
-        (is (empty? fx))
-        (is (false? (get-in h [:conns 1 :approvals]))))))
-  (testing "on stdio it is never taken: approvals come from relay acp's own flag"
+      (is (nil? (get-in h [:conns 1 :role])))
+      (let [[_ fx] (say h 1 (note "_relay/connect" {:role "clerk"}))]
+        (is (empty? fx)))))
+  (testing "on stdio it is never taken"
     (let [h (opened (fresh :embedded) 1 :origin :stdio)
-          [h fx] (say h 1 (req 1 "_relay/connect" {:approvals true}))]
-      (is (= -32600 (get-in (first (writes fx 1)) ["error" "code"])))
-      (is (false? (get-in h [:conns 1 :approvals]))))))
+          [_ fx] (say h 1 (req 1 "_relay/connect" {:role "clerk"}))]
+      (is (= -32600 (get-in (first (writes fx 1)) ["error" "code"]))))))
 
 ;; --- conversations
 
@@ -127,7 +125,7 @@
         (is (nil? (get-in h [:convs "hub"])))))))
 
 (deftest a-default-role-is-only-for-a-session-new-that-names-none
-  (let [ws (fn [] (first (run (fresh) {:event :connection-opened :conn 2 :origin :websocket :approvals true
+  (let [ws (fn [] (first (run (fresh) {:event :connection-opened :conn 2 :origin :websocket
                                        :default-role "hub"})))]
     (testing "a session/new with no role goes to the default role"
       (let [[_ fx] (say (ws) 2 (req 3 "session/new" {:cwd "/"}))]
@@ -141,15 +139,15 @@
         (let [[_ fx] (say h 2 (req 4 "_relay/items" {}))]
           (is (= -32602 (get-in (first (writes fx 2)) ["error" "code"]))))))
     (testing "a default role relay does not have is refused as any unknown role is"
-      (let [h (first (run (fresh) {:event :connection-opened :conn 2 :origin :websocket :approvals true
+      (let [h (first (run (fresh) {:event :connection-opened :conn 2 :origin :websocket
                                    :default-role "nobody"}))
             [_ fx] (say h 2 (req 3 "session/new" {:cwd "/"}))]
         (is (str/includes? (get-in (first (writes fx 2)) ["error" "message"]) "no role called nobody"))))
-    (testing "a WebSocket connection cannot claim a role or approvals with _relay/connect"
-      (let [h (first (run (fresh) {:event :connection-opened :conn 2 :origin :websocket :approvals false}))
-            [h fx] (say h 2 (req 1 "_relay/connect" {:approvals true :role "clerk"}))]
+    (testing "a WebSocket connection cannot claim a role with _relay/connect"
+      (let [h (first (run (fresh) {:event :connection-opened :conn 2 :origin :websocket}))
+            [h fx] (say h 2 (req 1 "_relay/connect" {:role "clerk"}))]
         (is (= -32600 (get-in (first (writes fx 2)) ["error" "code"])))
-        (is (= [false nil] ((juxt :approvals :role) (get-in h [:conns 2]))))))))
+        (is (nil? (get-in h [:conns 2 :role])))))))
 
 (deftest a-second-session-new-attaches-with-the-replay
   (let [h (-> (live) (opened 2))
@@ -198,7 +196,7 @@
 
 (deftest session-list-gives-live-conversations
   (let [h (assoc (live) :roster [(roster-entry "clerk" {:wake 7 :session "s1" :opened-at t0 :last-activity t0 :turn :idle :turns 1
-                                                          :unread? false :approvals 0}) (roster-entry "hub")])
+                                                          :unread? false}) (roster-entry "hub")])
         [_ fx] (say h 1 (req 9 "session/list" {}))]
     (is (= {"sessions" [{"sessionId" "s1" "cwd" "/w" "title" "Clerk" "updatedAt" (str t0) "_meta" {"relay/role" "clerk"}}]}
            (get (first (writes fx 1)) "result")))
@@ -244,7 +242,7 @@
     (is (= {:type :conversation/turn-start :actor "operator" :args {:wake 7 :session "s1"}} command))
     (is (empty? (sends fx "clerk")) "nothing reaches the agent before relay accepts the turn")
     (testing "busy: the prompt is queued, and the roster says so"
-      (let [h (assoc h :roster [(roster-entry "clerk" {:wake 7 :session nil :turn :idle :turns 0 :unread? false :approvals 0
+      (let [h (assoc h :roster [(roster-entry "clerk" {:wake 7 :session nil :turn :idle :turns 0 :unread? false
                                                        :opened-at t0 :last-activity t0})])
             [h fx] (run h {:event :submit-result :tag tag :rejection :busy :message "clerk is busy with scheduled work."})]
         (is (empty? fx))
@@ -284,7 +282,7 @@
         [_ fx] (say h 1 (note "session/cancel" {:sessionId "s1"}))]
     (is (= ["session/cancel"] (map #(get (parse %) "method") (sends fx "clerk"))))))
 
-;; --- permissions
+;; --- permissions: no client is ever asked
 
 (defn- permission [id]
   (line {:jsonrpc "2.0" :id id :method "session/request_permission"
@@ -292,69 +290,23 @@
                   :options [{:optionId "a" :kind "allow_once" :name "Allow"}
                             {:optionId "r" :kind "reject_once" :name "Reject"}]}}))
 
-(defn- choose [id opt] (res id {:outcome {:outcome "selected" :optionId opt}}))
-
-(defn- two-approvers []
-  (let [h (opened (live) 2 :approvals true)
-        [h] (say h 2 (req 1 "session/load" {:sessionId "s1"}))
-        h (opened h 3 :approvals false)
-        [h] (say h 3 (req 1 "session/load" {:sessionId "s1"}))]
-    h))
-
-(deftest a-permission-request-goes-to-every-approving-client-and-the-first-answer-wins
-  (let [[h fx] (agent (two-approvers) "clerk" (permission 900))
-        [p1] (writes fx 1)
-        [p2] (writes fx 2)]
-    (is (empty? (writes fx 3)) "a client that cannot approve is not asked")
-    (is (= "session/request_permission" (get p1 "method") (get p2 "method")))
-    (let [[h fx] (say h 2 (choose (get p2 "id") "a"))]
-      (is (= [{"jsonrpc" "2.0" "id" 900 "result" {"outcome" {"outcome" "selected" "optionId" "a"}}}]
-             (map parse (sends fx "clerk")))
-          "the answer reaches the agent under its own id")
-      (is (= [{"jsonrpc" "2.0" "method" "_relay/permission/settled"
-               "params" {"sessionId" "s1" "toolCallId" "c1" "outcome" "allow_once"}}]
-             (writes fx 1)))
-      (testing "a late answer from the other is dropped without an error, and never reaches the agent"
-        (let [[h fx] (say h 1 (res (get p1 "id") {:outcome {:outcome "cancelled"}}))]
-          (is (empty? fx))
-          (testing "and only once: a second is a stray"
-            (is (empty? (second (say h 1 (res (get p1 "id") {:outcome {:outcome "cancelled"}})))))))))))
-
-(deftest an-answer-relay-cannot-take-is-a-refusal
-  (testing "an option the agent did not offer goes to the proxy, which refuses it"
-    (let [[h fx] (agent (two-approvers) "clerk" (permission 900))
-          [p1] (writes fx 1)
-          [_ fx] (say h 1 (choose (get p1 "id") "made-up"))]
-      (is (= [{"jsonrpc" "2.0" "id" 900 "result" {"outcome" {"outcome" "selected" "optionId" "made-up"}}}]
-             (map parse (sends fx "clerk"))))
-      (is (= "reject_once" (get-in (first (writes fx 2)) ["params" "outcome"])))))
-  (testing "a line the strict reader refuses, with the request's id, is refused through the proxy"
-    (let [[h fx] (agent (two-approvers) "clerk" (permission 900))
-          [p1] (writes fx 1)
-          [_ fx] (say h 1 (str "{\"jsonrpc\":\"2.0\",\"id\":" (json/generate-string (get p1 "id")) ",\"result\":{},\"result\":{}}"))
-          [sent] (map parse (sends fx "clerk"))]
-      (is (= {"jsonrpc" "2.0" "id" 900 "result" {"outcome" {"outcome" "selected" "optionId" "r"}}} sent)
-          "refused through the proxy, which records it")))
-  (testing "a client that is not approving cannot answer"
-    (let [[h fx] (agent (two-approvers) "clerk" (permission 900))
-          id (get (first (writes fx 1)) "id")
-          [_ fx] (say h 3 (choose id "a"))]
-      (is (empty? (sends fx "clerk"))))))
-
-(deftest a-permission-with-nobody-to-answer-it
-  (testing "service: it waits, relay is asked once to tell the operator, and an approver attaching gets it"
-    (let [h (live :approvals false)
-          [h fx] (agent h "clerk" (permission 900))]
-      (is (= [{:type :permission/unattended :actor "dispatcher" :args {:wake 7 :call "c1"}}] (map :command (submits fx))))
-      (is (empty? (sends fx "clerk")))
-      (let [h (-> (submit-ok h fx) (opened 2 :approvals true))
-            [_ fx] (say h 2 (req 1 "session/load" {:sessionId "s1"}))]
-        (is (= ["_relay/replayed" nil "session/request_permission"] (map #(get % "method") (writes fx 2)))
-            "after the replay and the answer"))))
-  (testing "embedded: it is refused"
-    (let [[_ fx] (agent (live :mode :embedded :approvals false) "clerk" (permission 900))]
-      (is (= [{"jsonrpc" "2.0" "id" 900 "result" {"outcome" {"outcome" "selected" "optionId" "r"}}}]
-             (map parse (sends fx "clerk")))))))
+(deftest an-agent-s-permission-request-is-refused-and-no-client-sees-it
+  (doseq [mode [:service :embedded]]
+    (testing (name mode)
+      (let [h (opened (live :mode mode) 2)
+            [h] (say h 2 (req 1 "session/load" {:sessionId "s1"}))
+            [h fx] (agent h "clerk" (permission 900))]
+        (is (empty? (writes fx 1)))
+        (is (empty? (writes fx 2)))
+        (is (empty? (submits fx)) "and nobody is told to answer it")
+        (is (= [{"jsonrpc" "2.0" "id" 900 "error" {"code" -32601 "message" "relay's clients do not take session/request_permission."}}]
+               (map parse (sends fx "clerk"))))
+        (testing "nor is it kept for a client that attaches later"
+          (let [[_ fx] (say (opened h 3) 3 (req 1 "session/load" {:sessionId "s1"}))]
+            (is (not-any? #(= "session/request_permission" (get % "method")) (writes fx 3)))))
+        (testing "an agent cancelling a request of its own reaches no client"
+          (let [[_ fx] (agent h "clerk" (note "$/cancel_request" {:requestId 900}))]
+            (is (empty? fx))))))))
 
 ;; --- the roster, seen, ending
 
@@ -377,17 +329,14 @@
     (is (= [{"jsonrpc" "2.0" "id" 8 "result" {}}] (writes (second (run h {:event :submit-result :tag tag :ok true})) 1)))))
 
 (deftest ending-a-conversation-answers-everything-owed
-  (let [h (opened (live) 2 :approvals true)
+  (let [h (opened (live) 2)
         [h] (say h 2 (req 1 "session/load" {:sessionId "s1"}))
         [h fx] (say h 1 (req 30 "session/prompt" {:sessionId "s1" :prompt []}))
         h (submit-ok h fx)
         [h fx] (say h 2 (req 31 "_relay/items" {:sessionId "s1"}))
-        [h] (agent h "clerk" (permission 900))
         [h fx] (say h 2 (req 40 "_relay/conversations/end" {:sessionId "s1"}))]
     (is (= :send (:effect (first fx))) "the turn is cancelled first")
     (is (= :stop (:effect (last fx))) "then the conversation stopped")
-    (is (= 2 (count (filter #(= "_relay/permission/settled" (get % "method")) (concat (writes fx 1) (writes fx 2)))))
-        "its permission request is settled with the turn")
     (let [[h fx] (run h {:event :conversation-gone :role "clerk"})]
       (is (= [{"jsonrpc" "2.0" "id" 30 "error" {"code" -32000 "message" "The conversation ended."}}]
              (filter #(= 30 (get % "id")) (writes fx 1))))
@@ -406,19 +355,18 @@
 ;; --- relay's own methods, routed
 
 (deftest the-pane-s-methods-go-to-the-conversation-they-name
-  (let [h (opened (live) 2 :approvals false)
+  (let [h (opened (live) 2)
         [h] (say h 2 (req 1 "session/load" {:sessionId "s1"}))
         [h fx] (say h 2 (req 50 "_relay/items" {:sessionId "s1"}))
         [sent] (map parse (sends fx "clerk"))
-        items {:items [{:kind "shown" :canTrust true} {:kind "proposal"}]}
+        items {:items [{:kind "shown"}]}
         [_ fx] (agent h "clerk" (res (get sent "id") items))]
     (is (= ["_relay/items" {"sessionId" "s1"}] [(get sent "method") (get sent "params")]))
-    (is (= [{"kind" "shown" "canTrust" false} {"kind" "proposal"}] (get-in (first (writes fx 2)) ["result" "items"]))
-        "only a client that may approve is offered trust")
-    (testing "trust from a client that cannot approve is refused before the conversation sees it"
+    (is (= [{"kind" "shown"}] (get-in (first (writes fx 2)) ["result" "items"])))
+    (testing "trust is not one of relay's methods"
       (let [[_ fx] (say h 2 (req 51 "_relay/trust" {:sessionId "s1" :path "a.md"}))]
         (is (empty? (sends fx "clerk")))
-        (is (= -32000 (get-in (first (writes fx 2)) ["error" "code"])))))
+        (is (= -32601 (get-in (first (writes fx 2)) ["error" "code"])))))
     (testing "the board is the hub's: a proxy's word about it goes nowhere"
       (let [[_ fx] (agent h "clerk" (note "_relay/cards/changed" {:rev 3 :cards []}))]
         (is (empty? fx))))
@@ -556,13 +504,7 @@
            (get-in labels ["params" "update"]))
         "the labels come first, before any text they cover")
     (is (= "usage_update" (get-in usage ["params" "update" "sessionUpdate"])) "and the latest usage")
-    (is (not-any? #(= "tool_call_update" (get-in % ["params" "update" "sessionUpdate"])) more) "the old update itself was dropped"))
-  (testing "a permission request's labels count too"
-    (let [[h] (agent (live) "clerk" (line {:jsonrpc "2.0" :id 900 :method "session/request_permission"
-                                          :params {:sessionId "s1" :toolCall {:toolCallId "c1" :_meta {"agentloop/labels" ["private"]}}
-                                                   :options []}}))
-          [_ fx] (say (opened h 2) 2 (req 1 "session/load" {:sessionId "s1"}))]
-      (is (= ["private"] (get-in (first (writes fx 2)) ["params" "update" "_meta" "agentloop/labels"]))))))
+    (is (not-any? #(= "tool_call_update" (get-in % ["params" "update" "sessionUpdate"])) more) "the old update itself was dropped")))
 
 ;; --- Codex round 2
 
@@ -580,34 +522,6 @@
       (testing "and once answered, the id is free again"
         (let [[_ fx] (say h 1 (req 77 "slow" {:sessionId "s1"}))]
           (is (= ["slow"] (map #(get (parse %) "method") (sends fx "clerk")))))))))
-
-(deftest a-turn-that-ends-retires-its-permission-requests
-  (let [h (opened (live) 2 :approvals true)
-        [h] (say h 2 (req 1 "session/load" {:sessionId "s1"}))
-        [h fx] (say h 1 (req 30 "session/prompt" {:sessionId "s1" :prompt []}))
-        h (submit-ok h fx)
-        prompt-id (:up (second (hub/running h "clerk")))
-        [h fx] (agent h "clerk" (permission 900))
-        p2 (first (writes fx 2))]
-    (testing "the agent cancelling its request: each client is told under its own id, and it is settled"
-      (let [[h' fx] (agent h "clerk" (note "$/cancel_request" {:requestId 900}))]
-        (is (= [{"jsonrpc" "2.0" "method" "$/cancel_request" "params" {"requestId" (get p2 "id")}}
-                {"jsonrpc" "2.0" "method" "_relay/permission/settled" "params" {"sessionId" "s1" "toolCallId" "c1" "outcome" "cancelled"}}]
-               (writes fx 2)))
-        (is (= [{"jsonrpc" "2.0" "id" 900 "result" {"outcome" {"outcome" "cancelled"}}}] (map parse (sends fx "clerk")))
-            "and the proxy's record of it is closed")
-        (is (empty? (get-in h' [:convs "clerk" :perms])))))
-    (testing "the turn ending, however: no client is asked about it again"
-      (let [[h fx] (agent h "clerk" (res prompt-id {:stopReason "cancelled"}))
-            h (submit-ok h fx)]
-        (is (some #(= "_relay/permission/settled" (get % "method")) (writes fx 2)))
-        (is (empty? (get-in h [:convs "clerk" :perms])))
-        (let [[_ fx] (say (opened h 3 :approvals true) 3 (req 1 "session/load" {:sessionId "s1"}))]
-          (is (not-any? #(= "session/request_permission" (get % "method")) (writes fx 3))))))
-    (testing "cancelling the turn answers its requests cancelled, as ACP asks of a client"
-      (let [[_ fx] (say h 1 (note "session/cancel" {:sessionId "s1"}))]
-        (is (= ["session/cancel" nil] (map #(get (parse %) "method") (sends fx "clerk"))))
-        (is (= {"outcome" {"outcome" "cancelled"}} (get (parse (second (sends fx "clerk"))) "result")))))))
 
 (deftest a-client-cancelling-its-own-request-is-passed-on-under-relay-s-id
   (let [[h fx] (say (live) 1 (req 77 "slow" {:sessionId "s1"}))
@@ -697,7 +611,7 @@
 ;; parameter they do not take.
 (deftest the-board-needs-no-conversation
   (let [[s0 s1 card] (board-states)
-        h (-> (fresh) (assoc :state s0) (opened 1 :approvals true))
+        h (-> (fresh) (assoc :state s0) (opened 1))
         [h] (say h 1 (req 1 "initialize" {:protocolVersion 1 :clientCapabilities {}}))
         [h fx] (say h 1 (req 2 "_relay/cards" {}))]
     (is (empty? (get-in h [:conns 1 :attached])) "no conversation is open")
@@ -708,16 +622,16 @@
             [_ fx] (run h {:event :submit-result :tag tag :ok true :changed true :state s1})]
         (is (= ["operator" {:card card :op "tick" :item 1}] [(:actor command) (:args command)]))
         (is (= [true false] (mapv #(get % "done") (get-in (first (writes fx 1)) ["result" "card" "items"]))))))
-    (testing "a trust is taken from a client with approvals"
-      (let [[_ fx] (say h 1 (req 4 "_relay/cards/trust" {:card card :rev 1 :sha256 (apply str (repeat 64 "a"))}))]
-        (is (= [:label/trust] (map #(get-in % [:command :type]) (submits fx))))))
+    (testing "there is no trusting a card"
+      (let [[_ fx] (say h 1 (req 4 "_relay/cards/trust" {:card card :rev 1}))]
+        (is (empty? (submits fx)))
+        (is (= -32601 (get-in (first (writes fx 1)) ["error" "code"])))))
     (testing "and a change elsewhere is sent with no conversation open"
       (let [[_ fx] (run h {:event :log-changed :roster roster :state s1})]
         (is (= [[true false]] (map board-items (filter #(= "_relay/cards/changed" (get % "method")) (writes fx 1)))))))
     (testing "a sessionId is refused on every board method"
       (doseq [[method params] [["_relay/cards" {:sessionId "s1"}]
-                               ["_relay/cards/op" {:sessionId "s1" :card card :op "tick" :item 1}]
-                               ["_relay/cards/trust" {:sessionId "s1" :card card :rev 1 :sha256 (apply str (repeat 64 "a"))}]]]
+                               ["_relay/cards/op" {:sessionId "s1" :card card :op "tick" :item 1}]]]
         (let [[_ fx] (say h 1 (req 9 method params))
               [w] (writes fx 1)]
           (is (empty? (submits fx)) method)
@@ -815,7 +729,7 @@
   ;; The shell once carried out a submit's result before the rest of its
   ;; step's effects, so a roster subscriber got idle and then a stale
   ;; queued, and kept queued until the next log change.
-  (let [idle {:wake 7 :session "s1" :opened-at t0 :last-activity t0 :turn :idle :turns 0 :unread? false :approvals 0}
+  (let [idle {:wake 7 :session "s1" :opened-at t0 :last-activity t0 :turn :idle :turns 0 :unread? false}
         h (assoc (live) :roster [(roster-entry "clerk" idle) (roster-entry "hub")])
         [h] (drive h {:event :connection-line :conn 1 :line (req 5 "_relay/roles" {})})
         turns (fn [fx] (for [m (writes fx 1) :when (= "_relay/roles/changed" (get m "method"))]
@@ -886,5 +800,5 @@
                (sim/drain (reduce sim/act (sim/start :service (when (odd? i) 400))
                                   (gen/generate (gen/vector sim/gen-action 1 80) (mod i 100) i))))
         share (fn [k] (/ (count (filter #(pos? (get-in % [:seen k] 0)) runs)) (count runs)))]
-    (doseq [k [:settled-for-another :unattended :truncated :queued-then-run :orphan-answered]]
+    (doseq [k [:permission-refused :truncated :queued-then-run :orphan-answered]]
       (is (>= (share k) 0.02) (str k " reached in " (double (share k)) " of runs")))))

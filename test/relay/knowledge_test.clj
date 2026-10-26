@@ -190,15 +190,9 @@
     (is (= ids (mapv :id (core/facts (:state w) {:as-of (:now w) :search "tuesday bins"}))))
     (is (= ids (sort ids)))))
 
-(deftest a-contaminated-fact-does-not-move-the-ranking-of-the-others
-  ;; BM25 weighs a word by how many facts hold it, so a contaminated fact
-  ;; ranked alongside the others could reorder them. It is left out first.
+(deftest a-fact-from-outside-is-ranked-with-the-others
   (let [clean (-> (seed) (add-fact "Boat on the lake by the lake.") (add-fact "The car."))
         dirty (add-fact clean "Car car car car." {:labels ["contaminated"]})
-        q {:search "boat car"}]
-    (is (= (search-tool clean q) (search-tool dirty q)))
-    (is (str/includes? (search-tool clean q) "The car.\nFact"))
-    (testing "accepted, it is ranked with them, and here it reorders them"
-      (let [out (search-tool dirty (assoc q :accept_contamination true))]
-        (is (str/includes? out "Car car car car."))
-        (is (< (str/index-of out "Boat") (str/index-of out "The car.")))))))
+        out (search-tool dirty {:search "boat car"})]
+    (is (str/includes? out "Car car car car."))
+    (is (< (str/index-of out "Boat") (str/index-of out "The car.")))))

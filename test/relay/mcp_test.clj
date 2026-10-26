@@ -2,8 +2,9 @@
   "Tools from MCP servers: relay.edn names the servers and the tools taken
   from them, relay checks both, the agentloop request carries exactly the
   servers and tools a role is granted, and a run whose tools could not be
-  set up waits for the operator without pausing its harness. A tool whose
-  definition changed under a session waits for relay fresh."
+  set up is tried again without pausing its harness. When a tool's
+  definition changes under a session, relay takes the new one, tells the
+  operator, and the next session starts with it."
   (:require [babashka.fs :as fs]
             [cheshire.core :as json]
             [clojure.string :as str]
@@ -32,7 +33,7 @@
                  "search" {:command ["/usr/local/bin/search-mcp"] :send-labels true}}
    :tools {"file_read" {:protocol :mcp-stdio :server "files" :tool "read" :class :read :labels ["private"]}
            "file_write" {:protocol :mcp-stdio :server "files" :tool "write" :class :write :labels []
-                         :always-hold true :digest digest}
+                         :digest digest}
            "search" {:protocol :mcp-stdio :server "search" :tool "query" :class :read :labels ["contaminated"]
                      :allow-content ["image"]}
            "fetch" {:class :read :labels ["contaminated"] :description "Fetch." :command ["true"]}}
@@ -95,9 +96,8 @@
       (is (str/includes? (str (problem f)) expected) (str why ": " (problem f)))))
   (testing "the placeholder may sit inside an argument"
     (is (nil? (problem #(assoc-in % [:mcp-servers "files" :command] ["files-mcp" "--token-file={credentials_file}"])))))
-  (testing "an MCP tool may be read through the quarantined reader and may always hold"
-    (is (nil? (problem #(assoc-in % [:grants "hub" :quarantine] ["search"]))))
-    (is (nil? (problem #(assoc-in % [:tools "search" :always-hold] true)))))
+  (testing "nor may it hold its calls"
+    (is (str/includes? (str (problem #(assoc-in % [:tools "search" :always-hold] true))) "no longer has")))
   (testing "the brief does not run an MCP tool"
     (is (= {:unusable "file_read" :why "comes from an MCP server, which only agentloop runs"}
            ((requiring-resolve 'relay.brief/source)
@@ -182,7 +182,9 @@
                             (:send-labels given) (assoc "send_labels" true))
                           m)))
                    (get req "mcp_servers"))
-           (every? #(contains? (get-in req ["policy" "tools"]) %) (keys mcp))
+           ;; The policy gives labels only, and only for tools that have
+           ;; some: these have none.
+           (empty? (get-in req ["policy" "tools"]))
            (or (seq mcp) (not (contains? req "mcp_servers")))
            ;; Always the harness's timeout, never agentloop's default.
            (= (or (get-in settings [:harnesses :agentloop :tool-timeout-seconds])
@@ -207,8 +209,8 @@
             {"name" "file_write" "protocol" "mcp-stdio" "server" "files" "tool" "write" "digest" digest}
             {"name" "search" "protocol" "mcp-stdio" "server" "search" "tool" "query" "allow_content" ["image"]}]
            (filterv #(get % "protocol") (get hub "tools"))))
-    (is (= {"class" "write" "always_hold" true} (get-in hub ["policy" "tools" "file_write"])))
-    (is (= {"class" "read" "labels" ["private"]} (get-in hub ["policy" "tools" "file_read"])))
+    (is (nil? (get-in hub ["policy" "tools" "file_write"])) "no labels, so no entry")
+    (is (= {"labels" ["private"]} (get-in hub ["policy" "tools" "file_read"])))
     (is (= 300 (get hub "tool_timeout_seconds")))
     (is (not (contains? clerk "mcp_servers")) "a role granted no MCP tool starts no server")
     (is (= ["search"] (keys (get scout "mcp_servers"))) "only the servers of the role's own tools")
@@ -221,7 +223,7 @@
 (def pinned (apply str (repeat 64 "1")))
 (def got (apply str (repeat 64 "2")))
 
-(deftest tools-unavailable-needs-the-operator-and-keeps-the-labels
+(deftest tools-unavailable-keeps-the-labels
   (let [run #(agentloop/classify {:outcome % :exit 0 :session "s1" :now (Instant/parse "2026-10-15T12:00:00Z")})]
     (testing "a server that did not start"
       (let [r (run {:type "outcome" :reason "tools_unavailable" :labels ["private"]
@@ -270,12 +272,6 @@
 (defn- end [w args now]
   (run w "dispatcher" :wake/end (merge {:wake (:id (support/calling-wake (:state w) "hub")) :exit 0} args) now))
 
-(defn- fresh
-  "relay fresh as the command line sends it: with what it showed."
-  ([w role] (fresh w role t0))
-  ([w role now]
-   (run w "operator" :role/fresh {:role role :expect (core/fresh-expectation (:state w) role)} now)))
-
 (defn- notifications [w kind]
   (filter #(= kind (:kind %)) (vals (:notifications (:state w)))))
 
@@ -284,58 +280,82 @@
       (run "operator" :role/add {:id "hub" :title "Hub" :instructions "Route."})
       (run "operator" :memo/send {:to "hub" :subject "Look" :body "Look."})))
 
-(defn- rejection [f]
-  (try (f) nil (catch clojure.lang.ExceptionInfo e [(core/rejection e) (ex-message e)])))
-
-(deftest a-changed-definition-waits-for-relay-fresh
+(deftest a-changed-definition-is-taken-and-the-next-session-starts-with-it
   (let [w (-> (setup) (start t0)
-              (end {:outcome "ran" :session "s1" :cut-short true} t0)
+              (end {:outcome "ran" :session "s1" :cut-short true :pins {"file_read" pinned}} t0)
               (run "operator" :wake/start {:role "hub"} t0))
         _ (is (= "s1" (:session (get-in (:state w) [:wakes (:resumes (support/calling-wake (:state w) "hub"))]))))
         w (end w {:outcome "needs-attention" :session "s1" :labels ["private"]
                   :tools-error {:server "files" :tool "file_read" :pinned pinned :got got
                                 :message "The definition of the tool file_read is not the one this session pinned."}}
-               t0)
-        later (.plusSeconds t0 (* 3600 24 30))]
+               t0)]
     (testing "the harness is not paused, and nothing about it is said"
       (is (nil? (core/paused-until (:state w) "agentloop" t0)))
       (is (empty? (notifications w "harness-needs-attention"))))
-    (testing "the operator is told once, with what agentloop said and relay fresh"
-      (let [[n & more] (notifications w "tools-unavailable")]
+    (testing "the new definition is pinned, for every role granted it"
+      (is (= got (core/tool-pin (:state w) "file_read"))))
+    (testing "the operator is told once, plainly"
+      (let [[n & more] (notifications w "tool-changed")]
         (is (empty? more))
-        (is (str/includes? (:body n) "is not the one this session pinned"))
-        (is (str/includes? (:body n) "relay fresh hub"))
+        (is (str/includes? (:body n) "relay uses the new"))
+        (is (not (re-find #"(?i)relay fresh|label|hold" (:body n))))
         (is (= ["private"] (:labels n)) "with the session's labels")))
     (testing "the memo is not counted as a failed attempt: only the cut-short wake counted"
       (is (= 1 (:attempts (first (core/unread-memos (:state w) "hub"))))))
-    (testing "the dispatcher never wakes the role, however long it waits"
-      (is (= [] (core/roles-to-wake (:state w) (:config w) later)))
-      (is (= :paused (first (rejection #(start w later))))))
-    (testing "status says so"
-      (is (some #(str/includes? % "tools unavailable: file_read changed (relay fresh hub)")
-                (render/status (:state w) (ZoneId/of "UTC") t0 (:config w)))))
-    (testing "neither a wake by hand nor a conversation starts while it waits (D1)"
-      (is (= :paused (first (rejection #(run w "operator" :wake/start {:role "hub"} later)))))
-      (is (= :paused (first (rejection #(run w "operator" :wake/start {:role "hub" :chat true} later))))))
-    (testing "only the operator starts it afresh"
-      (is (= :forbidden (first (rejection #(run w "hub" :role/fresh {:role "hub"})))))
-      (is (= :forbidden (first (rejection #(run w "dispatcher" :role/fresh {:role "hub"}))))))
-    (testing "relay fresh ends the session; the next wake starts a new one"
-      (let [w (fresh w "hub")
-            ended (last (:events w))]
-        (is (= {:tool "file_read" :digest got} (:data (last (filter #(= "tool/pinned" (:type %)) (:events w)))))
-            "the changed definition is accepted")
-        (is (= got (core/tool-pin (:state w) "file_read")))
-        (is (some #(and (= "hold/session-ended" (:type %))
-                        (= {:role "hub" :session "s1" :why "the operator started it afresh" :fresh true} (:data %)))
-                  (:events w)))
-        (is (not (core/waiting-on-tools? (:state w) "hub" t0)))
-        (is (= ["hub"] (core/roles-to-wake (:state w) (:config w) later)))
-        (let [w (start w later)]
-          (is (nil? (:resumes (support/calling-wake (:state w) "hub"))) "a fresh session")
-          (testing "and relay fresh has nothing more to end"
-            (let [w (end w {:outcome "ran" :session "s2"} later)]
-              (is (= :invalid (first (rejection #(fresh w "hub" later))))))))))))
+    (testing "nothing waits: the next wake starts a fresh session with the new definition"
+      (is (not (core/waiting-on-tools? (:state w) "hub" t0)))
+      (is (= ["hub"] (core/roles-to-wake (:state w) (:config w) (.plusSeconds t0 3600))) "once its retry delay is up")
+      (let [w (start w (.plusSeconds t0 3600))
+            inputs {:shared "" :now t0 :relay-bin "relay" :data-path "/d"}
+            req (dispatch/wake-request {:data-dir "/nonexistent" :config (:config w)} (:state w)
+                                       (support/calling-wake (:state w) "hub") inputs)]
+        (is (nil? (:resumes (support/calling-wake (:state w) "hub"))) "a fresh session")
+        (is (= got (get-in (first (filter #(= "file_read" (:name %)) (:tools req))) [:mcp :digest])))))
+    (testing "status shows no block"
+      (is (not-any? #(str/includes? % "tools unavailable") (render/status (:state w) (ZoneId/of "UTC") t0 (:config w)))))))
+
+(deftest a-definition-that-changes-on-every-connect-backs-off-and-is-told-once
+  ;; A server whose description carries a timestamp or a counter differs
+  ;; every time. relay takes the first change at once; a second in a row
+  ;; waits, doubling, and nothing more is said.
+  (let [d (fn [i] (apply str (repeat 64 (str (mod i 10)))))
+        changed (fn [w i now]
+                  (end w {:outcome "needs-attention" :session (str "s" i)
+                          :tools-error {:server "files" :tool "file_read" :pinned (d i) :got (d (inc i))
+                                        :message "The definition of the tool file_read changed."}}
+                       now))
+        w (-> (setup) (start t0) (changed 1 t0))
+        _ (testing "the first change is taken at once"
+            (is (= (d 2) (core/tool-pin (:state w) "file_read")))
+            (is (not (core/waiting-on-tools? (:state w) "hub" t0))))
+        t1 (.plusSeconds t0 60)
+        w (-> w (start t1) (changed 2 t1))
+        retry (get-in (:state w) [:roles "hub" :tools-unavailable :retry-at])]
+    (testing "a second change in a row is taken, but the role waits"
+      (is (= (d 3) (core/tool-pin (:state w) "file_read")) "so a server that settles works at the retry")
+      (is (= (.plusSeconds t1 60) retry))
+      (is (core/waiting-on-tools? (:state w) "hub" t1))
+      (is (= [] (core/roles-to-wake (:state w) (:config w) t1))))
+    (let [w (reduce (fn [w i]
+                      (let [now (get-in (:state w) [:roles "hub" :tools-unavailable :retry-at])]
+                        (-> w (start now) (changed i now))))
+                    w (range 3 8))]
+      (testing "the waits double"
+        (is (= (.plusSeconds (get-in (:state w) [:roles "hub" :tools-unavailable :since])
+                             (config/retry-delay-seconds (:config w) 6))
+               (get-in (:state w) [:roles "hub" :tools-unavailable :retry-at]))))
+      (testing "the operator is told once in all"
+        (is (= 1 (count (notifications w "tool-changed"))))
+        (is (empty? (notifications w "tools-unavailable"))))
+      (testing "the memo is still there, not counted as failed"
+        (is (= 0 (:attempts (first (core/unread-memos (:state w) "hub"))))))
+      (testing "a wake that runs ends the streak: the next change is taken at once again"
+        (let [now (get-in (:state w) [:roles "hub" :tools-unavailable :retry-at])
+              w (-> w (start now) (end {:outcome "ran" :session "s9"} now)
+                    (run "operator" :memo/send {:to "hub" :subject "Again" :body "Again."} now)
+                    (start now) (changed 8 now))]
+          (is (not (core/waiting-on-tools? (:state w) "hub" now)))
+          (is (= 2 (count (notifications w "tool-changed")))))))))
 
 (deftest a-server-that-did-not-start-is-tried-again-later-in-the-same-session
   (let [w (-> (setup) (start t0)
@@ -346,7 +366,7 @@
     (is (= (.plusSeconds t0 60) retry) "after the first retry delay")
     (is (str/includes? (:body n) "did not start: boom"))
     (is (str/includes? (:body n) "relay wake hub"))
-    (is (not (str/includes? (:body n) "relay fresh")))
+    (is (not (re-find #"(?i)relay fresh|label|hold" (:body n))))
     (is (= [] (core/roles-to-wake (:state w) (:config w) t0)))
     (is (= ["hub"] (core/roles-to-wake (:state w) (:config w) retry)))
     (let [w (start w retry)
@@ -375,24 +395,9 @@
     (is (some? (core/paused-until (:state w) "agentloop" t0)))
     (is (nil? (get-in (:state w) [:roles "hub" :tools-unavailable])))))
 
-(deftest relay-fresh-denies-what-the-ended-session-left-open
-  (let [w (-> (setup) (start t0)
-              (end {:outcome "ran" :session "s1"
-                    :held [{:id "c1" :name "fetch" :input {:args ["x"]} :input-sha256 "abc"}]} t0))
-        h (first (core/open-holds (:state w) "hub"))
-        _ (is (some? h))
-        w (fresh w "hub")]
-    (is (= :denied (:status (core/hold (:state w) (:id h)))))
-    (is (empty? (core/open-holds (:state w) "hub")))
-    (is (get-in (:state w) [:ended-sessions "s1"]))
-    (testing "a role that does not exist, or is running"
-      (is (= :not-found (first (rejection #(fresh w "nobody")))))
-      (let [w (start w t0)]
-        (is (= :busy (first (rejection #(fresh w "hub")))))))))
-
 ;; --- review fixes
 
-(deftest a-conversation-never-clears-a-block-and-only-the-blocked-session-clears-a-fresh-one
+(deftest a-conversation-never-clears-a-block
   (let [w (-> (setup) (start t0)
               (end {:outcome "needs-attention" :session "s1"
                     :tools-error {:server "files" :message "did not start"}} t0))
@@ -401,29 +406,6 @@
         chat (support/calling-wake (:state w) "hub")
         w (run w "dispatcher" :wake/end {:wake (:id chat) :outcome "ran" :sessions ["c1"]} later)]
     (is (some? (get-in (:state w) [:roles "hub" :tools-unavailable])) "a conversation that ran clears nothing")))
-
-(deftest a-public-role-blocked-on-a-changed-tool-is-not-started-afresh-by-hand
-  ;; N1: making the role public ends its old session, which used to clear
-  ;; the block and let relay wake start a fresh session.
-  (let [base (assoc settings :dead-letter-handler "clerk")
-        cfg (config/resolve-config (assoc-in base [:grants "hub"] {:public true :tools ["search"]}))
-        pub (fn [w actor type args now]
-              (let [[state events] (core/run-command (:state w) {:type type :actor actor :args args :public true}
-                                                     {:now now :config (:config w)})]
-                (assoc w :state state :events (into (:events w) events))))
-        w (-> {:state core/empty-state :config (config/resolve-config (assoc-in base [:grants "hub"] {:tools ["search"]}))
-               :events []}
-              (pub "operator" :role/add {:id "hub" :title "Hub" :instructions "Route."} t0))
-        w (-> w (pub "operator" :memo/send {:to "hub" :subject "Look" :body "Look."} t0)
-              (start t0)
-              (end {:outcome "needs-attention" :session "s1"
-                    :tools-error {:tool "search" :pinned pinned :got got :message "changed"}} t0))
-        w (assoc w :config cfg)]
-    (is (= :paused (first (rejection #(run w "operator" :wake/start {:role "hub"} t0)))))
-    (is (get-in (:state w) [:roles "hub" :tools-unavailable :fresh]))
-    (let [w (fresh w "hub")]
-      (is (nil? (get-in (:state w) [:roles "hub" :tools-unavailable])))
-      (is (= got (core/tool-pin (:state w) "search"))))))
 
 (defn- pins-line [m]
   (json/generate-string {:type "pins" :pins {:pins m}}))
@@ -460,7 +442,7 @@
         (is (= pinned (get (first (filter #(= "file_read" (get % "name"))
                                           (get (json/parse-string (json/generate-string (agentloop/request-json req "sid" "/w"))) "tools")))
                            "digest")))))
-    (testing "a drift in a new session, after a wake that completed, blocks the role; fresh accepts it for every role"
+    (testing "a drift in a new session takes the new definition for every role, told once"
       (let [w (-> w (run "operator" :role/add {:id "clerk" :title "C" :instructions "x"})
                   (run "operator" :memo/send {:to "hub" :subject "Again" :body "Again."})
                   (start t0)
@@ -468,50 +450,17 @@
                         :tools-error {:server "files" :tool "file_read" :pinned pinned :got got
                                       :message "The MCP server files gives a definition of the tool file_read that is not the one the request pins"}}
                        t0))]
-        (is (core/waiting-on-tools? (:state w) "hub" t0))
-        (is (get-in (:state w) [:roles "hub" :tools-unavailable :fresh]))
-        (testing "another role offered the changed tool is stopped too"
+        (is (= got (core/tool-pin (:state w) "file_read")))
+        (is (not (core/waiting-on-tools? (:state w) "hub" t0)))
+        (testing "another role's old session stopped by the same change takes it quietly"
           (let [w (-> w (run "operator" :memo/send {:to "clerk" :subject "Go" :body "Go."})
                       (run "dispatcher" :wake/start {:role "clerk" :dispatched true}))
                 cw (support/calling-wake (:state w) "clerk")
                 w (run w "dispatcher" :wake/end {:wake (:id cw) :exit 0 :outcome "needs-attention" :session "c1"
                                                  :tools-error {:tool "file_read" :pinned pinned :got got :message "changed"}})]
-            (is (get-in (:state w) [:roles "clerk" :tools-unavailable :fresh]))
-            (let [w (fresh w "hub")]
-              (is (= got (core/tool-pin (:state w) "file_read")))
-              (is (not (core/waiting-on-tools? (:state w) "hub" t0)))
-              (is (not (core/waiting-on-tools? (:state w) "clerk" t0))
-                  "accepting it for one role accepts it for every role granted it"))))))))
-
-(deftest relay-fresh-ends-the-blocked-session-and-lists-what-it-drops
-  ;; N3: a held session and a later blocked one; fresh ends the blocked one.
-  (let [w (-> (setup) (start t0)
-              (end {:outcome "ran" :session "s1" :cut-short true} t0)
-              (run "operator" :wake/start {:role "hub"} t0)
-              (end {:outcome "needs-attention" :session "s2"
-                    :tools-error {:tool "file_read" :pinned pinned :got got :message "changed"}} t0))]
-    (is (= "s2" (core/session-to-carry-on (:state w) "hub"))))
-  (let [w (-> (setup) (start t0)
-              (end {:outcome "ran" :session "s1"
-                    :held [{:id "c1" :name "fetch" :input {:args ["x"]} :input-sha256 "abc"}
-                           {:id "c2" :name "fetch" :input {:args ["y"]} :input-sha256 "def"}]} t0))
-        [h1 h2] (core/open-holds (:state w) "hub")
-        w (-> w (run "operator" :hold/resolve {:hold (:id h1) :verdict "allow"})
-              (run "operator" :hold/resolve {:hold (:id h2) :verdict "allow"})
-              (run "dispatcher" :wake/start {:role "hub" :dispatched true})
-              (end {:outcome "needs-attention" :session "s1"
-                    :tools-error {:tool "file_read" :pinned pinned :got got :message "changed"}} t0))]
-    (is (= [(:id h1) (:id h2)] (mapv :id (core/holds-dropped-by-fresh (:state w) "hub")))
-        "approved calls whose resume never ran")))
-
-(deftest no-tool-may-take-the-readers-name
-  (is (str/includes? (str (problem #(-> % (assoc-in [:tools "read_quarantined"] {:class :read :labels [] :command ["x"]}))))
-                     "quarantined reader"))
-  (is (str/includes? (str (problem #(-> % (assoc-in [:tools "read_quarantined"] (get-in % [:tools "search"]))
-                                        (update :tools dissoc "search")
-                                        (assoc-in [:grants "hub" :tools] ["read_quarantined"])
-                                        (assoc-in [:grants "scout" :tools] ["read_quarantined"]))))
-                     "quarantined reader")))
+            (is (not (core/waiting-on-tools? (:state w) "clerk" t0)))
+            (is (nil? (:interrupted-wake (core/role (:state w) "clerk"))))
+            (is (= 1 (count (notifications w "tool-changed"))))))))))
 
 (deftest the-tools-message-is-one-line-and-status-never-shows-a-past-retry
   (is (= "a b c" (:message (agentloop/tools-error {:message "a\n\nb\r\n c"}))))
@@ -521,47 +470,3 @@
     (is (some #(str/includes? % "next try") (lines t0)))
     (is (not-any? #(str/includes? % "next try") (lines (.plusSeconds t0 3600))))
     (is (some #(str/includes? % "tried again at the next tick") (lines (.plusSeconds t0 3600))))))
-
-(deftest relay-fresh-acts-only-on-what-the-operator-saw
-  ;; R3: the state changes between showing and typing the code.
-  (let [w (-> (setup) (start t0)
-              (end {:outcome "needs-attention" :session "s1"
-                    :tools-error {:tool "file_read" :pinned pinned :got got :message "changed"}} t0))
-        shown (core/fresh-expectation (:state w) "hub")
-        _ (is (= {:session "s1" :tool "file_read" :got got} shown))
-        ;; Meanwhile the block is replaced by one for another change.
-        other (apply str (repeat 64 "3"))
-        moved (update-in w [:state :roles "hub" :tools-unavailable] assoc :got other)
-        r (rejection #(run moved "operator" :role/fresh {:role "hub" :expect shown}))]
-    (is (= :invalid (first r)))
-    (is (str/includes? (second r) "look again"))
-    (is (= :invalid (first (rejection #(run w "operator" :role/fresh {:role "hub"}))))
-        "without what was shown, nothing is done")
-    (is (nil? (core/tool-pin (:state (fresh moved "hub")) "nope")))
-    (is (= other (core/tool-pin (:state (fresh moved "hub")) "file_read")) "a fresh look accepts what it shows")))
-
-(deftest a-first-use-never-adopts-a-definition-already-seen-to-change
-  ;; R1: hub is stopped by a change before relay accepted any definition;
-  ;; another role's first use of the changed one must not lift it or be
-  ;; recorded.
-  (let [w (-> (setup)
-              (run "operator" :role/add {:id "clerk" :title "C" :instructions "x"})
-              (start t0)
-              (end {:outcome "needs-attention" :session "s1"
-                    :tools-error {:tool "file_read" :pinned pinned :got got :message "changed"}} t0))
-        _ (is (= pinned (core/tool-pin (:state w) "file_read")) "the definition it changed from is held")
-        w (-> w (run "operator" :memo/send {:to "clerk" :subject "Go" :body "Go."})
-              (run "dispatcher" :wake/start {:role "clerk" :dispatched true}))
-        cw (support/calling-wake (:state w) "clerk")
-        w (run w "dispatcher" :wake/end {:wake (:id cw) :exit 0 :outcome "ran" :session "c1" :pins {"file_read" got}})]
-    (is (= pinned (core/tool-pin (:state w) "file_read")))
-    (is (get-in (:state w) [:roles "hub" :tools-unavailable :fresh]) "only relay fresh lifts it")
-    (testing "tool/pinned alone lifts nothing"
-      (let [[state] (core/run-command (:state w) {:type :role/fresh :actor "operator"
-                                                  :args {:role "hub" :expect (core/fresh-expectation (:state w) "hub")}}
-                                      {:now t0 :config (:config w)})]
-        (is (nil? (get-in state [:roles "hub" :tools-unavailable])))
-        (let [after (core/evolve (:state w) {:seq (:next-seq (:state w)) :at (str t0) :type "tool/pinned"
-                                             :data {:tool "file_read" :digest got}})]
-          (is (= got (core/tool-pin after "file_read")))
-          (is (= (:roles (:state w)) (:roles after))))))))

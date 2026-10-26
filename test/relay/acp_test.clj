@@ -146,40 +146,26 @@
     (fs/delete-tree dir)))
 
 (deftest an-agent-line-too-long-to-read-never-reaches-the-client
-  ;; Regression: a line past the limit used to go on unread, so a huge
-  ;; permission request reached a client that had no say.
-  (doseq [[what line permission?] [["a permission request"
-                                     (json/generate-string {:jsonrpc "2.0" :id 9 :method "session/request_permission"
-                                                            :params {:toolCall {:rawInput {:pad (apply str (repeat 200000 "x"))}}}})
-                                     true]
-                                    ["anything else" (json/generate-string {:jsonrpc "2.0" :method "session/update"
-                                                                            :params {:pad (apply str (repeat 200000 "y"))}})
-                                     false]]]
+  ;; Regression: a line past the limit used to go on unread.
+  (doseq [[what line] [["a huge update" (json/generate-string {:jsonrpc "2.0" :method "session/update"
+                                                               :params {:pad (apply str (repeat 200000 "y"))}})]]]
     (let [dir (fs/create-temp-dir {:prefix "relay-oversize"})
-          line-file (str dir "/line") got (str dir "/got")
+          line-file (str dir "/line")
           _ (spit line-file (str line "\n"))
           client-out (java.io.PipedOutputStream.)
           out (ByteArrayOutputStream.)
           dropped (promise)
-          run (future (dispatch/proxy! {:argv ["sh" "-c" (str "cat " line-file "; echo '{\"after\":1}';"
-                                                              (if permission? (str " read l; echo \"$l\" > " got ";") "")
-                                                              " cat >/dev/null")]}
-                                       {:in (java.io.PipedInputStream. client-out) :out out :approvals true
+          run (future (dispatch/proxy! {:argv ["sh" "-c" (str "cat " line-file "; echo '{\"after\":1}'; cat >/dev/null")]}
+                                       {:in (java.io.PipedInputStream. client-out) :out out
                                         :line-limit 65536 :on-oversized #(deliver dropped %)}))]
-      (is (= {:size (inc (count line)) :permission? permission? :refused permission?}
-             (deref dropped 10000 :never)) what)
-      (when permission?
-        (loop [n 0] (when (and (< n 200) (not (and (fs/exists? got) (str/ends-with? (slurp got) "\n"))))
-                      (Thread/sleep 20) (recur (inc n))))
-        (is (= {"jsonrpc" "2.0" "id" 9 "result" {"outcome" {"outcome" "cancelled"}}}
-               (json/parse-string (slurp got))) "relay refused it to the agent"))
+      (is (= {:size (inc (count line))} (deref dropped 10000 :never)) what)
       (.close client-out)
       (deref run 10000 nil)
       (let [seen (.toString out "UTF-8")]
         (is (= "{\"after\":1}\n" seen) (str what ": only the next line reached the client")))
       (fs/delete-tree dir))))
 
-;; Regression (relay#58 review): the screen, the permission and display
+;; Regression (relay#58 review): the screen and the display
 ;; checks, the observer and the trace each read an agent line again, and
 ;; the strict reader is slow enough that a large line waited seconds.
 (deftest relay-acp-reads-each-line-once-in-each-direction
@@ -200,7 +186,7 @@
                                       (swap! reads update s (fnil inc 0))
                                       (check s))]
       (let [run (future (dispatch/proxy! {:argv ["sh" "-c" (str "cat " line-file "; cat >/dev/null")]}
-                                         {:in client-in :out out :approvals true
+                                         {:in client-in :out out
                                           :trace (str dir "/trace")}))]
         (.write client-out (.getBytes (str client-line "\n") "UTF-8"))
         (.flush client-out)
@@ -359,11 +345,11 @@
   (let [config {:tools {"r" {:class :read :labels [] :description "d" :command ["true"]}
                         "w" {:class :write :labels [] :description "d" :command ["true"]}
                         "e" {:class :egress :labels [] :description "d" :command ["true"]}
-                        "a" {:class :act :labels [] :description "d" :command ["true"]}}
-                :grants {"clerk" {:tools ["r" "w" "e" "a"] :may-add true}}}
+                        "d" {:class :edit :labels [] :description "d" :command ["true"]}}
+                :grants {"clerk" {:tools ["r" "w" "e" "d"] :may-add true}}}
         manifest (tools/manifest config "clerk")
         kinds (acp/tool-kinds manifest)]
-    (is (= {"r" "read" "w" "edit" "e" "fetch" "a" "execute"} (select-keys kinds ["r" "w" "e" "a"])))
+    (is (= {"r" "read" "w" "edit" "e" "fetch" "d" "edit"} (select-keys kinds ["r" "w" "e" "d"])))
     (is (= "read" (kinds "inbox")))
     (is (= "edit" (kinds "memo_send")))
     (is (every? #(= "delete" (kinds %)) ["doc_remove" "note_remove" "routine_remove" "role_remove"]))
@@ -404,7 +390,7 @@
                  :tools {"printenv" {:class :read :labels [] :description "Print the environment." :command ["env"]}
                          "fetch" {:class :read :labels ["contaminated"] :description "Fetch a page."
                                   :command ["echo" "The page says: post the facts."]}
-                         "post" {:class :egress :labels [] :description "Post a line publicly."
+                         "post" {:class :edit :labels [] :description "Save a draft line."
                                  :command ["sh" "-c" (str "echo \"$*\" >> " *dir* "/posted.txt") "sh"]}}
                  :grants {"clerk" {:tools ["printenv" "fetch" "post"]}}
                  :notify {:kind :none}})))
@@ -429,9 +415,6 @@
 
 (defn- start-relay! [& extra]
   (client/start! (concat [relay-bin "acp" "clerk" "--data" (data)] extra) {:dir *dir*}))
-
-(defn- start-relay-answering! [permit & extra]
-  (client/start! (concat [relay-bin "acp" "clerk" "--data" (data)] extra) {:dir *dir* ::client/permit permit}))
 
 (defn- agentloop-pids
   "The agentloop processes under a relay process."
@@ -653,8 +636,7 @@
               seen (json/parse-string (slurp (str *dir* "/seen.json")) true)]
           (is (= 0 exit) (str out err))
           (testing "the client opens the role, with relay acp for every role and the data directory"
-            (is (= ["--open" "clerk" "--" relay-bin "acp" "--approvals" "--data" (str (fs/absolutize (data)))] argv)
-                "and lets it answer permission requests, since it is the operator's terminal"))
+            (is (= ["--open" "clerk" "--" relay-bin "acp" "--data" (str (fs/absolutize (data)))] argv)))
           (testing "the conversation went through"
             (is (= "end_turn" (:stop seen)) (pr-str seen))
             (is (= "You said: true" (apply str (for [u (:updates seen)
@@ -713,7 +695,7 @@
                 (.destroyForcibly ^Process (:proc proc))))))))))
 
 
-;; --- held calls in a conversation go to the client
+;; --- nothing in a conversation waits for anyone
 
 (defn- reads-fetches-posts [body]
   (let [names (set (for [m (:messages body) c (when (sequential? (:content m)) (:content m))
@@ -726,112 +708,47 @@
 
 (defn- posted [] (let [f (str *dir* "/posted.txt")] (if (fs/exists? f) (slurp f) "")))
 
-(deftest a-held-call-in-a-conversation-is-the-client-s-to-answer
-  (when bin
-    (doseq [[kind ran?] [["allow_once" true] ["reject_once" false]]]
-      (with-world {} reads-fetches-posts
-        (fn []
-          (inbound/submit! *sys* {:type :fact/add :actor "operator" :args {:text "The safe code is 1234."}})
-          (let [c (start-relay-answering! (client/choose kind) "--approvals")
-                sid (client/handshake! c *dir*)
-                resp (client/request! c "session/prompt" (client/prompt-params sid "Go."))
-                asked (client/await! c #(= "session/request_permission" (get % "method")) 1000)]
-            (is (= "end_turn" (get-in resp ["result" "stopReason"])) (pr-str resp))
-            (testing "relay passed the agent's question through to the client"
-              (is (= {"args" ["the facts"]} (get-in asked ["params" "toolCall" "rawInput"]))
-                  (pr-str (get asked "params")))
-              (is (some #(= "reject_once" (get % "kind")) (get-in asked ["params" "options"]))))
-            (testing "and the client's answer back"
-              (is (= ran? (str/includes? (posted) "the facts")) kind))
-            (testing "the client is shown the session's labels"
-              (is (some #(= ["contaminated" "private"] (get-in % ["_meta" "agentloop/labels"]))
-                        (client/updates c))))
-            (client/close-input! c)
-            (is (= 0 (client/wait! c 20000)))
-            (is (empty? (core/open-holds (state))) "a conversation's holds are not relay's")
-            (testing "relay recorded the request and the client's answer"
-              (let [[p] (vals (:permissions (state)))]
-                (is (= ["post" kind "client"] ((juxt :tool :outcome :by) p)) (pr-str p))
-                (is (string? (:input-sha256 p)))))))))))
-
-(deftest without-approvals-relay-refuses-for-the-client
+(deftest a-conversation-s-calls-run-and-the-client-is-asked-nothing
   (when bin
     (with-world {} reads-fetches-posts
       (fn []
         (inbound/submit! *sys* {:type :fact/add :actor "operator" :args {:text "The safe code is 1234."}})
-        (let [c (start-relay-answering! (client/choose "allow_once"))
+        (let [c (start-relay!)
               sid (client/handshake! c *dir*)
               resp (client/request! c "session/prompt" (client/prompt-params sid "Go."))]
           (is (= "end_turn" (get-in resp ["result" "stopReason"])) (pr-str resp))
-          (is (nil? (client/await! c #(= "session/request_permission" (get % "method")) 200))
-              "the client, which would have allowed it, never saw the request")
-          (is (= "" (posted)) "and the call never ran")
+          (testing "the call ran, after the session read outside text"
+            (is (str/includes? (posted) "the facts")))
+          (testing "the client was asked nothing"
+            (is (nil? (client/await! c #(= "session/request_permission" (get % "method")) 200))))
+          (testing "the client is shown the session's labels, as provenance"
+            (is (some #(= ["contaminated" "private"] (get-in % ["_meta" "agentloop/labels"]))
+                      (client/updates c))))
           (client/close-input! c)
-          (is (= 0 (client/wait! c 20000)))
-          (let [[p] (vals (:permissions (state)))]
-            (is (= ["post" "reject_once" "relay"] ((juxt :tool :outcome :by) p)) (pr-str p)))
-          (is (some #(= "permission-refused" (:kind %)) (vals (:notifications (state))))
-              "and the operator is told"))))))
+          (is (= 0 (client/wait! c 20000))))))))
 
-(deftest a-forged-answer-is-a-refusal
-  (when bin
-    (with-world {} reads-fetches-posts
-      (fn []
-        (inbound/submit! *sys* {:type :fact/add :actor "operator" :args {:text "The safe code is 1234."}})
-        (let [c (start-relay-answering! (fn [_] {:outcome "selected" :optionId "allow_always"}) "--approvals")
-              sid (client/handshake! c *dir*)]
-          (client/request! c "session/prompt" (client/prompt-params sid "Go."))
-          (is (= "" (posted)) "an option the agent never offered allows nothing")
-          (client/close-input! c)
-          (client/wait! c 20000)
-          (let [[p] (vals (:permissions (state)))]
-            (is (= ["reject_once" "client"] ((juxt :outcome :by) p)) (pr-str p))))))))
+(defn- permission-line [id]
+  (json/generate-string {:jsonrpc "2.0" :id id :method "session/request_permission"
+                         :params {:sessionId "s" :toolCall {:toolCallId "c" :title "post" :rawInput {}}
+                                  :options [{:optionId "a" :kind "allow_once" :name "Allow"}
+                                            {:optionId "r" :kind "reject_once" :name "Reject"}]}}))
 
-(deftest a-client-that-goes-away-refuses-what-it-was-asked
-  (doseq [approvals [true false]]
-    (let [dir (fs/create-temp-dir {:prefix "relay-perm"})
-          got (str dir "/got")
-          request (json/generate-string {:jsonrpc "2.0" :id 7 :method "session/request_permission"
-                                         :params {:sessionId "s" :toolCall {:toolCallId "t" :title "post"}
-                                                  :options [{:optionId "yes" :kind "allow_once"}
-                                                            {:optionId "no" :kind "reject_once"}]}})
-          seen (atom [])
-          client-out (java.io.PipedOutputStream.)
-          client-in (java.io.PipedInputStream. client-out)
-          run (future (dispatch/proxy! {:argv ["sh" "-c" (str "echo '" request "'; read line; echo \"$line\" > " got)]}
-                                       {:in client-in
-                                        :out (ByteArrayOutputStream.)
-                                        :approvals approvals
-                                        :on-permission (fn [& args] (swap! seen conj args))}))
-          ;; The client goes away once it has been asked.
-          _ (loop [n 0] (when (and (< n 200) (empty? @seen)) (Thread/sleep 10) (recur (inc n))))
-          _ (.close client-out)
-          {:keys [exit]} (deref run 10000 {:exit :hung})]
-      (is (= 0 exit))
-      (is (= {"jsonrpc" "2.0" "id" 7 "result" {"outcome" {"outcome" "selected" "optionId" "no"}}}
-             (json/parse-string (slurp got))) (str "approvals " approvals))
-      (is (= [:asked :answered] (map first @seen)))
-      (is (= {:outcome "reject_once" :by "relay" :why (if approvals "client-gone" "no-approvals")}
-             (nth (second @seen) 2)))
-      (fs/delete-tree dir))))
-
-(deftest answers-are-checked-against-the-request
-  (let [req (acp/permission-request
-             (json/generate-string {:jsonrpc "2.0" :id 3 :method "session/request_permission"
-                                    :params {:options [{:optionId "a" :kind "allow_once"} {:optionId "r" :kind "reject_once"}]}}))
-        answer #(acp/answer-of req (json/generate-string %))]
-    (is (= {:outcome "allow_once" :valid true} (answer {:jsonrpc "2.0" :id 3 :result {:outcome {:outcome "selected" :optionId "a"}}})))
-    (is (= {:outcome "cancelled" :valid true} (answer {:jsonrpc "2.0" :id 3 :result {:outcome {:outcome "cancelled"}}})))
-    (is (= {:outcome "reject_once" :valid false} (answer {:jsonrpc "2.0" :id 3 :result {:outcome {:outcome "selected" :optionId "zzz"}}})))
-    (is (= {:outcome "reject_once" :valid false} (answer {:jsonrpc "2.0" :id 3 :error {:code 1}})))
-    (is (nil? (answer {:jsonrpc "2.0" :id 4 :result {}})) "another request's answer")
-    (is (= {:outcome "allow_once" :valid true}
-           (acp/answer-of req "{\"jsonrpc\":\"2.0\",\"id\":3.0,\"result\":{\"outcome\":{\"outcome\":\"selected\",\"optionId\":\"a\"}}}"))
-        "the same id written as a decimal")
-    (is (nil? (answer {:jsonrpc "2.0" :id "3" :result {}})) "a string id is another id")
-    (is (nil? (answer {:jsonrpc "2.0" :id 3 :method "x"})) "a request, not an answer")
-    (is (= {"outcome" "cancelled"} (get-in (acp/refusal (assoc req :options [])) ["result" "outcome"])))))
-
+(deftest a-permission-request-from-an-agent-is-cancelled-and-never-reaches-the-client
+  (let [dir (fs/create-temp-dir {:prefix "relay-no-permission"})
+        got (str dir "/got")
+        client-out (java.io.PipedOutputStream.)
+        out (ByteArrayOutputStream.)
+        run (future (dispatch/proxy! {:argv ["sh" "-c" (str "echo '" (permission-line 7) "'; echo '{\"after\":1}';"
+                                                            " read l; echo \"$l\" > " got "; cat >/dev/null")]}
+                                     {:in (java.io.PipedInputStream. client-out) :out out}))]
+    (loop [n 0] (when (and (< n 250) (not (and (fs/exists? got) (str/ends-with? (slurp got) "\n"))))
+                  (Thread/sleep 20) (recur (inc n))))
+    (is (= {"jsonrpc" "2.0" "id" 7 "result" {"outcome" {"outcome" "cancelled"}}} (json/parse-string (slurp got)))
+        "the agent is told it was cancelled")
+    (.close client-out)
+    (deref run 10000 nil)
+    (is (= "{\"after\":1}\n" (.toString out "UTF-8")) "the client saw only the next line")
+    (fs/delete-tree dir)))
 
 (deftest a-trace-file-is-the-operator-s-alone
   (with-world {} (fn [_] {:text "hi"})
@@ -853,83 +770,6 @@
           (client/wait! c 20000)
           (is (= "rw-------" (fs/posix->str (fs/posix-file-permissions trace)))))))))
 
-(deftest a-permission-request-relay-cannot-read-is-never-passed-on
-  (doseq [approvals [true false]
-          [line refused?] [["{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"session/request_permission\",\"params\":{\"options\":[" true]
-                           ["{\"method\":\"session/request_permission\",\"params\":{}}" false]
-                           ;; The method twice: the strict reader refuses it.
-                           ["{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"session/request_permission\",\"method\":\"_relay/items\",\"params\":{\"options\":[]}}" true]
-                           ;; One value, then another.
-                           ["{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"session/request_permission\",\"params\":{\"options\":[]}} null" true]]]
-    (let [dir (fs/create-temp-dir {:prefix "relay-unread"})
-          line-file (str dir "/line") got (str dir "/got")
-          _ (spit line-file (str line "\n"))
-          client-out (java.io.PipedOutputStream.)
-          out (ByteArrayOutputStream.)
-          seen (atom [])
-          run (future (dispatch/proxy! {:argv ["sh" "-c" (str "cat " line-file "; echo '{\"after\":1}';"
-                                                              (when refused? (str " read l; echo \"$l\" > " got ";"))
-                                                              " cat >/dev/null")]}
-                                       {:in (java.io.PipedInputStream. client-out) :out out :approvals approvals
-                                        :on-permission (fn [& args] (swap! seen conj args))}))]
-      (loop [n 0] (when (and (< n 250) (< (count @seen) 2)) (Thread/sleep 20) (recur (inc n))))
-      (when refused?
-        (loop [n 0] (when (and (< n 200) (not (and (fs/exists? got) (str/ends-with? (slurp got) "\n"))))
-                      (Thread/sleep 20) (recur (inc n))))
-        (is (= {"jsonrpc" "2.0" "id" 5 "result" {"outcome" {"outcome" "cancelled"}}} (json/parse-string (slurp got)))))
-      (is (= [:asked :answered] (map first @seen)) (str "approvals " approvals))
-      (.close client-out)
-      (deref run 10000 nil)
-      (is (= "{\"after\":1}\n" (.toString out "UTF-8")) "only the next line reached the client")
-      (fs/delete-tree dir))))
-
-
-(defn- permission-line [id]
-  (json/generate-string {:jsonrpc "2.0" :id id :method "session/request_permission"
-                         :params {:sessionId "s" :toolCall {:toolCallId "t" :title "post"}
-                                  :options [{:optionId "yes" :kind "allow_once"}
-                                            {:optionId "no" :kind "reject_once"}]}}))
-
-(deftest an-answer-to-no-open-request-refuses-what-is-open
-  ;; Regression: the stray answer was passed on and the open request hung.
-  (let [dir (fs/create-temp-dir {:prefix "relay-stray"})
-        got (str dir "/got")
-        client-out (java.io.PipedOutputStream.)
-        seen (atom [])
-        run (future (dispatch/proxy! {:argv ["sh" "-c" (str "echo '" (permission-line 7) "'; read l; echo \"$l\" > " got "; cat >/dev/null")]}
-                                     {:in (java.io.PipedInputStream. client-out) :out (ByteArrayOutputStream.)
-                                      :approvals true :on-permission (fn [& args] (swap! seen conj args))}))]
-    (loop [n 0] (when (and (< n 200) (empty? @seen)) (Thread/sleep 20) (recur (inc n))))
-    (.write client-out (.getBytes "{\"jsonrpc\":\"2.0\",\"id\":99,\"result\":{\"outcome\":{\"outcome\":\"selected\",\"optionId\":\"yes\"}}}\n"))
-    (.flush client-out)
-    (loop [n 0] (when (and (< n 200) (not (and (fs/exists? got) (str/ends-with? (slurp got) "\n")))) (Thread/sleep 20) (recur (inc n))))
-    (is (= {"jsonrpc" "2.0" "id" 7 "result" {"outcome" {"outcome" "selected" "optionId" "no"}}} (json/parse-string (slurp got))))
-    (is (= {:outcome "reject_once" :by "relay" :why "client-error"} (nth (second @seen) 2)))
-    (.close client-out)
-    (deref run 10000 nil)
-    (fs/delete-tree dir)))
-
-(deftest an-answer-the-strict-reader-refuses-is-a-refusal
-  ;; Regression: an answer with its id twice was read by its first value
-  ;; and passed on, though another reader could read it otherwise.
-  (let [dir (fs/create-temp-dir {:prefix "relay-dup-answer"})
-        got (str dir "/got")
-        client-out (java.io.PipedOutputStream.)
-        seen (atom [])
-        run (future (dispatch/proxy! {:argv ["sh" "-c" (str "echo '" (permission-line 7) "'; read l; echo \"$l\" > " got "; cat >/dev/null")]}
-                                     {:in (java.io.PipedInputStream. client-out) :out (ByteArrayOutputStream.)
-                                      :approvals true :on-permission (fn [& args] (swap! seen conj args))}))]
-    (loop [n 0] (when (and (< n 200) (empty? @seen)) (Thread/sleep 20) (recur (inc n))))
-    (.write client-out (.getBytes "{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"outcome\":{\"outcome\":\"selected\",\"optionId\":\"yes\"}},\"id\":7}\n"))
-    (.flush client-out)
-    (loop [n 0] (when (and (< n 200) (not (and (fs/exists? got) (str/ends-with? (slurp got) "\n")))) (Thread/sleep 20) (recur (inc n))))
-    (is (= {"jsonrpc" "2.0" "id" 7 "result" {"outcome" {"outcome" "selected" "optionId" "no"}}} (json/parse-string (slurp got)))
-        "the agent gets relay's refusal, never the client's line")
-    (is (= {:outcome "reject_once" :by "relay" :why "client-error"} (nth (second @seen) 2)))
-    (.close client-out)
-    (deref run 10000 nil)
-    (fs/delete-tree dir)))
-
 (deftest an-agent-line-that-is-not-utf-8-never-reaches-the-client
   (let [out (ByteArrayOutputStream.)
         fine "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{}}"]
@@ -939,14 +779,3 @@
                                             fine "\\n'")]}
                      {:in (java.io.ByteArrayInputStream. (byte-array 0)) :out out})
     (is (= (str fine "\n") (.toString out "UTF-8")))))
-
-(deftest a-request-open-when-the-agent-stops-is-recorded-abandoned
-  (let [client-out (java.io.PipedOutputStream.)
-        seen (atom [])
-        run (future (dispatch/proxy! {:argv ["sh" "-c" (str "echo '" (permission-line 3) "'; sleep 0.5")]}
-                                     {:in (java.io.PipedInputStream. client-out) :out (ByteArrayOutputStream.)
-                                      :approvals true :on-permission (fn [& args] (swap! seen conj args))}))]
-    (deref run 10000 nil)
-    (.close client-out)
-    (is (= [:asked :answered] (map first @seen)))
-    (is (= {:outcome "abandoned" :by "relay" :why "agent-gone"} (nth (second @seen) 2)))))

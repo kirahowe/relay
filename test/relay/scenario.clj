@@ -8,7 +8,6 @@
     {:doc    \"what it shows\"
      :live?  true                    ; may also run against the real model (default false)
      :model  {\"hub\" [reply ...]}     ; scripted replies, mock mode only
-     :reader [reply ...]             ; the quarantined reader's, mock mode only
      :steps  [step ...]
      :assert [assertion ...]}        ; checked after the last step
 
@@ -17,8 +16,6 @@
     {:run [\"memo\" \"hub\" \"-s\" \"Subject\" \"-m\" \"Body\"]  ; a relay command, as the operator
      :stdin \"text\"                                         ; optional
      :exit 0}                                               ; expected exit code, default 0
-    {:run [\"release\" \"1\"] :tty [\"y\"]}    ; what the operator types at the terminal,
-                                         ; in order, beyond the codes the runner types
     {:tick 3}                  ; relay's dispatcher pass, three times; wakes run to the end
     {:tick 1 :spawn :process}  ; the same, but each wake is started the way relay tick
                                ; starts it, as a `relay wake` subprocess, and waited for
@@ -48,12 +45,8 @@
   A role's replies are used in order, and once they run out it answers
   {:text \"Done.\"}. {:memo-id pattern} works in tool inputs too.
 
-  :reader is a vector of replies too, for agentloop's quarantined
-  reader, whose requests name no role. Each is the reader's whole reply,
-  such as {:text \"{\\\"answer\\\": true}\"}.
-
   An assertion is [:has kind pattern], [:none kind pattern] or
-  [:count kind pattern n]. Kind is one of :memo :hold :wake :role :routine
+  [:count kind pattern n]. Kind is one of :memo :wake :role :routine
   :dead-letter :notification (relay's records of one), :event (the log's
   events, as JSON read back) or :sent (what the file notifier received),
   and also:
@@ -66,8 +59,8 @@
     :journal     one per entry: :id :owner :text :at :wake
     :note :doc   the current ones
     :tool-call   one per call in any wake's transcript: :role :wake :n (its
-                 place in the run) :name :input :verdict (agentloop's: allow,
-                 deny or hold) :error :result. Held calls count.
+                 place in the run) :name :input :verdict (agentloop's: allow
+                 or deny) :error :result.
     :citation    one per ref (relay.refs) in a memo to the operator, or in
                  the outcome the hub gave when closing a memo from the
                  operator, as
@@ -103,13 +96,10 @@
               time zone; without it the clock starts at the real time
     :settings {:grants {\"clerk\" {:tools [\"fail-demo\"]}}}, merged into the
               staging relay.edn: only :grants, and in them only :tools,
-              naming tools relay.staging defines, :quarantine, naming
-              stand-in tools the role reads through read_quarantined
-              (relay checks they are :read and in its :tools). A role's
-              :tools and :quarantine replace its staging ones."
+              naming tools relay.staging defines. A role's :tools replace
+              its staging ones."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
-            [relay.mock-anthropic :as mock]
             [relay.core :as core]
             [relay.refs :as refs]
             [relay.staging :as staging]
@@ -166,7 +156,7 @@
 
     :else (= pattern value)))
 
-(def kinds #{:memo :hold :wake :role :routine :dead-letter :notification :event :sent
+(def kinds #{:memo :wake :role :routine :dead-letter :notification :event :sent
              :fact :journal :note :doc :tool-call :citation})
 
 ;; --- the newer kinds, from the state and the wakes' transcripts
@@ -261,7 +251,6 @@
   [{:keys [state events sent transcripts] :as world} kind]
   (case kind
     :memo (map #(memo-item state %) (sort-by :id (vals (:memos state))))
-    :hold (sort-by :id (vals (:holds state)))
     :wake (map #(wake-item transcripts %) (wakes state))
     :fact (fact-items world)
     :journal (journal-items world)
@@ -343,22 +332,15 @@
                  (str/join "\n" (keep :text (:system body))))]
     (second (re-find #"Your id is `([^`]+)`" system))))
 
-(def reader
-  "The key the quarantined reader's replies are kept under in a script.
-  The reader's requests name no role, and a keyword is never a role id."
-  ::reader)
-
 (defn script
-  "A scenario's whole script: :model's replies by role, and :reader's
-  under `reader`."
-  [model reader-replies]
-  (cond-> (or model {}) (seq reader-replies) (assoc reader (vec reader-replies))))
+  "A scenario's whole script: :model's replies by role."
+  [model]
+  (or model {}))
 
 (defn requester
-  "Whose turn a model request is: the role it is for, or `reader` for the
-  quarantined reader's."
+  "Whose turn a model request is: the role it is for."
   [body]
-  (if (mock/reader-request? body) reader (role-of body)))
+  (role-of body))
 
 (defn next-reply
   "The reply for the next request from `role`, and the counts after it.
@@ -373,8 +355,7 @@
   "The relay commands a scenario may run. Everything here changes or reads
   only the data directory."
   #{"status" "inbox" "memo" "close" "roles" "add" "update" "remove" "routines" "routine" "unroutine"
-    "retry" "wake" "facts" "fact" "notes" "journal" "docs" "doc" "put" "log" "holds"
-    "approve" "deny" "release" "trust" "declassify"})
+    "retry" "wake" "facts" "fact" "notes" "journal" "docs" "doc" "put" "log"})
 
 (defn path-option?
   "Whether a command-line argument picks a path: the data directory, the
@@ -407,18 +388,12 @@
       (nil? settings) []
       (not (map? settings)) [":settings is a map."]
       (not= #{:grants} (set (keys settings))) [":settings may hold only :grants."]
-      (not (map? (:grants settings))) [":settings :grants maps a role id to {:tools [...] :quarantine [...]}."]
+      (not (map? (:grants settings))) [":settings :grants maps a role id to {:tools [...]}."]
       :else
       (vec (for [[role grant] (:grants settings)
                  problem [(when-not (string? role) (str "A role in :settings :grants is a string, not " (pr-str role) "."))
-                          (when-not (and (map? grant) (seq grant) (every? #{:tools :quarantine} (keys grant))
-                                         (or (not (contains? grant :tools)) (vector? (:tools grant)))
-                                         (or (not (contains? grant :quarantine)) (vector? (:quarantine grant))))
-                            (str "The grant for " role " in :settings is {:tools [...] :quarantine [...]}"
-                                 ", any of them, nothing else."))
-                          (when-let [bad (seq (remove allowed (when (map? grant) (:quarantine grant))))]
-                            (str "The grant for " role " names " (str/join ", " bad) " in :quarantine; :settings may"
-                                 " grant the reader only over " (str/join ", " (sort allowed)) "."))
+                          (when-not (and (map? grant) (= #{:tools} (set (keys grant))) (vector? (:tools grant)))
+                            (str "The grant for " role " in :settings is {:tools [...]}, nothing else."))
                           (when-let [bad (seq (remove known (when (map? grant) (:tools grant))))]
                             (str "The grant for " role " names " (str/join ", " bad)
                                  "; :settings may grant only " (str/join ", " (sort known)) "."))]
@@ -430,8 +405,7 @@
   [settings {:keys [grants]}]
   (reduce (fn [s [role grant]]
             (cond-> s
-              (contains? grant :tools) (assoc-in [:grants role :tools] (:tools grant))
-              (contains? grant :quarantine) (assoc-in [:grants role :quarantine] (:quarantine grant))))
+              (contains? grant :tools) (assoc-in [:grants role :tools] (:tools grant))))
           settings grants))
 
 (defn problems
@@ -458,9 +432,7 @@
                            (and (:spawn step) (not (and (:tick step) (= :process (:spawn step)))))
                            (str "Step " (brief step) " may give :spawn :process only with :tick.")
                            (and (:advance-minutes step) (not (pos-int? (:advance-minutes step))))
-                           (str "Step " (brief step) " needs a positive :advance-minutes.")
-                           (and (contains? step :tty) (not (and (:run step) (vector? (:tty step)) (every? string? (:tty step)))))
-                           (str "Step " (brief step) " may give :tty, a vector of strings, only with :run."))))
+                           (str "Step " (brief step) " needs a positive :advance-minutes."))))
         assertion-problem (fn [[op kind :as a]]
                             (when-not (and (vector? a) (#{:has :none :count} op) (kinds kind))
                               (str "Assertion " (brief a) " is not [:has|:none|:count kind pattern ...].")))
@@ -475,7 +447,5 @@
                  (when-not (seq assert) ["A scenario needs :assert."])
                  (when-not (or (nil? model) (and (map? model) (every? vector? (vals model))))
                    [":model maps a role id to a vector of replies."])
-                 (when-not (or (nil? (:reader scenario)) (vector? (:reader scenario)))
-                   [":reader is a vector of the quarantined reader's replies."])
                  (keep step-problem steps)
                  (keep assertion-problem all-assertions)))))

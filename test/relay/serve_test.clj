@@ -21,8 +21,8 @@
 (deftest two-clients-share-one-conversation
   (with-service
     (fn [_]
-      (let [a (connect! :role "clerk" :approvals true)
-            b (connect! :approvals true)]
+      (let [a (connect! :role "clerk")
+            b (connect!)]
         (try
           (is (= "s1" (get-in (new-session! a "clerk") ["result" "sessionId"])))
           (let [r (new-session! b "clerk")]
@@ -64,68 +64,24 @@
                 (is (< -1 replayed answered))))
             (finally (done! c))))))))
 
-(deftest a-permission-answered-on-one-device-is-settled-on-the-other
+(deftest no-client-is-ever-asked-to-approve-anything
   (with-service
     (fn [_]
-      (let [a (connect! :role "clerk" :approvals true)
-            b (connect! :approvals true)
-            watcher (connect!)]
+      (let [a (connect! :role "clerk")
+            b (connect!)]
         (try
           (new-session! a "clerk")
           (new-session! b "clerk")
-          (new-session! watcher "clerk")
-          (let [id (client/request-async! a "session/prompt" (prompt "PERM please"))
-                req-a (client/await! a #(= "session/request_permission" (get % "method")) 5000)
-                req-b (client/await! b #(= "session/request_permission" (get % "method")) 5000)]
-            (is (and req-a req-b) "both approving clients are asked")
-            (Thread/sleep 300)
-            (is (not (some #{"session/request_permission"} (methods-of watcher))) "a client that cannot approve is not")
-            (#'client/send! b {:jsonrpc "2.0" :id (get req-b "id")
-                               :result {:outcome {:outcome "selected" :optionId "a"}}})
-            (is (= "end_turn" (get-in (client/response a id 5000) ["result" "stopReason"])))
-            (let [settled (client/await! a #(= "_relay/permission/settled" (get % "method")) 5000)]
-              (is (= {"sessionId" "s1" "toolCallId" "c1" "outcome" "allow_once"} (get settled "params"))))
-            (testing "the other's late answer is dropped, with no error, and never reaches the agent"
-              (#'client/send! a {:jsonrpc "2.0" :id (get req-a "id") :result {:outcome {:outcome "cancelled"}}})
-              (Thread/sleep 500)
-              (is (= ["PERMITTED a"] (filter #(str/starts-with? (str %) "PERMITTED") (texts a))))
-              (is (not-any? #(and (= (get req-a "id") (get % "id")) (contains? % "error")) @(:messages a)))))
-          (testing "an answer must pick an option the agent offered"
-            (let [id (client/request-async! b "session/prompt" (prompt "PERM again"))
-                  req (client/await! b #(and (= "session/request_permission" (get % "method"))
-                                             (not= "relay-1" (get % "id")))
-                                     5000)]
-              (#'client/send! b {:jsonrpc "2.0" :id (get req "id") :result {:outcome {:outcome "selected" :optionId "zzz"}}})
-              (is (= "end_turn" (get-in (client/response b id 5000) ["result" "stopReason"])))
-              (is (some #{"PERMITTED r"} (texts b)) "relay refused it for the agent")))
-          (finally (done! a b watcher)))))))
-
-(deftest a-permission-with-nobody-to-answer-waits-and-tells-the-operator
-  (with-service
-    (fn [_]
-      (let [a (connect! :role "clerk")]
-        (try
-          (new-session! a "clerk")
-          (testing "a client that cannot approve cannot grant itself approvals mid-stream"
-            (let [r (client/request! a "_relay/connect" {:approvals true})]
-              (is (= -32600 (get-in r ["error" "code"])) (pr-str r))))
           (let [id (client/request-async! a "session/prompt" (prompt "PERM please"))]
-            (is (wait-for #(some (fn [n] (= "permission-waiting" (:kind n))) (vals (:notifications (state)))) 10000)
-                "relay tells the operator")
-            (Thread/sleep 300)
-            (is (not (some #{"session/request_permission"} (methods-of a))))
-            (testing "an approving client that attaches gets the request, and its answer goes through"
-              (let [b (connect! :approvals true)]
-                (try
-                  (client/request! b "initialize" {:protocolVersion 1})
-                  (client/request! b "session/load" {:sessionId "s1"})
-                  (let [req (client/await! b #(= "session/request_permission" (get % "method")) 5000)]
-                    (is req)
-                    (#'client/send! b {:jsonrpc "2.0" :id (get req "id") :result {:outcome {:outcome "selected" :optionId "a"}}})
-                    (is (= "end_turn" (get-in (client/response a id 5000) ["result" "stopReason"]))))
-                  (finally (done! b))))))
-          (is (= 1 (count (filter #(= "permission-waiting" (:kind %)) (vals (:notifications (state)))))) "once")
-          (finally (done! a)))))))
+            (is (= "end_turn" (get-in (client/response a id 10000) ["result" "stopReason"])))
+            (testing "the agent was told the request was cancelled"
+              (is (some #{"PERMITTED cancelled"} (texts a))))
+            (testing "and no client saw it"
+              (is (not (some #{"session/request_permission"} (methods-of a))))
+              (is (not (some #{"session/request_permission"} (methods-of b)))))
+            (testing "nor was the operator told to answer one"
+              (is (not-any? #(re-find #"permission" (str (:kind %))) (vals (:notifications (state)))))))
+          (finally (done! a b)))))))
 
 (deftest a-prompt-queues-behind-a-dispatched-wake
   (with-service
@@ -246,7 +202,7 @@
     (is (= 2 (.size q)) "and queues nothing more")))
 
 (deftest the-event-queue-holds-producers-back
-  (let [eng (#'serve/engine nil :service false {:capacity 2})
+  (let [eng (#'serve/engine nil :service {:capacity 2})
         q (:q eng)]
     (#'serve/enqueue! eng 1)
     (#'serve/enqueue! eng 2)
@@ -290,7 +246,7 @@
       (finally (fs/delete-tree base)))))
 
 (deftest the-service-takes-only-so-many-connections
-  (let [eng (#'serve/engine nil :service false {:max-conns 2})
+  (let [eng (#'serve/engine nil :service {:max-conns 2})
         conn #(#'serve/add-connection! eng {:in (java.io.PipedInputStream. (java.io.PipedOutputStream.))
                                             :out (java.io.ByteArrayOutputStream.) :origin :socket})]
     (is (some? (conn)))
@@ -306,7 +262,7 @@
   (let [[h fx] (ht/say (ht/live) 1 (ht/req 30 "session/prompt" {:sessionId "s1" :prompt []}))
         h (ht/submit-ok h fx)
         up (:up (second (hub/running h "clerk")))
-        eng (#'serve/engine nil :service false)
+        eng (#'serve/engine nil :service)
         replies (atom [])
         submitted (atom [])
         err (java.io.StringWriter.)]
@@ -324,47 +280,3 @@
       (#'serve/process! eng {:event :tick}))
     (is (= [:conversation/turn-end] @submitted) "tried again")
     (is (nil? (get-in @(:hub eng) [:convs "clerk" :turn-end-due])) "and recorded")))
-
-
-;; --- reviews (relay#79)
-
-(defn- review-flow!
-  "A client that declares relay/review, on a conversation whose agent asks
-  a permission (PERM): its allow without the review's digest is refused
-  and the request sent again; with it, the call is allowed."
-  [c keeps]
-  (is (= keeps (get-in (client/request! c "initialize" {:protocolVersion 1 :clientCapabilities {:_meta {"relay/review" 1}}})
-                       ["result" "_meta" "relay/keeps"]))
-      "the mode this test is about")
-  (client/request! c "session/new" {:cwd *dir* :mcpServers [] :_meta {"relay/role" "clerk"}})
-  (let [id (client/request-async! c "session/prompt" (prompt "PERM please"))
-        req (client/await! c #(= "session/request_permission" (get % "method")) 10000)
-        {t "text" h "sha256"} (get-in req ["params" "_meta" "relay/review"])]
-    (is (str/starts-with? (str t) "Permission request from role \"clerk\"\nTool \"post\"") (pr-str req))
-    (is (= h (core/sha256 t)))
-    (#'client/send! c {:jsonrpc "2.0" :id (get req "id") :result {:outcome {:outcome "selected" :optionId "a"}}})
-    (let [again (client/await! c #(and (= "session/request_permission" (get % "method"))
-                                       (get-in % ["params" "_meta" "relay/refused"]))
-                               10000)]
-      (is again "the allow without the digest is refused, and the request sent again")
-      (is (not-any? #(str/starts-with? (str %) "PERMITTED") (texts c)) "nothing reached the agent")
-      (#'client/send! c {:jsonrpc "2.0" :id (get again "id")
-                         :result {:outcome {:outcome "selected" :optionId "a"} :_meta {"relay/review" h}}})
-      (is (= "end_turn" (get-in (client/response c id 10000) ["result" "stopReason"])))
-      (is (some #{"PERMITTED a"} (texts c))))))
-
-(deftest a-reviewing-client-allows-only-what-it-was-sent-through-the-service
-  (with-service
-    (fn [_]
-      (let [c (connect! :role "clerk" :approvals true)]
-        (try (review-flow! c true) (finally (done! c)))))))
-
-(deftest a-reviewing-client-allows-only-what-it-was-sent-in-relay-acp-alone
-  (with-service
-    (fn [service]
-      ;; No service for this one: relay acp runs the hub itself.
-      (stop-service! service)
-      (let [c (client/start! [support/relay-bin "acp" "clerk" "--approvals" "--data" (data)
-                              "--socket" (str *socket* ".none")]
-                             {:dir *dir* ::client/manual true})]
-        (try (review-flow! c false) (finally (done! c)))))))
