@@ -136,10 +136,24 @@
     (try
       (log/init! data)
       (write! {:serve {:websocket {:port 8765 :token-command ["/bin/echo" listener-token]}}})
-      (let [{:keys [exit out]} (relay "calendar" "url" "--host" "mac.tail1234.ts.net")]
-        (is (= 0 exit))
-        (is (= (str "https://mac.tail1234.ts.net:8765/calendar.ics?token=" token) (first out)))
-        (is (not (some #(str/includes? % listener-token) out)) "never the listener's own token"))
+      (binding [relay.cli/*probe* (constantly :ok)]
+        (let [{:keys [exit out]} (relay "calendar" "url" "--host" "mac.tail1234.ts.net")]
+          (is (= 0 exit))
+          (is (= (str "https://mac.tail1234.ts.net:8765/calendar.ics?token=" token) (first out)))
+          (is (not (some #(str/includes? % listener-token) out)) "never the listener's own token")))
+      (testing "on this machine the listener speaks plain http"
+        (binding [relay.cli/*probe* (constantly :ok)]
+          (is (= (str "http://127.0.0.1:8765/calendar.ics?token=" token)
+                 (first (:out (relay "calendar" "url" "--host" "127.0.0.1")))))))
+      (testing "it says when the feed cannot be read"
+        (binding [relay.cli/*probe* (constantly :refused)]
+          (is (str/includes? (second (:out (relay "calendar" "url" "--host" "mac.tail1234.ts.net")))
+                             "relay serve is not running")))
+        (binding [relay.cli/*probe* #(if (str/includes? % "127.0.0.1") :ok :refused)]
+          (is (= "  tailscale serve --bg --https=8765 http://127.0.0.1:8765"
+                 (last (:out (relay "calendar" "url" "--host" "mac.tail1234.ts.net"))))))
+        (binding [relay.cli/*probe* (constantly :other)]
+          (is (str/includes? (second (:out (relay "calendar" "url" "--host" "h"))) "but not with the calendar"))))
       (testing "without a listener it says what to set up"
         (write! {})
         (is (thrown-with-msg? Exception #"has none yet" (relay "calendar" "url" "--host" "h"))))

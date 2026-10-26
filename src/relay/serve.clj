@@ -24,6 +24,7 @@
   second service off the data directory whatever socket it would use."
   (:require [babashka.fs :as fs]
             [relay.acp :as acp]
+            [relay.config :as config]
             [relay.core :as core]
             [relay.dispatch :as dispatch]
             [relay.hub :as hub]
@@ -400,7 +401,8 @@
 (defn- calendar-feed
   "The agent's calendar as iCalendar text, from the log as it is now."
   [{:keys [sys]}]
-  (ics/render {:now ((:clock sys)) :events (core/calendar-feed (inbound/current-state sys))}))
+  (ics/render {:now ((:clock sys)) :events (core/calendar-feed (inbound/current-state sys))
+               :calendar-name (config/calendar-name (:config sys))}))
 
 (defn- websocket-connection!
   "Serves one TCP connection to the WebSocket listener: the request, the

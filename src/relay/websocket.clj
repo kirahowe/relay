@@ -162,11 +162,18 @@
       (apply str (map #(format "%02x" (bit-and 0xff %))
                       (.doFinal mac (.getBytes "relay calendar feed" StandardCharsets/US_ASCII)))))))
 
+(defn local-host?
+  "Whether `host` names this machine, where the listener speaks plain
+  http rather than the tailnet's https."
+  [host]
+  (contains? #{"127.0.0.1" "localhost" "::1" "[::1]"} (str/lower-case (str host))))
+
 (defn calendar-url
   "The URL to subscribe to the feed at: on `host` (the Mac's tailnet
-  name), the listener's `port`, with the feed's token."
+  name, over https, or this machine, over http), the listener's `port`,
+  with the feed's token."
   [host port token]
-  (str "https://" host ":" port calendar-path "?token=" (feed-token token)))
+  (str (if (local-host? host) "http://" "https://") host ":" port calendar-path "?token=" (feed-token token)))
 
 (defn decide-calendar
   "What the listener does with a request for the calendar feed: {:calendar
