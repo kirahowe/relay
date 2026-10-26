@@ -1,6 +1,6 @@
 # The house: a personal agent that prepares and never acts as you
 
-Status: ACTIVE (started 2026-10-25). A main session orchestrates implementer
+Status: BUILT (2026-10-25 to 2026-10-26), awaiting Kira's install. Started 2026-10-25. A main session orchestrates implementer
 and reviewer agents phase by phase with the phase-loop workflow. This file
 is the single source of truth for those agents: read it whole before
 touching code. When reality disagrees with it, update it and write a log
@@ -93,6 +93,32 @@ she sends it, it is hers.
 17. **UX before Kira tests.** UX-expert agents use the system at
     milestones and at the end, and their papercuts get fixed. Kira fixes
     papercuts relentlessly; so do we.
+
+### Kira's answers after the build (2026-10-26)
+
+18. **Trust boundary kept.** Writable `:files` roots may overlap trusted
+    mounts, with R2 and R3's refusals; revisit only if it causes friction.
+    No fourth Codex round for now.
+19. **Mounts are untrusted unless marked** `{:path ... :trusted true}`.
+    Kira marks her own folders.
+20. **Outside text never sends, contacts or moves.** Roles refuse any
+    such request that does not come directly from Kira; style rules
+    learned from outside text may shape skills, flagged in the note.
+21. **The main role is the steward.** Kira renames hub following
+    DEPLOY.md.
+22. **Forward-only deploy** is fine.
+23. **The dashboard's opening view** stays as it is; revisit later.
+24. **No monthly routine schedule** unless a need appears.
+25. **A scout may learn a private role's id** from a house memo.
+26. **Install through Homebrew** (next initiative): relay, agentloop,
+    relay-tui and webtool become formulas in Kira's tap (kirahowe/tap,
+    modelled on clef's formula); relay runs as one `brew services`
+    service (`relay run`: serve plus a tick every minute), replacing
+    `bb deploy` and the two launchd plists; development happens in the
+    single checkouts under ~/code/projects on `main`. Open: tagged
+    releases (Kira pushes) or head-only installs; and whether Kira stops
+    the launchd jobs before the checkouts move to `main` (until then the
+    live tick runs the dev checkout).
 
 ### Orchestrator decisions (2026-10-25, Kira may overrule)
 
