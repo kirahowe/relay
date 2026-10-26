@@ -2749,11 +2749,12 @@
         ;; message she answers drew on: the labels it quotes still bound
         ;; what the memo may hold (I3), but what is done at her request is
         ;; hers, and quiet (decision 14).
-        tx (cond-> tx
-             tell-role? (-> (with-public (dissoc tx :sources) false
-                              #(send-memo % {:from operator :to to :subject (:subject memo) :body (:body memo)}
-                                          (union (:labels memo) (:labels parent)) []))
-                            (cond-> (contains? tx :sources) (assoc :sources (:sources tx)))))]
+        tx (if tell-role?
+             (cond-> (with-public (dissoc tx :sources) false
+                       #(send-memo % {:from operator :to to :subject (:subject memo) :body (:body memo)}
+                                   (union (:labels memo) (:labels parent)) []))
+               (contains? tx :sources) (assoc :sources (:sources tx)))
+             tx)]
     (-> tx
         (emit "message/replied" (cond-> {:message (:id parent) :channel channel :text text}
                                   tell-role? (assoc :memo (last-id tx))))

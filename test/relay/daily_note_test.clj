@@ -594,7 +594,8 @@
           w (ok (reply w "r1" operator-address "not 1" verified))
           told (last (sort-by :id (vals (:messages (:state w)))))]
       (is (= (:id m) (:in-reply-to told)) "the answer is the one relay told")
-      (is (str/includes? (channels/body-text told) "from outside") "and it says where the text came from")
+      ;; No line is stamped (U1b): relay's own answer carries no "Drew on",
+      ;; and the client still knows the text is an outsider's.
       (is (true? (get-in (channels/wire told) ["sections" 0 "items" 0 "outsider"])) "in the client too")
       (doseq [[where t] [["the mail" (channels/body-text told)]
                          ["the client" (str/join "\n" (for [s (get (channels/wire told) "sections")
@@ -719,7 +720,15 @@
                             w (assoc-in w [:state :memos memo :routine] "grant-search")
                             w (ok (run w "dispatcher" :wake/start {:role "scout"}))
                             wake (:seq (first (:last w)))
-                            w (cond-> w failing? (-> (run "scout" :tool/failed {:wake wake :tool "web_search" :why "search-key"}) ok))]
+                            ;; relay's tool command records the broken key
+                            ;; on the wake (relay.tools/noting-setup), or
+                            ;; that it works again.
+                            w (case failing?
+                                true (ok (run w "dispatcher" :tool/broken {:tool "web_search" :problem "search-key" :wake wake}))
+                                ;; It met the broken key, already told: nothing new to record.
+                                :silent w
+                                (cond-> w (seq (:tools-broken (:state w)))
+                                  (-> (run "dispatcher" :tool/working {:tool "web_search"}) ok)))]
                         (ok (run w "dispatcher" :wake/end {:wake wake :outcome "ran"}))))]
     (is (= "The grant search has not run since the last note." (grants-line (:state w))))
     (let [w (search-wake w true)]
@@ -727,9 +736,15 @@
       (is (= "The grant search did not run: the web search key is not working." (grants-line (:state w))))
       (let [w (search-wake w false)]
         (is (= "No new grants since the last note." (grants-line (:state w))) "only once a search ran")))
-    (testing "only a role records a failure, on its own wake, and only a known one"
-      (is (:rejected (run w "steward" :tool/failed {:wake 999 :tool "x" :why "search-key"})))
-      (is (:rejected (run w "scout" :tool/failed {:wake 999 :tool "x" :why "anything"}))))
+    (testing "a key still broken reads as failing on a later wake that recorded nothing"
+      ;; relay tells the operator once, so the second wake that meets the
+      ;; broken key records no tool/broken of its own.
+      (let [w (search-wake (search-wake w true) :silent)
+            last-wake (get-in (:state w) [:wakes (apply max (keys (:wakes (:state w))))])]
+        (is (empty? (:tool-failures last-wake)))
+        (is (= :key-failing (core/grant-search (:state w) grant-cfg 0)))))
+    (testing "only the dispatcher records a broken tool"
+      (is (:rejected (run w "steward" :tool/broken {:tool "x" :problem "search-key"}))))
     (testing "relay.edn's :grants is owner/name"
       (is (str/includes? (try (config/resolve-config (assoc-in settings [:daily-note :grants] "grant search")) ""
                               (catch clojure.lang.ExceptionInfo e (ex-message e)))
