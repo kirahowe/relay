@@ -88,7 +88,7 @@
         (map? x) (and (every? string? (keys x)) (every? json-value? (vals x)))
         :else false))
 
-(def tool-keys #{:tool :class :labels :digest :on :fixed-args :hidden-args :always-hold :consent :preview})
+(def tool-keys #{:tool :class :labels :digest :on :fixed-args :hidden-args})
 
 (defn check-narrowing
   "A tool's :fixed-args, a map of argument names to JSON values, and
@@ -128,7 +128,7 @@
     (let [tools (:tools conn)]
       (when-not (and (map? tools) (seq tools))
         (problem! (str where " has no :tools.")))
-      (doseq [[n {:keys [tool class digest on always-hold] :as t}] tools
+      (doseq [[n {:keys [tool class digest on] :as t}] tools
               :let [w (str "Tool " (pr-str n) " of the connection " conn-name)]]
         (when-not (and (string? n) (re-matches tool-name-pattern n))
           (problem! (str w " needs a name of 1 to 64 letters, digits, - or _.")))
@@ -146,8 +146,6 @@
           (problem! (str w " needs :digest, the SHA-256 its definition was pinned at.")))
         (when-not (boolean? on)
           (problem! (str w " needs :on, true or false.")))
-        (when-not (or (nil? always-hold) (boolean? always-hold))
-          (problem! (str w " has :always-hold " (pr-str always-hold) "; it must be true or false.")))
         (check-narrowing w t))
       (doseq [[remote ns] (group-by (comp :tool val) tools) :when (next ns)]
         (problem! (str where " gives the server's tool " (pr-str remote) " twice."))))
@@ -155,8 +153,8 @@
 
 (defn ->settings
   "What a connection adds to relay.edn: its server, and its tools that are
-  on. A tool is pinned at its connect-time digest (:pin), which relay
-  fresh can replace in the log; relay.edn's own :digest is stricter and
+  on. A tool is pinned at its connect-time digest (:pin), which a changed
+  definition replaces in the log; relay.edn's own :digest is stricter and
   is not used here."
   [conn-name conn]
   {:server {:url (:url conn) :credentials-command (:credentials-command conn)}
@@ -165,10 +163,7 @@
                   [n (cond-> {:protocol :mcp-http :server conn-name :connection conn-name
                               :tool (:tool t) :class (:class t) :labels (:labels t) :pin (:digest t)}
                        (seq (:fixed-args t)) (assoc :fixed-args (:fixed-args t))
-                       (seq (:hidden-args t)) (assoc :hidden-args (:hidden-args t))
-                       (:always-hold t) (assoc :always-hold true)
-                       (contains? t :consent) (assoc :consent (:consent t))
-                       (contains? t :preview) (assoc :preview (:preview t)))]))})
+                       (seq (:hidden-args t)) (assoc :hidden-args (:hidden-args t)))]))})
 
 (defn read-file
   "The connection's file, read as EDN, or nil when there is none."

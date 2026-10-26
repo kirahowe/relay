@@ -30,7 +30,7 @@
 (defn wake-request
   "The OTLP/JSON request (a map) for one ended wake or conversation, a
   row of relay.week/wake-rows. Names, counts and labels only."
-  [{:keys [id role chat started-at ended-at outcome crashed cut-short held memos closed blocked
+  [{:keys [id role chat started-at ended-at outcome crashed cut-short memos closed blocked
            left-open dead-lettered cost-usd labels flags] :as row}]
   (let [{:keys [trace-id span-id]} (wake-ids row)]
     (otel/request
@@ -44,7 +44,6 @@
                              (otel/s-attr "relay.wake.kind" (if chat "conversation" "wake"))
                              (otel/s-attr "relay.wake.outcome" outcome)
                              (otel/strings-attr "relay.wake.labels" labels)
-                             (otel/i-attr "relay.wake.held_calls" held)
                              (otel/i-attr "relay.wake.memos" memos)
                              (otel/i-attr "relay.wake.memos_closed" closed)
                              (otel/i-attr "relay.wake.memos_blocked" blocked)

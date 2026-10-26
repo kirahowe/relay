@@ -13,24 +13,12 @@
                        appends the query to <data>/searches.log and
                        returns the pages in <data>/web that hold most of
                        its words, at most n, numbered as ask numbers them
-    mail-demo <data>   egress: appends the message to <data>/outbox.log
     campaign-draft-demo <data>
                        edit: saves a draft campaign (subject, body, group)
                        in <data>/campaigns.edn, or a new version of one
                        given its id. Every version is kept, so a change
-                       can be undone
-    campaign-send-demo <data>
-                       act: schedules one version of a draft to its group
-                       at a time, appending what goes out to
-                       <data>/sent.log. It refuses a group other than the
-                       one the draft is addressed to
-    campaign-preview-demo <data>
-                       campaign-send-demo's :preview: renders the draft
-                       version a send names as campaigns.edn holds it,
-                       with the group's size from
-                       <data>/campaign-groups.edn and the send time. The
-                       text comes from the stored draft, never from the
-                       call
+                       can be undone. Nothing is ever sent: the operator
+                       sends a campaign herself, in the service
 
   Kept apart from relay.staging so that each call starts quickly: this
   namespace needs nothing of relay's but its JSON reader."
@@ -89,9 +77,7 @@
                                          text "\n")))
                                 pages)))))
 
-;; --- the campaign stand-ins
-
-(def send-time #"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")
+;; --- the campaign stand-in
 
 (defn- text? [x] (and (string? x) (not (str/blank? x))))
 
@@ -118,61 +104,14 @@
          (envelope (str "Saved draft " id ", version " version ", to the group " (pr-str group)
                         ". Earlier versions are kept."))]))))
 
-(defn- stored-version [campaigns draft version]
-  (some #(when (= version (:version %)) %) (get-in campaigns [:drafts draft :versions])))
-
-(defn send-problem
-  "Why the service would refuse a send, or nil. Pure."
-  [campaigns {:keys [draft version group send_at]}]
-  (let [stored (stored-version campaigns draft version)]
-    (cond
-      (not (contains? (:drafts campaigns) draft)) (str "There is no draft " (pr-str draft) ".")
-      (not (integer? version)) "A send names the draft's version, a whole number."
-      (nil? stored) (str "Draft " draft " has no version " version ".")
-      (not= group (:group stored)) (str "Draft " draft " version " version " is addressed to the group "
-                                        (pr-str (:group stored)) ", not " (pr-str group) ".")
-      (not (and (string? send_at) (re-matches send-time send_at)))
-      "A send needs send_at, the local time to send, as YYYY-MM-DD HH:MM.")))
-
-(defn send-draft
-  "campaign-send-demo: [envelope line], line being what goes into sent.log,
-  or nil when the service refuses. What goes out is the stored version,
-  whatever else the call carries. Pure."
-  [campaigns groups {:keys [draft version group send_at] :as input}]
-  (if-let [why (send-problem campaigns input)]
-    [(envelope why :error true) nil]
-    (let [{:keys [subject body]} (stored-version campaigns draft version)]
-      [(envelope (str "Scheduled draft " draft " version " version " to " (pr-str group) " for " send_at "."))
-       (json/generate-string {:draft draft :version version :group group :members (get groups group)
-                              :send_at send_at :subject subject :body body})])))
-
-(defn preview-send
-  "campaign-preview-demo: what a held send would do, as markdown, from the
-  stored draft and the service's groups. Pure."
-  [campaigns groups {:keys [draft version group send_at] :as input}]
-  (if-let [why (send-problem campaigns input)]
-    (envelope (str "The service would refuse this send: " why) :error true)
-    (let [{:keys [subject body]} (stored-version campaigns draft version)
-          n (get groups group)]
-      (envelope (str "**Scheduled send** of draft " draft ", version " version ", to the group " (pr-str group)
-                     (if n (str ", " n " people") ", a group the service does not know")
-                     ", at " send_at ".\n\nSubject: " subject "\n\n---\n\n" body)))))
-
 (defn- read-edn [file]
   (when (fs/exists? file) (edn/read-string (slurp (str file)))))
 
-(defn- campaign! [tool dir input]
+(defn- campaign! [dir input]
   (let [file (str (fs/path dir "campaigns.edn"))
-        campaigns (read-edn file)
-        groups (or (read-edn (fs/path dir "campaign-groups.edn")) {})]
-    (case tool
-      "campaign-draft-demo" (let [[saved env] (save-draft campaigns input)]
-                              (when saved (spit file (pr-str saved)))
-                              env)
-      "campaign-send-demo" (let [[env line] (send-draft campaigns groups input)]
-                             (when line (spit (str (fs/path dir "sent.log")) (str line "\n") :append true))
-                             env)
-      "campaign-preview-demo" (preview-send campaigns groups input))))
+        [saved env] (save-draft (read-edn file) input)]
+    (when saved (spit file (pr-str saved)))
+    env))
 
 (defn answer
   "The envelope for one call. `input` is the call's input; `dir` the data
@@ -202,15 +141,7 @@
          {:append (str (fs/path dir "searches.log")) :line (json/generate-string {:query (str query)})
           :ask {:query (str query) :n n}}]))
 
-    "mail-demo"
-    (let [{:keys [to subject body]} input]
-      (if (str/blank? (str to))
-        [(envelope "A message needs a `to`." :error true)]
-        [(envelope (str "Sent to " to "."))
-         {:append (str (fs/path dir "outbox.log"))
-          :line (json/generate-string {:to (str to) :subject (str subject) :body (str body)})}]))
-
-    ("campaign-draft-demo" "campaign-send-demo" "campaign-preview-demo")
+    "campaign-draft-demo"
     [(envelope nil) {:campaign tool :input input}]
 
     [(envelope (str "No stand-in tool " tool ".") :error true)]))
@@ -229,7 +160,7 @@
                                   {:keys [query n]} (:ask effect)
                                   token (format "%016x" (.nextLong (java.security.SecureRandom.)))]
                               (assoc env :content (render-ask query (ask-pages pages query n) token)))
-              (:campaign effect) (campaign! (:campaign effect) dir (:input effect))
+              (:campaign effect) (campaign! dir (:input effect))
               (:append effect) (do (spit (:append effect) (str (:line effect) "\n") :append true) env)
               (:read effect) (if (fs/exists? (:read effect))
                                (assoc env :content (slurp (:read effect)))

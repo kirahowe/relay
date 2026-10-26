@@ -10,7 +10,7 @@
   conversations and one conversation may have several connections
   attached.
 
-  Three tables hold everything that is owed:
+  Two tables hold everything that is owed:
 
     :requests  every client request the hub has taken and not yet
                answered, one record each, from the moment it is taken to
@@ -27,14 +27,6 @@
                session, which answer is whose) is a query on this table.
                The hub's own request to an agent (initialize) is a record
                with no connection.
-    :perms     per conversation, the agent's permission requests, the
-               id each client was sent it under, and how many allows
-               without the review's digest each client sent (:bad).
-
-  A connection that declares relay/review in initialize (:review) is held
-  to the review (relay.review) each permission request carries: its
-  allow must name the review's digest, or relay sends it the request
-  again (refused-allow) and settles nothing.
     :awaiting  what to do with the result of each submit made and not yet
                answered, in order. A submit's result is the next event the
                hub sees (drive carries effects out so), so nothing else
@@ -47,7 +39,7 @@
 
   Events, maps with :event:
     :connection-opened  {:conn :origin (:socket | :stdio | :websocket)
-                         :approvals :role :default-role}
+                         :role :default-role}
                                             :role is the connection's own
                                             (relay acp <role>); :default-role
                                             only names the role a session/new
@@ -80,11 +72,12 @@
   every other.
 
   Modes, an option, never sniffed: :service keeps a conversation when its
-  last client goes and holds a permission request while no approving
-  client is attached, asking relay to notify the operator; :embedded
-  (relay acp with no service, one connection on stdio) ends every
-  conversation when its connection goes and refuses a permission request
-  nobody can answer."
+  last client goes; :embedded (relay acp with no service, one connection
+  on stdio) ends every conversation when its connection goes.
+
+  No client is ever asked to approve anything: an agent's
+  session/request_permission is refused like any other request a client
+  does not take."
   (:require [clojure.string :as str]
             [relay.acp :as acp]
             [relay.core :as core]
@@ -205,8 +198,6 @@
   [h role]
   (sort (keep (fn [[cid c]] (when (contains? (:attached c) role) cid)) (:conns h))))
 
-(defn- approving [h role] (filter #(get-in h [:conns % :approvals]) (attached h role)))
-
 (defn- active-role? [h role] (some #(= role (:id %)) (:roster h)))
 
 ;; --- the roster
@@ -271,19 +262,7 @@
       (refuse h rid -32602 error)
       (submit h command {:kind :card-op :rid rid :card (get-in command [:args :card])} :with-state true))))
 
-(defn- card-trust [h rid msg]
-  (let [cid (:conn (record h rid))
-        {:keys [command error]} (workspace/card-trust-command (params-of msg))]
-    (cond
-      ;; As _relay/trust: only a client that may approve vouches.
-      (not (get-in h [:conns cid :approvals]))
-      (refuse h rid -32000 (str "This conversation does not take trust from its client. Run relay trust card "
-                                (get (params-of msg) "card") " in a terminal."))
-      error (refuse h rid -32602 error)
-      :else (submit h command {:kind :card-op :trust true :rid rid :card (parse-long (get-in command [:args :ref]))}
-                    :with-state true))))
-
-(defn- card-op-result [h {:keys [rid card trust]} {:keys [ok changed rejection message] :as result}]
+(defn- card-op-result [h {:keys [rid card]} {:keys [ok changed rejection message] :as result}]
   (let [{:keys [conn]} (record h rid)
         state (or (:state result) (:state h))]
     (cond
@@ -296,9 +275,7 @@
         (if (get-in h [:conns conn :board])
           (assoc-in h [:conns conn :board :cards card] (:rev (core/card state card)))
           h)
-        (answer h rid (if trust
-                        (workspace/card-trust-answer state card)
-                        (workspace/card-op-answer state card changed)))
+        (answer h rid (workspace/card-op-answer state card changed))
         (board-changes h)))))
 
 ;; --- the replay buffer
@@ -356,9 +333,9 @@
 ;; the session's latest labels, which tell a client what the text after
 ;; them may hold (and so which links to defang), and its latest usage.
 ;; agentloop sends its labels in the _meta of a tool_call,
-;; tool_call_update, usage_update, session_info_update or permission
-;; request; a replay starts with them as the session_info_update agentloop
-;; sends when only the labels change.
+;; tool_call_update, usage_update or session_info_update; a replay starts
+;; with them as the session_info_update agentloop sends when only the
+;; labels change.
 
 (def ^:private labels-key "agentloop/labels")
 
@@ -396,166 +373,12 @@
     (write h cid (workspace/notification-line "_relay/replayed" {"sessionId" session
                                                                  "truncated" (boolean (:dropped replay))}))))
 
-;; --- permission requests
-
-(defn- send-perm
-  "Sends an open permission request to a connection, under an id of its
-  own for that connection."
-  [h role pkey cid]
-  (let [perm (get-in h [:convs role :perms pkey])]
-    (if (or (nil? perm) (contains? (:sent perm) cid))
-      h
-      (let [n (inc (get-in h [:conns cid :next-id] 0))
-            id (str "relay-" n)]
-        (-> h (assoc-in [:conns cid :next-id] n)
-            (assoc-in [:convs role :perms pkey :sent cid] id)
-            (write cid (with-id (:msg perm) id)))))))
-
-(def max-refused-allows
-  "How many allows without the review's digest relay takes from one
-  connection for one permission request before it stops sending the
-  request to it again. The request stays open all the same."
-  3)
-
-(def refused-allow-message
-  "What relay says, in the request it sends again, of an allow it did not take."
-  (str "relay did not take that allow: it did not carry the digest of this request's review, "
-       "so relay cannot tell that you saw it. Nothing was allowed; review the request again."))
-
-(defn- resend-perm
-  "Sends an open permission request to a connection again, under a new id,
-  after relay refused its allow, with relay's reason in
-  params._meta relay/refused. The old id is answered by nothing."
-  [h role pkey cid]
-  (let [perm (get-in h [:convs role :perms pkey])
-        n (inc (get-in h [:conns cid :next-id] 0))
-        id (str "relay-" n)
-        msg (update-in (:msg perm) ["params" "_meta"] #(assoc (if (map? %) % {}) "relay/refused" refused-allow-message))]
-    (-> h (assoc-in [:conns cid :next-id] n)
-        (assoc-in [:convs role :perms pkey :sent cid] id)
-        (write cid (with-id msg id)))))
-
-(defn- refused-allow
-  "A connection that declared relay/review allowed a permission request
-  without the digest of its review, or with another: nothing is settled
-  and nothing reaches the agent. The request is sent to it again, up to
-  max-refused-allows times; past that relay tells the operator and keeps
-  the request open, neither allowed nor refused on that account."
-  [h role pkey cid]
-  (let [h (update-in h [:convs role :perms pkey :bad cid] (fnil inc 0))
-        n (get-in h [:convs role :perms pkey :bad cid])]
-    (cond
-      (< n max-refused-allows) (resend-perm h role pkey cid)
-      (= n max-refused-allows)
-      (fx h {:effect :warn
-             :text (str "relay stopped asking a client about " role "'s call "
-                        (get-in h [:convs role :perms pkey :call])
-                        ": it allowed it " n " times without the digest of the call's review. "
-                        "The request is still open; answer it from another client, or end the conversation.")})
-      :else h)))
-
-(defn- perm-sent
-  "The permission request sent to a connection under this id key:
-  [role pkey], or nil."
-  [h cid k]
-  (first (for [[role c] (sort-by key (:convs h))
-               [pkey {:keys [sent]}] (sort-by key (:perms c))
-               :when (and (contains? sent cid) (= k (acp/id-key (get sent cid))))]
-           [role pkey])))
-
-(defn- refusal
-  "The answer that refuses a permission request, under the agent's id:
-  its reject_once option, or cancelled. Every refusal the hub makes is
-  this line, through the proxy, which records it."
-  [{:keys [msg]}]
-  (acp/refusal {:id (get msg "id")
-                :options (vec (filter map? (let [o (get-in msg ["params" "options"])] (when (sequential? o) o))))}))
-
-(defn- refusal-line [perm] (strict/generate (refusal perm)))
-
-(defn- refusal-outcome [perm]
-  (if (= "selected" (get-in (refusal perm) ["result" "outcome" "outcome"])) "reject_once" "cancelled"))
-
-(declare settle)
-
-(defn- refuse-perm
-  "Settles a permission request as refused, on a connection's behalf."
-  [h role pkey cid]
-  (let [perm (get-in h [:convs role :perms pkey])]
-    (settle h role pkey cid (refusal-line perm) (refusal-outcome perm))))
-
-(defn- unattended
-  "A permission request no approving connection can see: in service mode
-  it waits, and relay is asked once to tell the operator (again later if
-  that could not be recorded); in embedded mode it is refused."
-  [h role pkey]
-  (let [perm (get-in h [:convs role :perms pkey])]
-    (cond
-      (nil? perm) h
-      (= :embedded (:mode h))
-      (-> h (update-in [:convs role :perms] dissoc pkey) (send-conv role (refusal-line perm)))
-      (or (:notified perm) (awaiting? h #(and (= :unattended (:kind %)) (= [role pkey] [(:role %) (:pkey %)])))) h
-      :else
-      (-> h
-          (submit {:type :permission/unattended :actor core/dispatcher
-                   :args {:wake (get-in h [:convs role :wake]) :call (:call perm)}}
-                  {:kind :unattended :role role :pkey pkey})))))
-
-(defn- settle
-  "Settles a permission request: `line` goes to the proxy, which checks it
-  against the options the agent offered, and every connection it was sent
-  to but the winner is told."
-  [h role pkey winner line outcome]
-  (let [{:keys [sent call]} (get-in h [:convs role :perms pkey])
-        session (get-in h [:convs role :session])]
-    (as-> h h
-      (update-in h [:convs role :perms] dissoc pkey)
-      (reduce (fn [h cid]
-                (write h cid (workspace/notification-line "_relay/permission/settled"
-                                                          {"sessionId" session "toolCallId" call "outcome" outcome})))
-              h (sort (remove #{winner} (keys sent))))
-      (if line (send-conv h role line) h))))
-
-(defn- cancelled-answer
-  "The answer that tells the agent a permission request was cancelled,
-  under the agent's id, which the proxy takes as valid and records."
-  [{:keys [msg]}]
-  (strict/generate {"jsonrpc" "2.0" "id" (get msg "id") "result" {"outcome" {"outcome" "cancelled"}}}))
-
-(defn- retire-perm
-  "Settles a permission request as cancelled for everyone it was sent to,
-  and answers it so for the agent, which closes the proxy's record of it."
-  [h role pkey]
-  (if-let [perm (get-in h [:convs role :perms pkey])]
-    (settle h role pkey nil (cancelled-answer perm) "cancelled")
-    h))
-
-(defn- retire-perms [h role]
-  (reduce #(retire-perm %1 role %2) h (sort (keys (get-in h [:convs role :perms])))))
-
-(defn- drop-from-perms
-  "A connection no longer answers the requests it was sent. One left with
-  no approving connection is unattended."
-  [h cid roles]
-  (reduce (fn [h role]
-            (reduce (fn [h [pkey perm]]
-                      (if (contains? (:sent perm) cid)
-                        (let [h (update-in h [:convs role :perms pkey :sent] dissoc cid)]
-                          (if (empty? (get-in h [:convs role :perms pkey :sent])) (unattended h role pkey) h))
-                        h))
-                    h (sort-by key (get-in h [:convs role :perms]))))
-          h roles))
-
 ;; --- conversations
 
 (defn- attach
-  "Attaches a connection to a role's conversation and sends it the
-  permission requests still open, when it may answer them."
+  "Attaches a connection to a role's conversation."
   [h cid role]
-  (let [h (update-in h [:conns cid :attached] (fnil conj #{}) role)]
-    (if (get-in h [:conns cid :approvals])
-      (reduce #(send-perm %1 role %2 cid) h (sort (keys (get-in h [:convs role :perms]))))
-      h)))
+  (update-in h [:conns cid :attached] (fnil conj #{}) role))
 
 (defn- waiters [h role] (records h #(and (= role (:role %)) (= :waiting (:state %)))))
 
@@ -643,25 +466,15 @@
               h))
           h (sort-by key (:convs h))))
 
-(defn- retry-unattended [h]
-  (reduce (fn [h [role c]]
-            (reduce (fn [h [pkey perm]] (if (and (empty? (:sent perm)) (nil? (:notified perm))) (unattended h role pkey) h))
-                    h (sort-by key (:perms c))))
-          h (sort-by key (:convs h))))
-
 (defn- cancel-turn
-  "Cancels the running turn: session/cancel to the agent, and, as ACP asks
-  of a client that cancels, every permission request it has open is
-  answered cancelled."
+  "Cancels the running turn: session/cancel to the agent."
   [h role]
-  (-> h (send-conv role (workspace/notification-line "session/cancel" {"sessionId" (get-in h [:convs role :session])}))
-      (retire-perms role)))
+  (send-conv h role (workspace/notification-line "session/cancel" {"sessionId" (get-in h [:convs role :session])})))
 
 (defn- end-conversation
   "Forgets a conversation that has ended, answering everything owed about
   it: a queued prompt is cancelled, a request it never answered fails,
-  every connection holding one of its permission requests is told it is
-  settled, and whoever asked for the end is answered."
+  and whoever asked for the end is answered."
   [h role]
   (let [c (get-in h [:convs role])
         gone "The conversation ended."]
@@ -674,7 +487,6 @@
                     (and (= :prompt kind) (= :queued state)) (answer h rid {"stopReason" "cancelled"})
                     :else (refuse h rid -32000 gone)))
                 h (records h #(= role (:role %))))
-        (reduce (fn [h pkey] (settle h role pkey nil nil "cancelled")) h (sort (keys (:perms c))))
         (reduce (fn [h cid] (update-in h [:conns cid :attached] disj role)) h (attached h role))
         (update h :convs dissoc role)))))
 
@@ -729,7 +541,7 @@
       (full? h role) (refuse h rid -32000 full-message)
       c (-> h (update-record rid :state :waiting :role role :params params) (create-session role))
       :else
-      (-> h (assoc-in [:convs role] {:role role :status :starting :init :none :perms {} :next-id 0})
+      (-> h (assoc-in [:convs role] {:role role :status :starting :init :none :next-id 0})
           (update-record rid :state :waiting :role role :params params)
           (fx {:effect :start :role role})))))
 
@@ -780,8 +592,7 @@
   (as-> h h
     (drop-prompts h (filter #(= cid (:conn (val %))) (queued h role)))
     (if (and cancel? (= cid (:conn (second (running h role))))) (cancel-turn h role) h)
-    (update-in h [:conns cid :attached] disj role)
-    (drop-from-perms h cid [role])))
+    (update-in h [:conns cid :attached] disj role)))
 
 (defn- prompt
   "A prompt waits for its turn, one per session: as ACP has it, a session
@@ -839,28 +650,16 @@
         method (get msg "method")]
     (cond
       (not role) (refuse h rid -32602 why)
-      ;; Trust needs a client that may approve, as an answer to a
-      ;; permission request does.
-      (and (= "_relay/trust" method) (not (get-in h [:conns cid :approvals])))
-      (refuse h rid -32000 (str "This conversation does not take trust from its client. Run relay trust doc "
-                                (get (params-of msg) "path") " in a terminal."))
       (full? h role) (refuse h rid -32000 full-message)
       :else (-> (update-record h rid :method method) (send-upstream rid role msg :forward)))))
 
 (defn- connect [h cid rid msg first?]
-  (let [{:strs [approvals role]} (params-of msg)]
+  (let [{:strs [role]} (params-of msg)]
     (if (and first? (= :socket (get-in h [:conns cid :origin])))
-      (cond-> (update-in h [:conns cid] assoc :approvals (true? approvals) :role (when (string? role) role))
+      (cond-> (assoc-in h [:conns cid :role] (when (string? role) role))
         rid (answer rid {}))
       (cond-> h
         rid (refuse rid -32600 "relay takes _relay/connect only as the first line of a connection to its socket.")))))
-
-(defn reviews?
-  "Whether initialize's params declare that the client shows relay's
-  reviews: clientCapabilities._meta[\"relay/review\"] is 1."
-  [params]
-  (let [v (get-in params ["clientCapabilities" "_meta" "relay/review"])]
-    (boolean (and (number? v) (== 1 v)))))
 
 (defn- initialize-answer [h]
   {"protocolVersion" 1
@@ -878,9 +677,6 @@
     (case method
       "_relay/connect" (connect h cid rid msg first?)
       "initialize" (-> h (assoc-in [:conns cid :init] (params-of msg))
-                       ;; Once a client says it shows relay's reviews, relay
-                       ;; holds it to that for the rest of the connection.
-                       (update-in [:conns cid :review] #(or % (reviews? (params-of msg))))
                        (answer rid (initialize-answer h)))
       "authenticate" (answer h rid {})
       "session/new" (new-session h rid msg)
@@ -895,7 +691,6 @@
       "_relay/conversations/end" (end-request h rid msg)
       "_relay/cards" (cards-request h rid msg)
       "_relay/cards/op" (card-op h rid msg)
-      "_relay/cards/trust" (card-trust h rid msg)
       (cond
         (workspace/methods method) (forward h rid msg)
         (str/starts-with? method "_relay/") (refuse h rid -32601 (str "relay has no method " method "."))
@@ -943,63 +738,25 @@
       :else (let [[role] (attached-conv h cid msg)]
               (if (and role (session-of msg)) (send-conv h role (strict/generate msg)) h)))))
 
-(defn- hub-id?
-  "Whether an id is of the kind the hub gives its own requests to a
-  connection."
-  [id]
-  (and (string? id) (str/starts-with? id "relay-")))
-
-(defn- client-response [h cid line msg]
-  (let [id (get msg "id")]
-    (if-let [[role pkey] (perm-sent h cid (acp/id-key id))]
-      (let [p (get-in h [:convs role :perms pkey])
-            a (acp/answer-of {:id id :options (vec (filter map? (get-in p [:msg "params" "options"])))} line)]
-        (cond
-          (not a) h
-          ;; A client that reviews must show it reviewed what relay sent:
-          ;; an allow names the review's digest. A reject or a cancel
-          ;; needs none.
-          (and (get-in h [:conns cid :review]) (:valid a) (acp/allow-kinds (:outcome a))
-               (let [want (acp/review-digest (:msg p))]
-                 (not (and want (= want (acp/answer-digest msg))))))
-          (refused-allow h role pkey cid)
-          ;; The answer goes to the proxy under the agent's id; the proxy
-          ;; refuses one that picks no option the agent offered.
-          :else (settle h role pkey cid (with-id msg (get-in p [:msg "id"])) (:outcome a))))
-      (if (hub-id? id)
-        ;; An answer to a request already settled for another connection,
-        ;; or one the connection stopped holding when it detached.
-        h
-        ;; An answer to nothing it was asked: the client is confused, so
-        ;; what it holds open is refused rather than left to hang a turn.
-        (reduce (fn [h [role pkey]]
-                  (refuse-perm h role pkey cid))
-                h (for [[role c] (sort-by key (:convs h))
-                        [pkey p] (sort-by key (:perms c))
-                        :when (contains? (:sent p) cid)]
-                    [role pkey]))))))
-
 (defn- client-line [h cid line]
   (let [first? (zero? (get-in h [:conns cid :lines] 0))
         h (update-in h [:conns cid :lines] (fnil inc 0))
         msg (acp/message line)]
     (if (nil? msg)
-      ;; Not strictly one JSON object: never passed on. An open
-      ;; permission request it seems to answer is refused; a request
-      ;; whose id can be found is told why, unless that id is one of the
-      ;; hub's or the connection's own outstanding, whose answers it must
-      ;; not seem to give.
+      ;; Not strictly one JSON object: never passed on. A request whose
+      ;; id can be found is told why, unless that id is one the
+      ;; connection has outstanding, whose answer it must not seem to
+      ;; give.
       (let [lid (acp/line-id line)
             k (when (some? lid) (acp/id-key lid))]
-        (if-let [[role pkey] (when k (perm-sent h cid k))]
-          (refuse-perm h role pkey cid)
-          (if (and k (not (hub-id? lid)) (not (reserved? h cid k)))
-            (write h cid (workspace/error-line lid -32600 "relay does not pass on a line that is not one strictly valid JSON object."))
-            h)))
+        (if (and k (not (reserved? h cid k)))
+          (write h cid (workspace/error-line lid -32600 "relay does not pass on a line that is not one strictly valid JSON object."))
+          h))
       (case (acp/kind msg)
         :request (client-request h cid (get msg "id") msg first?)
         :notification (client-notification h cid msg first?)
-        :response (client-response h cid line msg)
+        ;; relay asks a client nothing, so an answer from one answers
+        ;; nothing.
         h))))
 
 (defn- close-connection
@@ -1012,7 +769,7 @@
                       (update-record h rid :orphan true)
                       (update h :requests dissoc rid)))
                   h (records h #(= cid (:conn %))))
-        h (-> h (drop-from-perms cid (keys (:convs h))) (update :conns dissoc cid))
+        h (update h :conns dissoc cid)
         ;; A role whose waiters all left has nothing to start a session for.
         h (reduce create-session h (sort (keys (:convs h))))]
     (if (and (= :embedded (:mode h)) (empty? (:conns h)))
@@ -1020,25 +777,6 @@
       h)))
 
 ;; --- what an agent says
-
-(defn- permission-request [h role msg]
-  (let [pkey (acp/id-key (get msg "id"))
-        call (get-in msg ["params" "toolCall" "toolCallId"])
-        h (-> h (keep-state role msg nil)
-              (assoc-in [:convs role :perms pkey] {:msg msg :call call :sent {}}))
-        approvers (approving h role)]
-    (if (seq approvers)
-      (reduce #(send-perm %1 role pkey %2) h approvers)
-      (unattended h role pkey))))
-
-(defn- passed-back
-  "An agent's answer to a request it was passed, as its client gets it.
-  Only a client that may approve is offered trust."
-  [h {:keys [conn method]} msg]
-  (if (and (= "_relay/items" method) (contains? msg "result") (not (get-in h [:conns conn :approvals])))
-    (update-in msg ["result" "items"]
-               (fn [items] (mapv #(cond-> % (contains? % "canTrust") (assoc "canTrust" false)) (filter map? items))))
-    msg))
 
 (defn- agent-response [h role line msg]
   (let [n (get msg "id")
@@ -1065,26 +803,9 @@
                 ;; Recorded before the client reads the answer, so its next
                 ;; prompt finds the turn over.
                 (end-turn h role (workspace/stop-reason line))
-                ;; Whatever it asked is moot once a turn is over: no client
-                ;; is asked about it again.
-                (retire-perms h role)
                 (reply h rid (with-id msg id))
                 (pump h role))
-      :forward (reply h rid (with-id (passed-back h r msg) id)))))
-
-(defn- agent-cancels
-  "The agent's $/cancel_request for a permission request it sent: each
-  client it went to is told under its own id, and the request is
-  settled."
-  [h role msg]
-  (let [pkey (acp/id-key (get (params-of msg) "requestId"))
-        perm (when pkey (get-in h [:convs role :perms pkey]))]
-    (if-not perm
-      h
-      (-> (reduce (fn [h [cid hub-id]]
-                    (write h cid (workspace/notification-line "$/cancel_request" {"requestId" hub-id})))
-                  h (sort-by key (:sent perm)))
-          (retire-perm role pkey)))))
+      :forward (reply h rid (with-id msg id)))))
 
 (defn- agent-line [h role line]
   (let [msg (acp/message line)
@@ -1093,11 +814,12 @@
     (cond
       (or (nil? kind) (not (get-in h [:convs role]))) h
       (= :response kind) (agent-response h role line msg)
-      (= "$/cancel_request" method) (agent-cancels h role msg)
+      ;; The agent cancelling a request of its own: no client was sent it.
+      (= "$/cancel_request" method) h
+      ;; A client is asked nothing by an agent, a permission request
+      ;; included.
       (= :request kind)
-      (if (= "session/request_permission" method)
-        (permission-request h role msg)
-        (send-conv h role (workspace/error-line (get msg "id") -32601 (str "relay's clients do not take " method "."))))
+      (send-conv h role (workspace/error-line (get msg "id") -32601 (str "relay's clients do not take " method ".")))
       (= "session/update" method)
       (reduce #(write %1 %2 line) (-> h (keep-state role msg line) (remember role line)) (attached h role))
       ;; The board is the hub's: a proxy has nothing to say about it.
@@ -1108,7 +830,7 @@
 ;; --- what relay decided
 
 (defn- submit-result [h {:keys [ok rejection message] :as result}]
-  (let [{:keys [kind role rid pkey] :as continuation} (peek (:awaiting h))
+  (let [{:keys [kind role rid] :as continuation} (peek (:awaiting h))
         h (update h :awaiting pop)
         r (when rid (record h rid))]
     (case kind
@@ -1139,10 +861,6 @@
                 (submit {:type :conversation/turn-unrecorded :actor core/dispatcher
                          :args {:wake (get-in h [:convs role :wake])}}
                         {:kind :ignore})))))
-      :unattended
-      (if (and ok (get-in h [:convs role :perms pkey]))
-        (assoc-in h [:convs role :perms pkey :notified] true)
-        h)
       :reply
       (cond
         ok (answer h rid {})
@@ -1163,8 +881,7 @@
   (let [h (assoc h ::fx [])
         h (case event
             :connection-opened
-            (assoc-in h [:conns (:conn e)] {:origin (:origin e) :approvals (true? (:approvals e))
-                                            :role (:role e) :default-role (:default-role e)
+            (assoc-in h [:conns (:conn e)] {:origin (:origin e) :role (:role e) :default-role (:default-role e)
                                             :attached #{} :lines 0})
             :connection-line (if (get-in h [:conns (:conn e)]) (client-line h (:conn e) (:line e)) h)
             :connection-closed (if (get-in h [:conns (:conn e)]) (close-connection h (:conn e)) h)
@@ -1173,7 +890,7 @@
               (-> (if (get-in h [:convs role])
                     h
                     ;; One opened before the hub asked (relay acp <role>).
-                    (assoc-in h [:convs role] {:role role :init :none :perms {} :next-id 0}))
+                    (assoc-in h [:convs role] {:role role :init :none :next-id 0}))
                   (update-in [:convs role] assoc :status :running :wake (:wake e))
                   (create-session role)))
             :conversation-failed
@@ -1187,10 +904,9 @@
               (assoc h :roster (vec (:roster e)) :state (or (:state e) (:state h)))
               (board-changes h)
               (retry-turn-ends h)
-              (retry-unattended h)
               (reduce (fn [h role] (-> h (assoc-in [:convs role :blocked] false) (pump role)))
                       h (sort (keys (:convs h)))))
-            :tick (-> h retry-turn-ends retry-unattended))
+            :tick (retry-turn-ends h))
         ;; The roster is sent once relay has decided what this event led
         ;; to, never in between.
         h (if (empty? (:awaiting h)) (roster-changes h) h)]

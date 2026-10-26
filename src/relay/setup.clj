@@ -108,28 +108,21 @@
    :required ["query"]
    :additionalProperties false})
 
-(def ^:private workbench-note
-  (str " ;; :workbench lets the hub hand a task to a separate assistant that\n"
-       " ;; searches and reads this Mac and computes, in a sandbox with no way\n"
-       " ;; to send anything out. It never reads relay's data, your keys or\n"
-       " ;; browser data.\n"))
-
 (defn- web-tool
-  "The hub's web tool, webtool's ask, as relay.edn's text."
+  "The scout's web tool, webtool's ask, as relay.edn's text."
   [{:keys [bin]} webtool-file]
   (str " ;; The web: webtool's ask searches with Brave Search and reads the top\n"
-       " ;; results. The hub reads it only through read_quarantined (its\n"
-       " ;; :quarantine grant), so it gets typed answers and stays clean. It is\n"
-       " ;; :egress because the query goes out to Brave.\n"
+       " ;; results. It is :egress because the query goes out to Brave, so only\n"
+       " ;; a public role may have it: the scout, which sees nothing of yours.\n"
+       " ;; Add it with relay add scout --public, its instructions on stdin.\n"
        " :tools {\"web\" {:class :egress\n"
        "                :labels [\"contaminated\"]\n"
        "                :protocol :envelope\n"
        "                :timeout-seconds 150\n"
-       "                :description \"Search the web and read the top results. Read it through read_quarantined with a closed schema.\"\n"
+       "                :description \"Search the web and read the top results.\"\n"
        "                :parameters " (pr-str web-tool-parameters) "\n"
        "                :command " (pr-str [bin "--config" webtool-file "ask"]) "}}\n"
-       workbench-note
-       " :grants {\"hub\" {:quarantine [\"web\"] :workbench true}}}\n"))
+       " :grants {\"scout\" {:public true :tools [\"web\"]}}}\n"))
 
 (defn render
   "relay.edn's text for the settings `interview` returns. `webtool-file`
@@ -158,15 +151,11 @@
          " ;;          :description \"Change Apple Reminders. Run with [\\\"help\\\"] for the commands.\"\n"
          " ;;          :command [\"/path/to/relay/tools/rem/rem\" \"--mode\" \"write\"]}\n"
          " ;; Changing your own reminders is :edit: nobody else sees them, and\n"
-         " ;; a change can be undone. relay asks you first only once the role has\n"
-         " ;; read an outsider's text. If a list is shared with other people, rem\n"
-         " ;; stays :act, so every change asks you, and rem-read adds\n"
-         " ;; \"contaminated\".\n"
+         " ;; a change can be undone. A list shared with other people is not\n"
+         " ;; yours alone, so leave rem out for it.\n"
          (if web
            (web-tool web webtool-file)
-           (str " :tools {}\n"
-                workbench-note
-                " :grants {\"hub\" {:workbench true}}}\n")))))
+           " :tools {}\n :grants {}}\n"))))
 
 (defn create!
   "Interviews the operator, shows the file and writes it to `file` only on

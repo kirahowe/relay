@@ -16,20 +16,27 @@
     (spit (str f) content)
     (fs/set-posix-file-permissions f "r--r--r--")))
 
+(defn- provenance
+  "A file's first line, saying where what it shows came from when any of
+  it came from outside, and nothing otherwise. A label is never named."
+  [labels]
+  (when (text/contaminated? labels)
+    (str text/outside-marker " Some of this came from outside relay; its links are broken.\n\n")))
+
 (defn- with-labels
-  "A file's text under a first line naming the labels of what it shows,
-  with nothing in it that could drive a terminal it is printed on, and,
-  from a contaminated source, its URLs broken."
+  "A file's text, under a line saying so when it came from outside, with
+  nothing in it that could drive a terminal it is printed on, and, from
+  outside, its URLs broken."
   [labels text]
-  (str "labels: " (if (seq labels) (str/join ", " labels) "none") "\n\n"
+  (str (provenance labels)
        (text/visible (if (text/contaminated? labels) (text/defang text) text))))
 
 (defn- page
-  "A file of lines (relay.render's): under a first line naming the labels
-  of what it shows, each line made visible, so a role's text, behind the
-  gutter, cannot pass for the page's own headings."
+  "A file of lines (relay.render's), under a line saying so when any of
+  it came from outside, each line made visible, so a role's text, behind
+  the gutter, cannot pass for the page's own headings."
   [labels lines]
-  (str "labels: " (if (seq labels) (str/join ", " labels) "none") "\n\n"
+  (str (provenance labels)
        (str/join "\n" (map text/visible-line lines)) "\n"))
 
 (defn- facts-page [sys]

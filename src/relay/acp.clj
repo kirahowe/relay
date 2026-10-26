@@ -81,7 +81,7 @@
   "A line read once: {:text :message}, its text (`text` for bytes) and the
   message relay's strict reader (relay.json) makes of it, the JSON object
   it is or nil. relay acp asks many things of one line (the screen,
-  permissions, displays, the observer, the trace), and the strict reader
+  displays, the observer, the trace), and the strict reader
   is slow enough on a large line that it must read it only once: the
   shell makes this value and every decision takes it. A line already read
   comes back as it is; anything but text or bytes has neither."
@@ -271,7 +271,7 @@
 
 (def class-kinds
   "The ACP tool kind for each of relay's tool classes."
-  {"read" "read" "write" "edit" "edit" "edit" "egress" "fetch" "act" "execute"})
+  {"read" "read" "write" "edit" "edit" "edit" "egress" "fetch"})
 
 (defn tool-kinds
   "The ACP kind of each tool in a manifest (relay.tools/manifest), by name:
@@ -284,92 +284,6 @@
                   [tool-name kind])))
         manifest))
 
-;; --- permission requests
-
-(defn- preview-block
-  "The text block of the preview in a tool call's content, if it has one:
-  one whose _meta has relay/preview true."
-  [content]
-  (when (sequential? content)
-    (some (fn [c]
-            (let [b (when (map? c) (get c "content"))]
-              (when (and (map? b) (= "text" (get b "type")) (string? (get b "text"))
-                         (true? (get-in b ["_meta" "relay/preview"])))
-                b)))
-          content)))
-
-(defn preview
-  "The text of the preview in a tool call's content, if it has one."
-  [content]
-  (get (preview-block content) "text"))
-
-(defn preview-labels
-  "The labels relay gave the preview in a tool call's content: what its
-  text carries, which is not what the session holds."
-  [content]
-  (let [ls (get-in (preview-block content) ["_meta" "relay/labels"])]
-    (when (sequential? ls) (vec (filter string? ls)))))
-
-(defn permission-request
-  "An agent's session/request_permission, as relay keeps track of it, or
-  nil for any other line: its id, session, tool call, the tool's name and
-  input, the options offered, the session's labels if the agent sent
-  them, and the preview, if the call's content has one."
-  [line]
-  (let [msg (message line)]
-    (when (and (map? msg) (= "session/request_permission" (get msg "method")) (contains? msg "id"))
-      (let [params (get msg "params")
-            call (when (map? params) (get params "toolCall"))
-            options (when (map? params) (get params "options"))]
-        {:id (get msg "id")
-         :session (when (map? params) (get params "sessionId"))
-         :call (when (map? call) (get call "toolCallId"))
-         :tool (when (map? call) (or (get call "name") (get call "title")))
-         :input (when (map? call) (get call "rawInput"))
-         :labels (let [ls (when (map? call) (get-in call ["_meta" "agentloop/labels"]))]
-                   (when (sequential? ls) (vec ls)))
-         :preview (when (map? call) (preview (get call "content")))
-         :preview-labels (when (map? call) (preview-labels (get call "content")))
-         ;; The arguments the operator fixed, which the input has in it.
-         :fixed-args (let [f (when (map? call) (get-in call ["_meta" "agentloop/fixed_args"]))]
-                       (when (and (map? f) (seq f)) f))
-         :options (vec (filter map? (when (sequential? options) options)))}))))
-
-(defn unreadable-permission-request
-  "A line that may be a permission request but is not one relay can read,
-  as much of a request as can be made of it: its id if one can be found,
-  and :unreadable. That is a line the strict reader refuses that mentions
-  request_permission, or a message whose method is
-  session/request_permission that permission-request cannot read (it has
-  no id). Nil for any other line. Such a line is refused, never passed
-  on."
-  [x]
-  (let [{:keys [text message] :as l} (line x)]
-    (when (and (some? text) (nil? (permission-request l)))
-      (when (if message
-              (= "session/request_permission" (get message "method"))
-              (str/includes? text "request_permission"))
-        {:id (when-not message (line-id text)) :unreadable true :options []}))))
-
-(defn stray-answer?
-  "Whether a client's line is an answer (a result or an error, with an
-  id, and no method), whichever request it claims to answer."
-  [line]
-  (let [msg (message line)]
-    (and (= :response (kind msg)) (or (contains? msg "result") (contains? msg "error")))))
-
-(defn- option-of-kind [{:keys [options]} kind]
-  (some #(when (= kind (get % "kind")) (get % "optionId")) options))
-
-(defn refusal
-  "The answer that refuses a permission request: its reject_once option,
-  or cancelled when it offers none."
-  [{:keys [id] :as req}]
-  {"jsonrpc" "2.0" "id" id
-   "result" {"outcome" (if-let [opt (option-of-kind req "reject_once")]
-                         {"outcome" "selected" "optionId" opt}
-                         {"outcome" "cancelled"})}})
-
 (defn id-key
   "A JSON-RPC id as a key that two ids share exactly when a client
   matching responses to its requests takes them for the same id: numbers
@@ -381,32 +295,7 @@
         (number? id) [:number (str (.stripTrailingZeros (bigdec id)))]
         :else nil))
 
-(defn answer-of
-  "What a client's line says about an outstanding permission request: nil
-  when the line is not an answer to it, else {:outcome kind :valid bool}.
-  An answer is valid only when it selects an option the agent offered or
-  cancels; anything else counts as a refusal."
-  [req line]
-  (let [msg (message line)]
-    (when (and (= :response (kind msg))
-               ;; By value, as the client and agentloop match ids: 1 and 1.0 are one.
-               (some? (id-key (:id req))) (= (id-key (:id req)) (id-key (get msg "id"))))
-      (let [outcome (get-in msg ["result" "outcome"])
-            chosen (when (and (map? outcome) (= "selected" (get outcome "outcome")))
-                     (some #(when (= (get outcome "optionId") (get % "optionId")) %) (:options req)))]
-        (cond
-          chosen {:outcome (get chosen "kind") :valid true}
-          (and (map? outcome) (= "cancelled" (get outcome "outcome"))) {:outcome "cancelled" :valid true}
-          :else {:outcome "reject_once" :valid false})))))
-
-;; --- previews
-
-(def preview-meta
-  "The _meta that marks the preview in a permission request's
-  toolCall.content, on the content item and on its text block, so a
-  client can tell it from anything else there and show it as relay's.
-  with-preview adds relay/labels, the labels of the preview's text."
-  {"relay/preview" true})
+;; --- outside text, made inert
 
 (defn- fence
   "A code fence longer than any run of backticks in s, so s cannot end it."
@@ -453,90 +342,3 @@
                                                   (str (get-in c ["content" "text"])))))
                                c)))
                          content)))))))
-
-(defn preview-markdown
-  "The markdown a client is shown for a held call's preview (relay.core
-  preview-of): what the tool's preview command read from the service, a
-  note when the command failed, and the hosts of links to places the
-  operator has not approved before (relay.core/approved-hosts), and the
-  placeholders such as [Venue] still left in it (relay.text/placeholders).
-
-  The preview's own text goes inside a code fence, and so do the notes
-  after it, which quote it. It can hold text an outsider wrote (a
-  campaign's body, say), and as live markdown it could show a remote
-  image, which a client fetches before anyone approves anything, or a link
-  whose text names another place than it goes."
-  [{:keys [content is-error]} approved]
-  (let [new-hosts (remove (set approved) (text/link-hosts content))
-        odd (text/lookalikes (str content))
-        ;; Characters that draw as nothing are shown as \u{XXXX}, so the
-        ;; preview cannot hide text from the operator. Line breaks and
-        ;; tabs stay, since the preview is markdown.
-        shown (escape-hidden content)
-        gaps (text/placeholders content)
-        notes (str/join "\n" (concat (when (seq gaps)
-                                       [(str "Still to fill in, and would go out as written: "
-                                             (str/join ", " gaps))])
-                                     (when (seq new-hosts)
-                                       [(str "Links to places you have not approved before: "
-                                             (str/join ", " new-hosts))])
-                                     (when (seq odd)
-                                       [(str "Characters that can pass for others: " (str/join "; " odd))])))
-        notes (text/visible notes)
-        fenced (fn [s] (str (fence s) "text\n" s "\n" (fence s)))]
-    (str (when is-error "The preview command could not say what this call would do.\n\n")
-         (fenced shown)
-         (when-not (str/blank? notes) (str "\n\n---\n" (fenced notes))))))
-
-(defn with-preview
-  "A session/request_permission line with `markdown` added to the end of
-  its toolCall.content as a text content block marked with preview-meta,
-  and with `labels`, what the preview's text carries, as relay/labels.
-  They are the preview's own, kept apart from agentloop/labels, which are
-  the session's: a client renders the preview by them, and the session is
-  no more contaminated for it. Everything else in the request is kept.
-  Nil when the line is not such a request."
-  [line markdown labels]
-  (let [msg (message line)
-        call (get-in msg ["params" "toolCall"])]
-    (when (and (map? msg) (= "session/request_permission" (get msg "method")) (map? call))
-      (let [content (get call "content")
-            meta (assoc preview-meta "relay/labels" (vec labels))
-            item {"type" "content" "_meta" meta
-                  "content" {"type" "text" "text" (str markdown) "_meta" meta}}]
-        (strict/generate
-         (assoc-in msg ["params" "toolCall" "content"]
-                   (conj (if (sequential? content) (vec content) []) item)))))))
-
-;; --- reviews
-
-(defn with-review
-  "A session/request_permission line with `review` (relay.review) as
-  params._meta[\"relay/review\"], or nil when the line is not such a
-  request. Only relay says what a review is, or that it refused an
-  answer: whatever the agent put under relay/review or relay/refused is
-  replaced or dropped. Everything else in the request is kept."
-  [line review]
-  (let [msg (message line)]
-    (when (and (map? msg) (= "session/request_permission" (get msg "method")) (map? (get msg "params")))
-      (let [meta (get-in msg ["params" "_meta"])
-            meta (-> (if (map? meta) meta {}) (dissoc "relay/refused") (assoc "relay/review" review))]
-        (strict/generate (assoc-in msg ["params" "_meta"] meta))))))
-
-(defn review-digest
-  "The digest of the review a permission request carries
-  (params._meta[\"relay/review\"][\"sha256\"]), or nil."
-  [msg]
-  (let [h (get-in msg ["params" "_meta" "relay/review" "sha256"])]
-    (when (string? h) h)))
-
-(defn answer-digest
-  "The digest a client's answer to a permission request gives back
-  (result._meta[\"relay/review\"]), or nil."
-  [msg]
-  (let [h (get-in msg ["result" "_meta" "relay/review"])]
-    (when (string? h) h)))
-
-(def allow-kinds
-  "The ACP option kinds that allow a call."
-  #{"allow_once" "allow_always"})

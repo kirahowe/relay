@@ -2,43 +2,29 @@
   "What `relay acp` tells a client's workspace pane, through ACP
   extension methods (their names start with _, as ACP requires):
 
-    _relay/items     what the operator was shown in a session, and the
-                     calls it proposed, newest first
+    _relay/items     what the operator was shown in a session, newest first
     _relay/resolve   look a [[kind:id]] ref up
-    _relay/trust     trust a shown doc, as `relay trust doc <path>` does
     _relay/cards     the operator's board, as wire forms (relay.cards/wire);
                      the first call subscribes the client to
                      _relay/cards/changed notifications
     _relay/cards/op  change a card, as the operator
-    _relay/cards/trust  trust a whole card, as `relay trust card <id>` does
 
   relay answers them itself, and agentloop never sees them: the board's in
   relay.hub, which knows what each client was sent, the rest in each
-  conversation's proxy (relay.dispatch). A conversation
-  keeps what it learns from the traffic in a value, `conversation`: the
-  displays it kept and the permission requests it passed on. Everything
-  here is pure; relay.dispatch is the shell.
-
-  Trust needs the same presence of the operator as an answer to a
-  permission request: it is taken only when relay acp was started with
-  --approvals, which the dashboard does because its client is the operator's
-  terminal. Without it the pane is told to show the command instead. A
-  trust names the version and the digest of the doc's review
-  (relay.review), so a doc that changed since is not trusted."
+  conversation's proxy (relay.dispatch). A conversation keeps what it
+  learns from the traffic in a value, `conversation`: the displays it
+  kept. Everything here is pure; relay.dispatch is the shell."
   (:require [clojure.string :as str]
             [relay.acp :as acp]
             [relay.cards :as cards]
             [relay.core :as core]
-            [relay.json :as strict]
-            [relay.review :as review]
-            [relay.text :as text]))
+            [relay.json :as strict]))
 
 ;; --- what a conversation has learned
 
 (def conversation
-  "Nothing learned yet: the displays kept, in the order they came, and
-  the permission requests passed on, by [session call]."
-  {:displays [] :proposals {}})
+  "Nothing learned yet: the displays kept, in the order they came."
+  {:displays []})
 
 (defn shown
   "The conversation once a session's displays are kept: each {:session
@@ -50,38 +36,13 @@
               (update c :displays conj {:session session :call call :ref ref :path path})))
           conv displays))
 
-(defn- status-of [outcome]
-  (case outcome
-    ("allow_once" "allow_always") "allowed"
-    ("reject_once" "reject_always") "rejected"
-    "cancelled"))
-
-(defn asked
-  "The conversation once a permission request went to the client. A
-  proposal is labelled with what it shows: the session's labels, which
-  its input carries, and its preview's (relay.acp/preview-labels)."
-  [conv {:keys [session call tool input labels preview preview-labels fixed-args]} ^java.time.Instant at]
-  (assoc-in conv [:proposals [session call]]
-            (cond-> {:session session :call call :tool tool :input input
-                     :labels (vec (core/union labels (when preview preview-labels)))
-                     :preview preview :status "waiting" :at at}
-              (seq fixed-args) (assoc :fixed (vec (sort (keys fixed-args)))))))
-
-(defn answered
-  "The conversation once a permission request was answered, by the client
-  or by relay."
-  [conv {:keys [session call]} outcome]
-  (if (get-in conv [:proposals [session call]])
-    (assoc-in conv [:proposals [session call] :status] (status-of outcome))
-    conv))
-
 ;; --- the requests
 
 (def methods
   "The pane's methods a conversation's proxy answers. The board's
   (_relay/cards, _relay/cards/op) are relay.hub's, which knows what each
   client was sent."
-  #{"_relay/items" "_relay/resolve" "_relay/trust"})
+  #{"_relay/items" "_relay/resolve"})
 
 (defn extension-request
   "A client's line as one of relay's extension methods: {:id :method
@@ -203,41 +164,26 @@
   (:shown (first (filter :shown (get-in state [:docs path :versions])))))
 
 (defn shown-item
-  "A shown doc as the pane lists it, or nil when it is gone. `text` is the
-  doc's content as it is; `review` is what the operator consents to when
-  trusting it (relay.review/doc-text) with its digest, and `sha256` is
-  that digest too, which _relay/trust must give back."
-  [state {:keys [call ref path]} approvals?]
-  (let [v (core/doc-version state path {})
-        t (core/trusted-version state "doc" path)]
-    (when (and v (not (:removed v)) t)
-      (let [{:keys [title sources]} (shown-meta state path)
-            labels (vec (core/union (:labels t)))]
+  "A shown doc as the pane lists it, or nil when it is gone. `labels` say
+  where what it shows came from."
+  [state {:keys [call ref path]}]
+  (let [v (core/doc-version state path {})]
+    (when (and v (not (:removed v)))
+      (let [{:keys [title sources]} (shown-meta state path)]
         {"kind" "shown" "ref" ref "path" path "callId" call
          "at" (str (:at v))
-         "title" (or title path) "text" (:text t)
+         "title" (or title path) "text" (:content v)
          "sources" (vec (for [{t :title r :ref} sources] {"title" t "ref" r}))
-         "labels" labels
-         "version" (:version t)
-         "review" (review/review (core/trust-text state "doc" path))
-         "sha256" (core/trust-digest state "doc" path)
-         "canTrust" (boolean (and approvals? (core/contaminated? labels)))
-         "trustCommand" (str "relay trust doc " path)}))))
-
-(defn- proposal-item [{:keys [call tool input labels preview status at fixed]}]
-  (cond-> {"kind" "proposal" "callId" call "tool" tool "input" input "preview" preview
-           "labels" labels "status" status "at" (str at)}
-    ;; The arguments in the input that the operator set.
-    (seq fixed) (assoc "fixedArgs" fixed)))
+         "labels" (core/union (:labels v) (core/path-labels state path))
+         "version" (:seq v)}))))
 
 (defn items
   "The _relay/items answer for a session (all of the conversation's when
-  `session` is nil): its shown docs and its proposals, newest first."
-  [state conv session approvals?]
+  `session` is nil): its shown docs, newest first."
+  [state conv session]
   (let [mine? #(or (nil? session) (= session (:session %)))
-        shown (keep #(when (mine? %) (shown-item state % approvals?)) (:displays conv))
-        proposals (map proposal-item (filter mine? (vals (:proposals conv))))]
-    {"items" (vec (reverse (sort-by #(core/inst (get % "at")) (concat shown proposals))))}))
+        shown (keep #(when (mine? %) (shown-item state %)) (:displays conv))]
+    {"items" (vec (reverse (sort-by #(core/inst (get % "at")) shown)))}))
 
 ;; --- resolve
 
@@ -255,45 +201,18 @@
                  (:labels r) (assoc "labels" (vec (:labels r)))
                  (:target r) (assoc "target" (:target r)))})))
 
-;; --- trust
-
-(defn trust-command
-  "What a _relay/trust asks for, as the command `relay trust doc` submits,
-  or {:error why}. Only a doc the conversation itself showed can be
-  trusted this way, and only when relay acp takes approvals from its
-  client. The version and digest are what the pane showed; core refuses
-  the trust if the doc has changed since."
-  [conv approvals? {:strs [sessionId path version sha256]}]
-  (cond
-    (not approvals?)
-    {:error (str "This conversation does not take trust from its client. Run relay trust doc " path
-                 " in a terminal.")}
-    (not (and (string? path) (some #(and (= path (:path %)) (or (nil? sessionId) (= sessionId (:session %))))
-                                   (:displays conv))))
-    {:error "Only something this conversation showed you can be trusted here."}
-    (not (and (integer? version) (string? sha256)))
-    {:error "_relay/trust needs the path, version and sha256 the pane showed."}
-    :else
-    {:command {:type :label/trust :actor core/operator :labels []
-               :args {:kind "doc" :ref path :version version :sha256 sha256 :via "chat"}}}))
-
 ;; --- the board
 ;;
 ;; A client never holds the truth about a card: it sends an op, relay
 ;; decides it, and the client draws whatever relay sends back. Every op
-;; from the client is the operator's, with no labels, whether or not
-;; relay acp takes approvals: the pane is the operator's as the command
-;; line is. A card change never wakes a role.
+;; from the client is the operator's, with no labels (I5): the pane is
+;; the operator's as the command line is. A card change never wakes a
+;; role.
 
 (defn card-wire
-  "A card as a client is sent it (relay.cards/wire), with its review
-  (relay.review/card-text and its digest), which every card carries. A
-  card with contaminated text also carries that digest as \"sha256\":
-  what a client sends back to trust it (_relay/cards/trust)."
+  "A card as a client is sent it (relay.cards/wire)."
   [c]
-  (let [{h "sha256" :as r} (review/review (review/card-text c))]
-    (cond-> (assoc (cards/wire c (core/card-labels c)) "review" r)
-      (text/contaminated? (cards/text-labels c)) (assoc "sha256" h))))
+  (cards/wire c (core/card-labels c)))
 
 (defn log-rev
   "The seq of the log's last event, which a client can compare revs with."
@@ -355,29 +274,6 @@
                  :args (into {:card card}
                              (keep (fn [k] (when (contains? params (name k)) [k (get params (name k))])))
                              cards/op-fields)}})))
-
-(defn card-trust-command
-  "What a _relay/cards/trust asks for, as the operator's :label/trust
-  command, or {:error why}. The params are strict: a client that sends
-  anything else is not told it trusted a card."
-  [params]
-  (let [{:strs [card rev sha256]} params
-        unknown (sort (remove #{"card" "rev" "sha256"} (keys params)))]
-    (cond
-      (seq unknown)
-      {:error (str "_relay/cards/trust has no parameter " (str/join ", " unknown) ". It takes card, rev, sha256.")}
-      (not (integer? card)) {:error "_relay/cards/trust needs a card, by number."}
-      (not (integer? rev)) {:error "_relay/cards/trust needs the rev you were shown, a number."}
-      (not (and (string? sha256) (re-matches #"[0-9a-f]{64}" sha256)))
-      {:error "_relay/cards/trust needs the sha256 you were shown."}
-      :else
-      {:command {:type :label/trust :actor core/operator :labels []
-                 :args {:kind "card" :ref (str card) :version rev :sha256 sha256 :via "chat"}}})))
-
-(defn card-trust-answer
-  "The _relay/cards/trust answer once the card is trusted."
-  [state card-id]
-  {"trusted" true "card" (card-wire (core/card state card-id))})
 
 (defn card-op-answer
   "The _relay/cards/op answer once the op is decided: the card as it is

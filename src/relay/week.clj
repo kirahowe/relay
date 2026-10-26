@@ -1,6 +1,6 @@
 (ns relay.week
   "What a stretch of relay's use looked like, so the operator can judge
-  it: every way relay asked them for something and how long it waited,
+  it: each time relay needed them and how long it waited,
   what each role's wakes did and cost, the wakes that look wrong, and the
   operator's own flags. relay week shows it and relay traces exports it.
 
@@ -64,9 +64,9 @@
 
 (defn transcript-facts
   "What a run's entries say about its tool calls: how many were made,
-  how many agentloop's policy refused (a denial a person resolved is a
-  held call's, counted with holds) and how many failed, with the tools
-  each named. Names only, never inputs or results."
+  how many agentloop's policy refused and how many failed, with the tools
+  each named. A denial a person resolved, which only an older agentloop
+  wrote, is not a refusal. Names only, never inputs or results."
   [entries]
   (let [decisions (keep :decision (filter #(= "decision" (:type %)) entries))
         results (keep #(get-in % [:tool_result :result]) (filter #(= "tool_result" (:type %)) entries))
@@ -95,12 +95,7 @@
 (def interruption-kinds
   "Each way relay asks the operator for something, in the order shown,
   with what answers it."
-  [["hold" "held calls" "relay approve, relay deny"]
-   ["permission" "calls asked in a conversation" "the dashboard"]
-   ["quarantine" "quarantined memos" "relay release"]
-   ["declassify" "memos for a public role" "relay declassify"]
-   ["fresh" "changed MCP tools" "relay fresh"]
-   ["harness" "a harness that needs you" "fix it; it runs again by itself"]
+  [["harness" "a harness that needs you" "fix it; it runs again by itself"]
    ["dead-letter" "work given up, sent to you" "relay retry"]])
 
 (defn- arise [acc kind ref role at]
@@ -132,7 +127,7 @@
 
 (defn- step
   "Folds one event, with the states before and after it, into the walk."
-  [acc [before after {:keys [seq type actor data] :as event}]]
+  [acc [_before after {:keys [seq type actor data] :as event}]]
   (let [at (core/inst (:at event))
         memo-to #(get-in after [:memos % :to])]
     (case type
@@ -141,42 +136,22 @@
       "wake/ended" (let [{:keys [role chat]} (get-in after [:wakes (:wake data)])]
                      (-> acc (update-in [:running role] dissoc (if chat :chat :wake))
                          (assoc-in [:wakes (:wake data) :tools-unavailable] (some? (:tools-error data)))))
-      "hold/opened" (arise acc "hold" seq (:role data) at)
-      "hold/resolved" (settle acc "hold" (:hold data)
-                              (cond (= "allow" (:verdict data)) "approved"
-                                    (= core/operator actor) "denied"
-                                    :else "dropped by relay")
-                              at)
-      "permission/asked" (arise acc "permission" seq (:role data) at)
-      "permission/answered"
-      (let [asked (->> (vals (:permissions before))
-                       (filter #(and (= (:wake data) (:wake %)) (= (:call data) (:call %)) (nil? (:outcome %))))
-                       (sort-by :id) last)]
-        (cond-> acc
-          asked (settle "permission" (:id asked)
-                        (if (= "relay" (:by data)) "refused by relay" (str (:outcome data))) at)))
       "notification/created"
       (let [acc (update acc :notifications conj
                         {:kind (:kind data) :at at
                          :from (when (= "memo-for-operator" (:kind data))
                                  (get-in after [:memos (:memo data) :from]))})]
         (case (:kind data)
-          "memo-quarantined" (arise acc "quarantine" (:memo data) (:role data) at)
-          "memo-awaiting-declassification" (arise acc "declassify" (:memo data) (:role data) at)
           "harness-needs-attention" (arise acc "harness" (:harness data) nil at)
           "work-abandoned" (arise acc "dead-letter" (:dead-letter data) (:role data) at)
           acc))
-      "memo/released" (settle acc "quarantine" (:memo data) "released" at)
-      "memo/declassified" (settle acc "declassify" (:memo data) "declassified" at)
       "memo/closed" (let [m (:memo data)
                           w (wake-of acc (memo-to m))]
-                      (cond-> (-> acc (settle "quarantine" m "closed unreleased" at)
-                                  (settle "declassify" m "closed undeclassified" at))
+                      (cond-> acc
                         (some #{m} (get-in after [:wakes w :memos])) (bump w :closed)))
       "memo/dead-lettered" (let [m (:memo data)
                                  w (wake-of acc (memo-to m))]
-                             (cond-> (-> acc (settle "quarantine" m "dead-lettered" at)
-                                         (settle "declassify" m "dead-lettered" at))
+                             (cond-> acc
                                (and (= "blocked" (:reason data)) (some #{m} (get-in after [:wakes w :memos])))
                                (bump w :blocked)
                                (= "never-closed" (:reason data)) (bump (:wake data) :dead-lettered)))
@@ -188,25 +163,18 @@
                   acc))
               acc (open-refs acc "dead-letter"))
       "harness/recovered" (settle acc "harness" (:harness data) "recovered" at)
-      "role/tools-unavailable" (if (and (:fresh data) (not (get-in before [:roles (:role data) :tools-unavailable :fresh])))
-                                 (arise acc "fresh" (:role data) (:role data) at)
-                                 acc)
-      "hold/session-ended" (if (:fresh data) (settle acc "fresh" (:role data) "accepted" at) acc)
       "journal/written" (let [w (wake-of acc (:owner data))]
                           (cond-> acc
                             (and w (= actor (:owner data))) (assoc-in [:wakes w :journal] true)))
       "memo/sent" (let [w (wake-of acc actor)]
                     (cond-> acc (and w (= core/operator (:to data))) (bump w :operator-memos)))
-      "label/trusted" (update acc :actions conj {:action "trust" :at at})
       "wake/flagged" (update acc :actions conj {:action "flag" :at at})
       acc)))
 
 (defn- replay-states
   "[before after event] for each event, folded as core/replay folds them."
   [events]
-  (let [marker (some #(when (= "labels/enabled" (:type %)) (:seq %)) events)
-        start (cond-> core/empty-state marker (assoc :legacy-before marker))
-        states (reductions core/evolve start events)]
+  (let [states (reductions core/evolve core/empty-state (core/with-legacy-labels events))]
     (map vector states (rest states) events)))
 
 (defn walk-log
@@ -264,7 +232,7 @@
     {:id id :role (:role w) :chat (boolean (:chat w)) :status (:status w)
      :started-at (:started-at w) :ended-at (:ended-at w)
      :outcome (:outcome w) :crashed (boolean (:crashed w)) :cut-short (boolean (:cut-short w))
-     :held (count (:held w)) :memos (count (:memos w))
+     :memos (count (:memos w))
      :closed (:closed f 0) :blocked (:blocked f 0) :left-open (:left-open f 0)
      :dead-lettered (:dead-lettered f 0) :journal (boolean (:journal f))
      :operator-memos (:operator-memos f 0) :tools-unavailable (boolean (:tools-unavailable f))
@@ -281,7 +249,7 @@
   and too many memos to the operator. A conversation is checked only for
   its tool calls. A wake the harness could not run, or still running, has
   none: the harness is counted elsewhere."
-  [{:keys [chat status outcome held journal left-open transcript cut-short crashed operator-memos]}]
+  [{:keys [chat status outcome journal left-open transcript cut-short crashed operator-memos]}]
   (let [tools (when transcript
                 [{:check "tool-calls-refused-or-failed"
                   :pass (zero? (+ (:refused transcript) (:failed transcript)))}])]
@@ -290,9 +258,8 @@
       chat (vec tools)
       (not= "ran" outcome) []
       :else (vec (concat
-                  ;; A held wake stopped part way, and is carried on later.
-                  (when (zero? held) [{:check "no-journal-entry" :pass journal}])
-                  [{:check "memos-left-open" :pass (zero? left-open)}]
+                  [{:check "no-journal-entry" :pass journal}
+                   {:check "memos-left-open" :pass (zero? left-open)}]
                   tools
                   [{:check "cut-short" :pass (not cut-short)}
                    {:check "crashed" :pass (not crashed)}
@@ -321,7 +288,6 @@
      :memos-closed (sum :closed) :memos-blocked (sum :blocked) :memos-left-open (sum :left-open)
      :memos-dead-lettered (sum :dead-lettered)
      :cut-short (count (filter :cut-short wakes)) :crashed (count (filter :crashed wakes))
-     :held (count (filter #(pos? (:held %)) wakes))
      :tools-unavailable (count (filter :tools-unavailable wakes))
      :cost-usd cost
      :conversation-cost-usd (usd-sum (keep :cost-usd chats))

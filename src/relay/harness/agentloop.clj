@@ -19,15 +19,7 @@
                  :limits {:max-turns 200 :max-tool-calls 400 :max-tokens 2000000}
                  ;; stops one tool call that hangs, so it cannot eat the
                  ;; whole wake; the default is 300
-                 :tool-timeout-seconds 300
-                 ;; the quarantined reader, for roles granted :quarantine,
-                 ;; and the model that runs the workbench for roles
-                 ;; granted :workbench; these are the defaults
-                 :reader {:model \"claude-haiku-5-5\" :effort \"low\"}
-                 ;; the sandboxed workbench: how long one command may run,
-                 ;; and paths its commands may not read, on top of the ones
-                 ;; agentloop always denies and relay's own data directory
-                 :workbench {:command-timeout-seconds 120 :deny-read []}}}
+                 :tool-timeout-seconds 300}}
 
   A run stopped at the wake deadline, by agentloop (reason \"canceled\") or
   by relay killing it (exit \"timeout\"), is reported as :cut-short, so the
@@ -49,16 +41,11 @@
   run: `agentloop acp request.json`, whose request names the conversations
   directory instead of one session.
 
-  A role granted :workbench also gets agentloop's sandboxed workbench:
-  the request carries a workbench block with the child model (the
-  reader's), the per-command timeout and the paths its commands may not
-  read, and the policy an entry for it of class read. relay's data
-  directory is always among the denied paths.
-
-  A role granted :quarantine also gets agentloop's read_quarantined: the
-  request carries a quarantine block naming the tools it reads through,
-  and the policy an entry for it of class read. agentloop adds the tool
-  itself and decides the labels of its answers.
+  The request follows agentloop's contract: no call is held for anyone.
+  Its policy carries only labels: the session's starting labels, the
+  static labels of the tools that have any, and for a public role
+  forbid_labels [\"private\"], so its session never holds the operator's
+  private things (I3).
 
   A role granted tools from MCP servers (relay.edn's :mcp-servers) gets
   them in its request as agentloop names them: each tool by its relay.edn
@@ -86,55 +73,6 @@
 (def default-effort "medium")
 (def default-provider "anthropic")
 (def default-tool-timeout-seconds 300)
-(def default-reader {:model "claude-haiku-5-5" :effort "low"})
-
-(def default-workbench
-  "The workbench settings an :agentloop harness does not give. :deny-read
-  here is on top of agentloop's own list (keys, browser data, agents'
-  settings); the role's grant adds more."
-  {:deny-read [] :command-timeout-seconds 120})
-
-(def reader-tool
-  "The tool agentloop adds for a quarantine block."
-  "read_quarantined")
-
-(defn- with-reader
-  "A request with the quarantined reader turned on over `inner`, the tools
-  the role may read through, when there are any. `reader-only` are those
-  the model is not offered at all. The reader's own policy entry is class
-  read with no labels: agentloop gives each answer its labels from the
-  inner tool's."
-  [req harness inner reader-only]
-  (if (seq inner)
-    (let [{:keys [model effort]} (merge default-reader (:reader harness))]
-      (-> req
-          (assoc :quarantine (cond-> {:model model :effort effort :tools (vec inner)}
-                               (seq reader-only) (assoc :reader_only (vec reader-only))))
-          (assoc-in [:policy :tools reader-tool] {:class "read"})))
-    req))
-
-(def workbench-tool
-  "The tool agentloop adds for a workbench block."
-  "workbench")
-
-(defn- with-workbench
-  "A request with the sandboxed workbench turned on, when the role is
-  granted it. The child model is the reader's (agentloop falls back to
-  the quarantine block's model, and relay always sends one), and the
-  grant's :deny-read adds to the paths agentloop always denies. relay's
-  own data directory is denied too: the workbench reads the operator's
-  files, not relay's log."
-  [req harness workbench data-dir]
-  (if workbench
-    (let [{:keys [model effort]} (merge default-reader (:reader harness))
-          {:keys [deny-read command-timeout-seconds]} (merge default-workbench (:workbench harness))]
-      (-> req
-          (assoc :workbench
-                 {:model model :effort effort
-                  :command_timeout_seconds command-timeout-seconds
-                  :deny_read (vec (distinct (concat [(str data-dir)] deny-read (:deny-read workbench))))})
-          (assoc-in [:policy :tools workbench-tool] {:class "read"})))
-    req))
 
 (defn- repo-root []
   (some-> (System/getProperty "relay.bin") fs/real-path fs/parent fs/parent str))
@@ -190,19 +128,6 @@
            (filter #(and % (.isAfter ^Instant % now)))
            first str))
 
-(defn held-calls
-  "The calls an outcome line says are held, as relay records them."
-  [held]
-  (vec (for [{:keys [id name input input_sha256 effective_input fixed_args]} (when (sequential? held) held)
-             :when (and (string? id) (string? name))]
-         (cond-> {:id id :name name :input input}
-           (string? input_sha256) (assoc :input-sha256 input_sha256)
-           ;; A call to a tool whose arguments the operator fixed: the
-           ;; input it would run on, which the digest is of, and the
-           ;; values the operator set in it.
-           (and (map? effective_input) (map? fixed_args) (seq fixed_args))
-           (assoc :effective-input effective_input :fixed-args fixed_args)))))
-
 (defn usage
   "A run's token counts from its outcome line, as relay records them, or
   nil when the line has none. A count that is not a whole number of zero
@@ -253,7 +178,7 @@
   "How a run ended. Pure: takes the parsed outcome line (nil when there was
   none), the exit code, stderr, the session id and the time."
   [{:keys [outcome exit stderr session now]}]
-  (let [{:keys [reason text error held labels label_sources refused forbidden cost_usd] :as line}
+  (let [{:keys [reason text error labels refused forbidden cost_usd] :as line}
         (when (map? outcome) outcome)
         error (when (map? error) error)
         ;; Whatever the outcome line held, only strings are shown to a person.
@@ -289,10 +214,6 @@
       :else
       (case reason
         ("completed" "max_tokens" "limit") (report "ran")
-        ;; Calls that wait for the operator: relay records a hold for each.
-        ;; Where each of the session's labels came from, for the operator.
-        "held" (report "ran" :held (mapv #(cond-> % (map? label_sources) (assoc :label-sources label_sources))
-                                         (held-calls held)))
         "refused" (report "ran" :crashed true)
         ;; The session holds a label it may not, so agentloop ran nothing.
         ;; The next wake starts a fresh session.
@@ -382,8 +303,7 @@
 
 (defn- base-request
   "What every agentloop request holds, whatever the mode."
-  [{:keys [harness model system-prompt tools tool-command policy quarantine reader-only workbench mcp-servers
-           display-ref-prefix data-dir]} work]
+  [{:keys [harness model system-prompt tools tool-command policy mcp-servers display-ref-prefix]} work]
   (let [{:keys [provider effort base-url retry limits tool-timeout-seconds api-key-command]} harness
         limit-keys {:max-turns :max_turns :max-tool-calls :max_tool_calls :max-tokens :max_tokens}
         retry-keys {:retries :retries :backoff-seconds :backoff_seconds
@@ -395,9 +315,9 @@
              :system system-prompt
              :tools (mapv request-tool tools)
              :tool_command (vec tool-command)
-             ;; Every tool is policed: the session's starting labels and
-             ;; each tool's class and labels, with calls and results in
-             ;; envelopes that carry labels both ways.
+             ;; The session's starting labels and each tool's static
+             ;; labels, with calls and results in envelopes that carry
+             ;; labels both ways.
              :policy policy
              :tool_protocol "envelope"
              :tool_env (harness/base-env {})
@@ -412,22 +332,16 @@
       display-ref-prefix (assoc :display_ref_prefix display-ref-prefix)
       base-url (assoc :base_url base-url)
       (seq limits) (assoc :limits (into {} (keep (fn [[k v]] (when-let [k2 (limit-keys k)] [k2 v])) limits)))
-      (seq retry) (assoc :retry (into {} (keep (fn [[k v]] (when-let [k2 (retry-keys k)] [k2 v])) retry)))
-      ;; A role granted :quarantine gets read_quarantined.
-      :always (with-reader harness quarantine reader-only)
-      ;; A role granted :workbench gets the sandboxed workbench.
-      :always (with-workbench harness workbench data-dir))))
+      (seq retry) (assoc :retry (into {} (keep (fn [[k v]] (when-let [k2 (retry-keys k)] [k2 v])) retry))))))
 
 (defn request-json
   "The request `agentloop run` reads: the wake's prompt, and one session,
   the file named by `id` in the session directory."
-  [{:keys [prompt session-dir timeout-ms resolve] :as request} id work]
+  [{:keys [prompt session-dir timeout-ms] :as request} id work]
   (cond-> (assoc (base-request request work)
                  :session (str (fs/path session-dir (str id ".jsonl")))
                  :prompt prompt)
-    timeout-ms (assoc :timeout_seconds (max 1 (- (quot timeout-ms 1000) 10)))
-    ;; The operator's decisions on the calls the session left held.
-    (seq resolve) (assoc :resolve (vec resolve))))
+    timeout-ms (assoc :timeout_seconds (max 1 (- (quot timeout-ms 1000) 10)))))
 
 (defn acp-request-json
   "The request `agentloop acp` reads. The client opens sessions, so the
@@ -437,12 +351,9 @@
   resuming or listing an earlier one, whose history and labels it would
   carry on. It adds what only a client shows: each tool's ACP kind, and a
   title, \"relay · <role id>\", for the client to name the conversation
-  by. read_quarantined and the workbench, when granted, are of kind read. agentloop asks the provider for the model's context window itself."
-  [{:keys [session-dir tools role quarantine workbench] :as request} work]
-  (let [kinds (cond-> (acp/tool-kinds tools)
-                ;; agentloop adds the reader; a client shows it as a read.
-                (seq quarantine) (assoc reader-tool "read")
-                workbench (assoc workbench-tool "read"))]
+  by. agentloop asks the provider for the model's context window itself."
+  [{:keys [session-dir tools role] :as request} work]
+  (let [kinds (acp/tool-kinds tools)]
     (cond-> (assoc (base-request request work) :session_dir (str session-dir) :new_sessions_only true)
       (:id role) (assoc :title (str "relay · " (:id role)))
       (seq kinds) (assoc :tool_kinds kinds))))

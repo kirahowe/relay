@@ -48,12 +48,19 @@
 (defn run-dir [& [dir]]
   (or dir *run-dir* (str (fs/path (System/getProperty "user.home") ".relay" "run"))))
 
+(defn- sha256
+  "The hex sha256 of a text's UTF-8 bytes."
+  [s]
+  (let [d (.digest (java.security.MessageDigest/getInstance "SHA-256")
+                   (.getBytes (str s) java.nio.charset.StandardCharsets/UTF_8))]
+    (apply str (map #(format "%02x" (bit-and % 0xff)) d))))
+
 (defn- data-key
   "A short name for a data directory: a hash of its real path, so a link
   to it, or /tmp and /private/tmp on macOS, name the same one."
   [data-dir]
   (let [real (try (str (fs/real-path data-dir)) (catch Exception _ (str (fs/normalize (fs/absolutize data-dir)))))]
-    (subs (core/sha256 real) 0 16)))
+    (subs (sha256 real) 0 16)))
 
 (defn socket-path
   "The socket the service for a data directory listens on: `socket` when
@@ -139,8 +146,8 @@
   this bounds what the service keeps for its clients."
   64)
 
-(defn- engine [sys mode approvals & [{:keys [capacity max-conns] :or {capacity event-capacity max-conns max-connections}}]]
-  {:sys sys :mode mode :approvals approvals :q (LinkedBlockingQueue. (int capacity)) :max-conns max-conns
+(defn- engine [sys mode & [{:keys [capacity max-conns] :or {capacity event-capacity max-conns max-connections}}]]
+  {:sys sys :mode mode :q (LinkedBlockingQueue. (int capacity)) :max-conns max-conns
    ;; What the loop thread itself raises (a connection it gave up on)
    ;; goes here, so the loop never waits on its own full queue.
    :own (LinkedBlockingQueue.) :loop-thread (atom nil)
@@ -264,7 +271,7 @@
   :conversation-failed when it never started. `started` is delivered
   {:wake} once it runs, or {:error} when it could not start; the
   conversation's result once it has ended is in the returned promise."
-  [{:keys [sys mode approvals] :as eng} role started]
+  [{:keys [sys] :as eng} role started]
   (let [q (LinkedBlockingQueue.)
         result (promise)
         ran (atom false)
@@ -282,8 +289,6 @@
             (fn []
               (let [r (try (dispatch/run-conversation!
                             sys role {:in (queue-input-stream q taken!) :out out :stop stop
-                                      ;; A service lets the hub decide who may answer.
-                                      :approvals (or (= :service mode) (boolean approvals))
                                       :on-started (fn [wake]
                                                     (reset! ran true)
                                                     (enqueue! eng {:event :conversation-started :role role :wake wake})
@@ -309,7 +314,7 @@
   closed. Returns {:cid :line! :close!}: (line! text) gives the hub a
   line the client sent, and the connection's end reaches the hub as
   :connection-closed, once."
-  [eng {:keys [write! close-transport! origin approvals role default-role trace]}]
+  [eng {:keys [write! close-transport! origin role default-role trace]}]
   (let [cid (swap! (:next-conn eng) inc)
         q (LinkedBlockingQueue.)
         closed (atom false)
@@ -328,7 +333,7 @@
                                                    (assoc % cid {:send! send! :close! close!})
                                                    %))]
     (when (and (not (contains? before cid)) (contains? after cid))
-      (enqueue! eng {:event :connection-opened :conn cid :origin origin :approvals approvals :role role
+      (enqueue! eng {:event :connection-opened :conn cid :origin origin :role role
                      :default-role default-role})
       (daemon (str "relay-connection-writer-" cid)
               (fn []
@@ -405,7 +410,7 @@
             (.setSoTimeout sock 0)
             (.setKeepAlive sock true)
             (if-let [{:keys [close! line!]}
-                     (open-connection! eng {:origin :websocket :approvals true
+                     (open-connection! eng {:origin :websocket
                                             :default-role (:default-role settings)
                                             :write! (fn [x] (try (ws/write-frame! out (ws/text-frame x)) true
                                                                  (catch java.io.IOException _ false)))
@@ -587,7 +592,7 @@
         server (doto (ServerSocketChannel/open StandardProtocolFamily/UNIX)
                  (.bind (UnixDomainSocketAddress/of ^String path)))
         _ (fs/set-posix-file-permissions path "rw-------")
-        eng (engine sys :service false)
+        eng (engine sys :service)
         stop (promise)
         quit (promise)]
     (dispatch/reap-lost-wakes! sys)
@@ -600,7 +605,7 @@
                 (when-let [ch (try (.accept server) (catch Exception _ nil))]
                   (when-not (add-connection! eng {:in (Channels/newInputStream ^SocketChannel ch)
                                                   :out (Channels/newOutputStream ^SocketChannel ch)
-                                                  :origin :socket :approvals false
+                                                  :origin :socket
                                                   :on-close #(try (.close ^SocketChannel ch) (catch Exception _ nil))})
                     (binding [*out* *err*] (println "relay serve turned a client away: it has as many as it takes."))
                     (try (.close ^SocketChannel ch) (catch Exception _ nil)))
@@ -665,13 +670,13 @@
 
 (defn- bridge!
   "Copies bytes between the client on in/out and a listening service,
-  having told the service first what this connection may do."
-  [^SocketChannel ch {:keys [in out approvals role trace]}]
+  having told the service first which role the connection is for."
+  [^SocketChannel ch {:keys [in out role trace]}]
   (let [sock-in (Channels/newInputStream ch)
         sock-out (Channels/newOutputStream ch)
         tracer (dispatch/tracer trace)
         done (promise)]
-    (.write sock-out (line-bytes (workspace/notification-line "_relay/connect" {"approvals" (boolean approvals) "role" role})))
+    (.write sock-out (line-bytes (workspace/notification-line "_relay/connect" {"role" role})))
     (.flush sock-out)
     (daemon "relay-bridge-in"
             (fn []
@@ -689,8 +694,8 @@
   the connection ends and every conversation it opened has ended. With a
   role, its conversation opens first: when it cannot, relay says why on
   stderr and returns 1 before any traffic."
-  [sys role {:keys [in out approvals trace]}]
-  (let [eng (engine sys :embedded approvals)
+  [sys role {:keys [in out trace]}]
+  (let [eng (engine sys :embedded)
         tracer (dispatch/tracer trace)
         started (promise)
         result (when role (start-conversation! eng role started))]
@@ -698,7 +703,7 @@
     (if-let [error (and role (:error @started))]
       (do (println error) 1)
       (let [quit (promise)
-            cid (add-connection! eng {:in in :out out :origin :stdio :approvals (boolean approvals) :role role
+            cid (add-connection! eng {:in in :out out :origin :stdio :role role
                                       :trace tracer})]
         (watch-log! eng quit)
         (dispatch/with-signals (assoc dispatch/terminal-signals
@@ -719,9 +724,8 @@
   ends the connection, and with it, in this process, its conversations.
   Returns an exit code.
 
-  Options: :approvals lets the client answer permission requests; :trace
-  a file to append both directions of the traffic to; :socket the
-  service's socket."
+  Options: :trace a file to append both directions of the traffic to;
+  :socket the service's socket."
   [sys role {:keys [trace in out socket run-dir] :or {in System/in out System/out} :as opts}]
   (binding [*out* *err*]
     (try

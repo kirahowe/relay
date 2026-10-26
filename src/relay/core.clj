@@ -13,16 +13,12 @@
   Entity ids are the seq of the event that created them: memo 42 is the
   memo that event 42 sent."
   (:require [clojure.string :as str]
-            [clojure.walk]
             [relay.cards :as cards]
             [relay.config :as config]
-            [relay.json :as strict]
-            [relay.review :as review]
             [relay.schedule :as schedule]
             [relay.search :as search]
             [relay.skills :as skills]
-            [relay.spend :as spend]
-            [relay.text :as text])
+            [relay.spend :as spend])
   (:import (java.time Duration Instant LocalDate LocalDateTime)
            (java.time.format DateTimeFormatter)))
 
@@ -38,6 +34,28 @@
   "Seen something an outsider could have written."
   "contaminated")
 (def label-names #{private-label contaminated-label})
+
+(def entry-points
+  "Where something enters relay, and the labels it enters with (I5).
+  Trust follows the hand that brought it in: what the operator types,
+  pastes or attaches, at the command line, in a conversation (a prompt or
+  a resource in it) or in a mail from their own verified address, is
+  theirs and enters trusted. What an ingestor or a scout brings in by
+  itself enters contaminated. A tool's result enters with the labels
+  relay.edn gives the tool, which the operator chose for it; anything a
+  session writes carries the union of what it read."
+  {:command-line [] :conversation [] :operator-mail []
+   :ingestor [contaminated-label] :scout [contaminated-label]})
+
+(defn entry-labels
+  "The labels of what enters relay at `entry` (entry-points), or for a
+  tool's result, {:tool labels}, the labels relay.edn gives the tool.
+  Throws for anything else, so a new way in must be given its labels."
+  [entry]
+  (cond
+    (contains? entry-points entry) (get entry-points entry)
+    (and (map? entry) (sequential? (:tool entry))) (vec (sort (distinct (:tool entry))))
+    :else (throw (ex-info (str "relay does not know the entry point " (pr-str entry) ".") {:entry entry}))))
 
 (defn union
   "Labels as relay keeps them: the distinct names of all the given
@@ -56,8 +74,8 @@
   "What reading one item of relay content (a memo, a version of a fact or
   doc, a note, a journal entry, a routine) adds: its writers' labels, and
   private unless the item is public. A public item was written by the
-  operator with --public, by a public role's session, or declassified by
-  the operator, and its labels never hold private."
+  operator with --public or by a public role's session, and its labels
+  never hold private."
   [item & colls]
   (if (:public item)
     (apply union (:labels item) colls)
@@ -70,8 +88,7 @@
 
 (def empty-state
   {:roles {} :memos {} :routines {} :wakes {} :dead-letters {} :harnesses {}
-   :notifications {} :guards {} :facts {} :notes {} :journals {} :docs {} :holds {}
-   :cards {}
+   :notifications {} :guards {} :facts {} :notes {} :journals {} :docs {} :cards {}
    ;; Every label any event has carried, which bounds what a session that
    ;; could read anything in relay may have seen.
    :seen-labels []
@@ -178,18 +195,22 @@
 (defn backing-off? [memo ^Instant now]
   (boolean (some-> (:retry-at memo) (after? now))))
 
-(declare quarantined? awaiting-declassification?)
+(declare public-role? shown-to-public? memo-labels)
 
-(declare held-memo-ids)
+(defn deliverable-memos
+  "Open memos to a role that it may be shown, oldest first. A public role
+  is shown only public memos with nothing private in them (I3): any other
+  waits, unseen, until the operator closes it. relay refuses to send one
+  now, so only an older log holds such a memo."
+  [state config to]
+  (if (and (not= operator to) (public-role? config to))
+    (filterv #(shown-to-public? % (memo-labels state %)) (unread-memos state to))
+    (unread-memos state to)))
 
 (defn waiting-memos
-  "Open memos a role may be shown that are not waiting out a retry delay,
-  and are not kept by a session with a call held for the operator."
+  "Open memos a role may be shown that are not waiting out a retry delay."
   [state config to now]
-  (let [held (held-memo-ids state to)]
-    (vec (remove #(or (backing-off? % now) (quarantined? config %) (awaiting-declassification? config %)
-                      (held (:id %)))
-                 (unread-memos state to)))))
+  (vec (remove #(backing-off? % now) (deliverable-memos state config to))))
 
 (defn harness-of [state config role-id]
   (or (:harness (role state role-id)) (some-> (:default-harness config) name)))
@@ -212,12 +233,11 @@
 
 (defn waiting-on-tools?
   "Whether the dispatcher leaves a role alone because its MCP tools could
-  not be set up: until the operator starts it afresh (relay fresh) when a
-  tool's definition changed under its session, otherwise until its retry
-  time."
+  not be set up: until its retry time. A block from an older relay that
+  waited for relay fresh has no retry time, and waits no longer."
   [state role-id now]
-  (when-let [{:keys [fresh retry-at]} (get-in state [:roles role-id :tools-unavailable])]
-    (or fresh (nil? retry-at) (after? retry-at now))))
+  (when-let [{:keys [retry-at]} (get-in state [:roles role-id :tools-unavailable])]
+    (boolean (and retry-at (after? retry-at now)))))
 
 (defn running-away? [state role-id config now]
   (>= (count (recent-wakes state role-id config now)) (:runaway-wakes config)))
@@ -244,84 +264,16 @@
          (schedule/due? sched baseline now (config/zone config))
          (not (has-open-run? state r)))))
 
-(defn hold [state id] (get-in state [:holds id]))
-
-(defn open-holds
-  "A role's tool calls waiting for the operator, oldest first, or every
-  role's with no role given."
-  ([state] (->> (vals (:holds state)) (filter #(= :open (:status %))) (sort-by :id) vec))
-  ([state role-id] (filterv #(= role-id (:role %)) (open-holds state))))
-
-(defn held? [state role-id] (boolean (seq (open-holds state role-id))))
-
-(defn pending-resolutions
-  "A role's holds the operator has decided that no wake has carried back to
-  the held session yet, oldest first."
-  [state role-id]
-  (->> (vals (:holds state))
-       (filter #(and (= role-id (:role %)) (#{:allowed :denied} (:status %)) (nil? (:delivered %))
-                     (not (:abandoned %))))
-       (sort-by :id)
-       vec))
-
-(defn- unsettled-hold?
-  "A hold whose session is not done with it: still open, or decided and
-  not yet carried back."
-  [h]
-  (or (= :open (:status h))
-      (and (#{:allowed :denied} (:status h)) (nil? (:delivered h)) (not (:abandoned h)))))
-
-(defn held-wakes
-  "The wakes whose sessions wait on a hold of a role's."
-  [state role-id]
-  (set (keep #(when (and (= role-id (:role %)) (unsettled-hold? %)
-                         (not (get-in state [:ended-sessions (:session %)])))
-                (:wake %))
-             (vals (:holds state)))))
-
-(defn held-memo-ids
-  "The memos kept by a role's held sessions. Each held session keeps the
-  memos it carried; the role's other memos go on without it."
-  [state role-id]
-  (set (mapcat #(get-in state [:wakes % :memos]) (held-wakes state role-id))))
-
-(defn kept-memo-ids
-  "The memos a role's working wake may not touch: those kept by a held
-  session other than the one it carries on. All of them when no wake
-  works, as in a conversation, which carries no held session on."
-  [state role-id]
-  (let [running (working-wake state role-id)]
-    (set (mapcat #(get-in state [:wakes % :memos])
-                 (disj (held-wakes state role-id) (:resumes running))))))
-
-(defn resumable-held-session
-  "A held session of a role's whose every hold is decided, ready to be
-  carried on with the decisions: {:wake :holds}, the oldest such, or nil.
-  An ended session is never carried on."
-  [state role-id]
-  (let [hs (filter #(and (= role-id (:role %)) (unsettled-hold? %)
-                         (not (get-in state [:ended-sessions (:session %)])))
-                   (vals (:holds state)))
-        by-session (group-by :session hs)]
-    (->> by-session
-         (keep (fn [[_ hs]] (when (every? #(not= :open (:status %)) hs)
-                              {:wake (apply max (map :wake hs)) :holds (vec (sort-by :id hs))})))
-         (sort-by :wake)
-         first)))
-
-(declare unwakeable-public-role? sessions-from-before-public)
+(declare unwakeable-public-role?)
 
 (defn roles-to-wake
-  "The roles the dispatcher should wake now: with a memo waiting or a held
-  session whose calls are all decided, not busy (busy?), their harness
-  not paused, and not stopped by the runaway guard. A call held for the
-  operator keeps only its own session's memos waiting. A public role whose
-  own text holds private is never woken (unwakeable-public-role?)."
+  "The roles the dispatcher should wake now: with a memo waiting, not busy
+  (busy?), their harness not paused, their tools not waiting out a retry,
+  and not stopped by the runaway guard. A public role whose own text holds
+  private is never woken (unwakeable-public-role?)."
   [state config now]
   (vec (for [id (active-role-ids state)
-             :when (and (or (seq (waiting-memos state config id now)) (resumable-held-session state id)
-                            ;; Woken to end them, so their memos go on.
-                            (seq (sessions-from-before-public state config id)))
+             :when (and (seq (waiting-memos state config id now))
                         (not (busy? state id))
                         (not (paused-until state (harness-of state config id) now))
                         (not (waiting-on-tools? state id now))
@@ -363,23 +315,6 @@
 (defn under-topic? [topic t]
   (or (nil? topic) (= topic t) (and t (str/starts-with? t (str topic "/")))))
 
-(declare contaminated?)
-
-(defn fact-as-shown
-  "The fact as a reader is shown it. With `clean`, a contaminated change
-  never hides a clean record: the latest version not written by a
-  contaminated session, marked :newer-withheld when a contaminated one
-  came after it. A fact no clean session ever wrote is shown as it is,
-  for the reader to withhold whole."
-  [{:keys [versions] :as f} known-at clean]
-  (let [latest (fact-as-known f known-at)]
-    (if (or (not clean) (nil? latest) (not (contaminated? (:labels latest))))
-      latest
-      (let [vs (if known-at (take-while #(not-after? (:recorded-at %) known-at) versions) versions)]
-        (if-let [v (last (remove #(contaminated? (:labels %)) vs))]
-          (assoc (merge (select-keys f [:id :supersedes]) v) :newer-withheld true)
-          latest)))))
-
 (declare fact-shown-to-public?)
 
 (defn facts
@@ -390,20 +325,17 @@
   first and ties by id, keeping only facts that share a word with it; a
   search with no words in it keeps facts whose text contains it, ignoring
   case. Every filter applies before the ranking, so the ranking says
-  nothing about the facts left out. With :clean, each fact as
-  fact-as-shown gives it, so a contaminated change does not hide it. With
-  :public-only, only facts a public role can see now (fact-shown-to-public?
-  of the current version, as fact_history asks) whose version shown is
-  public too, before any search, so a search or an earlier known_at says
-  nothing about the others. With :withhold-contaminated, a fact whose
-  version shown is contaminated is left out, before any search too."
-  [state {:keys [as-of known-at topic search all clean public-only withhold-contaminated]}]
+  nothing about the facts left out. With :public-only, only facts a
+  public role can see now (fact-shown-to-public? of the current version,
+  as fact_history asks) whose version shown is public too, before any
+  search, so a search or an earlier known_at says nothing about the
+  others."
+  [state {:keys [as-of known-at topic search all public-only]}]
   (let [as-of (or as-of known-at (:last-at state))
         found (->> (vals (:facts state))
                    (filter #(or (not public-only) (fact-shown-to-public? state (fact-as-known % nil))))
-                   (keep #(fact-as-shown % known-at clean))
+                   (keep #(fact-as-known % known-at))
                    (filter #(or (not public-only) (and (:public %) (not (private? (item-labels %))))))
-                   (remove #(and withhold-contaminated (contaminated? (:labels %))))
                    (filter #(and (if all (not (:retracted %)) (holds-at? % as-of))
                                  (under-topic? topic (:topic %))))
                    (sort-by :id))]
@@ -414,15 +346,11 @@
                  (filter #(str/includes? (str/lower-case (:text %)) needle) found)))))))
 
 (defn facts-shown
-  "The facts a reader is shown for a query (as for facts, without :clean
-  and :public-only, which this sets). A public reader is shown only public
-  facts, contaminated or not. Any other, unless it accepts contamination,
-  is shown each fact as fact-as-shown gives it to a clean reader, and none
-  whose version shown is contaminated."
-  [state q {:keys [public accept]}]
-  (let [accept (or public accept)]
-    (facts state (assoc q :clean (not accept) :public-only (boolean public)
-                        :withhold-contaminated (not accept)))))
+  "The facts a reader is shown for a query (as for facts, without
+  :public-only, which this sets): a public reader only public ones, any
+  other every one."
+  [state q {:keys [public]}]
+  (facts state (assoc q :public-only (boolean public))))
 
 (defn notes [state owner] (vec (sort-by :name (vals (get-in state [:notes owner])))))
 
@@ -432,7 +360,6 @@
   (let [entries (get-in state [:journals owner] [])]
     (if limit (vec (take-last limit entries)) entries)))
 
-(declare shown-to-public?)
 
 (defn journal-shown
   "The last `limit` entries of a role's journal that a reader may be shown,
@@ -454,30 +381,14 @@
       known-at (last (take-while #(not-after? (:at %) known-at) versions))
       :else (peek versions))))
 
-(defn doc-as-shown
-  "A doc's latest version as a reader is shown it. With `clean`, a
-  contaminated change (a new version or a removal) never hides a clean
-  one: the latest version not written by a contaminated session, marked
-  :newer-withheld. A doc no clean session wrote is shown as it is."
-  [state path clean]
-  (let [latest (doc-version state path {})]
-    (if (or (not clean) (nil? latest) (not (contaminated? (:labels latest))))
-      latest
-      (if-let [v (last (remove #(contaminated? (:labels %)) (get-in state [:docs path :versions])))]
-        (assoc v :newer-withheld true)
-        latest))))
-
 (defn docs
-  "The docs that exist, as recorded at `known-at` if given, by path. With
-  `clean`, as doc-as-shown gives them, so a contaminated removal or
-  overwrite does not hide a clean doc."
-  ([state known-at] (docs state known-at false))
-  ([state known-at clean]
-   (->> (keys (:docs state))
-        (keep #(if clean (doc-as-shown state % true) (doc-version state % {:known-at known-at})))
-        (remove :removed)
-        (sort-by :path)
-        vec)))
+  "The docs that exist, as recorded at `known-at` if given, by path."
+  [state known-at]
+  (->> (keys (:docs state))
+       (keep #(doc-version state % {:known-at known-at}))
+       (remove :removed)
+       (sort-by :path)
+       vec))
 
 ;; labels
 ;;
@@ -493,12 +404,11 @@
 ;; but are not private. A role id is text its creator chose, so wherever
 ;; one is shown, the labels of whoever chose it go with it.
 ;;
-;; Contaminated text is withheld by default. A reader is shown a
-;; placeholder that gives only what is clean (a number, a kind, a clean
-;; author) and can ask for the text, taking on its labels. A contaminated
-;; memo to a role granted an external act or egress tool is quarantined:
-;; it is not shown to the role, carried in a wake or counted as waiting
-;; until the operator releases it.
+;; Labels are provenance: they say where a thing came from, and drive two
+;; things only. A public role is shown only public items and its sessions
+;; may never hold private (agentloop's forbid_labels), and the operator is
+;; shown where a thing came from. Inside the house nothing is withheld,
+;; quarantined or held because of a label.
 
 (defn contaminated? [labels] (boolean (some #{contaminated-label} labels)))
 
@@ -517,58 +427,18 @@
   (let [r (role state id)]
     (union (:id-labels r) (:title-labels r) (:instructions-labels r))))
 
-(defn shown-id
-  "A role id as a reader is shown it, with its labels: the id when whoever
-  chose it was clean, else words that do not name it."
-  [state id]
-  (let [ls (id-labels state id)]
-    (if (contaminated? ls) ["a role whose id is withheld" []] [id ls])))
-
 (defn memo-labels
   "What reading a memo addressed to you adds: its writers' labels, private
-  unless it is public, and the labels of its sender's id as shown
-  (shown-id), or for a declassified memo, those the operator left on it."
+  unless it is public, and the labels of its sender's id."
   [state m]
-  (item-labels m (or (:from-labels m) (second (shown-id state (:from m))))))
-
-(defn shown-memo
-  "A memo as its recipient is shown it, its sender per shown-id."
-  [state m]
-  (assoc m :from (first (shown-id state (:from m)))))
-
-(defn quarantines?
-  "Whether a role holds an external tool that changes things outside
-  relay or sends data out: class edit, act or egress. Such a role may not
-  take in a contaminated memo by itself: the operator releases it. relay's
-  own tools are write and do not count. A role without such tools reads a
-  contaminated memo like any other and becomes contaminated."
-  [config role-id]
-  (boolean (some #(#{config/edit-class :act :egress} (get-in config [:tools % :class]))
-                 (config/role-tools config role-id))))
+  (item-labels m (id-labels state (:from m))))
 
 (defn public-role?
-  "Whether a role is public (relay.config/public?). Its sessions never hold
-  private, so it is shown only public items and has nothing private to
-  leak: no memo to it is quarantined, and its contaminated notes are not
-  withheld from it."
+  "Whether a role is public (relay.config/public?): a scout. Its sessions
+  never hold private, so it is shown only public items and has nothing
+  private to leak."
   [config role-id]
   (config/public? config role-id))
-
-(defn quarantined?
-  "A contaminated memo to a role that quarantines, not yet released. A
-  memo to a public role is never quarantined: that role holds no private
-  data for the memo's writer to make it send out."
-  [config m]
-  (and (not= operator (:to m)) (contaminated? (:labels m)) (not (:released m))
-       (not (public-role? config (:to m)))
-       (quarantines? config (:to m))))
-
-(defn awaiting-declassification?
-  "A memo to a public role that is not public: it waits, unseen by the
-  role, until the operator declassifies it (relay declassify) or closes
-  it."
-  [config m]
-  (and (not= operator (:to m)) (not (:public m)) (public-role? config (:to m))))
 
 (defn public-caller?
   "Whether a role's call is to be treated as a public role's: shown only
@@ -588,11 +458,6 @@
   shows carries private (`labels`, its labels as read)."
   [item labels]
   (and (:public item) (not (private? labels))))
-
-(defn deliverable-memos
-  "Open memos to a role that it may be shown, oldest first."
-  [state config to]
-  (filterv #(not (or (quarantined? config %) (awaiting-declassification? config %))) (unread-memos state to)))
 
 (defn version-labels
   "What showing one version of a fact or doc adds, with who wrote it."
@@ -640,82 +505,51 @@
   harness gave no labels) carries this."
   [state config role-id]
   (content-labels (:seen-labels state)
-                  (concat (mapcat #(tool-labels config %) (config/role-tools config role-id))
-                          ;; The workbench reads the operator's files, any of
-                          ;; which an outsider could have written; agentloop
-                          ;; drops contaminated only for a closed schema.
-                          (when (config/workbench config role-id) ["private" "contaminated"]))))
+                  (mapcat #(tool-labels config %) (config/role-tools config role-id))))
 
 (defn prompt-notes
-  "A role's notes as its system prompt shows them: the clean ones, and how
-  many are withheld as contaminated. A public role is shown its public
-  notes, contaminated or not, since it has nothing private to leak, and
-  its other notes are not even counted."
+  "A role's notes as its system prompt shows them: all of them, or for a
+  public role only its public ones."
   [state config owner]
   (if (public-role? config owner)
-    {:shown (filterv #(shown-to-public? % (item-labels %)) (notes state owner)) :withheld 0}
-    (let [{withheld true shown false} (group-by #(contaminated? (:labels %)) (notes state owner))]
-      {:shown (vec shown) :withheld (count withheld)})))
+    (filterv #(shown-to-public? % (item-labels %)) (notes state owner))
+    (notes state owner)))
 
 (def wake-journal-entries
   "How many of its latest journal entries a wake's prompt shows a role."
   3)
 
-(defn- within? [labels base] (every? (set base) labels))
-
 (defn prompt-journal
   "The tail of a role's journal as a wake's prompt shows it: the entries
   the journal tool would show for the last wake-journal-entries, oldest
-  first. The prompt never raises the wake's labels, so an entry whose
-  labels are not all among `base` (the wake's labels, wake-labels) is
-  marked :withheld, as :contaminated when it is, else as :unseen. The
-  role can still read it with `journal`, taking its labels on."
-  [state config owner base]
-  (mapv (fn [e]
-          (cond (within? (item-labels e) base) e
-                (contaminated? (:labels e)) (assoc e :withheld :contaminated)
-                :else (assoc e :withheld :unseen)))
-        (journal-shown state owner wake-journal-entries (public-role? config owner))))
+  first."
+  [state config owner]
+  (journal-shown state owner wake-journal-entries (public-role? config owner)))
 
 (defn prompt-skills
-  "A role's skills as its system prompt lists them: {:shown [{:path :title
-  :use-when :labels}] :withheld n}. The skills are the docs under
-  skills/<role>/ whose latest version exists. A contaminated one is left
-  out and counted, since a session that took in outside text wrote it,
-  until the operator trusts it. A public role is shown its public skills,
-  contaminated or not, and its other skills are not even counted."
+  "A role's skills as its system prompt lists them: [{:path :title
+  :use-when :labels}]. The skills are the docs under skills/<role>/ whose
+  latest version exists; a public role is shown only its public ones."
   [state config role]
   (let [prefix (str "skills/" role "/")
-        public (public-role? config role)
-        vs (->> (keys (:docs state))
-                (filter #(str/starts-with? % prefix))
-                sort
-                (keep #(let [v (doc-version state % {})] (when (and v (not (:removed v))) v))))
-        shown? (fn [v] (if public
-                         (doc-shown-to-public? state (:path v) v)
-                         (not (contaminated? (:labels v)))))
-        {shown true out false} (group-by (comp boolean shown?) vs)]
-    {:shown (vec (for [v shown]
-                   (assoc (skills/parse (:content v)) :path (:path v)
-                          :labels (union (item-labels v (version-labels state v)) (path-labels state (:path v))))))
-     :withheld (if public 0 (count out))}))
+        public (public-role? config role)]
+    (vec (for [path (sort (filter #(str/starts-with? % prefix) (keys (:docs state))))
+               :let [v (doc-version state path {})]
+               :when (and v (not (:removed v)) (or (not public) (doc-shown-to-public? state path v)))]
+           (assoc (skills/parse (:content v)) :path path
+                  :labels (union (item-labels v (version-labels state v)) (path-labels state path)))))))
 
 (defn prompt-fact-topics
   "The fact topics a wake's prompt lists for a role: {:topics [{:topic
-  :count}], sorted, :left-out}, counting the facts that hold now under
-  exactly each topic (nil for facts with none). The facts are the ones
-  the facts tool shows with no arguments (only public ones to a public
-  role, none contaminated to any other) whose labels are all among
-  `base`, the wake's labels, so the prompt never raises them. :left-out
-  says whether any other was left out; their topics are not shown."
-  [state config role base]
-  (let [{in true out false} (group-by #(within? (item-labels %) base)
-                                      (facts-shown state {} {:public (public-role? config role)}))]
-    {:topics (->> (group-by :topic in)
-                  (map (fn [[topic group]] {:topic topic :count (count group)}))
-                  (sort-by #(or (:topic %) "~"))
-                  vec)
-     :left-out (boolean (seq out))}))
+  :count :labels}], sorted}, counting the facts that hold now under
+  exactly each topic (nil for facts with none). The facts are the ones the
+  facts tool shows with no arguments: only public ones to a public role."
+  [state config role]
+  {:topics (->> (group-by :topic (facts-shown state {} {:public (public-role? config role)}))
+                (map (fn [[topic group]] {:topic topic :count (count group)
+                                          :labels (apply union (map item-labels group))}))
+                (sort-by #(or (:topic %) "~"))
+                vec)})
 
 (defn card [state id] (get-in state [:cards id]))
 
@@ -736,19 +570,15 @@
 
 (defn prompt-cards
   "The cards a wake's or a conversation's prompt lists for a role:
-  {:cards [{:id :title :kind :progress}], oldest first, :left-out}. Only
-  active cards whose title's labels, with private, are all among `base`,
-  the wake's labels, so the prompt never raises them; :left-out says
-  whether any other was left out. Counts are numbers and add no labels.
-  Nil for a public role, which has no board."
-  [state config role base]
+  {:cards [{:id :title :kind :progress :labels}]}, oldest first: the active
+  cards. Counts are numbers and add no labels. Nil for a public role,
+  which has no board."
+  [state config role]
   (when-not (public-role? config role)
-    (let [{in true out false} (group-by #(within? (content-labels (get-in % [:title :labels])) base)
-                                        (board state false))]
-      {:cards (mapv (fn [c] {:id (:id c) :title (get-in c [:title :text]) :kind (:kind c)
-                             :progress (cards/progress c)})
-                    in)
-       :left-out (boolean (seq out))})))
+    {:cards (mapv (fn [c] {:id (:id c) :title (get-in c [:title :text]) :kind (:kind c)
+                           :progress (cards/progress c)
+                           :labels (content-labels (get-in c [:title :labels]))})
+                  (board state false))}))
 
 (defn carried-memo-labels
   "What a memo carried in a wake adds wherever its text is shown again:
@@ -761,27 +591,21 @@
 
 (defn wake-labels
   "The labels of everything a wake's prompts are made of: the role's id,
-  title and instructions, the notes shown, the memos it carries and the
-  ids of their senders, the routines they are runs of, the note from
-  whoever woke it unless it was public, the operator's reasons on the
-  holds it carries back, unless the operator gave them knowing the role
-  was public. A conversation has no prompt, only the instructions and
-  notes. The journal tail and fact topics in a wake's prompt show only
-  what these labels already cover (prompt-journal, prompt-fact-topics),
-  so they add nothing."
-  [state config {:keys [role memos note note-public chat resolves]}]
+  title and instructions, the notes and skills shown, the memos it
+  carries and the ids of their senders, the routines they are runs of,
+  the note from whoever woke it unless it was public, and the journal
+  tail, fact topics and cards a wake's prompt lists. A conversation has no
+  prompt, only the instructions, notes, skills and cards."
+  [state config {:keys [role memos note note-public chat]}]
   (let [ms (keep #(memo state %) memos)]
     (union (role-labels state role)
-           (notes-labels (:shown (prompt-notes state config role)))
-           (mapcat :labels (:shown (prompt-skills state config role)))
+           (notes-labels (prompt-notes state config role))
+           (mapcat :labels (prompt-skills state config role))
            (mapcat #(carried-memo-labels state %) ms)
            (when (and (not chat) (not (blank? note)) (not note-public)) [private-label])
-           (when (some #(let [h (hold state %)]
-                          ;; A reason the operator gave knowing the role was
-                          ;; public is public; any other may be private.
-                          (and (not (blank? (:reason h))) (not (:reason-public h))))
-                       resolves)
-             [private-label]))))
+           (when-not chat (journal-labels (prompt-journal state config role)))
+           (when-not chat (mapcat :labels (:topics (prompt-fact-topics state config role))))
+           (mapcat :labels (:cards (prompt-cards state config role))))))
 
 (defn role-id-public?
   "Whether a role's id may be shown to a public role: the operator wrote
@@ -831,12 +655,21 @@
 
 (def removed-event-kinds
   "Events older versions of relay wrote for machinery that no longer
-  exists: research reports and their verification, the ledger, and trust
-  levels. The log is append-only, so they stay in old logs; they fold to
-  nothing. Their labels still count as seen."
+  exists: research reports and their verification, the ledger and trust
+  levels; held calls and the operator's decisions on them, a
+  conversation's permission requests, trusting contaminated text,
+  releasing a quarantined memo, declassifying one, and the marker where
+  labels began. The log is append-only, so they stay in old logs; they
+  fold to nothing (I8), with two exceptions that keep old items as they
+  were: the labels marker still says where labels began
+  (with-legacy-labels), and a declassified memo keeps the text the
+  operator vetted. Their labels still count as seen."
   #{"report/submitted" "report/verify-started" "report/verify-failed" "report/verified"
     "finding/reviewed" "ledger/entry-added" "ledger/entry-withdrawn" "ledger/status-set"
-    "role/trust-level"})
+    "role/trust-level"
+    "hold/opened" "hold/previewed" "hold/resolved" "hold/requeued" "hold/session-ended"
+    "permission/asked" "permission/answered"
+    "label/trusted" "memo/released" "memo/declassified" "labels/enabled"})
 
 (defmethod evolve* :default [state event]
   (when-not (removed-event-kinds (:type event))
@@ -844,20 +677,6 @@
                        " (event " (:seq event) "). Upgrade relay before reading this log.")
                   {:event event})))
   state)
-
-(def legacy-labels
-  "What anything a role or the dispatcher wrote before relay kept labels
-  is taken to have seen: no record says otherwise, so everything."
-  [contaminated-label private-label])
-
-(defn- with-legacy-labels
-  "An event written before the log's labels/enabled marker, by anyone but
-  the operator, carries legacy-labels: relay did not record what it had
-  seen. The operator can trust what they have read."
-  [{:keys [legacy-before]} {:keys [seq actor] :as event}]
-  (if (and legacy-before (< seq legacy-before) (not= operator actor))
-    (-> event (update :labels union legacy-labels) (dissoc :public))
-    event))
 
 (def public-item-events
   "The events that write an item a public role may be shown: these carry
@@ -870,35 +689,44 @@
   (when-not (= seq (:next-seq state))
     (throw (ex-info (str "Event " seq " is out of order; expected " (:next-seq state) ".")
                     {:event event})))
-  (let [{:keys [labels] :as event} (with-legacy-labels state event)]
-  ;; A public item never carries private: decide refuses what would make
-  ;; one, so this can only be a bug, and nothing is folded past it.
-  (when (and (:public event) (not (removed-event-kinds (:type event)))
-             (or (private? labels) (not (public-item-events (:type event)))))
-    (throw (ex-info (str "Event " seq " is public and carries private, or is not an item a public role"
-                         " may read. relay refuses to read it.")
-                    {:event event})))
-  (-> (evolve* state event)
-      (update :seen-labels union labels)
-      (assoc :next-seq (inc seq) :last-at (inst at)))))
+  (let [{:keys [labels]} event]
+    ;; A public item never carries private: decide refuses what would make
+    ;; one, so this can only be a bug, and nothing is folded past it.
+    (when (and (:public event) (not (removed-event-kinds (:type event)))
+               (or (private? labels) (not (public-item-events (:type event)))))
+      (throw (ex-info (str "Event " seq " is public and carries private, or is not an item a public role"
+                           " may read. relay refuses to read it.")
+                      {:event event})))
+    (-> (evolve* state event)
+        (update :seen-labels union labels)
+        (assoc :next-seq (inc seq) :last-at (inst at)))))
 
-(defmethod evolve* "labels/enabled" [state {:keys [seq]}]
-  (update state :labels-enabled-at #(or % seq)))
+(def legacy-labels
+  "What anything a role or the dispatcher wrote before relay kept labels
+  is taken to have seen: no record says otherwise, so everything."
+  [contaminated-label private-label])
+
+(defn with-legacy-labels
+  "The events as replay folds them. Every event before the log's first
+  labels/enabled marker, by anyone but the operator, carries
+  legacy-labels and is not public: relay did not record what its writer
+  had seen. The operator's own writing is hers. The marker itself is a
+  removed kind and folds to nothing; only its place in the log counts. A
+  log with no marker was written by a relay that kept labels from the
+  start (this one never writes the marker)."
+  [events]
+  (if-let [marker (some #(when (= "labels/enabled" (:type %)) (:seq %)) events)]
+    (map (fn [{:keys [seq actor] :as event}]
+           (if (and (< seq marker) (not= operator actor))
+             (-> event (update :labels union legacy-labels) (dissoc :public))
+             event))
+         events)
+    events))
 
 (defn replay
-  "The state the events fold to. The events before the log's first
-  labels/enabled marker, if it has one, were written before relay kept
-  labels (with-legacy-labels)."
+  "The state the events fold to (with-legacy-labels)."
   [events]
-  (let [marker (some #(when (= "labels/enabled" (:type %)) (:seq %)) events)]
-    (reduce evolve (cond-> empty-state marker (assoc :legacy-before marker)) events)))
-
-(defn needs-labels-marker?
-  "Whether a log has no labels/enabled marker yet. This relay writes one
-  into every log it opens: first thing in a new log, and after the old
-  events in a log from before relay kept labels."
-  [state]
-  (nil? (:labels-enabled-at state)))
+  (reduce evolve empty-state (with-legacy-labels events)))
 
 (defmethod evolve* "role/added" [state {:keys [seq at data labels public]}]
   (let [{:keys [id title instructions reports-to harness model]} data]
@@ -939,18 +767,16 @@
              :status :read :outcome (:outcome data) :closed-at (inst at) :closed-by actor
              :retry-at nil :outcome-labels (union labels)))
 
-(defmethod evolve* "memo/released" [state {:keys [data]}]
-  (assoc-in state [:memos (:memo data) :released] true))
-
 (defmethod evolve* "memo/declassified" [state {:keys [data]}]
-  ;; The operator read it and vouches that it holds nothing private, its
-  ;; sender's id included. Contaminated stays.
-  (update-in state [:memos (:memo data)]
-             #(assoc % :public true :declassified true
-                     ;; The text as the operator was shown it.
-                     :subject (or (:subject data) (:subject %)) :body (or (:body data) (:body %))
-                     :labels (vec (remove #{private-label} (:labels %)))
-                     :from-labels (vec (remove #{private-label} (:from-labels data))))))
+  ;; Declassify is gone, and so is what it did to who may read the memo:
+  ;; it stays as private as it was written. Its text stays the one the
+  ;; operator vetted, as it always read after this event.
+  (if (get-in state [:memos (:memo data)])
+    (update-in state [:memos (:memo data)]
+               #(cond-> %
+                  (string? (:subject data)) (assoc :subject (:subject data))
+                  (string? (:body data)) (assoc :body (:body data))))
+    state))
 
 (defmethod evolve* "memo/attempt-failed" [state {:keys [data]}]
   (update-in state [:memos (:memo data)] assoc
@@ -1007,58 +833,57 @@
                :baseline (inst at) :last-memo memo
                :status (if one-off :retired :active))))
 
+(defn definition-changed?
+  "Whether a wake's tools-error says an MCP tool's definition changed
+  under its session: agentloop gives the digest the session pinned and the
+  one the server lists now. Such a session cannot go on."
+  [tools-error]
+  (boolean (and (map? tools-error) (:pinned tools-error) (:got tools-error))))
+
 (defmethod evolve* "wake/started" [state {:keys [seq at data]}]
-  (let [{:keys [role memos note note-public public-session resumes harness pid pid-start chat resolves]} data]
+  (let [{:keys [role memos note note-public public-session resumes harness pid pid-start chat]} data]
     (cond-> (assoc-in state [:wakes seq] {:id seq :role role :memos (vec memos) :note note
                                           :note-public (true? note-public)
                                           :public-session (true? public-session)
                                           :resumes resumes :harness harness :pid pid
                                           :pid-start pid-start :started-at (inst at)
-                                          :status :running :chat (boolean chat)
-                                          :resolves (vec resolves)})
+                                          :status :running :chat (boolean chat)})
       ;; A conversation's turns: none yet, none ended and none seen.
       chat (update-in [:wakes seq] assoc :turn :idle :turns 0 :turns-ended 0 :seen 0
                       :last-activity (inst at))
-      ;; A conversation leaves an interrupted wake to be resumed later, and
-      ;; so does carrying on a held session: only the wake that carries
-      ;; it on, or a wake that carries on no held session, clears it.
-      (and (not chat) (or (empty? resolves) (= resumes (get-in state [:roles role :interrupted-wake]))))
-      (assoc-in [:roles role :interrupted-wake] nil)
-      ;; The holds whose decisions this wake carries back to the session.
-      true (update :holds (fn [hs] (reduce #(assoc-in %1 [%2 :delivered] seq) hs resolves))))))
+      ;; A conversation leaves an interrupted wake to be resumed later.
+      (not chat) (assoc-in [:roles role :interrupted-wake] nil))))
 
 (defmethod evolve* "wake/ended" [state {:keys [at data labels]}]
-  (let [{:keys [wake outcome exit crashed cut-short session sessions said transcript held usage cost-usd]} data
-        role-id (get-in state [:wakes wake :role])]
+  (let [{:keys [wake outcome exit crashed cut-short session sessions said transcript usage cost-usd tools-error]} data
+        role-id (get-in state [:wakes wake :role])
+        chat (get-in state [:wakes wake :chat])]
     (cond-> (update-in state [:wakes wake] assoc
                        :status :ended :ended-at (inst at) :outcome outcome :exit exit
                        :crashed (boolean crashed) :cut-short (boolean cut-short)
                        :session session :said said :transcript transcript :labels (union labels))
       sessions (assoc-in [:wakes wake :sessions] (vec sessions))
-      (seq held) (assoc-in [:wakes wake :held] (vec held))
       ;; What its model calls used and cost. A wake from before relay kept
       ;; them, or whose cost is unknown, has none: never 0.
       (map? usage) (assoc-in [:wakes wake :usage] usage)
       (number? cost-usd) (assoc-in [:wakes wake :cost-usd] cost-usd)
-      ;; A wake the harness failed, one cut short at its deadline, or one
-      ;; stopped for the operator to decide on a call, is kept to be
-      ;; resumed. A conversation is not.
-      (and (or (not= "ran" outcome) cut-short (seq held)) (not (get-in state [:wakes wake :chat])))
+      ;; A wake the harness failed, or one cut short at its deadline, is
+      ;; kept to be resumed. A conversation is not, and nor is a session
+      ;; whose tool changed under it: the next wake starts afresh.
+      (and (or (not= "ran" outcome) cut-short) (not chat) (not (definition-changed? tools-error)))
       (assoc-in [:roles role-id :interrupted-wake] wake)
-      ;; A wake that ran had its tools. A block for a changed definition
-      ;; is cleared only by the wake that carried its session on; a
-      ;; conversation never clears one.
-      (let [block (get-in state [:roles role-id :tools-unavailable])
-            w (get-in state [:wakes wake])]
-        (and (= "ran" outcome) block (not (:chat w))
-             (or (not (:fresh block))
-                 (= (:session block) (get-in state [:wakes (:resumes w) :session])))))
-      (update-in [:roles role-id] dissoc :tools-unavailable))))
+      ;; A wake that ran had its tools; a conversation clears no block.
+      (and (= "ran" outcome) (not chat) (get-in state [:roles role-id :tools-unavailable]))
+      (update-in [:roles role-id] dissoc :tools-unavailable)
+      ;; It also ends a streak of changed definitions (tools-unavailable).
+      (and (= "ran" outcome) (not chat) (get-in state [:roles role-id :tool-changed]))
+      (update-in [:roles role-id] dissoc :tool-changed))))
 
 (defmethod evolve* "tool/pinned" [state {:keys [data]}]
-  ;; Only records the digest. A role's block is lifted by relay fresh
-  ;; ending its session (hold/session-ended with :fresh).
-  (assoc-in state [:tool-pins (:tool data)] (:digest data)))
+  (cond-> (assoc-in state [:tool-pins (:tool data)] (:digest data))
+    ;; Taken because the definition changed under that role's session.
+    (and (:role data) (get-in state [:roles (:role data)]))
+    (assoc-in [:roles (:role data) :tool-changed] (:tool data))))
 
 (defn tool-pin
   "The definition digest relay accepted for an MCP tool, by its name in
@@ -1067,69 +892,10 @@
   (get-in state [:tool-pins tool]))
 
 (defmethod evolve* "role/tools-unavailable" [state {:keys [at data]}]
-  (let [{:keys [role wake session server tool got fresh retry-at tries]} data]
+  (let [{:keys [role wake session server tool retry-at tries]} data]
     (assoc-in state [:roles role :tools-unavailable]
-              {:wake wake :session session :server server :tool tool :got got :since (inst at)
-               :fresh (true? fresh) :retry-at (inst retry-at) :tries tries})))
-
-(defn- clean [labels] (vec (remove #{contaminated-label} labels)))
-
-(defn- clean-version [versions version]
-  (mapv #(cond-> % (= version (:seq %)) (update :labels clean)) versions))
-
-(defmethod evolve* "label/trusted" [state {:keys [data] :as event}]
-  (let [{:keys [kind ref version]} data
-        num (parse-long ref)
-        [owner nm] (str/split ref #"/" 2)]
-    (case kind
-      "memo" (update-in state [:memos num :labels] clean)
-      ;; The exact version the operator read, never a later one.
-      "fact" (update-in state [:facts num :versions] clean-version version)
-      "doc" (-> state
-                (update-in [:docs ref :versions] clean-version version)
-                (update-in [:docs ref :path-labels] clean))
-      "note" (update-in state [:notes owner nm :labels] clean)
-      "routine" (update-in state [:routines owner nm :labels] clean)
-      "role" (update-in state [:roles ref] #(-> % (update :id-labels clean) (update :title-labels clean)
-                                                (update :instructions-labels clean)))
-      "journal" (update state :journals
-                        (fn [js] (update-vals js (fn [es] (mapv #(cond-> % (= num (:id %)) (update :labels clean)) es)))))
-      ;; Every text element of the card as it stands; the decision already
-      ;; checked the rev and digest the operator saw.
-      "card" (update-in state [:cards num] cards/trusted (:seq event)))))
-
-(defmethod evolve* "hold/opened" [state {:keys [seq at data labels]}]
-  (let [{:keys [role wake session call tool input input-sha256 label-sources effective-input fixed-args
-                input-json effective-input-json]} data]
-    (cond-> (assoc-in state [:holds seq] {:id seq :role role :wake wake :session session :call call
-                                          :tool tool :input input :input-sha256 input-sha256
-                                          :input-json input-json
-                                          :label-sources label-sources
-                                          :status :open :opened-at (inst at) :labels (union labels)})
-      (map? fixed-args) (update-in [:holds seq] assoc :effective-input effective-input :fixed-args fixed-args
-                                   :effective-input-json effective-input-json))))
-
-(defmethod evolve* "hold/previewed" [state {:keys [data labels]}]
-  (let [{:keys [hold content is-error]} data]
-    (cond-> state
-      (get-in state [:holds hold])
-      (assoc-in [:holds hold :preview] {:content content :is-error (true? is-error) :labels (union labels)}))))
-
-(defmethod evolve* "hold/resolved" [state {:keys [at actor data]}]
-  (let [{:keys [hold verdict reason reason-public]} data]
-    (update-in state [:holds hold] assoc
-               :status (if (= "allow" verdict) :allowed :denied) :reason reason :reason-public (true? reason-public)
-               :resolved-at (inst at) :resolved-by actor)))
-
-(defmethod evolve* "permission/asked" [state {:keys [seq data]}]
-  (assoc-in state [:permissions seq] (assoc data :id seq)))
-
-(defmethod evolve* "permission/answered" [state {:keys [data]}]
-  (let [asked (->> (vals (:permissions state))
-                   (filter #(and (= (:wake data) (:wake %)) (= (:call data) (:call %)) (nil? (:outcome %))))
-                   (sort-by :id) last)]
-    (cond-> state
-      asked (update-in [:permissions (:id asked)] assoc :outcome (:outcome data) :by (:by data)))))
+              {:wake wake :session session :server server :tool tool :since (inst at)
+               :retry-at (inst retry-at) :tries tries})))
 
 (defmethod evolve* "conversation/line-dropped" [state _] state)
 
@@ -1145,27 +911,6 @@
 
 (defmethod evolve* "conversation/seen" [state {:keys [data]}]
   (assoc-in state [:wakes (:wake data) :seen] (:turn data)))
-
-(defmethod evolve* "hold/session-ended" [state {:keys [data]}]
-  (let [{:keys [role session]} data
-        interrupted (get-in state [:roles role :interrupted-wake])]
-    (cond-> (-> state
-                (assoc-in [:ended-sessions session] true)
-                (update :holds
-                    (fn [hs] (update-vals hs #(cond-> % (and (= session (:session %)) (not= :open (:status %))
-                                                              (nil? (:delivered %)))
-                                                     (assoc :abandoned true))))))
-      ;; The next wake starts afresh, carrying the role's open memos.
-      (= session (get-in state [:wakes interrupted :session]))
-      (assoc-in [:roles role :interrupted-wake] nil)
-      ;; A session whose tools could not be set up is done with too. A
-      ;; block for a changed definition stays until relay fresh accepts it.
-      (let [block (get-in state [:roles role :tools-unavailable])]
-        (and block (= session (:session block)) (or (not (:fresh block)) (:fresh data))))
-      (update-in [:roles role] dissoc :tools-unavailable))))
-
-(defmethod evolve* "hold/requeued" [state {:keys [data]}]
-  (update-in state [:holds (:hold data)] dissoc :delivered))
 
 (defmethod evolve* "harness/paused" [state {:keys [data]}]
   (let [{:keys [harness reason until failed-tries down-since]} data]
@@ -1343,23 +1088,9 @@
    (let [tx (emit tx "memo/sent" (cond-> {:from from :to to :subject subject :body body}
                                    routine (assoc :routine routine))
                   copied)]
-     (cond
-       (= operator to)
+     (if (= operator to)
        (notify tx "memo-for-operator" subject body :memo (last-id tx) :labels copied)
-       ;; Nothing of a quarantined memo's text goes in the notification.
-       (quarantined? (:config tx) (memo (:state tx) (last-id tx)))
-       (notify tx "memo-quarantined" (str "Memo " (last-id tx) " to " to " is quarantined")
-               (str "It is contaminated, so " to " is not shown it until you release it. relay release "
-                    (last-id tx) " shows it to you first.")
-               :role to :memo (last-id tx) :labels (ids-labels (:state tx) [to]))
-       ;; Nor of one waiting to be declassified: it may be private.
-       (awaiting-declassification? (:config tx) (memo (:state tx) (last-id tx)))
-       (notify tx "memo-awaiting-declassification"
-               (str "Memo " (last-id tx) " from " from " to " to " waits for you")
-               (str to " is a public role and the memo is not public, so " to " is not shown it until"
-                    " you declassify it. relay declassify " (last-id tx) " shows it to you first.")
-               :role to :memo (last-id tx) :labels (ids-labels (:state tx) [from to]))
-       :else tx))))
+       tx))))
 
 (defn- escalate
   "Passes a fresh dead letter on: as a memo to the dead letter handler, or as
@@ -1375,9 +1106,8 @@
         m (memo state (:memo letter))
         copied (union (memo-labels state m) (ids-labels state [(:from m) to]) (:labels letter))]
     (if (and handler (active-role? state handler) (not= handler to))
-      ;; Through send-memo, so a contaminated dead letter is quarantined
-      ;; and the operator told, as for any memo. The dispatcher writes it,
-      ;; so it is never public, whoever's call set it off.
+      ;; The dispatcher writes it, so it is never public, whoever's call
+      ;; set it off.
       (with-public tx false
         #(send-memo % {:from dispatcher :to handler :subject (str "Dead letter: " title) :body report}
                     copied))
@@ -1485,7 +1215,7 @@
   [config id harness]
   (let [g (config/grants config id)]
     (when (and (= :script (get-in config [:harnesses (keyword harness) :kind]))
-               (or (seq (:tools g)) (seq (:quarantine g)) (:may-add g) (:public g)))
+               (or (seq (:tools g)) (:may-add g) (:public g)))
       (reject! (str id " is granted tools or made public in relay.edn, and a :script harness gets no"
                     " tools and can claim any labels. Choose another harness or take the grants away.")))))
 
@@ -1547,11 +1277,7 @@
             tx (active-routines state id))
     (emit tx "role/removed" {:id id})
     (reduce (fn [tx m] (dead-letter tx (:id m) "recipient-removed" []))
-            tx (unread-memos state id))
-    ;; Nothing will ever carry a decision back to a removed role.
-    (reduce (fn [tx {hold-id :id}]
-              (emit tx "hold/resolved" {:hold hold-id :verdict "deny" :reason "The role was removed."}))
-            tx (open-holds state id))))
+            tx (unread-memos state id))))
 
 ;; memos
 
@@ -1574,21 +1300,18 @@
     (when (str/includes? subject "\n") (reject! "A memo's subject is one line."))
     (when (> (count subject) 200) (reject! "A memo's subject is at most 200 characters."))
     (operator-public! tx to "A memo")
+    ;; A public role is shown only public text. A memo from inside the
+    ;; house would carry the operator's things out to it, so until scouts
+    ;; take requests (B5) none is sent.
+    (when (and (not= operator actor) (public-role? (:config tx) to) (not (:public tx)))
+      (reject! :forbidden (str to " works on the open web, and a memo from " actor " could carry your"
+                               " private things to it, so it was not sent.")))
     (send-memo tx {:from actor :to to :subject subject :body body})))
-
-(defn- not-kept!
-  "Refuses a role's change to a memo a held session keeps, unless the role
-  is carrying that session on."
-  [{:keys [state actor]} id]
-  (when (and (not= operator actor) ((kept-memo-ids state actor) id))
-    (reject! :held (str "Memo " id " is kept by a session waiting for the operator;"
-                        " it goes on once the held call is decided."))))
 
 (defmethod decide* :memo/close [{:keys [actor] :as tx} {{:keys [memo outcome]} :args}]
   (let [m (open-memo! tx memo)]
     (when-not (or (= actor (:to m)) (= operator actor))
       (reject! :forbidden (str "Memo " memo " is not addressed to " actor ".")))
-    (not-kept! tx memo)
     (emit tx "memo/closed" {:memo memo :outcome (require-text outcome "The outcome")})))
 
 (defmethod decide* :memo/block [{:keys [actor] :as tx} {{:keys [memo explanation]} :args}]
@@ -1596,7 +1319,6 @@
   (let [m (open-memo! tx memo)]
     (when-not (= actor (:to m))
       (reject! :forbidden (str "Memo " memo " is not addressed to " actor ".")))
-    (not-kept! tx memo)
     (dead-letter tx memo "blocked" [] :explanation (require-text explanation "The explanation"))))
 
 (defmethod decide* :memo/retry [{:keys [state config actor] :as tx} {{:keys [role]} :args}]
@@ -1650,7 +1372,8 @@
       ;; A public role cannot see or close an open run that is not public,
       ;; which would keep the rewritten routine from firing. The rewrite
       ;; replaces it.
-      (if (and last-run (= :unread (:status last-run)) (awaiting-declassification? (:config tx) last-run))
+      (if (and last-run (= :unread (:status last-run)) (public-role? (:config tx) owner)
+               (not (shown-to-public? last-run (memo-labels (:state tx) last-run))))
         (emit tx "memo/closed" {:memo (:id last-run)
                                 :outcome (str "Replaced when the routine " name " was rewritten: this run was"
                                               " not public, so " owner " could not see it.")})
@@ -1671,60 +1394,10 @@
   (when-not (= dispatcher actor)
     (reject! :forbidden "Only the dispatcher does that.")))
 
-(defn sessions-from-before-public
-  "A public role's held sessions that cannot be carried on as a public
-  role's, not yet ended: those from before it was public, and those whose
-  decided calls carry a reason the operator gave while it was not."
-  [state config role-id]
-  (if-not (public-role? config role-id)
-    []
-    (let [hs (filter #(and (= role-id (:role %)) (unsettled-hold? %)
-                           (not (get-in state [:ended-sessions (:session %)])))
-                     (vals (:holds state)))]
-      (->> (group-by :session hs)
-           (keep (fn [[session hs]]
-                   (when (some #(or (not (get-in state [:wakes (:wake %) :public-session]))
-                                    ;; A reason given while the role was not
-                                    ;; public could not be carried back to it.
-                                    (and (not (blank? (:reason %))) (not (:reason-public %))))
-                               hs)
-                     session)))
-           sort vec))))
-
-(defn- end-session
-  "Ends a role's session, so that no wake carries it on: each call still
-  open in it is denied with `reason`, and its memos go on in a fresh
-  session."
-  [tx role-id session why reason & [extra]]
-  (as-> tx tx
-    (reduce (fn [tx {h :id}] (emit tx "hold/resolved" {:hold h :verdict "deny" :reason reason}))
-            tx (sort-by :id (filter #(and (= session (:session %)) (= :open (:status %)))
-                                    (vals (:holds (:state tx))))))
-    (emit tx "hold/session-ended" (merge {:role role-id :session session :why why}
-                                         (when (:fresh extra) {:fresh true})))))
-
-(defn- end-sessions-from-before-public
-  "Ends a public role's held sessions from before it was public: they may
-  hold private text no label records (the operator's AGENTS.md, what was
-  said in them), so none is carried on. Its open calls are denied, and the
-  memos they kept go on in fresh sessions. roles-to-wake wakes the role for
-  this, so a session whose calls nobody decides cannot strand them."
-  [{:keys [state config] :as tx} role-id]
-  (reduce #(end-session %1 role-id %2 "the role was made public"
-                        "The role was made public, so this session was ended.")
-          tx (sessions-from-before-public state config role-id)))
-
 (defn- start-wake
   "What :wake/start does once the role is known to be free."
   [{:keys [state config now actor] :as tx} {{role-id :role :keys [note dispatched chat pid pid-start]} :args}]
   (let [harness (harness-of state config role-id)]
-    ;; A tool whose definition changed is taken only through relay fresh:
-    ;; no wake, conversation or wake by hand starts while the role waits
-    ;; for it. This runs after a public role's old sessions are ended, so
-    ;; it sees what the wake would really carry on.
-    (when (get-in state [:roles role-id :tools-unavailable :fresh])
-      (reject! :paused (str "A tool of " role-id "'s changed its definition. Run relay fresh " role-id
-                            " first.")))
     (when dispatched
       (when (paused-until state harness now) (reject! :paused (str harness " is paused.")))
       (when (running-away? state role-id config now)
@@ -1737,29 +1410,17 @@
     ;; when it ends.
     (when (and chat (not= operator actor))
       (reject! :forbidden "Only the operator can open a conversation."))
-    (let [;; A held session whose calls are all decided is carried on
-          ;; first, with the decisions and the memos it kept. Otherwise a
-          ;; wake starts with the memos no held session keeps, in a fresh
+    (let [;; A wake starts with the memos the role may be shown, in a fresh
           ;; session unless the last one was cut short.
-          ready (when-not chat (resumable-held-session state role-id))
-          kept (held-memo-ids state role-id)
           memos (cond chat []
-                      ready (filterv #(and (= :unread (:status %)) (not (awaiting-declassification? config %)))
-                                     (map #(memo state %) (get-in state [:wakes (:wake ready) :memos])))
                       dispatched (waiting-memos state config role-id now)
-                      :else (filterv #(not (kept (:id %))) (deliverable-memos state config role-id)))
-          held (held-wakes state role-id)
-          ;; A session from before relay kept labels is never carried on:
-          ;; the policy could not know what it had seen.
-          before-labels? #(and % (:labels-enabled-at state) (< % (:labels-enabled-at state)))
+                      :else (deliverable-memos state config role-id))
           public (public-role? config role-id)
-          ;; Nor is a session from before a public role was public carried
+          ;; A session from before a public role was public is not carried
           ;; on as one: it may hold private text that no label records.
           before-public? #(and public % (not (get-in state [:wakes % :public-session])))
-          interrupted (cond ready (when-not (before-labels? (:wake ready)) (:wake ready))
-                            :else (let [w (:interrupted-wake (role state role-id))]
-                                    (when-not (or (before-labels? w) (held w) (before-public? w)) w)))
-          resolves (when ready (mapv :id (:holds ready)))
+          interrupted (let [w (:interrupted-wake (role state role-id))]
+                        (when-not (before-public? w) w))
           ;; A note the operator wrote with --public may go where the role
           ;; sends things; the conversation's own note is relay's.
           note-public (boolean (and (not chat) (not (blank? note)) (:public tx)))]
@@ -1769,20 +1430,18 @@
         (reject! :invalid (str role-id " is a public role and cannot run as one: " why)))
       ;; The last line: nothing private goes into a public role's prompts.
       (when (and public (private? (wake-labels state config {:role role-id :memos (mapv :id memos) :note note
-                                                             :note-public note-public :chat chat
-                                                             :resolves resolves})))
+                                                             :note-public note-public :chat chat})))
         (reject! :invalid (str role-id " is a public role, and its prompts would hold private data.")))
-      (if (and (empty? memos) (blank? note) (not chat) (empty? resolves))
+      (if (and (empty? memos) (blank? note) (not chat))
         tx
         (emit tx "wake/started" (cond-> {:role role-id :memos (mapv :id memos) :note note
                                          :resumes (when-not chat interrupted)
                                          :harness harness :pid pid :pid-start pid-start}
                                   note-public (assoc :note-public true)
                                   public (assoc :public-session true)
-                                  chat (assoc :chat true)
-                                  (seq resolves) (assoc :resolves resolves)))))))
+                                  chat (assoc :chat true)))))))
 
-(defmethod decide* :wake/start [{:keys [config actor] :as tx} {{role-id :role :keys [chat]} :args :as command}]
+(defmethod decide* :wake/start [{:keys [actor] :as tx} {{role-id :role :keys [chat]} :args :as command}]
   (when-not (#{dispatcher operator} actor)
     (reject! :forbidden "Only the operator or the dispatcher wakes a role."))
   (active-role! (:state tx) role-id)
@@ -1796,8 +1455,7 @@
       (reject! :busy (str role-id " already has a conversation open.") (id-labels (:state tx) role-id)))
     (when (busy? (:state tx) role-id)
       (reject! :busy (str role-id " is already running.") (id-labels (:state tx) role-id))))
-  (start-wake (cond-> tx (public-role? config role-id) (end-sessions-from-before-public role-id))
-              command))
+  (start-wake tx command))
 
 (defn- settle-memos
   "Deals with each memo a wake carried that is still open. The role never
@@ -1847,120 +1505,16 @@
         (cond
           (and (= "needs-attention" outcome) (not told?))
           (notify tx "harness-needs-attention" (str harness " needs you before relay can work")
-                  (str "It said:\n\n" said "\n\nEvery role on it is on hold and nothing has been "
+                  (str "It said:\n\n" said "\n\nEvery role on it waits, and nothing has been "
                        "dropped. Work carries on by itself once it runs again.")
                   :harness harness :labels (:said-labels tx))
           :else tx)))))
 
-(def reader-tool
-  "agentloop's quarantined reader, which runs another tool for a role."
-  "read_quarantined")
-
-(defn held-tool
-  "The tool a held call would run, from its tool name and input: for the
-  quarantined reader, the inner tool its input names, since the reader is
-  held only for what that call would do. Nil for a reader call whose input
-  names no tool."
-  [tool input]
-  (if (= reader-tool tool)
-    (let [t (when (map? input) (or (get input :tool) (get input "tool")))]
-      (when (and (string? t) (not (blank? t))) t))
-    tool))
-
-(defn- held-call?
-  "A held call relay can record: with an id, a tool name, and the digest
-  of its input that the decision is bound to. Without the digest it is
-  not recorded, since a decision could not be tied to it."
-  [c]
-  (and (map? c) (string? (:id c)) (not (blank? (:id c))) (string? (:name c)) (not (blank? (:name c)))
-       (string? (:input-sha256 c)) (not (blank? (:input-sha256 c)))))
-
-(defn preview-of
-  "The preview relay.dispatch ran for a held call, when it is one relay can
-  keep: {:content text :is-error bool :labels [...]}. Nil for anything else."
-  [p]
-  (when (and (map? p) (string? (:content p)) (boolean? (:is-error p))
-             (sequential? (:labels p)) (every? label-names (:labels p)))
-    (-> (select-keys p [:content :is-error]) (assoc :labels (union (:labels p))))))
-
-(defn preview-target
-  "The tool whose :preview a held call gets, and the input to give it:
-  for a call through the quarantined reader, the inner tool and the
-  inner input, since the reader is held for what that call would do.
-  The input is the one the call would run on, with any arguments the
-  operator fixed."
-  [tool input]
-  (if-let [inner (and (= reader-tool tool) (held-tool tool input))]
-    [inner (when (map? input) (or (get input :input) (get input "input")))]
-    [tool input]))
-
-(defn preview-labels
-  "The labels a preview's text carries: what the preview command said, the
-  tool's static labels, since it reads the same service, and the labels of
-  the session whose input it was given, since it may repeat that input."
-  [config tool preview session-labels]
-  (union (:labels preview) (get-in config [:tools tool :labels]) session-labels))
-
-(defn approved-hosts
-  "The hosts of every link in a preview the operator approved: of a hold
-  they allowed, or a call they allowed in a conversation. A link in a new
-  preview to any other host is marked."
-  [state]
-  (into #{}
-        (mapcat #(text/link-hosts (get-in % [:preview :content])))
-        (concat (filter #(and (= :allowed (:status %)) (= operator (:resolved-by %))) (vals (:holds state)))
-                (filter #(and (= "allow_once" (:outcome %)) (= "client" (:by %))) (vals (:permissions state))))))
-
-(defn- open-hold
-  "Records a call held in a wake's session, unless it is already known: a
-  hold still open stays as it is, and one decided and carried back that is
-  held again was never received, so it is carried back again. A preview
-  relay ran for it is kept with it, under labels of its own."
-  [{:keys [state] :as tx} wake session {:keys [id name input input-sha256 label-sources preview effective-input fixed-args]}]
-  (let [known (first (filter #(and (= session (:session %)) (= id (:call %))) (vals (:holds state))))]
-    (cond
-      (nil? known)
-      (let [tx (emit tx "hold/opened" (cond-> {:role (:role wake) :wake (:id wake) :session session
-                                               :call id :tool name :input input :input-sha256 input-sha256
-                                               ;; The input exactly, as JSON text: the log
-                                               ;; reads its numbers back as doubles, and the
-                                               ;; operator's review must show the input the
-                                               ;; approval lets run, digit for digit.
-                                               :input-json (strict/generate input)}
-                                        (map? label-sources) (assoc :label-sources label-sources)
-                                        ;; What the call would run on: the digest is of it.
-                                        (and (map? effective-input) (map? fixed-args) (seq fixed-args))
-                                        (assoc :effective-input effective-input :fixed-args fixed-args
-                                               :effective-input-json (strict/generate effective-input)))
-                     (:said-labels tx))
-            hold-id (last-id tx)
-            preview (preview-of preview)
-            tx (cond-> tx
-                 preview (emit "hold/previewed" {:hold hold-id :content (:content preview)
-                                                 :is-error (:is-error preview)}
-                               (preview-labels (:config tx) (first (preview-target name (or effective-input input)))
-                                               preview (:said-labels tx))))]
-        ;; The input stays in relay holds: it may hold private data, and a
-        ;; notification goes to a phone.
-        (notify tx "hold-opened" (str (:role wake) " wants to use " (or (held-tool name input) name))
-                (str "Hold " hold-id ": " (:role wake) " wants to use " (or (held-tool name input) name)
-                     (when (and (= reader-tool name) (held-tool name input)) " through the reader")
-                     ", "
-                     (if-let [c (get-in (:config tx) [:tools (held-tool name input) :class])]
-                       (str (if (#{:act :egress config/edit-class} c) "an " "a ") (clojure.core/name c) " tool")
-                             "one of relay's own tools")
-                     ". It is waiting for you: relay holds shows it in full.")
-                :role (:role wake) :hold hold-id
-                :labels (union (:said-labels tx) (id-labels state (:role wake)))))
-      ;; Carried back again only if it is the same call, by its digest.
-      (and (not= :open (:status known)) (:delivered known) (= input-sha256 (:input-sha256 known)))
-      (emit tx "hold/requeued" {:hold (:id known)})
-      :else tx)))
-
 (defn- tell-refusals
-  "Tells the operator about what agentloop kept from a wake's session for
-  carrying a label it may not hold: a session that would not start, and
-  tool results it refused. Names the tools, never what they returned."
+  "Tells the operator about what agentloop kept from a public role's
+  session for carrying their private things: a session that would not
+  start, and tool results it refused. Names the tools, never what they
+  returned."
   [{:keys [state] :as tx} wake {:keys [refused forbidden]}]
   (let [role (:role wake)
         tools (sort (distinct (keep #(when (and (map? %) (string? (:tool %))) (:tool %)) (when (sequential? refused) refused))))
@@ -1968,13 +1522,13 @@
     (cond-> tx
       (seq forbidden)
       (notify "session-forbidden" (str role "'s session did not start")
-              (str "It holds " (str/join " and " forbidden) ", which a public role's session may not hold, so"
-                   " agentloop did not run it. Its next wake starts a fresh session.")
+              (str "It had seen your private things, which " role " works without, so it did not run."
+                   " Its next wake starts a fresh session.")
               :role role :labels (id-labels state role))
       (seq tools)
-      (notify "result-refused" (str "A result was kept from " role)
-              (str "agentloop refused " (count refused) " tool result(s) from " (str/join ", " tools)
-                   " because they carried private data, which " role " may not see.")
+      (notify "result-refused" (str "Something was kept from " role)
+              (str (str/join ", " tools) " returned your private things, which " role
+                   " works without, so it was not shown " (if (next refused) "them." "it."))
               :role role :labels (id-labels state role)))))
 
 (defn wake-usage
@@ -2059,7 +1613,8 @@
   "Remembers the definition digest of each MCP tool a wake's session
   pinned that relay has not seen before (trust on first use, as SSH's
   known_hosts). Every later request names it, so any session, of any
-  role, that is offered another definition stops for the operator."
+  role, that is offered another definition stops, and relay takes the new
+  one for the next (tools-unavailable)."
   [{:keys [state config] :as tx} wake pins]
   (if (or (:chat wake) (not (map? pins)))
     tx
@@ -2073,54 +1628,62 @@
             tx (sort-by (comp str key) pins))))
 
 (defn- tools-unavailable
-  "Records that a wake's MCP tools could not be set up, and tells the
-  operator once. When a tool's definition changed under the session (the
-  session pinned another), nothing carries the session on and nothing
-  starts a fresh one by itself, which would take the new definition
-  unseen: the role waits for relay fresh. Otherwise the role is tried
-  again after a wait that doubles, as a harness is."
+  "Records that a wake's MCP tools could not be set up. When a tool's
+  definition changed under the session (the session pinned another),
+  relay takes the new definition, tells the operator, and the role's next
+  wake starts a fresh session with it. When it changes again before the
+  role has run since, as a server whose description carries a timestamp
+  does, relay still takes it but tries the role again only after a wait
+  that doubles, and says nothing more: one notification per streak, and
+  no agentloop started on every tick. When relay.edn's :digest pins the
+  old one, the operator must change :digest: until then the role is tried
+  again after a wait that doubles, as for any other failure."
   [{:keys [state config ^Instant now] :as tx} wake session {:keys [message server tool pinned got]}]
   (let [role (:role wake)
         before (get-in state [:roles role :tools-unavailable])
-        relay-pin (get-in config [:tools tool :digest])
         changed (boolean (and pinned got))
-        ;; A changed definition that relay.edn's :digest pins is refused
-        ;; whatever the session, so a fresh session would not help.
-        fresh (and changed (not= pinned relay-pin))
-        tries (inc (or (:tries before) 0))
-        retry-at (when-not fresh (.plusSeconds now (config/retry-delay-seconds config tries)))
-        ;; A tool seen to change before relay accepted any definition of
-        ;; it is held to the one it changed from, so a first use elsewhere
-        ;; can never adopt the changed one.
-        tx (if (and fresh tool (config/mcp-tool? (get-in config [:tools tool])) (nil? (tool-pin state tool))
-                    (string? pinned) (re-matches #"[0-9a-f]{64}" pinned))
-             (emit tx "tool/pinned" {:tool tool :digest pinned})
-             tx)
-        tx (emit tx "role/tools-unavailable" (cond-> {:role role :wake (:id wake) :session session
-                                                      :fresh fresh :tries tries}
-                                               server (assoc :server server)
-                                               tool (assoc :tool tool)
-                                               (and fresh got) (assoc :got got)
-                                               retry-at (assoc :retry-at (str retry-at))))]
-    (if (and before (= fresh (:fresh before)))
+        mcp (and tool (config/mcp-tool? (get-in config [:tools tool])))
+        config-pin (get-in config [:tools tool :digest])
+        ;; relay.edn's :digest is the operator's own pin, which relay never
+        ;; moves.
+        takes-new (and changed mcp (nil? config-pin) (string? got) (re-matches #"[0-9a-f]{64}" got))
+        ;; It changed under this role's last session too.
+        again (and takes-new (= tool (get-in state [:roles role :tool-changed])))
+        back-off (fn [tx]
+                   (let [tries (inc (or (:tries before) 0))
+                         retry-at (.plusSeconds now (config/retry-delay-seconds config tries))]
+                     (emit tx "role/tools-unavailable" (cond-> {:role role :wake (:id wake) :session session
+                                                                :tries tries :retry-at (str retry-at)}
+                                                         server (assoc :server server)
+                                                         tool (assoc :tool tool)))))]
+    (cond
+      (and takes-new (= got (tool-pin state tool)))
+      ;; Taken already, when another session stopped on the same change.
       tx
-      (notify tx "tools-unavailable"
-              (if fresh (str role "'s session cannot go on") (str role "'s tools could not be set up"))
-              (str "agentloop said:\n\n" message "\n\n"
-                   (cond
-                     fresh
-                     (str "relay does not carry a session on with a tool whose definition changed, and does"
-                          " not start a fresh one by itself, since that would take the new definition"
-                          " unchecked. Check the change. To accept it, run `relay fresh " role "`: the"
-                          " session ends and the next wake starts a new one. Its memos wait until then.")
-                     changed
-                     (str "The definition no longer matches the :digest relay.edn gives " tool ". Check"
-                          " the change. To accept it, set :digest to " got " and run `relay fresh " role
-                          "`. Its memos wait until then.")
-                     :else
-                     (str "Nothing ran and nothing is dropped. relay tries " role " again after a wait that"
-                          " doubles each time; `relay wake " role "` tries at once.")))
-              :role role :labels (:said-labels tx)))))
+
+      again
+      (-> tx (emit "tool/pinned" {:tool tool :digest got :role role}) back-off)
+
+      takes-new
+      (-> tx
+          (emit "tool/pinned" {:tool tool :digest got :role role})
+          (notify "tool-changed" (str tool " changed")
+                  (str "The server behind " tool " now describes it differently, and relay uses the new"
+                       " version from now on. " role " starts a fresh session with it at its next wake.")
+                  :role role :labels (:said-labels tx)))
+
+      :else
+      (let [tx (back-off tx)]
+        (if before
+          tx
+          (notify tx "tools-unavailable" (str role "'s tools could not be set up")
+                  (str "agentloop said:\n\n" message "\n\n"
+                       (if (and changed config-pin)
+                         (str "The definition no longer matches the :digest relay.edn gives " tool "."
+                              " Check the change. To take it, set :digest to " got ".")
+                         (str "Nothing ran and nothing is dropped. relay tries " role " again after a wait"
+                              " that doubles each time; `relay wake " role "` tries at once.")))
+                  :role role :labels (:said-labels tx)))))))
 
 (defn- tell-shown
   "Tells the operator what a wake showed them, by path only: a display's
@@ -2133,8 +1696,7 @@
       (notify tx "shown" (str (:role wake) " showed you " (count paths) (if (= 1 (count paths)) " thing" " things"))
               (str "While it worked, " (:role wake) " showed you what it found. Read "
                    (if (= 1 (count paths)) "it" "them") " with relay doc:\n\n"
-                   (str/join "\n" (map #(str "relay doc " %) paths))
-                   "\n\nOr trust one you have read with relay trust doc <path>.")
+                   (str/join "\n" (map #(str "relay doc " %) paths)))
               :role (:role wake)))))
 
 (def stop-reasons
@@ -2152,26 +1714,20 @@
                                         :stop-reason (if (stop-reasons stop-reason) stop-reason "other")})))
 
 (defn- end-wake [{:keys [state config] :as tx} wake-id {:keys [outcome exit crashed cut-short session sessions said
-                                                              transcript resets-at held labels usage cost-usd
+                                                              transcript resets-at labels usage cost-usd
                                                               tools-error pins shown]
                                                        :as report}]
   (let [wake (get-in state [:wakes wake-id])
         tools-error (when (and (= "needs-attention" outcome) (not (:chat wake)))
                       (wake-tools-error tools-error))
-        ;; What the session said, and the input of any call it left held,
-        ;; are its own text, with the labels it had gathered by the end:
-        ;; as its harness reports them, or when it does not, every label
-        ;; it could have gathered.
+        ;; What the session said is its own text, with the labels it had
+        ;; gathered by the end: as its harness reports them, or when it
+        ;; does not, every label it could have gathered.
         tx (assoc tx :said-labels (if (and (sequential? labels) (every? label-names labels))
                                     (union labels)
                                     (session-labels-bound state config (:role wake))))]
     (when-not (harness-outcomes outcome)
       (reject! (str "Unknown harness outcome " (pr-str outcome) ".")))
-    ;; Whatever the harness said is held, the wake ends: only a wake that
-    ;; ran and has a session to resume can leave calls held, and anything
-    ;; else in the list is not a call.
-    (let [held (when (and (sequential? held) (= "ran" outcome) (not (:chat wake)) (not (blank? session)))
-                 (filterv held-call? held))]
     ;; A conversation records every session it used, in order, instead of
     ;; the one session a wake resumes from.
     (when (some? sessions)
@@ -2186,7 +1742,6 @@
                                      :cut-short (boolean cut-short) :session session :said said
                                      :transcript transcript}
                               (some? sessions) (assoc :sessions (vec sessions))
-                              (seq held) (assoc :held (mapv :id held))
                               (wake-usage usage) (assoc :usage (wake-usage usage))
                               (wake-cost cost-usd) (assoc :cost-usd (wake-cost cost-usd))
                               tools-error (assoc :tools-error tools-error))
@@ -2198,95 +1753,18 @@
         (tools-unavailable tx wake session tools-error)
         (note-harness tx (:harness wake) outcome resets-at said))
       (if cut-short (journal-cut-short tx wake) tx)
-      (reduce #(open-hold %1 wake session %2) tx held)
-      ;; A wake stopped for the operator has not failed its memos: it is
-      ;; resumed once they decide.
-      (if (and (= "ran" outcome) (empty? held)) (settle-memos tx wake said) tx)
+      (if (= "ran" outcome) (settle-memos tx wake said) tx)
       (tell-refusals tx wake report)
       (tell-shown tx wake shown)
       ;; Only a cost can move the week's total.
       (if (wake-cost cost-usd) (warn-of-spend tx) tx)
-      (dissoc tx :said-labels)))))
+      (dissoc tx :said-labels))))
 
-;; the operator's say over contaminated text
+;; the operator's own
 
 (defn- operator-only! [{:keys [actor]} what]
   (when-not (= operator actor)
     (reject! :forbidden (str "Only the operator " what "."))))
-
-(defmethod decide* :memo/release [{:keys [config] :as tx} {{id :memo} :args}]
-  (operator-only! tx "releases a quarantined memo")
-  (let [m (open-memo! tx id)]
-    (when-not (quarantined? config m)
-      (reject! :invalid (str "Memo " id " is not quarantined.")))
-    (emit tx "memo/released" {:memo id})))
-
-(defn plain-spacing
-  "Text with its spacing made plain: every run of spaces, tabs and other
-  blanks within a line becomes one space, lines lose the blanks at their
-  start and end, and runs of blank lines become one, none at the start or
-  end. What is left is what a reader sees, so nothing can ride in the
-  spacing (trailing spaces and tabs as bits, say) past someone who read
-  it. Anything that draws as nothing or as an empty space
-  (text/blank-glyph?) counts as a blank, and every kind of line break as
-  one."
-  [s]
-  (->> (str/split (-> (apply str (map #(if (text/blank-glyph? %) " " (String. (Character/toChars (int %))))
-                                      (iterator-seq (.iterator (.codePoints (str s))))))
-                      (str/replace #"\r\n?|[\u0085\u2028\u2029]" "\n"))
-                  #"\n")
-       (map #(str/trim (str/replace % #"[\p{Zs}\t\x0B\f\u001C-\u001F]+" " ")))
-       (partition-by str/blank?)
-       (mapcat #(if (str/blank? (first %)) [""] %))
-       (drop-while str/blank?)
-       reverse (drop-while str/blank?) reverse
-       (str/join "\n")))
-
-(defn declassified
-  "A memo as declassifying makes it, and the role is given: its subject and
-  body defanged if it is contaminated (text/defang), with plain spacing
-  (plain-spacing), in Unicode NFC. relay declassify shows exactly this
-  text, adding only the [contaminated] marker, so what the operator
-  vouches for and what the role gets are one text. Defanging folds
-  several texts into one (http and HtTp, a dot and [.]), so the role
-  must get the folded text, or the difference could carry bits the
-  operator never saw."
-  [m]
-  (let [fix (fn [s] (-> (str s)
-                        (cond-> (contaminated? (:labels m)) text/defang)
-                        plain-spacing
-                        (java.text.Normalizer/normalize java.text.Normalizer$Form/NFC)))]
-    (-> m
-        ;; A subject is one line, however it was written.
-        (update :subject #(fix (str/replace (plain-spacing %) "\n" " ")))
-        (update :body fix))))
-
-(defn declassify-text
-  "The review text (relay.review) of declassifying memo m: the memo as
-  declassifying makes it, which is what the public role gets."
-  [m]
-  (review/declassify-text (declassified m)))
-
-(defn declassify-digest
-  "The digest a declassify of memo `id` must name now, or nil."
-  [state id]
-  (some-> (memo state id) declassify-text review/digest))
-
-(defmethod decide* :memo/declassify [{:keys [state config] :as tx} {{id :memo digest :sha256} :args}]
-  ;; The operator has read the memo, its sender's id included, and says it
-  ;; may leave this machine. Only a person at the terminal does that.
-  (operator-only! tx "declassifies a memo")
-  (let [m (open-memo! tx id)]
-    (when-not (awaiting-declassification? config m)
-      (reject! :invalid (str "Memo " id " is not waiting to be declassified.")))
-    ;; Only the memo the operator was shown: the digest of its review.
-    (when-not (and (string? digest) (= digest (review/digest (declassify-text m))))
-      (reject! :conflict (str "Memo " id " is not what you were shown. Nothing was declassified; look again.")))
-    (let [{:keys [subject body]} (declassified m)]
-      (emit tx "memo/declassified" {:memo id :subject subject :body body :sha256 digest
-                                    :from-labels (vec (remove #{private-label} (second (shown-id state (:from m)))))}
-            ;; It holds the memo's text, without the private it vouches away.
-            (remove #{private-label} (:labels m))))))
 
 (defmethod decide* :result/refused [{:keys [state actor] :as tx} {{:keys [tool]} :args}]
   ;; relay kept a tool's result from a public role's session for carrying
@@ -2294,189 +1772,9 @@
   ;; tool, never what it returned.
   (caller-role! tx)
   (when-not (public-actor? tx) (reject! :forbidden "Only a public role's results are refused."))
-  (notify tx "result-refused" (str "A result was kept from " actor)
-          (str "relay refused a result from " tool " because it carried private data, which " actor
-               " may not see.")
+  (notify tx "result-refused" (str "Something was kept from " actor)
+          (str tool " returned your private things, which " actor " works without, so it was not shown it.")
           :role actor :labels (id-labels state actor)))
-
-(def trust-kinds #{"memo" "fact" "doc" "note" "routine" "role" "journal" "card"})
-
-(defn trusted-version
-  "What `relay trust <kind> <ref>` is about, and its labels: a memo, a
-  fact's current version, a doc's latest version, a note or routine named
-  owner/name, a role, or a journal entry by number. Nil when there is none."
-  [state kind ref]
-  (let [num (some-> ref str parse-long)
-        [owner nm] (str/split (str ref) #"/" 2)]
-    (case kind
-      "memo" (when-let [m (memo state num)]
-               {:version (:id m) :labels (:labels m) :text (str (:subject m) "\n\n" (:body m))})
-      "fact" (when-let [v (some-> (fact state num) (fact-as-known nil))]
-               {:version (:seq v) :labels (:labels v) :text (str (when (:topic v) (str "[" (:topic v) "] ")) (:text v)
-                                               (when (:why v) (str "\n\nWhy it changed: " (:why v))))})
-      "doc" (when-let [v (doc-version state ref {})]
-              (when-not (:removed v)
-                {:version (:seq v) :labels (union (:labels v) (path-labels state ref)) :text (:content v)}))
-      "note" (when-let [n (get-in state [:notes owner nm])]
-               {:version (:version n) :labels (:labels n) :text (:text n)})
-      "routine" (when-let [r (routine state owner nm)]
-                  {:version (:version r) :labels (:labels r) :text (str (:schedule r) "\n" (:instructions r))})
-      "role" (when-let [r (role state ref)]
-               {:version (:version r) :labels (role-labels state ref)
-                :text (str ref "\n" (:title r) "\n\n" (:instructions r))})
-      "journal" (when-let [e (first (filter #(= num (:id %)) (mapcat val (:journals state))))]
-                  {:version (:id e) :labels (:labels e) :text (:text e)})
-      ;; The whole card as it stands, at its rev.
-      "card" (when-let [c (some->> num (card state))]
-               {:version (:rev c) :labels (cards/text-labels c) :text (cards/text-form c)})
-      nil)))
-
-(defn sha256
-  "The hex sha256 of a text's UTF-8 bytes."
-  [s]
-  (let [d (.digest (java.security.MessageDigest/getInstance "SHA-256")
-                   (.getBytes (str s) java.nio.charset.StandardCharsets/UTF_8))]
-    (apply str (map #(format "%02x" (bit-and % 0xff)) d))))
-
-(defn trust-record
-  "What `relay trust <kind> <ref>` vouches for as a record for
-  relay.review/record-lines, made from the subject's own fields, each
-  under its own labels, never from a text form: a memo's subject and
-  body; a fact's topic, text, validity, explanation and whether it is
-  retracted; a doc's path (under the labels of whoever chose it) and
-  content; a note's or routine's owner, name and text, a routine's
-  schedule; a role's id, title and instructions; a journal entry's owner
-  and text. Nil for a card (relay.review/card-text) or when there is
-  nothing to trust."
-  [state kind ref]
-  (when-let [v (trusted-version state kind ref)]
-    (let [num (some-> ref str parse-long)
-          [owner nm] (str/split (str ref) #"/" 2)
-          ls (vec (:labels v))
-          line (fn [label value labels] {:label label :labels (vec labels) :value value :as :line})
-          blk (fn [label value labels] {:label label :labels (vec labels) :value value :as :block})
-          plain (fn [label value] {:label label :labels [] :value (some-> value str) :as :plain})
-          rec (fn [fields] {:kind kind :version (:version v) :labels ls :fields fields})]
-      (case kind
-        "memo" (let [m (memo state num)]
-                 (rec [(plain "Memo" (:id m)) (line "From" (:from m) []) (line "To" (:to m) [])
-                       (line "Subject" (:subject m) ls) (blk "Body" (:body m) ls)]))
-        "fact" (let [f (fact-as-known (fact state num) nil)]
-                 (rec [(plain "Fact" (:id f)) (line "Topic" (:topic f) ls) (blk "Text" (:text f) ls)
-                       (plain "Valid from" (:valid-from f)) (plain "Valid to" (:valid-to f))
-                       (plain "Retracted" (boolean (:retracted f)))
-                       (plain "Supersedes" (:supersedes f))
-                       (blk "Why it changed" (:why f) ls)]))
-        "doc" (let [d (doc-version state ref {})]
-                (review/doc-record ref (:version v) (path-labels state ref) (:labels d) (:content d)))
-        "note" (let [n (get-in state [:notes owner nm])]
-                 (rec [(line "Owner" owner []) (line "Name" nm ls) (blk "Text" (:text n) ls)]))
-        "routine" (let [r (routine state owner nm)]
-                    (rec [(line "Owner" owner []) (line "Name" nm ls) (line "Schedule" (:schedule r) ls)
-                          (blk "Instructions" (:instructions r) ls)]))
-        "role" (let [r (role state ref)]
-                 (rec [(line "Id" ref []) (line "Title" (:title r) ls) (blk "Instructions" (:instructions r) ls)]))
-        "journal" (let [[o e] (first (for [[o es] (:journals state) e es :when (= num (:id e))] [o e]))]
-                    (rec [(plain "Entry" (:id e)) (line "Owner" o []) (blk "Text" (:text e) ls)]))
-        nil))))
-
-(defn trust-text
-  "The review text of what `relay trust <kind> <ref>` is about
-  (relay.review): for a card relay.review/card-text, for anything else
-  relay.review/record-text of its trust-record. Nil when there is none.
-  A trust names the digest of this text: what the operator was shown,
-  made safe, is what they vouch for."
-  [state kind ref]
-  (when (trusted-version state kind ref)
-    (if (= "card" kind)
-      (review/card-text (card state (parse-long (str ref))))
-      (some-> (trust-record state kind ref) review/record-text))))
-
-(defn trust-digest
-  "The digest a trust of this kind and ref must name now: the sha256 of
-  its trust-text. Nil when there is nothing to trust."
-  [state kind ref]
-  (some-> (trust-text state kind ref) review/digest))
-
-(defmethod decide* :label/trust [{:keys [state] :as tx} {{:keys [kind ref version via] digest :sha256} :args}]
-  ;; The operator has read it and vouches for it. That clears
-  ;; contaminated from what it says now, and never private.
-  (operator-only! tx "vouches for contaminated text")
-  (when-not (trust-kinds kind)
-    (reject! (str "Trust what? One of " (str/join ", " (sort trust-kinds)) ".")))
-  (let [v (trusted-version state kind ref)]
-    (when-not v (reject! :not-found (str "There is no " kind " " ref ".")))
-    (when-not (contaminated? (:labels v))
-      (reject! :invalid (str "The " kind " " ref " is not contaminated.")))
-    ;; The operator vouches for the text they were shown, and only that:
-    ;; the digest is of its review text, so if it changed since, or
-    ;; would be shown differently, nothing is trusted.
-    (when-not (and (= version (:version v)) (string? digest) (= digest (trust-digest state kind ref)))
-      (reject! :conflict (str "The " kind " " ref " changed since you read it. Nothing was trusted; look again.")))
-    (emit tx "label/trusted" (cond-> {:kind kind :ref (str ref) :version version}
-                               ;; Trusted from the workspace pane in the dashboard.
-                               (= "chat" via) (assoc :via "chat")))))
-
-;; permission requests in a conversation
-;;
-;; agentloop asks the ACP client about a held call itself. relay acp
-;; records each request and its answer, so the log says who allowed what.
-
-(defn- permission-labels
-  "The labels of a permission request's text: the session's as agentloop
-  sent them, or with none valid, every label the session could hold."
-  [{:keys [state config]} role labels]
-  (if (and (sequential? labels) (seq labels) (every? label-names labels))
-    (union labels)
-    (session-labels-bound state config role)))
-
-(defmethod decide* :permission/asked [{:keys [state config] :as tx} {{:keys [wake session call tool input-sha256 labels preview]} :args}]
-  (dispatcher-only! tx)
-  (let [role (get-in state [:wakes wake :role])
-        labels (permission-labels tx role labels)
-        preview (preview-of preview)]
-    (when-not (get-in state [:wakes wake :chat]) (reject! "Only a conversation asks its client."))
-    ;; The preview is what the operator was shown when they answered. Its
-    ;; labels go on the event, which holds its text.
-    (emit tx "permission/asked" (cond-> {:wake wake :role role :session session :call call :tool tool
-                                         :input-sha256 input-sha256}
-                                  preview (assoc :preview (dissoc preview :labels)))
-          (cond-> labels preview (union (preview-labels config tool preview labels))))))
-
-(def ^:private refusal-reasons
-  {"no-approvals" "Its ACP client was not started with --approvals, so relay refused the call for it. To decide such calls yourself, talk with it in the dashboard (relay)."
-   "client-gone" "Its client went away before answering, so relay refused the call."
-   "client-error" "Its client answered a request that was not open, so relay refused what was open rather than let the turn hang."
-   "unreadable" "relay could not read the request, so it refused it rather than pass it on."
-   "agent-gone" "Its agent stopped before the client answered."})
-
-(defmethod decide* :permission/answered [{:keys [state] :as tx} {{:keys [wake session call tool outcome by labels why]} :args}]
-  (dispatcher-only! tx)
-  (let [role (get-in state [:wakes wake :role])]
-    (when-not (get-in state [:wakes wake :chat]) (reject! "Only a conversation asks its client."))
-    (cond-> (emit tx "permission/answered" (cond-> {:wake wake :role role :session session :call call
-                                                    :outcome outcome :by by}
-                                             why (assoc :why why))
-                  (permission-labels tx role labels))
-      ;; relay answered it, not the operator: say why.
-      (= "relay" by)
-      (notify "permission-refused" (str role " was refused a call to " tool " in a conversation")
-              (get refusal-reasons why "relay refused the call.")
-              :role role :labels (union (id-labels state role) (permission-labels tx role labels))))))
-
-(defmethod decide* :permission/unattended [{:keys [state] :as tx} {{:keys [wake call]} :args}]
-  ;; relay serve holds a conversation's permission request while no
-  ;; client that may answer it is attached, and asks for this once. The
-  ;; notification names only the role: the request's text is the agent's.
-  (dispatcher-only! tx)
-  (let [{:keys [role chat status]} (get-in state [:wakes wake])
-        open? (some #(and (= wake (:wake %)) (= call (:call %)) (nil? (:outcome %))) (vals (:permissions state)))]
-    (if (and chat (= :running status) open?)
-      (notify tx "permission-waiting" (str role " is waiting for you in a conversation")
-              (str role " asked to use a tool in its conversation, and no client that can answer is attached."
-                   " Open relay --open " role " to answer it. The conversation waits until you do.")
-              :role role :wake wake :labels (id-labels state role))
-      tx)))
 
 (defmethod decide* :conversation/turn-unrecorded [{:keys [state] :as tx} {{:keys [wake]} :args}]
   ;; relay serve could not record the end of a conversation's turn, so the
@@ -2490,17 +1788,13 @@
               :role role :wake wake :labels (id-labels state role))
       tx)))
 
-(defmethod decide* :conversation/line-dropped [{:keys [state] :as tx} {{:keys [wake size permission refused]} :args}]
+(defmethod decide* :conversation/line-dropped [{:keys [state] :as tx} {{:keys [wake size]} :args}]
   (dispatcher-only! tx)
   (let [role (get-in state [:wakes wake :role])]
     (-> tx
-        (emit "conversation/line-dropped" {:wake wake :role role :size size
-                                           :permission (boolean permission) :refused (boolean refused)})
+        (emit "conversation/line-dropped" {:wake wake :role role :size size})
         (notify "conversation-line-dropped" (str "relay dropped a message from " role "'s agent")
-                (str "A line of " size " bytes was too long to check, so its client never saw it."
-                     (when permission " It looked like a permission request, ")
-                     (when (and permission refused) "and relay refused it.")
-                     (when (and permission (not refused)) "and relay could not tell which, so it went unanswered."))
+                (str "A line of " size " bytes was too long to check, so its client never saw it.")
                 :role role :labels (id-labels state role)))))
 
 (def ^:private session-pattern
@@ -2545,14 +1839,6 @@
       (emit tx "conversation/seen" {:wake wake :role role :turn turn})
       tx)))
 
-(defmethod decide* :labels/enable [{:keys [state] :as tx} _]
-  ;; Marks where labels begin, the first time this relay opens a log
-  ;; written before it kept them.
-  (dispatcher-only! tx)
-  (if (needs-labels-marker? state)
-    (emit tx "labels/enabled" {})
-    tx))
-
 ;; flags: the operator marks a wake or a conversation to find it later
 
 (def flag-values #{"good" "bad"})
@@ -2572,154 +1858,10 @@
   (emit tx "wake/flagged" (cond-> {:wake wake :value value}
                             (not (blank? note)) (assoc :note (str/trim note)))))
 
-;; holds
-
-(def denials-per-session
-  "After this many denied calls a session is not carried on: a model
-  that keeps asking for what it is refused starts afresh."
-  3)
-
-(defn- json-keys [x] (clojure.walk/stringify-keys x))
-
-(defn fixed-args-changed?
-  "Whether the operator's fixed arguments for a held call's tool differ
-  from the ones it was held with. agentloop binds the approval to the
-  input with them, so such a call would not run: it is refused here,
-  where the operator can see why, and agentloop refuses it again."
-  [config h]
-  ;; Through the reader, the inner tool's.
-  (let [tool (or (held-tool (:tool h) (:input h)) (:tool h))]
-    (not= (json-keys (not-empty (:fixed-args h)))
-          (json-keys (not-empty (get-in config [:tools tool :fixed-args]))))))
-
-(defmethod decide* :hold/resolve [{:keys [state actor] :as tx} {{hold-id :hold :keys [verdict reason end]} :args}]
-  ;; A person decides, never a model or a tool: only the operator, at the
-  ;; command line, can resolve a hold.
-  (when-not (= operator actor)
-    (reject! :forbidden "Only the operator decides on a held tool call."))
-  (let [h (hold state hold-id)]
-    (when-not h (reject! :not-found (str "There is no hold " hold-id ".")))
-    (when-not (= :open (:status h))
-      (reject! :invalid (str "Hold " hold-id " was already decided: " (name (:status h)) ".")))
-    (when-not (#{"allow" "deny"} verdict)
-      (reject! (str "A hold is resolved with allow or deny, not " (pr-str verdict) ".")))
-    (when (and (= "allow" verdict) (fixed-args-changed? (:config tx) h))
-      (reject! :invalid (str "Hold " hold-id " cannot be allowed: your settings for " (:tool h)
-                             " changed since it was held, so it would not run as it was shown."
-                             " Deny it, and the role can ask again.")))
-    (let [tx (emit tx "hold/resolved" (cond-> {:hold hold-id :verdict verdict}
-                                        (not (blank? reason)) (assoc :reason (str/trim reason))
-                                        ;; The operator is told, as they type it,
-                                        ;; that a public role's reason is public.
-                                        (and (not (blank? reason)) (public-role? (:config tx) (:role h)))
-                                        (assoc :reason-public true)))
-          denied (count (filter #(and (= (:session h) (:session %)) (= :denied (:status %)))
-                                (vals (:holds (:state tx)))))
-          ended (cond (and (= "deny" verdict) end) "the operator ended it"
-                      (and (= "deny" verdict) (>= denied denials-per-session))
-                      (str denied " of its calls were denied"))]
-      (if-not ended
-        tx
-        (cond-> (as-> tx tx
-                  ;; Every other call still open in it is denied: the
-                  ;; session will not be carried on to run it.
-                  (reduce (fn [tx {other :id}]
-                            (emit tx "hold/resolved" {:hold other :verdict "deny" :reason "The session was ended."}))
-                          tx (filter #(and (= (:session h) (:session %)) (= :open (:status %)))
-                                     (vals (:holds (:state tx)))))
-                  (emit tx "hold/session-ended" {:role (:role h) :session (:session h) :why ended}))
-          (not end)
-          (notify "session-ended" (str (:role h) "'s session will not be carried on")
-                  (str "Its calls were denied " denied " times, so its next wake starts afresh,"
-                       " with its open memos.")
-                  :role (:role h) :labels (id-labels state (:role h))))))))
-
-(defn session-to-carry-on
-  "The session relay fresh ends: the one whose tool changed, when the role
-  waits for relay fresh, even if it has ended; otherwise the interrupted
-  wake's, or the one whose tools could not be set up, unless it has
-  ended. Nil when there is none."
-  [state role-id]
-  (let [block (get-in state [:roles role-id :tools-unavailable])
-        interrupted (get-in state [:roles role-id :interrupted-wake])]
-    (if (and (:fresh block) (not (blank? (:session block))))
-      (:session block)
-      (let [session (or (get-in state [:wakes interrupted :session]) (:session block))]
-        (when-not (or (blank? session) (get-in state [:ended-sessions session]))
-          session)))))
-
-(defn holds-dropped-by-fresh
-  "The calls relay fresh would drop from a role's session: those still
-  open, which it denies, and those approved that never ran, since no
-  wake carried the decision back to a run that went on."
-  [state role-id]
-  (when-let [session (session-to-carry-on state role-id)]
-    (->> (vals (:holds state))
-         (filter #(and (= session (:session %))
-                       (or (= :open (:status %))
-                           (and (= :allowed (:status %))
-                                (let [d (:delivered %)]
-                                  (or (nil? d) (not= "ran" (get-in state [:wakes d :outcome]))))))))
-         (sort-by :id)
-         vec)))
-
-(defn fresh-expectation
-  "What relay fresh would act on for a role, as the operator is shown it
-  and must confirm: the session it ends, and for a changed tool, the tool
-  and the digest it accepts. Nil values where there is none."
-  [state role-id]
-  (let [{:keys [fresh tool got]} (get-in state [:roles role-id :tools-unavailable])]
-    {:session (session-to-carry-on state role-id)
-     :tool (when fresh tool)
-     :got (when fresh got)}))
-
-(defn roles-released-by-fresh
-  "The other roles relay fresh for `role-id` lets go: those stopped by the
-  same change of the same tool, sorted. Their blocked sessions end too,
-  since one that pinned the old definition would only stop them again."
-  [state role-id]
-  (let [{:keys [fresh tool got]} (get-in state [:roles role-id :tools-unavailable])]
-    (when (and fresh tool got)
-      (vec (sort (keep (fn [[r {b :tools-unavailable}]]
-                         (when (and (not= r role-id) (:fresh b) (= tool (:tool b)) (= got (:got b))
-                                    (not (blank? (:session b))))
-                           r))
-                       (:roles state)))))))
-
-(defmethod decide* :role/fresh [{:keys [state] :as tx} {{role-id :role :keys [expect]} :args}]
-  ;; Starting afresh accepts the tool definition the operator was shown,
-  ;; so only the operator does it, and only for what they saw.
-  (operator-only! tx "starts a role's session afresh")
-  (active-role! state role-id)
-  ;; An idle conversation's session would go on with the old definition.
-  (when (open? state role-id)
-    (reject! :busy (str role-id " is running.") (id-labels state role-id)))
-  (let [{:keys [session tool got] :as now} (fresh-expectation state role-id)
-        accept? (and tool got (config/mcp-tool? (get-in (:config tx) [:tools tool])))]
-    (when-not session
-      (reject! :invalid (str role-id " has no session to end: its next wake starts afresh.")))
-    (when-not (= now {:session (:session expect) :tool (:tool expect) :got (:got expect)})
-      (reject! :invalid (str "What relay fresh would do for " role-id " has changed since it was shown."
-                             " Nothing was done. Run relay fresh " role-id " again and look again.")))
-    (as-> tx tx
-      ;; The changed definition is accepted: every later session, of any
-      ;; role granted the tool, is held to it.
-      (if accept? (emit tx "tool/pinned" {:tool tool :digest got}) tx)
-      (end-session tx role-id session "the operator started it afresh"
-                   "The operator started the role afresh, so this session was ended."
-                   {:fresh true})
-      ;; Other roles stopped by the same change are let go the same way.
-      (reduce (fn [tx r]
-                (end-session tx r (get-in (:state tx) [:roles r :tools-unavailable :session])
-                             "the operator accepted a changed tool"
-                             "The operator accepted a changed tool, so this session was ended."
-                             {:fresh true}))
-              tx (if accept? (roles-released-by-fresh state role-id) [])))))
-
 ;; relay connect: the operator looked at a remote server's tools and
-;; pinned the definition of each one they turned on. Every later session,
-;; of any role, is held to it, as after relay fresh, so connecting again
-;; replaces what an earlier connect or first use pinned.
+;; pinned the definition of each one relay proposed. Every later session,
+;; of any role, is held to it, so connecting again replaces what an
+;; earlier connect or first use pinned.
 (defmethod decide* :tools/pin [{:keys [state] :as tx} {{:keys [pins]} :args}]
   (operator-only! tx "pins tool definitions")
   (when-not (and (map? pins) (seq pins)
@@ -2801,7 +1943,7 @@
                                   now)))
               (notify tx "harness-unreachable"
                       (str harness " has been unreachable since " (:down-since h))
-                      "Every role on it is on hold and nothing has been dropped. Work carries on by itself once it is back."
+                      "Every role on it waits, and nothing has been dropped. Work carries on by itself once it is back."
                       :harness harness)
               tx))
           tx (sort-by key (:harnesses state))))

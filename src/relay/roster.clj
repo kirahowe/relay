@@ -5,27 +5,20 @@
   client must show as it is.
 
     roster  each active role, in `relay roles` order:
-              {:id :title :labels :working? :holds :conversation}
+              {:id :title :labels :working? :conversation}
             :labels are those of the role's id and title, which is all
             the roster shows of the role. :working? says a wake of the
-            role works through its memos, and :holds counts its calls
-            held for the operator. :conversation is nil, or the role's
-            open conversation:
+            role works through its memos. :conversation is nil, or the
+            role's open conversation:
               {:wake :session :opened-at :last-activity :turn :turns
-               :unread? :approvals}
+               :unread?}
             :session is the ACP session its last turn ran in (nil before
             its first), :turn is :idle or :running, :turns counts the
-            turns started, :unread? says a turn ended after the last one
-            the operator saw, and :approvals counts its permission
-            requests asked and not answered.
+            turns started, and :unread? says a turn ended after the last
+            one the operator saw.
     wire    the roster as JSON-ready data, every role in the form
             `_relay/roles` sends."
   (:require [relay.core :as core]))
-
-(defn- approvals
-  "A conversation's permission requests that wait for an answer."
-  [state wake-id]
-  (count (filter #(and (= wake-id (:wake %)) (nil? (:outcome %))) (vals (:permissions state)))))
 
 (defn conversation
   "A role's open conversation as the roster shows it, or nil."
@@ -38,8 +31,7 @@
      :last-activity (or last-activity started-at)
      :turn (if (= :running turn) :running :idle)
      :turns (or turns 0)
-     :unread? (> (or turns-ended 0) (or seen 0))
-     :approvals (approvals state id)}))
+     :unread? (> (or turns-ended 0) (or seen 0))}))
 
 (defn entry
   "One role as the roster shows it."
@@ -49,7 +41,6 @@
      :title title
      :labels (core/union id-labels title-labels)
      :working? (some? (core/working-wake state id))
-     :holds (count (core/open-holds state id))
      :conversation (conversation state id)}))
 
 (defn roster
@@ -64,20 +55,18 @@
 (defn wire-role
   "A roster entry as JSON-ready data with string keys. Times are ISO-8601
   instants; the wake id stays relay's own."
-  [{:keys [id title labels working? holds conversation]}]
+  [{:keys [id title labels working? conversation]}]
   {"id" id
    "title" title
    "labels" (vec labels)
    "working" (boolean working?)
-   "holds" holds
-   "conversation" (when-let [{:keys [session opened-at last-activity turn turns unread? approvals]} conversation]
+   "conversation" (when-let [{:keys [session opened-at last-activity turn turns unread?]} conversation]
                     {"sessionId" session
                      "openedAt" (str opened-at)
                      "lastActivity" (str last-activity)
                      "turn" (name turn)
                      "turns" turns
-                     "unread" (boolean unread?)
-                     "approvals" approvals})})
+                     "unread" (boolean unread?)})})
 
 (defn wire
   "The roster as `_relay/roles` sends it: {\"roles\" [Role]}."

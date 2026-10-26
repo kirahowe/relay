@@ -9,33 +9,22 @@
             [relay.connections :as connections])
   (:import (java.time ZoneId)))
 
-(def edit-class
-  "The class of a tool that changes the operator's own things outside
-  relay: nobody else sees the change, and the earlier state survives, so
-  it can be undone (their own reminders, a draft in their mail). A tool
-  that overwrites or deletes with no history kept is :act. relay cannot
-  follow labels outside itself: injected text a contaminated session wrote
-  into the operator's reminders would be read back labelled only private.
-  So a call is held once the session is contaminated."
-  :edit)
-
 (def tool-classes
   "Every tool a role can be granted is named in config and given one of
-  these classes, which agentloop's policy decides on:
+  these classes, which say what the tool can do:
 
     :read    returns content, changes nothing, sends nothing out that an
              outsider could see
     :write   changes relay data only, which keeps its labels
-    :edit    changes the operator's own things outside relay (edit-class)
-    :egress  can send data the model chose where an outsider could see it
-    :act     others see it, it spends money, or it cannot be undone, such
-             as sending a campaign or a payment
+    :edit    changes something outside relay that only the operator sees
+             and that they can undo: a draft in their own account, mail
+             to them, the agent's own calendar
+    :egress  can send what the model chose where an outsider could see it,
+             such as a web search; only a public role may have one
 
-  A session that has seen something contaminated needs the operator's
-  approval for an edit call, and one that has also seen private data for
-  an egress call. Every act call needs it, whatever the session has seen,
-  unless the tool's :consent covers the call. Read and write calls run."
-  #{:read :write edit-class :egress :act})
+  Nothing relay holds can send, post, publish or pay as the operator, so
+  there is no class for that. No call is ever held for the operator."
+  #{:read :write :edit :egress})
 
 (def label-names
   "The labels a tool's output can carry (relay.core/label-names). An
@@ -65,7 +54,7 @@
    :runaway-wakes 30
    :runaway-window-minutes 60
    ;; The ACP client bare `relay` runs, given `[--open <role>] -- relay
-   ;; acp --approvals` after these arguments.
+   ;; acp` after these arguments.
    :client ["relay-tui"]
    :tools {}
    :mcp-servers {}
@@ -103,42 +92,10 @@
 
 (def efforts #{"low" "medium" "high" "xhigh" "max"})
 
-(defn- check-reader
-  "An agentloop harness's optional :reader: the model its quarantined
-  reader runs on, {:model \"claude-haiku-5-5\" :effort \"low\"}, either
-  or both."
-  [h kind reader]
-  (let [{:keys [model effort]} reader]
-    (when-not (and (= :agentloop kind) (map? reader) (every? #{:model :effort} (keys reader))
-                   (or (nil? model) (and (string? model) (not (str/blank? model))))
-                   (or (nil? effort) (efforts effort)))
-      (problem! (str "Harness " (name h) " in relay.edn has :reader " (pr-str reader) ". An :agentloop"
-                     " harness may give {:model \"claude-haiku-5-5\" :effort \"low\"}, the quarantined"
-                     " reader's model and effort, with effort one of " (str/join ", " (sort efforts)) ".")))))
-
-(defn- deny-path?
-  "Whether p can be a path the workbench refuses to read: absolute, and
-  without a character that could end a rule early in the sandbox
-  profile. It may end in * to mean every path with that prefix."
-  [p]
-  (and (string? p) (str/starts-with? p "/")
-       (not (str/includes? p "\""))
-       (not (str/includes? p "\\"))))
-
-(defn- check-workbench-settings
-  "An agentloop harness's optional :workbench: {:command-timeout-seconds
-  120 :deny-read [...]}, either or both. The paths are refused here, not
-  silently dropped, because a wrong spelling would leave the workbench
-  reading what the operator meant to keep from it."
-  [h kind workbench]
-  (let [{:keys [command-timeout-seconds deny-read]} workbench]
-    (when-not (and (= :agentloop kind) (map? workbench)
-                   (every? #{:command-timeout-seconds :deny-read} (keys workbench))
-                   (or (nil? command-timeout-seconds) (pos-int? command-timeout-seconds))
-                   (or (nil? deny-read) (and (vector? deny-read) (every? deny-path? deny-read))))
-      (problem! (str "Harness " (name h) " in relay.edn has :workbench " (pr-str workbench) ". An :agentloop"
-                     " harness may give {:command-timeout-seconds 120 :deny-read [\"/Users/you/private\"]},"
-                     " how long one sandboxed command may run and absolute paths it may not read.")))))
+(def removed-harness-keys
+  "Harness settings relay no longer has: the quarantined reader's model
+  and the workbench."
+  #{:reader :workbench})
 
 (defn- check-required
   [{:keys [timezone default-harness harnesses notify]}]
@@ -151,10 +108,9 @@
   (doseq [[h {:keys [kind api-key-command] :as harness}] harnesses]
     (when-not kind
       (problem! (str "Harness " (name h) " in relay.edn needs a :kind.")))
-    (when (contains? harness :reader)
-      (check-reader h kind (:reader harness)))
-    (when (contains? harness :workbench)
-      (check-workbench-settings h kind (:workbench harness)))
+    (when-let [gone (seq (filter #(contains? harness %) (sort removed-harness-keys)))]
+      (problem! (str "Harness " (name h) " in relay.edn has " (str/join " and " (map pr-str gone))
+                     ", which relay no longer has. Remove " (if (next gone) "them." "it."))))
     (when (and (= :agentloop kind)
                (not (and (sequential? api-key-command) (seq api-key-command))))
       (problem! (str "Harness " (name h) " in relay.edn needs :api-key-command, "
@@ -178,65 +134,15 @@
 (def grant-keys
   "What a role can be granted. Anything else is refused, so a typo such as
   :pubic cannot leave a role able to hold private data."
-  #{:tools :may-add :public :quarantine :workbench})
-
-(defn- check-quarantine-grant
-  "A :quarantine grant names tools the role may read through agentloop's
-  quarantined reader, read_quarantined. Each must be one of the role's
-  tools in relay.edn, of class :read or :egress, and not :always-hold. One
-  that is not also in its :tools is reader-only: the model is never offered
-  it, and reaches it only through the reader. The reader runs
-  it and shows the role only a checked answer about its output. An
-  :egress tool, such as webtool's ask, is decided as the role's own call
-  would be, since the role writes its input: a session that has seen both
-  private data and an outsider's text is held. :write and :act tools
-  change things, which a reader must never do. An :always-hold tool is
-  refused because every call would wait on the operator for a read."
-  [role {:keys [quarantine]} tools]
-  (when-not (and (vector? quarantine) (seq quarantine) (apply distinct? quarantine)
-                 (every? string? quarantine))
-    (problem! (str "The :quarantine grant for " role " in relay.edn is a vector of distinct tool names,"
-                   " such as [\"web_fetch\"].")))
-  (doseq [t quarantine]
-    (when-not (contains? tools t)
-      (problem! (str "Role " role " has " t " in :quarantine, which is not a tool in relay.edn's :tools.")))
-    (when-not (#{:read :egress} (get-in tools [t :class]))
-      (problem! (str "Role " role " has " t " in :quarantine, which is not a :read or :egress tool in :tools."
-                     " The reader reads only through tools that change nothing.")))
-    (when (true? (get-in tools [t :always-hold]))
-      (problem! (str "Role " role " has " t " in :quarantine, which has :always-hold. Every read"
-                     " through it would wait for you.")))))
-
-(defn- check-workbench-grant
-  "A :workbench grant gives the role agentloop's sandboxed workbench: a
-  child session that runs shell commands with no network and reads the
-  disk. It is `true`, or a map with :deny-read, more absolute paths the
-  commands may not read (a path may end in * to deny every path starting
-  with it). The answers are private, so a public role may not have it,
-  and only agentloop runs it: a script harness's program could claim any
-  labels. agentloop refuses the request on a system with no sandbox-exec,
-  which is not checked here."
-  [role {:keys [workbench public]} harnesses default-harness]
-  (when-not (or (true? workbench)
-                (and (map? workbench) (= #{:deny-read} (set (keys workbench)))
-                     (vector? (:deny-read workbench)) (seq (:deny-read workbench))
-                     (apply distinct? (:deny-read workbench))
-                     (every? deny-path? (:deny-read workbench))))
-    (problem! (str "The :workbench grant for " role " in relay.edn is true, or"
-                   " {:deny-read [\"/Users/you/private\"]}, absolute paths the workbench may not read,"
-                   " and nothing else.")))
-  (when (true? public)
-    (problem! (str "Role " role " is :public, so it may not have :workbench: the workbench reads"
-                   " the operator's private files.")))
-  (when (= :script (get-in harnesses [default-harness :kind]))
-    (problem! (str "Role " role " has :workbench, and the default harness is a :script harness,"
-                   " which has no workbench. A role with the workbench needs agentloop."))))
+  #{:tools :may-add :public})
 
 (defn- check-grants
   "Checks each role's grants, and what a public role may not have. A public
   role's session never holds private, so it is granted nothing whose
   output is private, nothing that adds or changes roles, and no dead
-  letters, which quote other roles' memos."
+  letters, which quote other roles' memos. A role that is not public, a
+  house role, holds the operator's things, so it is granted no :egress
+  tool: nothing it reads can leave the house by one."
   [{:keys [tools grants dead-letter-handler harnesses default-harness]}]
   (when-not (map? grants)
     (problem! "relay.edn has :grants that is not a map of role ids to grants."))
@@ -259,7 +165,7 @@
       (when (:may-add g)
         (problem! (str "Role " role " is :public, so it may not have :may-add: it could write"
                        " roles' instructions and read what other roles wrote.")))
-      (doseq [t (distinct (concat (:tools g) (:quarantine g)))
+      (doseq [t (distinct (:tools g))
               :when (some #{"private"} (get-in tools [t :labels]))]
         (problem! (str "Role " role " is :public, so it may not be granted " t
                        ", whose output is private.")))
@@ -269,10 +175,11 @@
       (when (= :script (get-in harnesses [default-harness :kind]))
         (problem! (str "Role " role " is :public, and the default harness is a :script harness,"
                        " whose program can claim any labels. A public role needs agentloop."))))
-    (when (contains? g :quarantine)
-      (check-quarantine-grant role g tools))
-    (when (contains? g :workbench)
-      (check-workbench-grant role g harnesses default-harness))))
+    (when-not (:public g)
+      (doseq [t (distinct (:tools g))
+              :when (= :egress (get-in tools [t :class]))]
+        (problem! (str "Role " role " is granted " t ", an :egress tool, and only a public role may have"
+                       " one: " role " holds your things, which " t " could send out of the house."))))))
 
 (defn- check-budget
   "The optional :budget, a weekly amount in US dollars. relay only warns
@@ -340,8 +247,8 @@
 (defn- check-brief
   "The optional :brief: {:at \"07:30\"}, the time each day, and the tools
   it reads, :calendar and :reminders, when they are not cal and rem-read.
-  A tool named here must be a :read tool in :tools: the brief runs it with
-  nobody there to approve a call."
+  A tool named here must be a :read tool in :tools: the brief runs it by
+  itself, and must change nothing."
   [{:keys [brief tools] :as config}]
   (when (contains? config :brief)
     (let [{:keys [at]} brief
@@ -431,8 +338,8 @@
 (def mcp-tool-keys
   "What an MCP tool may give. :pin and :connection come only from a
   connection file (relay.connections)."
-  #{:class :labels :always-hold :protocol :server :tool :digest :allow-content
-    :fixed-args :hidden-args :pin :connection :consent :preview})
+  #{:class :labels :protocol :server :tool :digest :allow-content
+    :fixed-args :hidden-args :pin :connection})
 
 (defn- check-mcp-tool
   "A tool with :protocol :mcp-stdio or :mcp-http. Its server gives its description and
@@ -473,9 +380,6 @@
   (when-not (map? mcp-servers)
     (problem! "relay.edn's :mcp-servers is a map of server names to {:command [...]}."))
   (doseq [[n s] mcp-servers] (check-mcp-server n s))
-  ;; agentloop adds read_quarantined itself and refuses a tool of that name.
-  (when (contains? tools "read_quarantined")
-    (problem! "Tool read_quarantined in relay.edn has the name of agentloop's quarantined reader. Name it otherwise."))
   (doseq [[n t] tools]
     (if (mcp-tool? t)
       (check-mcp-tool n t mcp-servers)
@@ -492,54 +396,10 @@
       (problem! (str "The MCP server " n " in relay.edn gives none of :tools. Name a tool from it, or"
                      " remove it.")))))
 
-;; --- standing consent and previews
-
-(defn- json-value?
-  "Whether x is a value that has exactly one JSON form: a string, a whole
-  number, a finite decimal, true, false, nil, or a vector or a map with
-  string keys of such values."
-  [x]
-  (cond
-    (or (string? x) (boolean? x) (nil? x) (int? x)) true
-    (double? x) (Double/isFinite x)
-    (vector? x) (every? json-value? x)
-    (map? x) (every? (fn [[k v]] (and (string? k) (json-value? v))) x)
-    :else false))
-
-(defn- check-consent
-  "A tool's :consent: the operator's standing consent for an :act tool, a
-  vector of rules. A rule is a map from the call's argument names, as
-  strings, to the exact values the call must give them. A call whose input
-  has every pair of some rule runs without asking. An empty rule would
-  cover every call, so it is refused, and so is :consent on any other
-  class or beside :always-hold."
-  [tool-name {:keys [class always-hold] :as tool}]
-  (when (contains? tool :consent)
-    (let [consent (:consent tool)
-          where (str "Tool " tool-name " in relay.edn")]
-      (when-not (= :act class)
-        (problem! (str where " has :consent, which only an :act tool takes. Its class is "
-                       (pr-str class) ", and calls to it are not held for consent.")))
-      (when (true? always-hold)
-        (problem! (str where " has both :consent and :always-hold, and :always-hold asks every time"
-                       " whatever the consent. Keep one.")))
-      (when-not (and (vector? consent)
-                     (every? #(and (map? %) (seq %) (every? string? (keys %)) (json-value? %)) consent))
-        (problem! (str where " has :consent " (pr-str consent) "; it must be a vector of rules, each"
-                       " a map from argument names (strings) to the exact values a call must give them,"
-                       " such as [{\"group\" \"Kira only\"}]. A rule names at least one argument."))))))
-
-(defn- check-preview
-  "A tool's :preview: an envelope command relay runs on a held call's input
-  to show the operator what the call would do."
-  [tool-name tool]
-  (when (contains? tool :preview)
-    (let [preview (:preview tool)]
-      (when-not (and (vector? preview) (seq preview)
-                     (every? #(and (string? %) (not (str/blank? %)) (not (str/includes? % "\u0000"))) preview))
-        (problem! (str "Tool " tool-name " in relay.edn has :preview " (pr-str preview) "; it must be a"
-                       " command, a vector of strings such as [\"mail-preview\"], run on the envelope"
-                       " protocol."))))))
+(def removed-tool-keys
+  "Tool settings relay no longer has: no call is held for the operator,
+  so there is nothing to hold, consent to or preview."
+  #{:always-hold :consent :preview})
 
 (defn validate
   "Returns the config, or throws describing the first problem found."
@@ -549,7 +409,11 @@
                  (every? #(and (string? %) (not (str/blank? %))) client))
     (problem! (str "relay.edn has :client " (pr-str client)
                    "; it must be a command, such as [\"relay-tui\"].")))
-  (doseq [[tool-name {:keys [class labels always-hold] :as tool}] tools]
+  (doseq [[tool-name {:keys [class labels] :as tool}] tools]
+    (when-let [gone (seq (filter #(contains? tool %) (sort removed-tool-keys)))]
+      (problem! (str "Tool " tool-name " in relay.edn has " (str/join " and " (map pr-str gone))
+                     ", which relay no longer has: no call waits for you. Remove "
+                     (if (next gone) "them." "it."))))
     (when-not (tool-classes class)
       (throw (ex-info (str "Tool " tool-name " needs a :class, one of "
                            (sort (map name tool-classes)) ".")
@@ -576,17 +440,11 @@
     (when-not (or (nil? (:timeout-seconds tool)) (pos-int? (:timeout-seconds tool)))
       (throw (ex-info (str "Tool " tool-name " has :timeout-seconds " (pr-str (:timeout-seconds tool))
                            "; it must be a positive whole number.")
-                      {:tool tool-name :relay/usage true})))
-    (when-not (or (nil? always-hold) (boolean? always-hold))
-      (throw (ex-info (str "Tool " tool-name " has :always-hold " (pr-str always-hold)
-                           "; it must be true or false.")
-                      {:tool tool-name :relay/usage true})))
-    (check-consent tool-name tool)
-    (check-preview tool-name tool))
+                      {:tool tool-name :relay/usage true}))))
   ;; A :script harness runs a program that no policy watches, so its
   ;; roles may not be granted tools that reach outside relay.
   (when (and (= :script (get-in config [:harnesses (:default-harness config) :kind]))
-             (some (fn [[_ g]] (or (seq (:tools g)) (seq (:quarantine g)) (:may-add g))) grants))
+             (some (fn [[_ g]] (or (seq (:tools g)) (:may-add g))) grants))
     (problem! (str "The default harness in relay.edn is a :script harness, which gets no tools,"
                    " so no role may be granted :tools or :may-add.")))
   (check-mcp config)
@@ -633,36 +491,10 @@
   [config role]
   (true? (:public (grants config role))))
 
-(defn quarantine-tools
-  "The tools a role may read through the quarantined reader (its
-  :quarantine grant), or nil."
-  [config role]
-  (not-empty (:quarantine (grants config role))))
-
-(defn reader-only-tools
-  "The tools a role reaches only through the quarantined reader: those in
-  its :quarantine grant and not in its :tools. The model is never offered
-  them, so their raw output cannot reach the role."
-  [config role]
-  (let [{:keys [tools quarantine]} (grants config role)]
-    (not-empty (vec (remove (set tools) quarantine)))))
-
 (defn role-tools
-  "Every external tool a role's sessions can run, directly or through the
-  reader: its :tools, then its reader-only tools."
+  "Every external tool a role's sessions can run: its :tools."
   [config role]
-  (let [{:keys [tools quarantine]} (grants config role)]
-    (vec (distinct (concat tools quarantine)))))
-
-(defn workbench
-  "The role's :workbench grant as the harness takes it: {:deny-read [...]}
-  (possibly empty), or nil when the role does not have it."
-  [config role]
-  (let [g (:workbench (grants config role))]
-    (cond
-      (true? g) {:deny-read []}
-      (map? g) {:deny-read (vec (:deny-read g))}
-      :else nil)))
+  (vec (distinct (:tools (grants config role)))))
 
 (defn mcp-servers-for
   "The :mcp-servers that the named tools come from, by name: those a

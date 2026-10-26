@@ -8,18 +8,16 @@
   part of a line the renderer writes, and any line break in it is escaped
   where it is printed. Text that may run to several lines is shown with
   text/block: every line behind text/gutter, which nothing else starts
-  with, under a [contaminated] line when it is contaminated."
+  with, under a line saying it came from outside when it did. Nothing
+  here names a label or a class: the operator sees where a thing came
+  from."
   (:require [cheshire.core :as json]
             [clojure.walk]
             [clojure.string :as str]
             [relay.cards :as cards]
-            [relay.config :as config]
             [relay.core :as core]
-            [relay.json :as strict]
-            [relay.review :as review]
             [relay.spend :as spend]
             [relay.text :as text]
-            [relay.tools :as tools]
             [relay.week :as week])
   (:import (java.time Instant ZoneId)
            (java.time.format DateTimeFormatter)))
@@ -40,26 +38,13 @@
         (local at zone)))))
 
 (defn memo
-  "One memo, as the operator's inbox shows it. One from a contaminated
-  source is marked and its URLs broken."
+  "One memo, as the operator's inbox shows it. One from outside is marked
+  so and its URLs broken."
   [zone {:keys [id from subject body sent-at labels]}]
   (concat
    ["" (str "[" id "] " (text/for-operator labels subject))
     (str "    from " from ", " (local sent-at zone))]
    (text/block labels body)))
-
-(defn declassify
-  "What relay declassify shows of a memo `d` already as declassifying makes
-  it (relay.core/declassified): that text exactly, with the
-  [contaminated] marker as the only thing added. It is not defanged again:
-  core did that, and the role gets the same text."
-  [zone {:keys [id from subject body sent-at labels]}]
-  (concat
-   ["" (str "[" id "] " (when (text/contaminated? labels) "[contaminated] ") subject)
-    (str "    from " from ", " (local sent-at zone))]
-   (when (text/contaminated? labels) ["  [contaminated]"])
-   ;; Behind the gutter, but not defanged again: core did that.
-   (text/block [] body)))
 
 (defn inbox [zone memos]
   (if (empty? memos)
@@ -97,14 +82,13 @@
      (for [{memo-id :id :keys [subject labels]} (core/dead-memos state id)]
        (text/for-operator (core/union labels id-ls)
                           (format "    dead  [%d] %s (relay retry %s)" memo-id subject id)))
-     (when-let [{:keys [server tool fresh retry-at]} (get-in state [:roles id :tools-unavailable])]
+     (when-let [{:keys [server tool retry-at]} (get-in state [:roles id :tools-unavailable])]
        [(text/for-operator id-ls
                            (str "    tools unavailable"
                                 (cond tool (str ": " tool) server (str ": server " server))
-                                (cond
-                                  (or fresh (nil? retry-at)) (str " changed (relay fresh " id ")")
-                                  (.isAfter ^Instant retry-at now) (str ", next try " (local retry-at zone))
-                                  :else ", tried again at the next tick")))]))))
+                                (if (and retry-at (.isAfter ^Instant retry-at now))
+                                  (str ", next try " (local retry-at zone))
+                                  ", tried again at the next tick")))]))))
 
 (defn- dollars
   "An amount in US dollars to the cent. One above zero that rounds to
@@ -155,16 +139,10 @@
             (str condition ", next try " (local paused-until zone))
             "available"))))
    ["" (format "Operator's inbox: %d open" (count (core/unread-memos state core/operator)))]
-   (when-let [hs (seq (core/open-holds state))]
-     [(format "Held tool calls: %d (relay holds)" (count hs))])
-   (when-let [qs (seq (filter #(core/quarantined? config %) (filter #(= :unread (:status %)) (vals (:memos state)))))]
-     [(format "Quarantined memos: %s (relay release <memo>)" (str/join ", " (sort (map :id qs))))])
    (for [id (core/active-role-ids state)
          :let [why (when config (core/unwakeable-reason state config id))]
          :when why]
      (text/for-operator (core/id-labels state id) (str "Public role " id " cannot run: " why)))
-   (when-let [ds (seq (filter #(core/awaiting-declassification? config %) (filter #(= :unread (:status %)) (vals (:memos state)))))]
-     [(format "Memos waiting to be declassified: %s (relay declassify <memo>)" (str/join ", " (sort (map :id ds))))])
    (let [budget (get-in config [:budget :weekly-usd])]
      (when (or budget (seq (:wakes state)))
        (spend state (spend/weekly (vals (:wakes state)) zone now spend-weeks) budget)))
@@ -185,18 +163,16 @@
   role, with whom it reports to and what it is doing. A line carries the
   labels of the role's id and title and of the id it reports to."
   [state roster]
-  (for [{:keys [id title labels working? holds conversation]} roster
+  (for [{:keys [id title labels working? conversation]} roster
         :let [reports-to (:reports-to (core/role state id))
-              {:keys [turn turns unread? approvals]} conversation]]
+              {:keys [turn turns unread?]} conversation]]
     (text/for-operator (core/union labels (core/id-labels state reports-to))
                        (str id ": " title (when reports-to (str ", reports to " reports-to))
                             (when working? "  [working]")
-                            (when (pos? holds) (str "  [" (plural holds "call" "calls") " held]"))
                             (when conversation
                               (str "  [conversation: " (if (= :running turn) "turn running" "idle")
                                    ", " (plural turns "turn" "turns")
                                    (when unread? ", unread")
-                                   (when (pos? approvals) (str ", " (plural approvals "approval" "approvals") " waiting"))
                                    "]"))))))
 
 (defn routines
@@ -311,7 +287,7 @@
 
 (defn card
   "One card as relay card shows it: its text form, with each element's
-  text marked and defanged when it is contaminated, and a note's text
+  text marked and defanged when it came from outside, and a note's text
   behind the gutter."
   [c]
   (cards/text-lines c {:mark text/for-operator :block text/block}))
@@ -322,193 +298,6 @@
   (if (empty? cs)
     ["The board is empty."]
     (vec (rest (mapcat #(cons "" (card %)) cs)))))
-
-(defn- why-held
-  "Why agentloop's policy held a call, from the tool's class and the
-  session's labels."
-  [{:keys [class always-hold]} labels]
-  (let [ls (set labels)]
-    (cond
-      always-hold "the tool is set to always ask you"
-      (= :act class)
-      "others would see it, it spends money, or it cannot be undone, and no consent of yours in relay.edn covers this input"
-      (and (= config/edit-class class) (ls "contaminated"))
-      "it changes your things outside relay, and the session has seen an outsider's text"
-      (and (= :egress class) (ls "private") (ls "contaminated"))
-      "it can send data out, and the session has seen both your private data and an outsider's text"
-      :else "the policy held it")))
-
-(defn- defanged-block
-  "Text as text/block shows it, with its links defanged whatever its
-  labels. text/block defangs a contaminated source itself, and defang is
-  not idempotent, so a clean one is defanged here, once."
-  [labels s]
-  (if (text/contaminated? labels)
-    (text/block labels s)
-    (text/block labels (text/defang s))))
-
-(defn preview
-  "A held call's preview, as screen lines: what its tool's :preview command
-  read from the service about what the call would do, never what the role
-  said it would do. Links to a host not in `approved` (hosts in previews
-  the operator approved before) are listed, and so are characters that can
-  pass for others. A preview is the service's text, so its links are
-  always defanged, whatever its labels."
-  [{:keys [content is-error labels] :as p} approved]
-  (if-not p
-    []
-    (let [new-hosts (remove (set approved) (text/link-hosts content))
-          odd (text/lookalikes (str content))
-          gaps (text/placeholders content)]
-      (concat
-       [(if is-error
-          "    preview: the preview command could not say what this call would do:"
-          "    what it would do (from the tool's preview, not from the role):")]
-       (defanged-block labels content)
-       (when (seq gaps)
-         (cons "    still to fill in, and would go out as written:"
-               (map #(str "      " (text/defang %)) gaps)))
-       (when (seq new-hosts)
-         (cons "    links to places you have not approved before:"
-               (map #(str "      " (text/defang %)) new-hosts)))
-       (when (seq odd)
-         ;; Each note quotes the word it is in, which can be a link.
-         (cons "    look closely, the preview has characters that can pass for others:"
-               (map #(str "      " (text/defang %)) odd)))))))
-
-(def ^:private destination-key
-  #"(?i)url|uri|link|to|cc|bcc|recipient|host|address|email|endpoint|dest|channel|repo|webhook|server|domain|phone|number")
-
-(defn- destinations
-  "What in a call's input says where data would go: values under keys
-  that name a destination, and any other string that looks like an
-  address."
-  [input]
-  (let [nodes (tree-seq coll? seq input)
-        keyed (for [n nodes :when (map-entry? n)
-                    :let [[k v] n]
-                    :when (and (re-find destination-key (name k)) (or (string? v) (number? v)))]
-                [(name k) v])
-        keyed-values (set (map second keyed))
-        loose (for [n nodes :when (and (string? n) (not (keyed-values n))
-                                       (re-find #"://|@|\.[a-z]{2,}(/|$)" n))]
-                n)]
-    (distinct (concat (map (fn [[k v]] (str k ": " v)) keyed) loose))))
-
-(defn hold
-  "One held tool call, with what the operator needs to decide it: why it
-  was held, what the tool is, where the data would go, what the session
-  has seen and from where, anything in the input that could pass for
-  something else, and the whole input. Every link in what it shows of the
-  input is defanged, whatever the labels: the operator reads the input to
-  judge it, and a defanged link still shows where it goes. The input is
-  marked contaminated when the session or the preview is. The binding is
-  to the exact input, which relay keeps as it is."
-  ([h] (hold h nil))
-  ([h config] (hold h config #{}))
-  ([{:keys [id role tool session call labels label-sources fixed-args] :as h} config approved]
-   (let [;; What the call would run on: with the arguments the operator
-         ;; fixed, which the approval is bound to.
-         input (if (map? fixed-args) (or (:effective-input h) (:input h)) (:input h))
-         inner (when (= core/reader-tool tool) (core/held-tool tool input))
-         t (get-in config [:tools (or inner tool)])
-         class (or (:class t) (when-not t :builtin))
-         input-text (json/generate-string input {:pretty true})
-         shown-labels (core/union labels (get-in h [:preview :labels]))
-         odd (text/lookalikes (str/join " " (filter string? (tree-seq coll? seq input))))]
-     (concat
-      [(str "Hold " id ": " role " wants to use " (if inner (str inner ", through the reader") tool))
-       (str "    held because " (why-held t labels))
-       (str "    the tool: " (if (= :builtin class) "one of relay's own" (name (or class :unknown)))
-            (when (:description t) (str ", " (:description t))))]
-      (when (#{:egress :act} class)
-        (let [ds (destinations (if inner (or (:input input) (get input "input")) input))]
-          [(str "    where it would go: " (if (seq ds) (text/defang (str/join "; " ds)) "nothing in the input names a place"))]))
-      [(str "    the session has seen: " (if (seq labels) (str/join ", " labels) "nothing labelled"))]
-      (for [[label src] (sort-by key label-sources)]
-        (str "      " (name label) " from "
-             (case (get src :kind (get src "kind"))
-               "tool" (str "the tool " (or (:tool src) (get src "tool")) " (call " (or (:call_id src) (get src "call_id")) ")")
-               "seed" "what relay put in its prompt"
-               "prompt" "a prompt it was given"
-               (pr-str src))))
-      (when (seq odd)
-        (cons "    look closely, the input has characters that can pass for others:"
-              (map #(str "      " (text/defang %)) odd)))
-      (preview (:preview h) approved)
-      (when (and config (core/fixed-args-changed? config h))
-        ["    your settings for this tool changed since it was held, so it will not run as shown: deny it"])
-      [(str "    session " session ", call " call)
-       "    input (links are defanged: hxxp is http, [.] is a dot):"]
-      (defanged-block shown-labels input-text)
-      (when (seq fixed-args)
-        (cons "    set by your settings, not by the role:"
-              (for [[k v] (sort-by (comp str key) fixed-args)]
-                (str "      " (name k) " = " (text/defang (json/generate-string v))))))))))
-
-(defn exact-input
-  "What a held call would run on, exactly: the input (with the operator's
-  fixed arguments, when there are any) read from the JSON text the hold
-  kept, by relay's strict reader, so every number is as agentloop sent
-  it. A hold recorded before relay kept that text gives the input as the
-  log read it back, its decimals as doubles (hold-notes says so)."
-  [{:keys [fixed-args input-json effective-input-json] :as h}]
-  (let [fixed? (map? fixed-args)
-        text (if fixed? effective-input-json input-json)]
-    (if (string? text)
-      (strict/parse text)
-      (if fixed? (or (:effective-input h) (:input h)) (:input h)))))
-
-(defn hold-review
-  "A held call as the review the operator approves or denies it from
-  (relay.review/request-lines, headed Held call, with no options): the
-  role, the tool and its class, its preview, the whole input it would run
-  on, the arguments the operator's settings fix, the session's labels and
-  the characters to check."
-  [{:keys [role tool labels fixed-args preview] :as h} config]
-  (let [input (exact-input h)
-        reader (= core/reader-tool tool)
-        inner (when reader (core/held-tool tool input))
-        class (if reader (some->> inner (tools/class-of config)) (tools/class-of config tool))]
-    (review/request-lines {:heading "Held call" :role role :tool tool :reader reader :inner inner :class class
-                           :preview (when preview {:text (str (:content preview)) :labels (vec (:labels preview))
-                                                   :error (boolean (:is-error preview))})
-                           :input input :labels (vec labels) :fixed-args fixed-args :options nil})))
-
-(defn hold-notes
-  "relay's own notes beside a held call's review: which hold it is, why it
-  was held, where its labels came from, and whether the operator's
-  settings changed since."
-  [{:keys [id tool session call labels label-sources] :as h} config]
-  (let [input (:input h)
-        inner (when (= core/reader-tool tool) (core/held-tool tool input))
-        t (get-in config [:tools (or inner tool)])
-        q #(json/generate-string (str %))]
-    (concat
-     [(str "Hold " id ", session " (q session) ", call " (q call)
-           (when inner (str ", through the reader for " (q inner))))
-      (str "Held because " (why-held t labels) ".")]
-     (for [[label src] (sort-by key label-sources)]
-       (str (name label) " from "
-            (case (get src :kind (get src "kind"))
-              "tool" (str "the tool " (q (or (:tool src) (get src "tool"))) " (call " (q (or (:call_id src) (get src "call_id"))) ")")
-              "seed" "what relay put in its prompt"
-              "prompt" "a prompt it was given"
-              (q (pr-str src)))))
-     (when-not (string? (if (map? (:fixed-args h)) (:effective-input-json h) (:input-json h)))
-       ["relay recorded this hold before it kept inputs exactly: a decimal in it may be shown rounded."])
-     (when (and config (core/fixed-args-changed? config h))
-       ["Your settings for this tool changed since it was held, so it will not run as shown: deny it."]))))
-
-(defn holds
-  ([hs] (holds hs nil))
-  ([hs config] (holds hs config #{}))
-  ([hs config approved]
-   (if (empty? hs)
-     ["No tool calls are waiting for you."]
-     (concat (mapcat #(concat (hold % config approved) [""]) hs)
-             ["relay approve <hold> lets one run; relay deny <hold> [why] refuses it,"
-              "and with --end also starts the role's next wake afresh."]))))
 
 ;; --- eval runs (bb eval)
 
@@ -552,13 +341,12 @@
 ;; One push: a title of counts and a body of short lines. The text from
 ;; the calendar and reminders is one field of one line of what the tool
 ;; printed, so it holds no line break; the push edge (relay.notify) makes
-;; every character visible and, when the brief's labels say contaminated,
-;; marks the whole brief and breaks its URLs.
+;; every character visible and, when the brief's labels say it came from
+;; outside, marks the whole brief and breaks its URLs.
 
 (def ^:private brief-names
   {:calendar ["Calendar" "event" "events"]
-   :reminders ["Reminders due" "reminder" "reminders"]
-   :holds ["Held calls" "held call" "held calls"]})
+   :reminders ["Reminders due" "reminder" "reminders"]})
 
 (defn- counted [n one many] (str n " " (if (= 1 n) one many)))
 
@@ -602,10 +390,6 @@
 
 (defn- interruption-ref [{:keys [kind ref]}]
   (case kind
-    "hold" (str "hold " ref)
-    "permission" (str "permission request " ref)
-    ("quarantine" "declassify") (str "memo " ref)
-    "fresh" (str "relay fresh " ref)
     "harness" (str "harness " ref)
     "dead-letter" (str "dead letter " ref)
     (str kind " " ref)))
@@ -633,7 +417,7 @@
      [(str "relay week, " (or (local from zone) "the start") " to " (or (local until zone) "now")
            " (" zone ")")
       ""
-      "Interruptions: each time relay asked you for something"
+      "Interruptions: each time relay needed you"
       (format "  %-32s %6s %8s %8s %8s %8s" "" "arose" "decided" "pending" "median" "longest")]
      (mapcat (fn [{:keys [kind arose decided pending decisions median-seconds max-seconds oldest-pending-seconds]}]
                (cons (format "  %-32s %6d %8d %8d %8s %8s" (names kind) arose decided pending
@@ -663,14 +447,14 @@
      (if (empty? roles)
        ["  none"]
        (mapcat (fn [{:keys [role role-labels wakes conversations memos-closed memos-blocked memos-left-open
-                            memos-dead-lettered cut-short crashed held tools-unavailable cost-usd
+                            memos-dead-lettered cut-short crashed tools-unavailable cost-usd
                             conversation-cost-usd priced-wakes cost-per-wake unpriced]}]
                  (map #(role-line role-labels %)
                       [(str "  " role ": " wakes (if (= 1 wakes) " wake, " " wakes, ")
                             conversations (if (= 1 conversations) " conversation" " conversations"))
                        (str "    memos: " memos-closed " closed, " memos-blocked " blocked, " memos-left-open
                             " left open, " memos-dead-lettered " dead-lettered")
-                       (str "    " cut-short " cut short, " crashed " crashed, " held " held, "
+                       (str "    " cut-short " cut short, " crashed " crashed, "
                             tools-unavailable " without their tools")
                        (str "    cost " (dollars cost-usd)
                             (when cost-per-wake (str ", " (dollars cost-per-wake) " a wake over " priced-wakes " priced"))

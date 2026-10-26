@@ -216,9 +216,6 @@
                :else (str ", due " due))
          ")")))
 
-(defn- hold-line [{:keys [id role tool]}]
-  (str "Hold " id ": " role " wants to use " tool))
-
 (defn- listed
   "A section of items as {:status :ok :count :lines :labels}, the lines cut
   at lines-per-section."
@@ -231,21 +228,20 @@
      :labels (if (seq items) (core/union labels) [])}))
 
 (defn compose
-  "The brief for `date`: its three sections, in order, from the calendar
-  and reminders sections (tool-section) and the state. Each section is
-  {:key :status ...}; one with items has :count, :lines and :labels, the
-  labels of the text it shows."
-  [state date calendar reminders]
+  "The brief for `date`: its two sections, in order, from the calendar
+  and reminders sections (tool-section). Each section is {:key :status
+  ...}; one with items has :count, :lines and :labels, the labels of the
+  text it shows. `state` is the log's, for sections that come to read
+  it."
+  [_state date calendar reminders]
   (let [tool (fn [k sec line-of]
                (assoc (if (= :ok (:status sec))
                         (listed (:items sec) #(line-of date %) (:more sec) (:labels sec))
                         sec)
-                      :key k))
-        holds (core/open-holds state)]
+                      :key k))]
     {:date date
      :sections [(tool :calendar calendar event-line)
-                (tool :reminders reminders reminder-line)
-                (assoc (listed holds hold-line 0 (core/ids-labels state (map :role holds))) :key :holds)]}))
+                (tool :reminders reminders reminder-line)]}))
 
 (defn empty-brief?
   "Whether the brief has nothing to say: no section has an item or is

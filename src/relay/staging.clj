@@ -10,10 +10,8 @@
   nobody), a hub, a clerk that holds an :edit tool, and a few facts. All of
   it is made up. It also defines the stand-in tools in `stand-in-tools`,
   which no role holds until an eval case grants them: among them a
-  campaign service for the fictional Harbour Sound Society, whose drafts
-  are an :edit and whose sends are an :act, held for the operator with a
-  preview of the stored draft. The service's groups are in
-  campaign-groups.edn.
+  campaign service for the fictional Harbour Sound Society that only
+  saves drafts, an :edit. Nothing in staging can send.
 
   Some places are refused whatever the flags say: in or around ~/Sync,
   ~/.config/relay, ~/Library/Application Support/relay, the live checkouts under ~/code/projects, and the data
@@ -39,9 +37,8 @@
 
 (def stand-in-tools
   "The tools staging defines beyond remind-demo, by name: what an eval case
-  may grant (see relay.staging-tools). None is granted by default. A
-  :preview here names the relay.staging-tools command that is the tool's
-  :preview."
+  may grant (see relay.staging-tools). None is granted by default. The
+  :egress one goes only to the public scout."
   {"fail-demo" {:class :edit
                 :labels []
                 :description "Set a reminder. Give the reminder's text, with its time as HH:MM."
@@ -57,7 +54,7 @@
    "web-ask-demo" {:class :egress
                    :labels ["contaminated"]
                    :description (str "Search the web and read the top results, as webtool's ask does. The query goes out;"
-                                     " the pages are written by outsiders. Read it through read_quarantined with a closed schema.")
+                                     " the pages are written by outsiders.")
                    :parameters {:type "object"
                                 :properties {:query {:type "string" :description "What to search for."}
                                              :n {:type "integer" :minimum 1 :maximum 5
@@ -75,38 +72,13 @@
                                                     :body {:type "string" :description "The email's text, in markdown."}
                                                     :group {:type "string" :description "The group it is addressed to, such as Mailing list."}}
                                        :required ["subject" "body" "group"]
-                                       :additionalProperties false}}
-   "campaign-send-demo" {:class :act
-                         :labels []
-                         :preview "campaign-preview-demo"
-                         :description (str "Schedule one version of a saved draft campaign to go out to its group at a"
-                                           " local time. The service sends the stored version, and refuses a group"
-                                           " other than the draft's.")
-                         :parameters {:type "object"
-                                      :properties {:draft {:type "string" :description "The draft's id, such as c1."}
-                                                   :version {:type "integer" :description "The draft version to send."}
-                                                   :group {:type "string" :description "The draft's group."}
-                                                   :send_at {:type "string" :description "When to send, local time, as YYYY-MM-DD HH:MM."}}
-                                      :required ["draft" "version" "group" "send_at"]
-                                      :additionalProperties false}}
-   "mail-demo" {:class :egress
-                :labels []
-                :description "Send an email."
-                :parameters {:type "object"
-                             :properties {:to {:type "string"} :subject {:type "string"} :body {:type "string"}}
-                             :required ["to" "subject" "body"]}}})
+                                       :additionalProperties false}}})
 
 (defn- staging-tools-command [data-dir repo-root bb-bin tool-name]
   [bb-bin "--classpath" (str (fs/path repo-root "src")) "-m" "relay.staging-tools" tool-name data-dir])
 
 (defn- stand-in [data-dir repo-root bb-bin [tool-name tool]]
-  [tool-name (cond-> (assoc tool :protocol :envelope :command (staging-tools-command data-dir repo-root bb-bin tool-name))
-               (:preview tool) (assoc :preview (staging-tools-command data-dir repo-root bb-bin (:preview tool))))])
-
-(def campaign-groups
-  "The groups campaign-send-demo's service knows, with their sizes. Staging
-  init writes them to <data>/campaign-groups.edn."
-  {"Mailing list" 287 "Board" 6})
+  [tool-name (assoc tool :protocol :envelope :command (staging-tools-command data-dir repo-root bb-bin tool-name))])
 
 (defn settings
   "The relay.edn settings of a staging directory. Pure. The stand-in tools
@@ -132,7 +104,7 @@
    :grants {"hub" {:may-add true}
             "clerk" {:tools ["remind-demo"]}
             ;; A public role: shown only public text, never the operator's
-            ;; private data, so it may send data out unheld.
+            ;; private things, so it may send what it writes out.
             "scout" {:public true}}})
 
 (defn render-settings
@@ -284,7 +256,6 @@
         (fs/create-dirs (fs/path dir "web"))
         (doseq [f (fs/list-dir fixtures) :when (re-matches staging-tools/page-name (str (fs/file-name f)))]
           (fs/copy f (fs/path dir "web" (fs/file-name f)) {:replace-existing true}))))
-    (spit (str (fs/path dir "campaign-groups.edn")) (pr-str campaign-groups))
     (log/init! dir)
     (let [sys (inbound/system dir (cond-> {} clock (assoc :clock clock)))]
       (doseq [command (seed hub)]

@@ -1,9 +1,11 @@
 (ns relay.connect
   "relay connect <name> <url> and relay mcp-token <name>: the operator
   signs relay in to a remote MCP server, and relay writes the connection
-  file (relay.connections) with each tool as relay proposes it: the class
-  its annotations suggest, the default labels, and on unless its name says
-  it deletes. The operator changes any of that by editing the file.
+  file (relay.connections) with each tool as relay proposes it: on and
+  :read when its annotations say it only reads, otherwise off and :edit,
+  for the operator to turn on by editing the file once they know it
+  changes only their own things there. A tool whose name says it deletes
+  starts off too.
 
   The sign-in is OAuth 2.1's authorization code flow with PKCE (S256), as
   MCP's authorization spec has it: the server's protected-resource
@@ -65,12 +67,19 @@
   [{:keys [name title]}]
   (boolean (some delete-words (concat (words name) (words title)))))
 
+(defn read-only?
+  "Whether a tool's annotations say it only reads (readOnlyHint)."
+  [{:keys [annotations]}]
+  (true? (:readOnlyHint annotations)))
+
 (defn propose-class
   "The class a tool starts with: :read when its annotations say it only
-  reads (readOnlyHint), :act otherwise, whatever else they say. Nothing
-  is proposed a class that runs unasked outside relay on its own say-so."
-  [{:keys [annotations]}]
-  (if (true? (:readOnlyHint annotations)) :read :act))
+  reads, :edit otherwise, whatever else they say. Nothing relay can hold
+  sends, posts, publishes or pays as the operator, so an :edit tool starts
+  off (propose): the operator turns it on once they know it changes only
+  their own things."
+  [tool]
+  (if (read-only? tool) :read :edit))
 
 (defn relay-name
   "The name relay gives a server's tool: the connection's name, an
@@ -85,16 +94,15 @@
 
 (def kept-choices
   "What an earlier connect's choice for a tool carries over to a new one."
-  [:class :labels :on :fixed-args :hidden-args :always-hold :consent :preview])
+  [:class :labels :on :fixed-args :hidden-args])
 
 (defn propose
   "Every listed tool with what it would start as: its relay name, class,
-  labels, and whether it is on. An act tool asks the operator before every
-  call by its class, so it is not given :always-hold, which would also
-  shut out :consent. An :always-hold an earlier connect proposed for an
-  act tool is dropped for the same reason. A tool already in the connection
-  file `previous` keeps the choices written there, and its name. No new
-  name is one of `taken`, the names relay.edn's own tools have."
+  labels, and whether it is on: only a read-only tool whose name does not
+  say it deletes. A tool already in the connection file `previous` keeps
+  the choices written there, and its name, unless its class is one relay
+  no longer has. No new name is one of `taken`, the names relay.edn's own
+  tools have."
   [conn-name listed previous & [taken]]
   (let [before (into {} (for [[n t] (:tools previous)] [(:tool t) (assoc t :name n)]))]
     (:out (reduce (fn [{:keys [taken out]} {:keys [name] :as l}]
@@ -103,9 +111,9 @@
                           class (propose-class l)
                           t (merge {:name rn :tool name :title (:title l) :description (:description l)
                                     :digest (:digest l) :class class :labels default-labels
-                                    :on (not (delete-like? l))}
-                                   (select-keys old kept-choices))
-                          t (cond-> t (= :act (:class t)) (dissoc :always-hold))]
+                                    :on (and (= :read class) (not (delete-like? l)))}
+                                   (when (contains? config/tool-classes (:class old))
+                                     (select-keys old kept-choices)))]
                       {:taken (conj taken rn) :out (conj out t)}))
                   {:taken (into (set taken) (keep :name (vals before))) :out []}
                   (sort-by :name listed)))))
@@ -114,17 +122,15 @@
 
 (defn does
   "What a tool may do, in the operator's words."
-  [{:keys [class on always-hold]}]
+  [{:keys [class on]}]
   (cond
+    (and (not on) (= :edit class))
+    "Off. It may change things there. Turn it on in the file only if it changes your own things, which nobody else sees."
     (not on) "Off: nothing can use it."
-    always-hold (case class
-                  :read "Reads, and asks you before each use."
-                  "Acts for you, and asks you first every time.")
     :else (case class
-            :read "Reads only. It runs without asking."
-            :act "Acts for you, and asks you first every time."
-            :egress "Can send what it is given out to the service, and asks you first when that mixes your private things with outside text."
-            :edit "Changes your own things there, which nobody else sees, and asks you first when what it works with came from outside."
+            :read "Reads only."
+            :edit "Changes your own things there, which nobody else sees."
+            :egress "Can send what it is given out to the service. Only a role on the open web may have it."
             (str "Class " (name class) "."))))
 
 (defn- shown-line
@@ -576,10 +582,9 @@
 (defn connect!
   "relay connect. `opts`: :name, :url, :data-dir (absolute), :relay-bin,
   :agentloop, :taken (tool names relay.edn already gives), :client-id, the
-  terminal's :say and :ask, :confirm! (shows lines and asks for the typed
-  code, throwing when it is wrong) and :pin! (records the pins in the
-  log). Returns the lines to print."
-  [{:keys [name url data-dir relay-bin agentloop say confirm! pin!] :as opts}]
+  terminal's :say and :ask, and :pin! (records the pins in the log).
+  Returns the lines to print."
+  [{:keys [name url data-dir relay-bin agentloop say pin!] :as opts}]
   (when-not (and (string? name) (re-matches connections/name-pattern name))
     (problem! (str "A connection's name is 1 to 32 lower case letters, digits, - or _, such as mailerlite;"
                    " not " (pr-str name) ".")))
@@ -598,14 +603,17 @@
         conn (connection {:url url :oauth oauth :connected (str ((:now env)))
                           :credentials-command [relay-bin "mcp-token" name "--data" data-dir "--url" url]}
                          proposal)]
-    (confirm! (concat [(str "Connect relay to " url " as " name ", with these tools:") ""]
-                      (summary proposal)
-                      [""
-                       (str "relay keeps the sign-in in your login keychain, as " (connections/keychain-service name) ".")
-                       (str "It writes " (str (connections/file-path data-dir name)) ", which no role can read.")
-                       (if (seq on)
-                         "No role can use these tools until relay.edn grants them."
-                         "Every tool is off, so no role can use any of them.")]))
+    (say (str (str/join "\n" (concat [(str "Connecting relay to " url " as " name ", with these tools:") ""]
+                                     (summary proposal)
+                                     [""
+                                      (str "relay keeps the sign-in in your login keychain, as "
+                                           (connections/keychain-service name) ".")
+                                      (str "It writes " (str (connections/file-path data-dir name))
+                                           ", which no role can read.")
+                                      (if (seq on)
+                                        "No role can use these tools until relay.edn grants them."
+                                        "Every tool is off, so no role can use any of them.")]))
+              "\n"))
     ((:keychain-write! env) (connections/keychain-service name) (connections/keychain-account data-dir) (encode-blob blob))
     (let [f (connections/file-path data-dir name)
           tmp (fs/path (fs/parent f) (str "." name ".edn.tmp"))]

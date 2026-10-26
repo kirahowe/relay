@@ -12,12 +12,8 @@
     :system-prompt  the role's standing instructions
     :prompt         the prompt for this wake
     :tools          the tools the role is offered (relay.tools/manifest)
-    :quarantine     the tools the role may read through a quarantined
-                    reader (its :quarantine grant), or nil
-    :workbench      {:deny-read [...]} when the role is granted the
-                    sandboxed workbench, or nil
-    :data-dir       relay's data directory, which the workbench may not
-                    read
+    :policy         the session's starting labels, each tool's static
+                    labels, and for a public role forbid_labels
     :mcp-servers    the MCP servers the role's MCP tools come from, by
                     name, as relay.edn gives them
     :tool-command   the command a harness runs for a tool call, given the
@@ -139,13 +135,9 @@
 ;;   resume         the session to carry on from, or ""
 ;;   tool_command   the argv that runs a tool call, given the tool name last;
 ;;                  it reads an envelope on stdin and writes one on stdout
-;;   policy         the session's starting labels and each tool's class
-;;   resolve        the operator's decisions on calls the session held
-;;
-;; The report may also list `held` calls ({id, name, input}) that wait for
-;; the operator, as agentloop's outcome does.
+;;   policy         the session's starting labels and each tool's labels
 (defmethod wake-command :script
-  [{:keys [harness system-prompt prompt tools tool-command run-dir resume timeout-ms policy resolve]}]
+  [{:keys [harness system-prompt prompt tools tool-command run-dir resume timeout-ms policy]}]
   (let [file #(str (fs/path run-dir %))
         args-file (file "args.json")
         report-file (file "report.json")]
@@ -157,8 +149,7 @@
                                            :report report-file
                                            :resume (str resume)
                                            :tool_command (vec tool-command)
-                                           :policy policy
-                                           :resolve (vec resolve)}))
+                                           :policy policy}))
     {:argv (conj (vec (:command harness)) args-file)
      :dir run-dir :env (base-env {}) :in prompt
      :out-file (file "transcript.log") :timeout-ms timeout-ms
@@ -191,7 +182,4 @@
        :crashed (not= 0 exit)
        :session (text (:session parsed))
        :said said
-       :resets-at (instant-text (or (:resets_at parsed) (:resets-at parsed)))
-       :held (vec (for [{:keys [id name input]} (when (sequential? (:held parsed)) (:held parsed))
-                        :when (and (string? id) (string? name))]
-                    {:id id :name name :input input}))})))
+       :resets-at (instant-text (or (:resets_at parsed) (:resets-at parsed)))})))

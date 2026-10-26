@@ -2,7 +2,6 @@
   "The relay command."
   (:require [babashka.cli :as cli]
             [clojure.edn :as edn]
-            [clojure.java.io :as io]
             [babashka.fs :as fs]
             [clojure.string :as str]
             [relay.cards :as cards]
@@ -18,7 +17,6 @@
             [relay.notify :as notify]
             [relay.pause :as pause]
             [relay.render :as render]
-            [relay.review :as review]
             [relay.roster :as roster]
             [relay.serve :as serve]
             [relay.setup :as setup]
@@ -55,15 +53,13 @@ Every command needs the data directory, from --data <dir> or from the file
                                       names another with :client), with <role>
                                       in focus when given
   relay help                          print this (also relay --help)
-  relay acp [<role>] [--trace <file>] [--approvals]
+  relay acp [<role>] [--trace <file>]
                                       talk with the roles from an ACP client, which
                                       runs this as its agent command: through
                                       relay serve when it runs, else in this
                                       process; <role> is the role a session is
                                       for when the client does not say; --trace
-                                      appends the traffic to <file> as JSON lines;
-                                      --approvals lets the client answer held tool
-                                      calls, which relay otherwise refuses
+                                      appends the traffic to <file> as JSON lines
   relay serve                         run the service that keeps conversations
                                       going while no client is attached (launchd
                                       runs this; see setup/); its lock and
@@ -104,24 +100,11 @@ Every command needs the data directory, from --data <dir> or from the file
   relay doc revert <path> <version>   put back an earlier version of a doc
   relay export <dir>                  write a read-only snapshot of the knowledge
   relay log [--tail <n>] [--json]     the events, newest last
-  relay holds                         tool calls waiting for you to decide, in full
-  relay approve <hold>                let a held tool call run
-  relay deny <hold> [why] [--end]     refuse a held tool call; --end also starts the
-                                      role's next wake afresh instead of in that session
-  relay fresh <role>                  end the session a role's next wake would carry on,
-                                      so it starts afresh; this is how you accept an MCP
-                                      tool whose definition changed under the session
-  relay release <memo>                deliver a quarantined memo to its role
-  relay declassify <memo>             make a memo to a public role public, so the
-                                      role is shown it
-  relay trust <kind> <ref>            vouch for contaminated text you have read:
-                                      memo <n>, fact <n>, doc <path>, note <role>/<name>,
-                                      routine <role>/<name>, role <id> or journal <n>
   relay week [--since <date>] [--until <date>] [--json]
-                                      how often relay asked you for something and how
-                                      long it waited, what each role's wakes did and
-                                      cost, wakes that look wrong, and your flags;
-                                      the last 7 days unless dates (YYYY-MM-DD) say
+                                      how often relay needed you and how long it
+                                      waited, what each role's wakes did and cost,
+                                      wakes that look wrong, and your flags; the
+                                      last 7 days unless dates (YYYY-MM-DD) say
   relay flag <wake> good|bad [note]   mark a wake or conversation (its id from relay
                                       status or relay week) to find it later
   relay traces --out <dir> [--since <date>] [--until <date>] [--agentloop <bin>]
@@ -139,20 +122,15 @@ Every command needs the data directory, from --data <dir> or from the file
   relay tool --data <dir> --role <r> [--wake <w>] <name>
                                       run a role's tool call (harnesses use this)
 
-approve, deny, fresh, release, declassify, trust,
-connect and revert show you what they are about on the terminal and ask you to type a code
-back there, so only a person at the terminal can make those decisions.
-
---untrusted on memo, put, add, update and routine marks what you write as
-contaminated, for text you copied from somewhere you do not trust.
+Whatever you write or paste here is yours, and relay treats it so.
 
 --public on memo, routine, fact, put, add, update and wake --note marks what
 you write as public: it may leave this machine, since a public role can put
 it in a web search. A public role is shown only public text, so anything you
-write for one needs it. It goes with --untrusted. On add and update it marks
-the role's text public: a public role's own id, title and instructions must
-be, and it sees only roles whose text is. update --public with both --title
-and --instructions marks the id public too.")
+write for one needs it. On add and update it marks the role's text public: a
+public role's own id, title and instructions must be, and it sees only roles
+whose text is. update --public with both --title and --instructions marks the
+id public too.")
 
 (defn- fail! [& msg]
   (throw (ex-info (str/join " " msg) {:relay/usage true})))
@@ -249,16 +227,17 @@ and --instructions marks the id public too.")
         (System/console) ""
         :else (.readAllBytes System/in)))
 
-(def ^:dynamic *untrusted*
-  "Labels for what the operator writes: contaminated with --untrusted."
-  [])
-
 (def ^:dynamic *public*
   "Whether what the operator writes is public: --public."
   false)
 
-(defn- submit! [sys type args]
-  (inbound/submit! sys {:type type :actor core/operator :args args :labels *untrusted* :public *public*}))
+(defn- submit!
+  "Submits the operator's command. What the operator writes at the
+  command line is theirs, so it carries the labels of that entry point:
+  none (I5)."
+  [sys type args]
+  (inbound/submit! sys {:type type :actor core/operator :args args
+                        :labels (core/entry-labels :command-line) :public *public*}))
 
 (defn- run-tool
   "A harness runs this for each tool call: an envelope on stdin, {input,
@@ -304,92 +283,23 @@ and --instructions marks the id public too.")
                            (when (empty? vs) (fail! (str "There is no doc at " (:path args) ".")))
                            (render/doc-history zone (:path args) vs)))}))
 
-;; --- decisions only a person at the terminal makes
-
-(defn- open-tty
-  "The controlling terminal, never stdin: a harness or a pipe cannot answer
-  for the operator. Throws when there is none."
-  []
-  (let [r (io/reader "/dev/tty")
-        w (io/writer "/dev/tty")]
-    {:say (fn [text] (.write w (str text)) (.flush w))
-     :ask (fn [] (.readLine ^java.io.BufferedReader r))}))
-
-(def ^:dynamic *tty*
-  "Opens the terminal for a confirmation, as {:say (fn [text]) :ask (fn []
-  line)}. Bound in tests."
-  open-tty)
-
-(def ^:private code-chars "ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
-
-(defn- confirmation-code []
-  (let [rng (java.security.SecureRandom.)]
-    (apply str (repeatedly 4 #(nth code-chars (.nextInt rng (count code-chars)))))))
-
-(defn- tty!
-  "The operator's terminal (*tty*), or a refusal saying `verb` needs one."
-  [verb]
-  (try (*tty*)
-       (catch Exception _
-         (fail! (str "relay " verb " asks you to confirm on a terminal, and there is none.")))))
-
-(defn- confirm!
-  "Shows `lines` on the terminal and asks for a fresh code to be typed back.
-  Throws, changing nothing, when there is no terminal or the code is wrong.
-  `tty` is a terminal already open for the same decision."
-  [verb lines & [tty]]
-  (let [{:keys [say ask]} (or tty (tty! verb))
-        code (confirmation-code)]
-    (say (str (str/join "\n" (map text/visible-line lines)) "\n\nType " code " to " verb ": "))
-    (when-not (= code (some-> (ask) str/trim str/upper-case))
-      (fail! "That is not the code. Nothing was changed."))))
-
-(defn- confirm-review!
-  "confirm! for a consent relay wrote a review of (relay.review): shows the
-  review text `t` itself, as it is, since it is safe to print by
-  construction, then relay's own `notes`, and asks for a fresh code. Fails,
-  changing nothing, when t holds anything a review may not."
-  [verb t notes & [tty]]
-  (when-not (every? #(or (= 10 %) (text/printable? %)) (iterator-seq (.iterator (.codePoints (str t)))))
-    (fail! "relay could not show this safely. Nothing was changed."))
-  (let [{:keys [say ask]} (or tty (tty! verb))
-        code (confirmation-code)]
-    (say (str t (when (seq notes) (str "\n\n" (str/join "\n" (map text/visible-line notes))))
-              "\n\nType " code " to " verb ": "))
-    (when-not (= code (some-> (ask) str/trim str/upper-case))
-      (fail! "That is not the code. Nothing was changed."))))
-
-(defn- labels-line [labels]
-  (str "Labels: " (if (seq labels) (str/join ", " labels) "none")))
-
-(defn- decide-hold! [sys verb verdict hold-id reason & [end]]
-  (let [st (inbound/current-state sys)
-        h (core/hold st hold-id)]
-    (when-not h (fail! (str "There is no hold " hold-id ".")))
-    ;; Asking for a code to do nothing would only teach typing codes.
-    (when-not (= :open (:status h))
-      (fail! (str "Hold " hold-id " was already decided: " (name (:status h)) ".")))
-    (confirm-review! verb (review/text-of (render/hold-review h (:config sys)))
-                     (concat (render/hold-notes h (:config sys))
-                           (when end ["" "The session will not be carried on: the role's next wake starts afresh."])
-                           ;; The role is shown the reason, and may send it out.
-                           (when (and (= "deny" verdict) (core/public-role? (:config sys) (:role h)))
-                             ["" (str (:role h) " is a public role: your reason is shown to it as public, and"
-                                      " may leave this machine in a web search.")])))
-    (submit! sys :hold/resolve {:hold hold-id :verdict verdict :reason reason :end (boolean end)})
-    (result 0 (str (if (= "allow" verdict) "Approved" "Denied") " hold " hold-id ". "
-                   (:role h) " carries on at the next tick."))))
-
 ;; --- the board
+
+(def ^:dynamic *terminal*
+  "How relay connect talks with the operator: {:say (fn [text]) :ask (fn []
+  line)}, stdout and stdin by default. Bound in tests."
+  (fn [] {:say (fn [text] (print text) (flush))
+          :ask (fn [] (read-line))}))
 
 (defn- operator-card! [sys type args]
   ;; Whatever the operator writes on a card is the operator's: no labels,
-  ;; never public, whatever --untrusted or --public say.
-  (inbound/submit! sys {:type type :actor core/operator :args args :labels [] :public false}))
+  ;; never public, whatever --public says.
+  (inbound/submit! sys {:type type :actor core/operator :args args :labels (core/entry-labels :command-line)
+                        :public false}))
 
 (def ^:private card-options
   "What relay card reads, and the options every command may be given."
-  #{:item :row :column :state :text :seen :title :data :untrusted :public})
+  #{:item :row :column :state :text :seen :title :data :public})
 
 (defn- card!
   "relay card: show one card, change it with an op, or add one."
@@ -461,8 +371,8 @@ and --instructions marks the id public too.")
    :coerce {:subject :string :message :string :title :string :reports-to :string
             :harness :string :model :string :schedule :string :note :string
             :tail :long :data :string :search :string :as-of :string :known-at :string
-            :version :long :wake :long :role :string :trace :string :untrusted :boolean :public :boolean :approvals :boolean
-            :topic :string :from :string :to :string :why :string :text :string :end :boolean
+            :version :long :wake :long :role :string :trace :string :public :boolean
+            :topic :string :from :string :to :string :why :string :text :string
             :pause-file :string :socket :string :run-dir :string :since :string :until :string :out :string :agentloop :string
             :client-id :string :url :string :open :string
             :item [:string] :row [:string] :column [:string] :state :string :seen :long :archived :boolean}})
@@ -516,8 +426,7 @@ and --instructions marks the id public too.")
                {:exit (if (#{:ran :idle} (:result woke)) 0 1) :out (render/wake-result woke)})
       :dashboard (result (dispatch/dashboard! sys (:open opts) {:data (when (:data opts) (str (fs/absolutize dir)))}))
       "acp" (let [[r] more]
-              (result (serve/acp! sys r {:trace (:trace opts) :approvals (:approvals opts) :socket (:socket opts)
-                                         :run-dir (:run-dir opts)})))
+              (result (serve/acp! sys r {:trace (:trace opts) :socket (:socket opts) :run-dir (:run-dir opts)})))
       "serve" (result (serve/serve! sys {:socket (:socket opts) :run-dir (:run-dir opts)}))
       "tick" (do (dispatch/tick! sys) (result 0))
       "facts" (knowledge sys :facts {:topic (first more) :search (:search opts)
@@ -538,11 +447,6 @@ and --instructions marks the id public too.")
                                 version (some-> b parse-long)
                                 v (first (filter #(= version (:seq %)) (:versions (core/fact (state) id))))]
                             (when-not v (fail! "usage: relay fact revert <fact> <version>, a version from relay fact <fact>"))
-                            (confirm! "revert" (concat [(str "Fact " id " back to version " version ":" (when (:topic v) (str " [" (:topic v) "]")))]
-                                                       (text/block (:labels v) (:text v))
-                                                       [(str "holds from " (or (:valid-from v) "the start") " until "
-                                                             (or (:valid-to v) "further notice"))
-                                                        "" (labels-line (:labels v))]))
                             (submit! sys :fact/revert {:fact id :version version})
                             (result 0 (str "Reverted fact " id " to version " version ".")))
                  (knowledge sys :fact {:fact (some-> sub parse-long)})))
@@ -561,9 +465,6 @@ and --instructions marks the id public too.")
                 (let [version (some-> b parse-long)
                       v (core/doc-version (state) a {:version version})]
                   (when-not v (fail! "usage: relay doc revert <path> <version>, a version from relay doc <path> --history"))
-                  (confirm! "revert" (concat [(str a " back to version " version ":")]
-                                             (if (:removed v) ["(removed)"] (text/block (:labels v) (:content v)))
-                                             ["" (labels-line (:labels v))]))
                   (submit! sys :doc/revert {:path a :version version})))
               (cond
                 (= "revert" path) (result 0 (str "Reverted " a " to version " b "."))
@@ -576,81 +477,6 @@ and --instructions marks the id public too.")
                  (when-not dir (fail! "usage: relay export <dir>"))
                  (result 0 (str "Wrote " (export/export! sys dir) " files to " dir)))
       "log" (lines (render/log (log/read-events (:data-dir sys)) opts))
-      "holds" (let [st (state)] (lines (render/holds (core/open-holds st) (:config sys) (core/approved-hosts st))))
-      "approve" (let [[h] more]
-                  (decide-hold! sys "approve" "allow" (some-> h parse-long) nil))
-      "deny" (let [[h & why] more]
-               (decide-hold! sys "deny" "deny" (some-> h parse-long)
-                             (or (:message opts) (when (seq why) (str/join " " why)))
-                             (:end opts)))
-      "fresh" (let [[r] more
-                    st (state)]
-                (when-not r (fail! "usage: relay fresh <role>"))
-                (when-not (core/active-role? st r) (fail! (str r " is not an active role.")))
-                (when-not (core/session-to-carry-on st r)
-                  (fail! (str r " has no session to end: its next wake starts afresh.")))
-                ;; What is shown is what is sent: core refuses if it has
-                ;; changed by the time the code is typed.
-                (let [{:keys [tool got] :as expect} (core/fresh-expectation st r)
-                      others (core/roles-released-by-fresh st r)
-                      dropped (fn [role]
-                                (for [h (core/holds-dropped-by-fresh st role)]
-                                  (str "  " role " hold " (:id h) ": " (:tool h) " ("
-                                       (if (= :open (:status h)) "open, will be denied" "approved, not yet run")
-                                       ")")))]
-                  (confirm! "start afresh"
-                            (concat
-                             [(str "End the session " r "'s next wake would carry on. The next wake starts a"
-                                   " new session, with " r "'s open memos.")
-                              (if tool
-                                (str "This accepts the definition of the MCP tool " tool " that agentloop saw"
-                                     " when the wake was stopped (sha256 " got "), for every role granted it.")
-                                "No tool definition changes.")]
-                             (when (seq others)
-                               [(str "The same change stopped " (str/join ", " others) ": their sessions end"
-                                     " too, and their next wakes start afresh.")])
-                             (when-let [ls (seq (mapcat dropped (cons r others)))]
-                               (cons "These held calls will never run:" ls))))
-                  (submit! sys :role/fresh {:role r :expect expect})
-                  (result 0 (str r "'s next wake starts afresh."))))
-      "release" (let [id (some-> (first more) parse-long)
-                      m (core/memo (state) id)]
-                  (when-not (and m (core/quarantined? (:config sys) m)) (fail! (str "Memo " (first more) " is not quarantined.")))
-                  (confirm! "release" (concat (render/memo zone m) ["" (labels-line (:labels m))
-                                                                    (str "Releasing it shows it to " (:to m)
-                                                                         ", which then counts as contaminated.")]))
-                  (submit! sys :memo/release {:memo id})
-                  (result 0 (str "Released memo " id " to " (:to m) ".")))
-      "declassify" (let [id (some-> (first more) parse-long)
-                         m (core/memo (state) id)]
-                     (when-not (and m (= :unread (:status m)) (core/awaiting-declassification? (:config sys) m))
-                       (fail! (str "Memo " (first more) " is not waiting to be declassified.")))
-                     ;; The role gets exactly what the operator is shown:
-                     ;; the review of the memo as declassifying makes it
-                     ;; (defanged if contaminated, spacing plain, NFC), and
-                     ;; core declassifies only the memo with that review.
-                     (let [t (core/declassify-text m)]
-                       (confirm-review! "declassify" t
-                                        [(str "Declassifying it shows it to " (:to m) ", a public role, exactly as it"
-                                              " is shown here. Say so only if nothing in it, its sender"
-                                              " included, is private, not even in its choice of words: it may leave"
-                                              " this machine in a web search.")])
-                       (binding [*public* false]
-                         (submit! sys :memo/declassify {:memo id :sha256 (review/digest t)})))
-                     (result 0 (str "Declassified memo " id "; " (:to m) " is shown it at its next wake.")))
-      "trust" (let [[kind ref] more
-                    st (state)
-                    v (core/trusted-version st kind ref)
-                    t (when v (core/trust-text st kind ref))]
-                (when-not v (fail! "usage: relay trust <kind> <ref>, naming something relay keeps"))
-                ;; The review text itself (relay.review), and its digest is
-                ;; what is signed: what the operator read is exactly what
-                ;; they vouch for, and a change since trusts nothing.
-                (confirm-review! "trust" t [(labels-line (:labels v))
-                                            "Trusting it clears contaminated from what it says now."])
-                (submit! sys :label/trust {:kind kind :ref ref :version (:version v)
-                                           :sha256 (review/digest t)})
-                (result 0 (str "Trusted " kind " " ref ".")))
       "week" (let [r (week-report sys opts)]
                (if (:json opts)
                  (result 0 (-> (json/generate-string (week/json-ready r) {:escape-non-ascii true})
@@ -680,7 +506,7 @@ and --instructions marks the id public too.")
                       config (:config sys)]
                   (when-not (and n url)
                     (fail! "usage: relay connect <name> <url> [--client-id <id>] [--agentloop <bin>]"))
-                  (let [{:keys [say ask] :as tty} (tty! "connect")
+                  (let [{:keys [say ask]} (*terminal*)
                         ;; The server writes the tool names and descriptions shown.
                         say (fn [text] (say (str/join "\n" (map text/visible-line (str/split text #"\n" -1)))))]
                     (apply result 0
@@ -691,7 +517,6 @@ and --instructions marks the id public too.")
                              :client-id (:client-id opts)
                              :taken (set (keep (fn [[t spec]] (when-not (= n (:connection spec)) t)) (:tools config)))
                              :say say :ask ask
-                             :confirm! (fn [lines] (confirm! "connect" lines tty))
                              :pin! (fn [pins] (submit! sys :tools/pin {:pins pins}))}))))
       (apply result 1 (str/split-lines usage)))))
 
@@ -753,6 +578,10 @@ and --instructions marks the id public too.")
   [cmd more opts]
   (do (when (and (= "tool" cmd) (or (str/blank? (:role opts)) (str/blank? (:data opts))))
         (fail! "usage: relay tool --data <dir> --role <role> <tool name>"))
+      ;; babashka.cli takes any flag, so one relay no longer has would
+      ;; pass unnoticed: what the operator writes is theirs.
+      (when (contains? opts :untrusted)
+        (fail! "relay has no --untrusted: what you write or paste is yours, and relay treats it so."))
       (let [dir (data-dir opts)
             result (case cmd
                      "init" (init! dir)
@@ -764,8 +593,7 @@ and --instructions marks the id public too.")
                                       (when (= "tick" cmd) (report-broken-settings! dir (ex-message e)))
                                       (throw e)))]
                        (when (= "tick" cmd) (fs/delete-if-exists (fs/path dir ".settings-problem")))
-                       (binding [*untrusted* (if (:untrusted opts) [core/contaminated-label] [])
-                                 *public* (true? (:public opts))]
+                       (binding [*public* (true? (:public opts))]
                          (command sys dir cmd more opts))))]
         ;; Everything printed may hold text a role wrote, so nothing
         ;; that could drive the terminal is printed raw. relay tool's
