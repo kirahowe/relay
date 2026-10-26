@@ -4,7 +4,7 @@
   address to the operator's, both from relay.edn:
 
     {:kind :email
-     :url \"smtps://smtp.example.org:465\"      ; smtp:// only to this machine
+     :url \"smtps://smtp.example.org:465\"      ; or smtp://...:587, STARTTLS required
      :from \"agent@example.org\"                ; the agent's own address
      :to \"you@example.org\"                    ; yours, the only recipient
      :user \"agent@example.org\"                ; the login, if the server wants one

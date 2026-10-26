@@ -439,18 +439,26 @@
   ;; nothing a header could be split on.
   (and (string? s) (re-matches #"[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(\.[A-Za-z0-9\-]+)+" s)))
 
-(defn smtp-url-problem
-  "Why an email channel's :url cannot be used, or nil. smtps:// is TLS
-  from the start; plain smtp:// would send the password and the mail in
-  the clear, so it is taken only to this machine (a local relay such as
-  mailpit)."
+(defn- smtp-url-parts [url]
+  (when (string? url)
+    (re-matches #"(smtps?)://(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.\-]+)(:\d{1,5})?/?" url)))
+
+(defn plain-smtp?
+  "Whether mail to an email channel's :url may go unencrypted: smtp:// to
+  this machine only (a local relay such as mailpit). Any other host gets
+  TLS, from the start with smtps:// or by STARTTLS, which curl is told to
+  require (relay.channels/curl-argv). Pure."
   [url]
-  (let [[_ scheme host] (when (string? url)
-                          (re-matches #"(smtps?)://(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.\-]+)(:\d{1,5})?/?" url))]
-    (cond
-      (nil? scheme) "it is not smtps://host:port or smtp://127.0.0.1:port"
-      (and (= "smtp" scheme) (not (#{"127.0.0.1" "localhost" "[::1]"} host)))
-      "plain smtp:// is only for this machine; use smtps:// for any other host")))
+  (let [[_ scheme host] (smtp-url-parts url)]
+    (boolean (and (= "smtp" scheme) (#{"127.0.0.1" "localhost" "[::1]"} (str/lower-case host))))))
+
+(defn smtp-url-problem
+  "Why an email channel's :url cannot be used, or nil: smtps://host:port,
+  TLS from the start (port 465), or smtp://host:port, where relay
+  requires STARTTLS (port 587) except to this machine (plain-smtp?)."
+  [url]
+  (when-not (smtp-url-parts url)
+    "it is not smtps://host:port or smtp://host:port"))
 
 (defn- push-problem [where {:keys [via url topic command path token-command token-file link] :as ch}]
   (cond

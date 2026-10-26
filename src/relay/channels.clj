@@ -175,15 +175,19 @@
 
 (defn curl-argv
   "The curl command that submits `file` over SMTP for an email channel.
-  -q first, so no .curlrc is read; no proxy; only SMTP. With a :user,
-  the login is read from stdin (-K -), so it is never on a command line
-  anyone can see. The one recipient is the channel's :to."
+  -q first, so no .curlrc is read; no proxy; only SMTP; TLS required
+  (--ssl-reqd: STARTTLS for smtp://) except to this machine
+  (relay.messages/plain-smtp?). With a :user, the login is read from
+  stdin (-K -), so it is never on a command line anyone can see. The one
+  recipient is the channel's :to."
   [{:keys [url from to user timeout-seconds]} file]
-  (cond-> ["curl" "-q" "--silent" "--show-error" "--noproxy" "*" "--proto" "=smtp,smtps"
-           "--max-time" (str (or timeout-seconds 60))
+  (cond-> ["curl" "-q" "--silent" "--show-error" "--noproxy" "*" "--proto" "=smtp,smtps"]
+    (not (messages/plain-smtp? url)) (conj "--ssl-reqd")
+    :always
+    (into ["--max-time" (str (or timeout-seconds 60))
            ;; The path is the name curl gives itself in EHLO: the domain
            ;; it sends from, rather than the name of the file it uploads.
-           "--url" (str (str/replace url #"/$" "") "/" (domain-of from)) "--mail-from" from "--mail-rcpt" to "--upload-file" (str file)]
+           "--url" (str (str/replace url #"/$" "") "/" (domain-of from)) "--mail-from" from "--mail-rcpt" to "--upload-file" (str file)])
     user (into ["-K" "-"])))
 
 (defn curl-login

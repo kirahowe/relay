@@ -248,10 +248,12 @@
       "none: the client alone")
   (is (nil? (problem {:channels {"mail" mail} :routes [{:channels ["mail"]}]})))
   (is (nil? (problem {:channels {"mail" (assoc mail :url "smtp://127.0.0.1:1025")} :routes []})) "plain SMTP to this machine")
+  (is (nil? (problem {:channels {"mail" (assoc mail :url "smtp://smtp.example.org:587")} :routes []}))
+      "smtp:// to another host, where STARTTLS is required")
   (is (nil? (problem {:channels {"mail" (assoc mail :user "agent@example.org" :credentials-command ["cat" "/k"])}
                       :routes [{:urgencies ["low"] :channels ["mail"] :at :digest}]
                       :digest-at "18:00" :quiet-hours {:from "22:00" :to "07:00"}})))
-  (doseq [[m why] [[{:channels {"mail" (assoc mail :url "smtp://smtp.example.org:25")} :routes []} "only for this machine"]
+  (doseq [[m why] [[{:channels {"mail" (assoc mail :url "ftp://smtp.example.org:25")} :routes []} "cannot be used"]
                    [{:channels {"mail" (assoc mail :url "https://smtp.example.org")} :routes []} "cannot be used"]
                    [{:channels {"mail" (assoc mail :to "kira@example.org, eve@example.net")} :routes []} ":to"]
                    [{:channels {"mail" (assoc mail :to "Kira <kira@example.org>")} :routes []} ":to"]

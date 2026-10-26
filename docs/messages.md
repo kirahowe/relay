@@ -237,10 +237,12 @@ flowchart LR
 - `Message-ID` is `<relay.<id>.<created-ms>@<from's domain>>`, the same
   every time, so a reply threads to it.
 - curl runs with `-q` (no `.curlrc`), `--noproxy "*"`, `--proto
-  =smtp,smtps`, one `--mail-rcpt`, and the login on stdin (`-K -`), so
+  =smtp,smtps`, `--ssl-reqd` unless the server is this machine, one
+  `--mail-rcpt`, and the login on stdin (`-K -`), so
   the password is on no command line. The message goes in an
   owner-only temporary file that is removed after.
-- `smtps://` for any server; plain `smtp://` only to this machine.
+- `smtps://` (TLS from the start) or `smtp://` (STARTTLS, required) for
+  any server; unencrypted `smtp://` only to this machine.
 
 ### Push
 
@@ -283,7 +285,7 @@ except the subject.
 
 ```mermaid
 flowchart TD
-  cfg[relay.edn :messages] -->|settings-problem refuses<br/>a :to with a name, a comma,<br/>or anything but one address;<br/>keys a channel does not take;<br/>plain smtp:// off this machine| ok[a checked channel]
+  cfg[relay.edn :messages] -->|settings-problem refuses<br/>a :to with a name, a comma,<br/>or anything but one address;<br/>keys a channel does not take;<br/>a :url not smtp:// or smtps://| ok[a checked channel]
   model[what the model gives] -->|tell_operator takes only<br/>subject, body, items,<br/>urgency, in_reply_to| core
   core[relay.core] -->|refuses a subject<br/>with a line break| m[the message]
   m --> render[channels/email<br/>From and To from the channel,<br/>fixed headers,<br/>subject squeezed and encoded,<br/>body base64]

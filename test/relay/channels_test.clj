@@ -248,6 +248,16 @@
     (is (= "smtps://smtp.example.org:465/example.org" (second (drop-while #(not= "--url" %) argv)))))
   (is (not (some #{"-K"} (channels/curl-argv (dissoc mail-channel :user :credentials-command) "/tmp/m.eml")))))
 
+(deftest smtp-to-another-host-requires-starttls
+  (let [argv #(channels/curl-argv (assoc mail-channel :url %) "/tmp/m.eml")]
+    (is (some #{"--ssl-reqd"} (argv "smtp://smtp.example.org:587"))
+        "curl refuses to go on if the server will not start TLS")
+    (is (some #{"--ssl-reqd"} (argv "smtp://SMTP.example.org:25")))
+    (testing "plain SMTP stays for this machine only"
+      (doseq [u ["smtp://127.0.0.1:1025" "smtp://localhost:1025" "smtp://[::1]:1025"]]
+        (is (not (some #{"--ssl-reqd"} (argv u))) u)))
+    (is (some #{"--ssl-reqd"} (argv "smtps://smtp.example.org:465")) "TLS from the start, required all the same")))
+
 ;; --- what a mail app shows
 
 (defn- msg-of [id subject text & {:as more}]

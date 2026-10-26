@@ -36,8 +36,9 @@
    ;; JSON line per push and reaches nobody (used by staging data).
    "phone" {:kind :push :via :ntfy :url "http://127.0.0.1:2586" :topic "relay"}
    ;; Mail from the agent's own address to yours, and to no one else,
-   ;; sent with curl. smtps:// for a real server; plain smtp:// only to
-   ;; this machine. The password is what :credentials-command prints.
+   ;; sent with curl. smtps://host:465, or smtp://host:587 where relay
+   ;; requires STARTTLS; unencrypted only to this machine. The password
+   ;; is what :credentials-command prints.
    ;; "mail" {:kind :email
    ;;         :url "smtps://smtp.example.org:465"
    ;;         :from "agent@example.org"
