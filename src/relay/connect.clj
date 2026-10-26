@@ -1,8 +1,9 @@
 (ns relay.connect
   "relay connect <name> <url> and relay mcp-token <name>: the operator
-  signs relay in to a remote MCP server, chooses which of its tools roles
-  may have and what each may do, and relay writes the connection file
-  (relay.connections).
+  signs relay in to a remote MCP server, and relay writes the connection
+  file (relay.connections) with each tool as relay proposes it: the class
+  its annotations suggest, the default labels, and on unless its name says
+  it deletes. The operator changes any of that by editing the file.
 
   The sign-in is OAuth 2.1's authorization code flow with PKCE (S256), as
   MCP's authorization spec has it: the server's protected-resource
@@ -17,7 +18,7 @@
   when it is near its end; agentloop runs it as the server's credentials
   command.
 
-  The pure parts (classification, the summary, metadata checks, the
+  The pure parts (the proposal, the summary, metadata checks, the
   authorization URL, the token blob) are plain functions. The edges
   (HTTP, the browser, the keychain, the terminal, agentloop) come in a
   map, so tests give their own."
@@ -30,8 +31,7 @@
             [relay.config :as config]
             [relay.connections :as connections]
             [relay.json :as strict]
-            [relay.text :as text]
-            [relay.vet :as vet])
+            [relay.text :as text])
   (:import (java.net URI URLDecoder URLEncoder)
            (java.nio.channels FileChannel)
            (java.nio.file OpenOption StandardOpenOption)
@@ -92,14 +92,10 @@
   labels, and whether it is on. An act tool asks the operator before every
   call by its class, so it is not given :always-hold, which would also
   shut out :consent. An :always-hold an earlier connect proposed for an
-  act tool is dropped for the same reason. A tool the operator chose for before, in the connection
-  file `previous`, keeps that choice and its name. No new name is one of
-  `taken`, the names relay.edn's own tools have.
-
-  Each tool carries its definition's text (:texts) and what relay.vet
-  found odd in it (:flags), with `others` the names of tools from
-  elsewhere. A flagged tool starts off, whatever was chosen before."
-  [conn-name listed previous & [taken others]]
+  act tool is dropped for the same reason. A tool already in the connection
+  file `previous` keeps the choices written there, and its name. No new
+  name is one of `taken`, the names relay.edn's own tools have."
+  [conn-name listed previous & [taken]]
   (let [before (into {} (for [[n t] (:tools previous)] [(:tool t) (assoc t :name n)]))]
     (:out (reduce (fn [{:keys [taken out]} {:keys [name] :as l}]
                     (let [old (get before name)
@@ -109,13 +105,7 @@
                                     :digest (:digest l) :class class :labels default-labels
                                     :on (not (delete-like? l))}
                                    (select-keys old kept-choices))
-                          t (cond-> t (= :act (:class t)) (dissoc :always-hold))
-                          flags (vet/flags l (set others))
-                          t (assoc t :texts (vet/texts l) :flags flags)
-                          ;; Every time: the digest leaves out titles and
-                          ;; annotations, so an earlier yes may not be for
-                          ;; this text.
-                          t (cond-> t (seq flags) (assoc :on false))]
+                          t (cond-> t (= :act (:class t)) (dissoc :always-hold))]
                       {:taken (conj taken rn) :out (conj out t)}))
                   {:taken (into (set taken) (keep :name (vals before))) :out []}
                   (sort-by :name listed)))))
@@ -137,8 +127,6 @@
             :edit "Changes your own things there, which nobody else sees, and asks you first when what it works with came from outside."
             (str "Class " (name class) "."))))
 
-(defn- schema-text? [[where]] (not (#{"name" "title" "description"} where)))
-
 (defn- shown-line
   "Server text shown on one line of the operator's screen: whitespace,
   newlines included, made single spaces, and links broken."
@@ -146,59 +134,18 @@
   (text/defang (one-line s)))
 
 (defn summary-line
-  "One tool as the operator is shown it. Every word of its definition is
-  shown, since the model reads all of it and the typed code trusts what
-  was shown. A clean tool's text is on a line or two; a flagged one's is
-  shown whole, defanged and behind the gutter, after why it was flagged."
-  [i {:keys [title tool description texts flags] :as t}]
-  (let [head (str (format "%2d. " (inc i))
-                  (if (str/blank? title) (shown-line tool) (str (shown-line title) " (" (shown-line tool) ")")))]
-    (if (seq flags)
-      (str/join "\n"
-                (concat [head
-                         (str "    " (does t))
-                         "    relay found something odd in what the server wrote for this tool, so it starts off:"]
-                        (for [f flags] (str "      - " (shown-line f)))
-                        ["    Everything the server wrote for it:"]
-                        (mapcat (fn [[where s]] (cons (str "    " (shown-line where) ":")
-                                                      (map #(str "  " %) (text/block [] (text/defang s)))))
-                                texts)))
-      (str head "\n" "    " (does t)
-           (when-not (str/blank? description) (str "\n    The server says: " (shown-line description)))
-           (when-let [schema (seq (filter schema-text? texts))]
-             (str "\n    The rest of what it says: "
-                  (str/join "; " (for [[w s] schema] (str (shown-line w) ": " (shown-line s))))))))))
+  "One tool as the operator is shown it: its name, what it may do, and
+  what the server says it is for."
+  [i {:keys [title tool description] :as t}]
+  (str (format "%2d. " (inc i))
+       (if (str/blank? title) (shown-line tool) (str (shown-line title) " (" (shown-line tool) ")"))
+       "\n    " (does t)
+       (when-not (str/blank? description) (str "\n    The server says: " (shown-line description)))))
 
 (defn summary
   "The lines that show the operator what connecting would allow."
   [proposal]
-  (vec (map-indexed summary-line proposal)))
-
-(defn choices
-  "The answers that set a tool's class or turn it on or off, by key, for
-  the classes relay knows. :write (relay's own data) is never a remote
-  tool's."
-  [classes]
-  (into (array-map)
-        (concat [["r" {:class :read :label "reads only"}]
-                 ["a" {:class :act :label "acts for you, asks you every time"}]]
-                (when (contains? classes :egress) [["e" {:class :egress :label "sends things out to the service"}]])
-                (when (contains? classes config/edit-class)
-                  [["c" {:class config/edit-class :label "changes your own things, asks after outside text"}]])
-                [["off" {:on false :label "off"}]
-                 ["on" {:on true :label "on"}]])))
-
-(defn apply-choice
-  "The proposal with one tool changed by an answer from `choices`. A tool
-  set to act asks every time by its class. A new class drops any
-  :always-hold; the operator can write it in the file."
-  [proposal i {:keys [class on]}]
-  (update proposal i
-          (fn [t]
-            (cond-> t
-              (some? on) (assoc :on on)
-              class (assoc :class class)
-              class (dissoc :always-hold)))))
+  (vec (mapcat (fn [i t] (str/split-lines (summary-line i t))) (range) proposal)))
 
 (defn connection
   "The connection file's map from what the operator chose."
@@ -626,31 +573,9 @@
                                                   :bound (bound-to url oauth)})})))
       (finally (stop)))))
 
-(defn- choose!
-  "Shows the proposal and lets the operator change it, until they press
-  Enter. Returns the proposal as chosen."
-  [proposal {:keys [say ask classes]}]
-  (let [opts (choices classes)]
-    (loop [proposal proposal]
-      (say (str "\n" (str/join "\n" (summary proposal))
-                "\n\nType a number to change that tool, or press Enter if this is right: "))
-      (let [a (some-> (ask) str/trim)
-            i (some-> a parse-long dec)]
-        (cond
-          (nil? a) (problem! "The terminal closed. Nothing was changed.")
-          (str/blank? a) proposal
-          (not (and i (< -1 i (count proposal)))) (recur proposal)
-          :else (do (say (str (shown-line (:tool (proposal i))) ": "
-                              (str/join ", " (for [[k {:keys [label]}] opts] (str k " " label))) ": "))
-                    (if-let [c (get opts (some-> (ask) str/trim str/lower-case))]
-                      (recur (apply-choice proposal i c))
-                      (recur proposal))))))))
-
 (defn connect!
   "relay connect. `opts`: :name, :url, :data-dir (absolute), :relay-bin,
-  :agentloop, :taken (tool names relay.edn already gives), :others (the
-  names of tools from elsewhere, which a definition has no reason to
-  name), :classes (what relay.edn's tools may be), :client-id, the
+  :agentloop, :taken (tool names relay.edn already gives), :client-id, the
   terminal's :say and :ask, :confirm! (shows lines and asks for the typed
   code, throwing when it is wrong) and :pin! (records the pins in the
   log). Returns the lines to print."
@@ -668,7 +593,7 @@
         {:keys [oauth blob]} (sign-in! env opts)
         listed (list-tools agentloop url (:access-token blob))
         _ (when (empty? listed) (problem! "The server offers no tools. Nothing was changed."))
-        proposal (choose! (propose name listed previous (:taken opts) (:others opts)) opts)
+        proposal (propose name listed previous (:taken opts))
         on (filter :on proposal)
         conn (connection {:url url :oauth oauth :connected (str ((:now env)))
                           :credentials-command [relay-bin "mcp-token" name "--data" data-dir "--url" url]}
