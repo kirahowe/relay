@@ -101,6 +101,31 @@
            (<= (count xs) limit)
            (= ats (reverse (sort ats)))))))
 
+(defspec items-at-the-same-time-are-newest-first-by-the-logs-order 50
+  ;; Several things made in one tick share a time; the log's order says
+  ;; which came last.
+  (prop/for-all [kinds (gen/vector (gen/elements [:message :draft :card]) 1 8)]
+    (let [w (reduce (fn [w [i k]]
+                      (case k
+                        :message (ct/run w "clerk" :message/send {:subject (str "m" i) :sections [{:items ["x"]}]})
+                        :draft (ct/run w "clerk" :prepared/record {:call (str "c" i) :tool "t" :title (str "d" i) :where "w"})
+                        :card (ct/run w "clerk" :card/add {:kind "note" :title (str "k" i) :text "t"})))
+                    (seed) (map-indexed vector kinds))
+          xs (ready/ready (:state w))
+          seqs (map :seq xs)
+          wire (mapv ready/wire xs)]
+      (and (= (count kinds) (count xs))
+           (apply = (map :at xs))
+           (= seqs (reverse (sort seqs)))
+           (= seqs (map #(get % "seq") wire))))))
+
+(deftest the-order-is-total
+  (let [at (Instant/parse "2026-10-26T12:00:00Z")
+        a {:id "card:3" :at at :seq 3} b {:id "message:5" :at at :seq 5}
+        c {:id "event:1" :at (.plusSeconds at 1) :seq 1}]
+    (is (= [c b a] (sort ready/newer-first [a b c])))
+    (is (= [c b a] (sort ready/newer-first [b c a])))))
+
 ;; --- where a thing came from
 
 (deftest a-label-reads-as-where-it-came-from
@@ -454,7 +479,7 @@
         [h fx] (ht/say h 1 (ht/req 5 "_relay/ready" {}))
         answer (get (first (ht/writes fx 1)) "result")]
     (is (= ["message"] (map #(get % "kind") (get answer "items"))))
-    (is (= #{"id" "kind" "at" "title" "lines" "from" "outsider" "message" "messageKind" "urgency" "thread" "replyTo" "replies"}
+    (is (= #{"id" "kind" "at" "seq" "title" "lines" "from" "outsider" "message" "messageKind" "urgency" "thread" "replyTo" "replies"}
            (set (keys (first (get answer "items")))))
         "a message's item carries what a client needs to answer it")
     (testing "a new item reaches the subscriber, and only it"

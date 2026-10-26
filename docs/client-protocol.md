@@ -145,8 +145,10 @@ command line instead.
   role made with an edit tool that is not relay's own, entries on the
   agent's calendar that have not ended, and findings a role put on the
   board.
-- An Item is `{"id", "kind", "at", "title", "lines": [string], "from":
-  string or null, "outsider": bool}` and what its kind adds. `id` is
+- An Item is `{"id", "kind", "at", "seq", "title", "lines": [string],
+  "from": string or null, "outsider": bool}` and what its kind adds.
+  `seq` is the log's number of the event that made the item; items with
+  the same `at` are newest first by it, then by `id`. `id` is
   stable and names the kind and its number (`"message:7"`,
   `"prepared:12"`, `"event:3"`, `"card:9"`). `kind` is `"message"`,
   `"draft"`, `"event"` or `"finding"`; a client shows any other kind by

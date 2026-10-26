@@ -13,7 +13,7 @@
     :finding   an active card a role put on her board
     :move      (B9) a file move, with its undo
 
-  An item is {:id \"message:7\" :kind :at :title :lines [text] :from
+  An item is {:id \"message:7\" :kind :at :seq :title :lines [text] :from
   \"from a mail by x@y\" or nil :labels [..]} and what its kind adds. A
   kind is one source, a function of the state that gives items (`sources`):
   a new kind is one more entry there, and a line in `kind-words`. Nothing
@@ -73,7 +73,7 @@
 ;; --- the sources
 
 (defn- message-item [state m]
-  {:id (str "message:" (:id m)) :kind :message :at (:created-at m)
+  {:id (str "message:" (:id m)) :kind :message :at (:created-at m) :seq (:id m)
    :message (:id m) :message-kind (:kind m) :urgency (:urgency m) :thread (:thread m)
    :title (:subject m)
    :lines (vec (for [sec (:sections m) it (:items sec)] (:text it)))
@@ -82,14 +82,14 @@
    :reply-to (when (core/message-author state m) (:id m))})
 
 (defn- draft-item [p]
-  {:id (str "prepared:" (:id p)) :kind :draft :at (:at p)
+  {:id (str "prepared:" (:id p)) :kind :draft :at (:at p) :seq (:id p)
    :title (:title p)
    :lines (vec (remove str/blank? [(:where p) (:preview p)]))
    :labels (vec (:labels p))
    :tool (:tool p)})
 
 (defn- event-item [e]
-  {:id (str "event:" (:id e)) :kind :event :at (:recorded-at e)
+  {:id (str "event:" (:id e)) :kind :event :at (:recorded-at e) :seq (:seq e)
    :title (:title e)
    :lines (vec (remove str/blank? [(:location e) (:description e)]))
    :labels (vec (:labels e))
@@ -97,7 +97,7 @@
 
 (defn- finding-item [c]
   (let [p (cards/progress c)]
-    {:id (str "card:" (:id c)) :kind :finding :at (:added-at c)
+    {:id (str "card:" (:id c)) :kind :finding :at (:added-at c) :seq (:id c)
      :title (get-in c [:title :text])
      :lines (vec (when (and p (pos? (:total p))) [(str (:done p) " of " (:total p) " done")]))
      :labels (vec (cards/text-labels c))
@@ -117,14 +117,24 @@
 
 (def default-limit 60)
 
+(defn newer-first
+  "A comparator: the later :at first; at the same time, the later event
+  in the log (:seq); then by id, so the order is total."
+  [a b]
+  (let [c (compare (:at b) (:at a))
+        c (if (zero? c) (compare (or (:seq b) 0) (or (:seq a) 0)) c)]
+    (if (zero? c) (compare (:id a) (:id b)) c)))
+
 (defn ready
   "Everything ready for the operator in `state`: the newest `limit`
-  items (60 unless given), newest first, ties by id."
+  items (60 unless given), newest first. Items with the same time are
+  ordered by the log's sequence number of the event that made them,
+  newest first, then by id."
   ([state] (ready state {}))
   ([state {:keys [limit] :or {limit default-limit}}]
    (->> sources
         (mapcat #(% state))
-        (sort-by (juxt (comp - #(.toEpochMilli ^java.time.Instant %) :at) :id))
+        (sort newer-first)
         (take limit)
         vec)))
 
@@ -164,7 +174,7 @@
 
 (defn- wire-item [{:keys [labels] :as it}]
   (let [from (provenance labels)]
-    (cond-> {"id" (:id it) "kind" (name (:kind it)) "at" (str (:at it))
+    (cond-> {"id" (:id it) "kind" (name (:kind it)) "at" (str (:at it)) "seq" (:seq it)
              "title" (safe-line labels (:title it))
              "lines" (mapv #(safe labels %) (:lines it))
              "from" from
