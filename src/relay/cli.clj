@@ -3,6 +3,7 @@
   (:require [babashka.cli :as cli]
             [clojure.edn :as edn]
             [babashka.fs :as fs]
+            [babashka.process :as p]
             [clojure.string :as str]
             [relay.cards :as cards]
             [relay.config :as config]
@@ -30,6 +31,7 @@
             [relay.text :as text]
             [relay.tools :as tools]
             [relay.traces :as traces]
+            [relay.websocket :as ws]
             [relay.week :as week]))
 
 (def usage
@@ -155,6 +157,9 @@ Every command needs the data directory, from --data <dir> or from the file
                                       changes gives it
   relay dismiss <item> [<note>]       drop a suggestion of the latest daily note
                                       (or of note <note>) for good
+  relay calendar url [--host <name>]  the address to subscribe to the agent's
+                                      calendar at, in your calendar app; it opens
+                                      the calendar and nothing else
   relay poll [<source>]               check relay.edn's :ingest sources now (the
                                       mailbox, GitHub, calendars), due or not, and
                                       say what came in
@@ -460,7 +465,7 @@ id public too.")
             :version :long :wake :long :role :string :trace :string :public :boolean
             :topic :string :from :string :to :string :why :string :text :string
             :pause-file :string :socket :string :run-dir :string :since :string :until :string :out :string :agentloop :string
-            :client-id :string :url :string :open :string
+            :client-id :string :url :string :open :string :host :string
             :item [:string] :row [:string] :column [:string] :state :string :seen :long :archived :boolean}})
 
 (defn- house!
@@ -550,6 +555,38 @@ id public too.")
                             "Sent today's daily note. It counts as today's, so the next one is tomorrow."
                             "Today's note had nothing to say, so nothing was sent."))))
       (fail! "usage: relay note [now]"))))
+
+(defn- tailnet-name
+  "This Mac's name on the tailnet, from `tailscale status --json`, or nil
+  when tailscale is not on PATH or does not say within five seconds."
+  []
+  (when-let [bin (fs/which "tailscale")]
+    (try
+      (let [proc (p/process [(str bin) "status" "--json"] {:out :string :err :string})
+            r (deref proc 5000 nil)]
+        (if (and r (zero? (:exit r)))
+          (some-> (json/parse-string (:out r)) (get-in ["Self" "DNSName"]) (str/replace #"\.$" "") not-empty)
+          (do (p/destroy-tree proc) nil)))
+      (catch Exception _ nil))))
+
+(defn- calendar!
+  "relay calendar url: the address a calendar app subscribes to the
+  agent's calendar at, with the feed's own token (relay.websocket/
+  feed-token), which opens the calendar and nothing else."
+  [sys [sub] opts]
+  (when-not (= "url" sub) (fail! "usage: relay calendar url [--host <name>]"))
+  (let [{:keys [port token-command]} (get-in (:config sys) [:serve :websocket])]
+    (when-not port
+      (fail! "The calendar is served by relay serve's listener, and relay.edn has none yet. See \"Reaching"
+             "relay from your phone\" in the README for :serve {:websocket ...}."))
+    (let [{:keys [token error]} (serve/read-token token-command)
+          _ (when error (fail! (str "relay could not read the listener's token: " error ".")))
+          host (or (:host opts) (tailnet-name))]
+      (if host
+        (result 0 (ws/calendar-url host port token)
+                "Add it in your calendar app as a calendar subscription. It opens the calendar and nothing else.")
+        (result 0 (ws/calendar-url "<your Mac's tailnet name>" port token)
+                "relay could not find this Mac's tailnet name: put it in, or run relay calendar url --host <name>.")))))
 
 (def ^:private ready-shown
   "How many of the newest items relay ready shows without --all."
@@ -692,6 +729,7 @@ id public too.")
                         problems))
       "tool" (run-tool sys (:role opts) (first more) (:wake opts))
       "house" (house! sys more)
+      "calendar" (calendar! sys more opts)
       "moves" (lines (files/calls-lines (core/move-calls (state)) zone))
       "undo" (let [id (some-> (first more) parse-long)]
                (when-not id (fail! "usage: relay undo <move>, a number from relay moves"))

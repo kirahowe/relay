@@ -101,7 +101,9 @@
    :title (:title e)
    :lines (vec (remove str/blank? [(:location e) (:description e)]))
    :labels (vec (:labels e))
-   :start (:start e) :end (:end e)})
+   :start (:start e) :end (:end e)
+   ;; A whole day: its first day and the day after its last.
+   :start-date (:start-date e) :end-date (:end-date e)})
 
 (defn- finding-item [c]
   (let [p (cards/progress c)]
@@ -226,6 +228,8 @@
                            "replies" (mapv (fn [r] {"at" (str (:at r)) "text" (safe [] (:text r))})
                                            (:replies it)))
       (:start it) (assoc "start" (str (:start it)) "end" (str (:end it)))
+      (:start-date it) (assoc "allDay" true "startDate" (str (:start-date it))
+                              "lastDate" (str (.minusDays ^java.time.LocalDate (:end-date it) 1)))
       (:card it) (assoc "card" (:card it))
       (:move it) (assoc "move" (:move it) "role" (:role it) "undo" (:undo it) "undone" (:undone it)))))
 

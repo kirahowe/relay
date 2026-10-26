@@ -11,7 +11,9 @@
     - TEXT values escape backslash, semicolon, comma and newline, and
       drop every control, format or invisible code point, so text a model
       wrote cannot start another property or hide what it says.
-    - Times are UTC.
+    - Times are UTC. An all-day event is a DATE: DTSTART;VALUE=DATE is
+      its first day and DTEND;VALUE=DATE the day after its last, so a
+      calendar app shows it as a whole day wherever it is.
     - An event's UID is made from its number, so it never changes.
     - SEQUENCE is the number of changes the event has had, so it rises
       with each one.
@@ -112,6 +114,13 @@
   [^Instant t]
   (.format ^DateTimeFormatter utc-format t))
 
+(def ^:private date-format (DateTimeFormatter/ofPattern "uuuuMMdd"))
+
+(defn date
+  "A day as an iCalendar DATE."
+  [^java.time.LocalDate d]
+  (.format ^DateTimeFormatter date-format d))
+
 (defn uid
   "The UID of the event numbered `id`: the same for every version of it."
   [id]
@@ -129,8 +138,10 @@
   "One event's VEVENT, as unfolded-property strings (each folded already).
   The event is {:id :title :start :end :location :description :sequence
   :created :modified :removed-at}, times as Instants. :end, :location
-  and :description may be nil. A :removed-at makes it cancelled."
-  [{:keys [id title start end location description sequence created modified removed-at]}]
+  and :description may be nil. A :removed-at makes it cancelled. An
+  all-day event has :start-date and :end-date too, LocalDates, the first
+  day and the day after the last, and is written with those."
+  [{:keys [id title start end start-date end-date location description sequence created modified removed-at]}]
   (concat
    ["BEGIN:VEVENT"
     (property "UID" (uid id))
@@ -138,8 +149,9 @@
     (property "CREATED" (utc created))
     (property "LAST-MODIFIED" (utc modified))
     (property "SEQUENCE" (str sequence))
-    (property "DTSTART" (utc start))]
-   (when end [(property "DTEND" (utc end))])
+    (if start-date (property "DTSTART;VALUE=DATE" (date start-date)) (property "DTSTART" (utc start)))]
+   (cond start-date [(property "DTEND;VALUE=DATE" (date end-date))]
+         end [(property "DTEND" (utc end))])
    [(text-property "SUMMARY" title)]
    (when-not (str/blank? location) [(text-property "LOCATION" location)])
    (when-not (str/blank? description) [(text-property "DESCRIPTION" description)])

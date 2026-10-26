@@ -291,7 +291,8 @@ operator subscribes to. Put an event on it when something has a time the
 operator will want to see: an appointment you found in the mail, a
 deadline with a day, a time you promised to come back to something. Give
 a title that makes sense on its own and the local start; an event with
-no end lasts an hour. When the time or place changes, use
+no end lasts an hour. For a whole day, such as a holiday, set `all_day`
+and give the date. When the time or place changes, use
 `calendar_update` rather than adding another event, and say why when it
 isn't obvious. Take an event off with `calendar_remove` when it no
 longer applies. Their calendar app is told it was cancelled.

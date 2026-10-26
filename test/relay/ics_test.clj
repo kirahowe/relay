@@ -11,7 +11,7 @@
             [relay.ics :as ics])
   (:import (java.nio ByteBuffer)
            (java.nio.charset CodingErrorAction StandardCharsets)
-           (java.time Duration Instant)))
+           (java.time Duration Instant LocalDate ZoneOffset)))
 
 ;; --- a reader of iCalendar, for the tests
 
@@ -104,29 +104,55 @@
   (Instant/parse (str (subs s 0 4) "-" (subs s 4 6) "-" (subs s 6 8) "T"
                       (subs s 9 11) ":" (subs s 11 13) ":" (subs s 13 15) "Z")))
 
+(defn- one-line-of [component name]
+  (let [ls (filter #(= name (:name %)) (:props component))]
+    (assert (<= (count ls) 1) (str name " given twice"))
+    (first ls)))
+
+(defn- parse-date [s]
+  (assert (re-matches #"\d{8}" s) (str "not a DATE: " s))
+  (LocalDate/parse (str (subs s 0 4) "-" (subs s 4 6) "-" (subs s 6 8))))
+
+(defn- date-valued?
+  "Whether a DTSTART or DTEND is a DATE (RFC 5545 3.3.4): VALUE=DATE and
+  nothing else among its parameters."
+  [l]
+  (case (:params l)
+    "" false
+    ";VALUE=DATE" true
+    (throw (ex-info (str "unexpected parameters " (pr-str (:params l))) {}))))
+
 (defn read-events
-  "What a feed says, as maps like the ones relay.ics renders, plus :status."
+  "What a feed says, as maps like the ones relay.ics renders, plus :status.
+  An all-day event has :start-date and :end-date, and no :start or :end."
   [text]
   (let [cal (parse text)]
     (assert (= "VCALENDAR" (:name cal)))
     (assert (= ["2.0"] (prop-values cal "VERSION")))
-    (vec (for [e (:children cal)]
+    (vec (for [e (:children cal)
+               :let [ds (one-line-of e "DTSTART") de (one-line-of e "DTEND")
+                     all-day (date-valued? ds)]]
            (do (assert (= "VEVENT" (:name e)))
-               (when-let [end (one-prop e "DTEND")]
-                 (assert (.isAfter (parse-utc end) (parse-utc (one-prop e "DTSTART")))
+               (when de
+                 (assert (= all-day (date-valued? de)) "DTSTART and DTEND are of one kind")
+                 (assert (if all-day
+                           (.isAfter (parse-date (:value de)) (parse-date (:value ds)))
+                           (.isAfter (parse-utc (:value de)) (parse-utc (:value ds))))
                          "DTEND is after DTSTART"))
+               (merge
+                (if all-day
+                  {:start-date (parse-date (:value ds)) :end-date (some-> de :value parse-date)}
+                  {:start (parse-utc (:value ds)) :end (some-> de :value parse-utc)})
                {:uid (one-prop e "UID")
                 :dtstamp (parse-utc (one-prop e "DTSTAMP"))
                 :created (parse-utc (one-prop e "CREATED"))
                 :modified (parse-utc (one-prop e "LAST-MODIFIED"))
                 :sequence (parse-long (one-prop e "SEQUENCE"))
-                :start (parse-utc (one-prop e "DTSTART"))
-                :end (some-> (one-prop e "DTEND") parse-utc)
                 :title (unescape-text (one-prop e "SUMMARY"))
                 :location (some-> (one-prop e "LOCATION") unescape-text)
                 :description (some-> (one-prop e "DESCRIPTION") unescape-text)
                 :status (one-prop e "STATUS")
-                :property-names (set (map :name (:props e)))})))))
+                :property-names (set (map :name (:props e)))}))))))
 
 ;; --- generators
 
@@ -153,14 +179,20 @@
 
 (def gen-event
   (gen/fmap
-   (fn [[id title start length location description changes created-gap removed?]]
+   (fn [[id title start length location description changes created-gap removed? days]]
      (let [created (.minusSeconds ^Instant start created-gap)
-           modified (.plusSeconds ^Instant created (* 60 changes))]
-       {:id id :title title :start start
-        :end (when length (.plusSeconds ^Instant start length))
-        :location location :description description
-        :sequence changes :created created :modified modified
-        :removed-at (when removed? modified)}))
+           modified (.plusSeconds ^Instant created (* 60 changes))
+           ;; Some are whole days, as relay keeps them: the first day, the
+           ;; day after the last, and the starts of both.
+           first-day (when days (.toLocalDate (.atZone ^Instant start ZoneOffset/UTC)))]
+       (cond-> {:id id :title title :start start
+                :end (when length (.plusSeconds ^Instant start length))
+                :location location :description description
+                :sequence changes :created created :modified modified
+                :removed-at (when removed? modified)}
+         days (assoc :start-date first-day :end-date (.plusDays first-day days)
+                     :start (.toInstant (.atStartOfDay first-day ZoneOffset/UTC))
+                     :end (.toInstant (.atStartOfDay (.plusDays first-day days) ZoneOffset/UTC))))))
    (gen/tuple (gen/choose 1 100000)
               (gen/one-of [gen-text gen-long-text])
               gen-instant
@@ -169,7 +201,8 @@
               (gen/one-of [(gen/return nil) gen-text gen-long-text])
               (gen/choose 0 50)
               (gen/choose 0 100000)
-              gen/boolean)))
+              gen/boolean
+              (gen/one-of [(gen/return nil) (gen/choose 1 5)]))))
 
 (def gen-events
   (gen/fmap (fn [es] (vec (vals (into {} (map (juxt :id identity) es)))))
@@ -248,8 +281,10 @@
                             (= (ics/clean-text (:title e)) (:title b))
                             (= (when-not (str/blank? (:location e)) (ics/clean-text (:location e))) (:location b))
                             (= (when-not (str/blank? (:description e)) (ics/clean-text (:description e))) (:description b))
-                            (= (:start e) (:start b))
-                            (= (:end e) (:end b))
+                            (if (:start-date e)
+                              (and (= (:start-date e) (:start-date b)) (= (:end-date e) (:end-date b))
+                                   (nil? (:start b)))
+                              (and (= (:start e) (:start b)) (= (:end e) (:end b)) (nil? (:start-date b))))
                             (= (:sequence e) (:sequence b))
                             (= (:created e) (:created b))
                             (= (:modified e) (:modified b) (:dtstamp b))
@@ -295,6 +330,19 @@
         feed (fn [at] (read-events (ics/render {:now at :events [e]})))]
     (is (= 1 (count (feed (.minusSeconds (.plus over (Duration/ofDays ics/ended-days)) 1)))))
     (is (empty? (feed (.plus over (Duration/ofDays ics/ended-days)))))))
+
+(deftest an-all-day-event-is-a-date
+  ;; Regression (U1): a role said it had added an all-day event, and the
+  ;; feed had an hour at midnight.
+  (let [d (LocalDate/parse "2026-11-11")
+        e {:id 4 :title "Remembrance Day" :start (Instant/parse "2026-11-11T04:00:00Z")
+           :end (Instant/parse "2026-11-12T04:00:00Z") :start-date d :end-date (.plusDays d 1)
+           :sequence 0 :created now :modified now}
+        text (ics/render {:now now :events [e]})]
+    (is (str/includes? text "DTSTART;VALUE=DATE:20261111\r\n"))
+    (is (str/includes? text "DTEND;VALUE=DATE:20261112\r\n"))
+    (is (not (re-find #"DTSTART:" text)))
+    (is (= [d (.plusDays d 1)] ((juxt :start-date :end-date) (first (read-events text)))))))
 
 (deftest times-are-utc-to-the-second
   (is (= "20261014T130500Z" (ics/utc (Instant/parse "2026-10-14T13:05:00.999Z"))))

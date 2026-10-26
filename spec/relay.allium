@@ -918,6 +918,10 @@ entity CalendarEventVersion {
     title: String
     start: Timestamp
     end: Timestamp
+    -- An all-day event's first day and the day after its last; start and
+    -- end are then the starts of those days in the operator's zone.
+    start_date: Date?
+    end_date: Date?
     location: String?
     description: String?
     why: String?
@@ -3152,13 +3156,18 @@ rule ServeCalendarFeed {
     when: CalendarFeedRequested(request)
 
     -- The feed is served on the WebSocket listener only (127.0.0.1, behind
-    -- the operator's tailnet), to the listener's token given as a bearer
+    -- the operator's tailnet), to the feed's own token given as a bearer
     -- token or as ?token= in the URL, and to no request with a foreign
     -- Origin. It lists every event; a removed one stays as STATUS:CANCELLED
     -- for 30 days and is then dropped. Times are UTC, DTSTAMP is the time of
-    -- the event's last change, and lines are folded at 75 octets.
+    -- the event's last change, and lines are folded at 75 octets. An
+    -- all-day event is DATE values: its first day and the day after its
+    -- last. The feed's token is HMAC-SHA256 of a fixed text keyed with
+    -- the listener's token: it opens the feed and nothing else, and the
+    -- listener's token does not open the feed. relay calendar url prints
+    -- the URL with it.
     requires: request.path = "/calendar.ics" and request.method = GET
-    requires: request.token = config.serve.websocket.token
+    requires: request.token = feed_token(config.serve.websocket.token)
 }
 
 -- Organizing files

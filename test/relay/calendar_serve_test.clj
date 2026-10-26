@@ -2,7 +2,10 @@
   "The agent's calendar feed, on relay serve's WebSocket listener and
   nowhere else (I9). The routing is pure and checked as a property; the
   service is checked end to end, with an HTTP client that is not relay's."
-  (:require [babashka.http-client :as http]
+  (:require [babashka.fs :as fs]
+            [babashka.http-client :as http]
+            [relay.cli]
+            [relay.log :as log]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [clojure.test.check.clojure-test :refer [defspec]]
@@ -16,8 +19,13 @@
 
 ;; --- the decision
 
-(def token "tok-for-tests-123")
-(def settings {:token token :allowed-origins ["https://phone.example"]})
+(def listener-token
+  "The listener's token, which opens every conversation."
+  "tok-for-tests-123")
+(def token
+  "The feed's own token, made from the listener's."
+  (ws/feed-token listener-token))
+(def settings {:token listener-token :allowed-origins ["https://phone.example"]})
 
 (defn- head
   ([target] (head target {}))
@@ -44,10 +52,21 @@
   (testing "an origin the listener does not allow is refused, as for the upgrade"
     (is (= {:status 403} (ws/route (head "/calendar.ics" (assoc (bearer token) "Origin" "https://evil.example")) settings)))
     (is (= {:calendar true} (ws/route (head "/calendar.ics" (assoc (bearer token) "Origin" "https://phone.example")) settings))))
-  (testing "a token with characters a URL escapes"
-    (is (= {:calendar true} (ws/route (head "/calendar.ics?token=a%2Bb%20c%2F")
-                                      {:token "a+b c/"})))
-    (is (= {:calendar true} (ws/route (head "/calendar.ics?token=a+b") {:token "a+b"}))))
+  (testing "the listener's own token does not open the feed, in a header or a URL"
+    ;; Regression (U1): the feed took the token that opens every
+    ;; conversation, and a calendar app syncs its URL to its provider.
+    (is (= {:status 401} (ws/route (head "/calendar.ics" (bearer listener-token)) settings)))
+    (is (= {:status 401} (ws/route (head (str "/calendar.ics?token=" listener-token)) settings))))
+  (testing "and the feed's token does not open a conversation"
+    (is (= {:status 401} (ws/route (head "/" (merge (bearer token) {"Upgrade" "websocket" "Connection" "Upgrade"
+                                                                     "Sec-WebSocket-Version" "13"
+                                                                     "Sec-WebSocket-Key" "dGhlIHNhbXBsZSBub25jZQ=="}))
+                                   settings))))
+  (testing "the URL relay calendar url prints is the one the feed takes"
+    (let [url (ws/calendar-url "mac.tail1234.ts.net" 8765 listener-token)]
+      (is (= (str "https://mac.tail1234.ts.net:8765/calendar.ics?token=" token) url))
+      (is (= {:calendar true} (ws/route (head (subs url (count "https://mac.tail1234.ts.net:8765"))) settings)))
+      (is (not (str/includes? url listener-token)))))
   (testing "only a GET of exactly that path is the feed; the rest is as before"
     (is (= {:status 404} (ws/route (head "POST" "/calendar.ics" (bearer token)) settings)))
     (is (= {:status 404} (ws/route (head "/calendar.ics/" (bearer token)) settings)))
@@ -74,6 +93,24 @@
            ;; The feed is never an upgrade, and an upgrade never the feed.
            (not (and (:calendar d) (:upgrade d)))))))
 
+(defspec the-two-tokens-never-open-each-others-door 200
+  ;; For any listener token: the feed's token differs from it, opens the
+  ;; feed, and never upgrades to a conversation; the listener's token
+  ;; never opens the feed.
+  (prop/for-all [t (gen/fmap #(apply str %) (gen/not-empty (gen/vector (gen/elements (map char (range 0x21 0x7f))))))]
+    (let [ft (ws/feed-token t)
+          s {:token t :allowed-origins []}
+          upgrade (fn [tok] (ws/route (head "/" (merge (bearer tok) {"Upgrade" "websocket" "Connection" "Upgrade"
+                                                                    "Sec-WebSocket-Version" "13"
+                                                                    "Sec-WebSocket-Key" "dGhlIHNhbXBsZSBub25jZQ=="}))
+                                      s))]
+      (and (not= ft t)
+           (re-matches #"[0-9a-f]{64}" ft)
+           (= {:calendar true} (ws/route (head (str "/calendar.ics?token=" ft)) s))
+           (= {:status 401} (ws/route (head "/calendar.ics" (bearer t)) s))
+           (= {:status 401} (upgrade ft))
+           (contains? (upgrade t) :upgrade)))))
+
 (deftest the-answer-is-a-calendar-that-is-never-cached
   (let [bs (ws/calendar-response-bytes "BEGIN:VCALENDAR\r\n日\r\n")
         text (String. bs "UTF-8")
@@ -82,6 +119,31 @@
     (is (str/includes? head "Content-Type: text/calendar; charset=utf-8"))
     (is (str/includes? head "Cache-Control: no-store"))
     (is (str/includes? head (str "Content-Length: " (alength (.getBytes ^String body "UTF-8")))))))
+
+;; --- relay calendar url
+
+(deftest the-command-line-prints-the-address-to-subscribe-to
+  ;; Regression (U1): nothing printed the feed's address, and the README
+  ;; had it built by hand around the listener's own token.
+  (let [dir (str (fs/create-temp-dir {:prefix "relay-calendar-url"}))
+        data (str dir "/data")
+        write! (fn [settings]
+                 (spit (str data "/relay.edn")
+                       (pr-str (merge {:timezone "UTC" :default-harness :x
+                                       :harnesses {:x {:kind :agentloop :api-key-command ["true"]}}}
+                                      settings))))
+        relay #(relay.cli/execute (concat ["--data" data] %&))]
+    (try
+      (log/init! data)
+      (write! {:serve {:websocket {:port 8765 :token-command ["/bin/echo" listener-token]}}})
+      (let [{:keys [exit out]} (relay "calendar" "url" "--host" "mac.tail1234.ts.net")]
+        (is (= 0 exit))
+        (is (= (str "https://mac.tail1234.ts.net:8765/calendar.ics?token=" token) (first out)))
+        (is (not (some #(str/includes? % listener-token) out)) "never the listener's own token"))
+      (testing "without a listener it says what to set up"
+        (write! {})
+        (is (thrown-with-msg? Exception #"has none yet" (relay "calendar" "url" "--host" "h"))))
+      (finally (fs/delete-tree dir)))))
 
 ;; --- the service
 
@@ -114,6 +176,8 @@
         (let [[e] (agent-add! {:title "Dentist, Elm St; bring card" :start "2026-10-20 09:00"
                                :end "2026-10-20 10:00" :description "Line one\nLine two"})
               id (:seq e)]
+          (testing "the listener's own token gets nothing"
+            (is (= 401 (:status (get-feed port {:query (str "?token=" listener-token)})))))
           (testing "an event the agent wrote is in the feed, by header or by URL"
             (doseq [r [(get-feed port {:headers (bearer token)})
                        (get-feed port {:query (str "?token=" token)})]]
@@ -144,4 +208,4 @@
               (is (not (try (with-open [_ (doto (java.net.Socket.) (.connect (java.net.InetSocketAddress. a (int port)) 500))] true)
                             (catch Exception _ false)))
                   "refused on this machine's own address")))))
-      nil {:serve {:websocket {:port port :token-command ["/bin/echo" token]}}})))
+      nil {:serve {:websocket {:port port :token-command ["/bin/echo" listener-token]}}})))

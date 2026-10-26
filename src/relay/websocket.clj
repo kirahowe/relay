@@ -148,16 +148,38 @@
                (percent-decode (subs pair 6)))]
     (when (= 1 (count vals)) (first vals))))
 
+(defn feed-token
+  "The calendar feed's own token, made from the listener's: HMAC-SHA256
+  of a fixed text, keyed with the listener's token, in hex. A calendar
+  app keeps its subscription URL, and syncs it to its provider's servers
+  and to other devices, so the URL carries this token, which opens the
+  feed and nothing else. It cannot be turned back into the listener's
+  token, and it changes when that token does. Nil without a token."
+  [token]
+  (when (and (string? token) (not (str/blank? token)))
+    (let [mac (javax.crypto.Mac/getInstance "HmacSHA256")]
+      (.init mac (javax.crypto.spec.SecretKeySpec. (.getBytes ^String token StandardCharsets/UTF_8) "HmacSHA256"))
+      (apply str (map #(format "%02x" (bit-and 0xff %))
+                      (.doFinal mac (.getBytes "relay calendar feed" StandardCharsets/US_ASCII)))))))
+
+(defn calendar-url
+  "The URL to subscribe to the feed at: on `host` (the Mac's tailnet
+  name), the listener's `port`, with the feed's token."
+  [host port token]
+  (str "https://" host ":" port calendar-path "?token=" (feed-token token)))
+
 (defn decide-calendar
   "What the listener does with a request for the calendar feed: {:calendar
   true} to answer with it, or {:status n}. The order:
 
     an Origin not allowed              403
-    no token, or not the token         401
+    no token, or not the feed's token  401
     otherwise                          the feed
 
-  The token is the listener's, the same one an ACP client sends, given as
-  a bearer token or in the URL. Nothing else about the request matters."
+  The token is the feed's own (feed-token), given as a bearer token or in
+  the URL. The listener's token, which opens every conversation, does not
+  open the feed, so it is never put in a URL. Nothing else about the
+  request matters."
   [head {:keys [token allowed-origins]}]
   (let [origins (get-in head [:headers "origin"])
         auth (get-in head [:headers "authorization"])
@@ -168,7 +190,7 @@
       (and (seq origins)
            (not (and (= 1 (count origins)) (some #(= (first origins) %) allowed-origins))))
       {:status 403}
-      (not (token-matches? given token)) {:status 401}
+      (not (token-matches? given (feed-token token))) {:status 401}
       :else {:calendar true})))
 
 (defn route

@@ -630,6 +630,11 @@ your keychain.
    the token from step 1 (to see it again, run the `security` command from
    step 2).
 
+6. To have the agent's calendar in your calendar app, run `bin/relay
+   calendar url`. It prints the feed's address, with a token that opens
+   the calendar and nothing else. Add that address in the app as a
+   calendar subscription (see The calendar).
+
 relay answers a request with no token or a wrong one with a bare 401, a
 request with an origin it does not allow with a bare 403, and anything
 that is not a WebSocket upgrade with a 404. None of these responses has
@@ -655,7 +660,10 @@ with the labels of what its writer had seen, and removing an event keeps
 its history. `relay serve` publishes the calendar at `/calendar.ics` as
 iCalendar (RFC 5545). A UID is made from the event's number and never
 changes, and `SEQUENCE` counts the event's changes, so a calendar app
-sees each change as an update to the same event. Times are UTC. A removed
+sees each change as an update to the same event. Times are UTC. An
+all-day event (`calendar_add` with `all_day`) is written as dates, its
+first day and the day after its last, so your calendar app shows it as a
+whole day. A removed
 event stays in the feed as `STATUS:CANCELLED` for 30 days, so a
 subscriber that polls now and then still hears of it, and is then
 dropped. An event that ended more than 30 days ago is dropped too; the
@@ -666,11 +674,17 @@ characters, so what a role writes cannot add a property or an event.
 The feed is on the WebSocket listener (see Reaching relay from your
 phone), on that port and no other, so it is reachable only where that
 listener is: 127.0.0.1, published on your tailnet by `tailscale serve`.
-It takes the listener's token, as `Authorization: Bearer <token>` or,
-since a calendar app cannot send a header, as `?token=<token>` in the
-URL. A request without it gets a bare 401, and one with an `Origin` the
-listener does not allow a bare 403. To subscribe, add a calendar by URL:
-`https://<your Mac's tailnet name>:8765/calendar.ics?token=<token>`.
+The feed has a token of its own, made from the listener's, which opens
+the calendar and nothing else: a calendar app syncs the URL to its
+provider and your other devices, so the URL must not hold the key to your
+conversations. The listener's own token does not open the feed. The feed
+takes its token as `?token=<token>` in the URL, since a calendar app
+cannot send a header, or as `Authorization: Bearer <token>`. A request
+without it gets a bare 401, and one with an `Origin` the listener does
+not allow a bare 403. `relay calendar url` prints the URL to subscribe
+to, with this Mac's tailnet name from `tailscale status` (or give it
+with `--host <name>`). Add it in your calendar app as a calendar
+subscription. The feed's token changes when the listener's does.
 
 ### Spend
 

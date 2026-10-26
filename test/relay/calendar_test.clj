@@ -55,6 +55,41 @@
       (is (empty? (core/calendar-events (:state w) {:as-of (:now w)})))
       (is (= 1 (count (core/calendar-events (:state w) {:all true})))))))
 
+(deftest an-all-day-event-is-a-whole-day-end-to-end
+  ;; Regression (U1): calendar_add had no all-day option, so "an all-day
+  ;; event for Wed 11 Nov" was an hour at midnight.
+  (let [w (-> (seed) (run "clerk" :calendar/add {:title "Remembrance Day" :start "2026-11-11" :all_day true}))
+        id (created w)
+        [e] (feed w)
+        read (fn [w] (:content ((:read (get tools/builtin "calendar"))
+                                {:state (:state w) :config ct/cfg :now (:now w)} "clerk" {})))]
+    (is (nil? (:rejected w)) (:why w))
+    (is (= [(java.time.LocalDate/parse "2026-11-11") (java.time.LocalDate/parse "2026-11-12")]
+           ((juxt :start-date :end-date) e)) "DTSTART and DTEND are DATEs: the day, and the day after")
+    (is (nil? (:start e)))
+    (is (str/includes? (str (read w)) "2026-11-11, all day"))
+    (testing "several days, and moved"
+      (let [w (run w "clerk" :calendar/update {:event id :start "2026-11-12" :end "2026-11-13"})
+            [e] (feed w)]
+        (is (nil? (:rejected w)) (:why w))
+        (is (= [(java.time.LocalDate/parse "2026-11-12") (java.time.LocalDate/parse "2026-11-14")]
+               ((juxt :start-date :end-date) e)))
+        (is (str/includes? (str (read w)) "2026-11-12 to 2026-11-13, all day"))
+        (testing "a last day before the first is refused"
+          (is (= :invalid (:rejected (run w "clerk" :calendar/update {:event id :end "2026-11-01"})))))
+        (testing "and made a timed event again"
+          (let [w (run w "clerk" :calendar/update {:event id :all_day false :start "2026-11-12 09:00"})
+                [e] (feed w)]
+            (is (nil? (:rejected w)) (:why w))
+            (is (nil? (:start-date e)))
+            (is (= 3600 (.getSeconds (java.time.Duration/between (:start e) (:end e)))))))
+        (testing "removed, it is still a whole day, cancelled"
+          (let [w (run w "clerk" :calendar/remove {:event id})
+                [e] (feed w)]
+            (is (= ["CANCELLED" (java.time.LocalDate/parse "2026-11-12")] ((juxt :status :start-date) e)))))))
+    (testing "an all-day event needs a date"
+      (is (= :invalid (:rejected (run (seed) "clerk" :calendar/add {:title "x" :start "soon" :all_day true})))))))
+
 (deftest the-sequence-rises-and-the-uid-stays-with-each-change
   (let [w (-> (seed) (run "clerk" :calendar/add dentist))
         id (created w)

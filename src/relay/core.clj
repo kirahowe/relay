@@ -442,7 +442,7 @@
   [state]
   (vec (for [[id {:keys [versions]}] (sort-by key (:calendar state))
              :let [v (peek versions)]]
-         (assoc (select-keys v [:title :start :end :location :description])
+         (assoc (select-keys v [:title :start :end :start-date :end-date :location :description])
                 :id id :sequence (dec (count versions))
                 :created (:recorded-at (first versions)) :modified (:recorded-at v)
                 :removed-at (when (:removed v) (:recorded-at v))))))
@@ -1266,10 +1266,17 @@
                                            :why why :superseded-by superseded-by)
                               retracted (assoc :retracted true)))))
 
-(defn- calendar-version [{:keys [seq at actor labels]} change {:keys [title start end location description why]}]
-  {:seq seq :recorded-at (inst at) :actor actor :change change :labels (union labels)
-   :title title :start (inst start) :end (inst end) :location location :description description
-   :why why :removed (= change :removed)})
+(defn- calendar-version
+  "One version of an event. An all-day event also has :start-date and
+  :end-date, the first day and the day after the last (as iCalendar's
+  DTEND is), as LocalDates; its :start and :end are the starts of those
+  days in the operator's zone when it was written, which order and list
+  it among the others."
+  [{:keys [seq at actor labels]} change {:keys [title start end start-date end-date location description why]}]
+  (cond-> {:seq seq :recorded-at (inst at) :actor actor :change change :labels (union labels)
+           :title title :start (inst start) :end (inst end) :location location :description description
+           :why why :removed (= change :removed)}
+    start-date (assoc :start-date (LocalDate/parse (str start-date)) :end-date (LocalDate/parse (str end-date)))))
 
 (defn- add-calendar-version [state id version]
   (update-in state [:calendar id :versions] (fnil conj []) version))
@@ -1285,7 +1292,7 @@
     ;; It still says what the last version said.
     (add-calendar-version state (:event data)
                           (calendar-version event :removed
-                                            (assoc (select-keys old [:title :start :end :location :description])
+                                            (assoc (select-keys old [:title :start :end :start-date :end-date :location :description])
                                                    :why (:why data)
                                                    :start (some-> (:start old) str) :end (some-> (:end old) str))))))
 
@@ -3352,39 +3359,83 @@
     (reject! :invalid (str "The calendar holds " calendar-limit " events already. Wait for old ones to"
                            " drop off, or remove some."))))
 
+(defn- event-date
+  "An all-day event's day: a date such as 2026-11-11, or the date of a
+  local time or instant given with it, in the operator's zone."
+  ^LocalDate [config s what]
+  (when-not (blank? s)
+    (let [t (str/trim s)]
+      (or (try (LocalDate/parse t) (catch Exception _ nil))
+          (some-> (world-time config t what) (.atZone (config/zone config)) .toLocalDate)))))
+
+(defn- all-day-span
+  "An all-day event's days as the log keeps them: the first day, the day
+  after the last, and the starts of both in the operator's zone. `last`
+  is the last day, the first when nil."
+  [config ^LocalDate first-day ^LocalDate last-day]
+  (let [last-day (or last-day first-day)
+        _ (when (.isBefore last-day first-day) (reject! :invalid "An all-day event's last day is not before its first."))
+        _ (when-not (<= 1970 (.getYear first-day) (.getYear last-day) 9998)
+            (reject! :invalid "An event's days must be between the years 1970 and 9998."))
+        after (.plusDays last-day 1)
+        zone (config/zone config)]
+    {:start (str (.toInstant (.atStartOfDay first-day zone))) :end (str (.toInstant (.atStartOfDay after zone)))
+     :start-date (str first-day) :end-date (str after)}))
+
 (defmethod decide* :calendar/add [{:keys [state config now] :as tx}
-                                  {{:keys [title start end location description]} :args}]
+                                  {{:keys [title start end location description all_day]} :args}]
   (calendar-writer! tx)
   (calendar-room! state now)
-  (let [start (or (event-time config start "start") (reject! :invalid "An event needs a start."))
-        end (or (event-time config end "end") (.plusSeconds start 3600))]
-    (event-span! start end)
-    (emit tx "calendar/added" {:title (event-title title) :start (str start) :end (str end)
-                               :location (event-note location "location" 200)
-                               :description (event-note description "description" 2000)})))
+  (let [span (if (true? all_day)
+               (all-day-span config (or (event-date config start "start") (reject! :invalid "An event needs a start."))
+                             (event-date config end "end"))
+               (let [start (or (event-time config start "start") (reject! :invalid "An event needs a start."))
+                     end (or (event-time config end "end") (.plusSeconds start 3600))]
+                 (event-span! start end)
+                 {:start (str start) :end (str end)}))]
+    (emit tx "calendar/added" (merge {:title (event-title title)} span
+                                     {:location (event-note location "location" 200)
+                                      :description (event-note description "description" 2000)}))))
 
 (defmethod decide* :calendar/update [{:keys [state config now] :as tx}
-                                     {{:keys [event title start end location description why]} :args :as command}]
+                                     {{:keys [event title start end location description why all_day]} :args :as command}]
   (calendar-writer! tx)
   (let [cur (calendar-live! state event)
         args (:args command)
         given (fn [k] (contains? args k))
-        new-start (if-not (blank? start) (event-time config start "start") (:start cur))
-        new-end (if-not (blank? end) (event-time config end "end") (:end cur))
-        changed {:title (if (blank? title) (:title cur) (event-title title))
-                 :start new-start :end new-end
-                 :location (if (given :location) (event-note location "location" 200) (:location cur))
-                 :description (if (given :description) (event-note description "description" 2000) (:description cur))}]
-    (when (= changed (select-keys cur [:title :start :end :location :description]))
+        ;; An event stays all day or timed unless all_day says otherwise.
+        all-day? (if (boolean? all_day) all_day (some? (:start-date cur)))
+        span (if all-day?
+               (let [first-day (or (event-date config start "start")
+                                   (:start-date cur)
+                                   (some-> ^Instant (:start cur) (.atZone (config/zone config)) .toLocalDate))
+                     ;; The last day stays, unless a new first day is given.
+                     last-day (or (event-date config end "end")
+                                  (when (blank? start) (some-> ^LocalDate (:end-date cur) (.minusDays 1))))]
+                 (all-day-span config first-day last-day))
+               (let [new-start (if-not (blank? start) (event-time config start "start") (:start cur))
+                     new-end (cond (not (blank? end)) (event-time config end "end")
+                                   ;; A whole day made timed lasts an hour.
+                                   (:start-date cur) (.plusSeconds ^Instant new-start 3600)
+                                   :else (:end cur))]
+                 (when (and (blank? end) (not (:start-date cur)) (not (after? new-end new-start)))
+                   (reject! :invalid "The new start is not before the event's end. Give the end too."))
+                 (event-span! new-start new-end)
+                 {:start (str new-start) :end (str new-end)}))
+        changed (merge {:title (if (blank? title) (:title cur) (event-title title))
+                        :location (if (given :location) (event-note location "location" 200) (:location cur))
+                        :description (if (given :description) (event-note description "description" 2000) (:description cur))}
+                       span)
+        as-kept (fn [e] (-> (select-keys e [:title :start :end :start-date :end-date :location :description])
+                            (update :start str) (update :end str)
+                            (cond-> (:start-date e) (-> (update :start-date str) (update :end-date str)))))]
+    (when (= (as-kept changed) (as-kept cur))
       (reject! :invalid (str "Event " event " already says that. Give only what changes.")))
-    (when (and (blank? end) (not (after? new-end new-start)))
-      (reject! :invalid "The new start is not before the event's end. Give the end too."))
-    (event-span! new-start new-end)
     ;; Moving an event that fell off the feed back onto it adds one.
     (when (and (not (ics/listed? now (assoc cur :removed-at nil)))
-               (ics/listed? now {:start new-start :end new-end}))
+               (ics/listed? now {:start (inst (:start span)) :end (inst (:end span))}))
       (calendar-room! state now))
-    (emit tx "calendar/changed" (cond-> (assoc changed :event event :start (str new-start) :end (str new-end))
+    (emit tx "calendar/changed" (cond-> (assoc changed :event event)
                                   (not (blank? why)) (assoc :why (str/trim why)))
           (:labels cur))))
 

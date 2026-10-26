@@ -296,7 +296,7 @@ flowchart LR
 |---|---|
 | Text cannot add a property or an event | Line breaks become `\n`; control, format, bidi and invisible code points are dropped; `\`, `;`, `,` are escaped. |
 | Lines fit | Every physical line is at most 75 octets, the leading space of a continuation included, and a break never falls inside a UTF-8 sequence. |
-| UTC | `DTSTART`, `DTEND`, `DTSTAMP`, `CREATED` and `LAST-MODIFIED` are all `...Z`, to the second. |
+| UTC | `DTSTART`, `DTEND`, `DTSTAMP`, `CREATED` and `LAST-MODIFIED` are all `...Z`, to the second. An all-day event's `DTSTART` and `DTEND` are `VALUE=DATE`: its first day and the day after its last. |
 | Stable UID | `relay-event-<id>@relay.invalid`, from the number of the event that added it. |
 | SEQUENCE rises | It is the number of versions minus one, so each change adds one. |
 | Same input, same bytes | `DTSTAMP` is the event's last change, not the request time, and events are sorted by id. |
@@ -315,17 +315,21 @@ flowchart TB
     isfeed -->|"no"| upg["websocket decide:<br/>upgrade, or 404 / 403 / 401 / 400"]
     isfeed -->|"yes"| origin{"Origin header?"}
     origin -->|"not allowed"| s403["403, no body"]
-    origin -->|"none or allowed"| tok{"token in Authorization<br/>or in ?token= ?"}
+    origin -->|"none or allowed"| tok{"feed token in Authorization<br/>or in ?token= ?"}
     tok -->|"missing or wrong"| s401["401, no body"]
     tok -->|"matches"| feed["200 text/calendar"]
 ```
 
 The listener binds `127.0.0.1` only. Tailscale publishes it on the
 tailnet with TLS, as for the phone client. So the feed is reachable only
-where that listener is, and only with the token it already uses. A
-calendar app cannot send a header, so the token may also ride in the
-URL. The comparison is constant-time, and a wrong token gets the same
-bare answer as no token.
+where that listener is, and only with the feed's own token: HMAC-SHA256
+of a fixed text, keyed with the listener's token. That token opens the
+feed and nothing else, and the listener's token does not open the feed,
+so the URL a calendar app keeps and syncs to its provider never holds
+the key to the conversations. A calendar app cannot send a header, so
+the token may also ride in the URL. `relay calendar url` prints the URL.
+The comparison is constant-time, and a wrong token gets the same bare
+answer as no token.
 
 ## Provenance: labels
 

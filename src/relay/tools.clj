@@ -131,13 +131,16 @@
 (defn- event-when
   "When an event is, in the operator's zone: the date and times, with the
   end's date only when it is another day."
-  [config {:keys [start end]}]
-  (let [z #(.atZone ^Instant % (config/zone config))
-        fmt #(.format (z %1) (DateTimeFormatter/ofPattern %2))]
-    (str (fmt start "yyyy-MM-dd HH:mm") " to "
-         (if (= (.toLocalDate (z start)) (.toLocalDate (z end)))
-           (fmt end "HH:mm")
-           (fmt end "yyyy-MM-dd HH:mm")))))
+  [config {:keys [start end start-date end-date]}]
+  (if start-date
+    (let [last-day (.minusDays ^java.time.LocalDate end-date 1)]
+      (str start-date (when-not (= last-day start-date) (str " to " last-day)) ", all day"))
+    (let [z #(.atZone ^Instant % (config/zone config))
+          fmt #(.format (z %1) (DateTimeFormatter/ofPattern %2))]
+      (str (fmt start "yyyy-MM-dd HH:mm") " to "
+           (if (= (.toLocalDate (z start)) (.toLocalDate (z end)))
+             (fmt end "HH:mm")
+             (fmt end "yyyy-MM-dd HH:mm"))))))
 
 (defn- fmt-event [config {:keys [id title location description removed] :as e}]
   (str "Event " id (when removed ", removed") ", " (event-when config e) "\n  " title
@@ -145,7 +148,7 @@
        (when description (str "\n  " (str/replace description #"\n" "\n  ")))))
 
 (defn- event-args [args]
-  (select-keys args [:event :title :start :end :location :description :why]))
+  (select-keys args [:event :title :start :end :location :description :why :all_day]))
 
 (defn- new-event [events]
   (:seq (first (filter #(= "calendar/added" (:type %)) events))))
@@ -391,8 +394,11 @@
     :description (str "Put an event on your own calendar, which the operator subscribes to. It is never"
                       " the operator's calendar: nothing here invites anyone or changes their appointments."
                       " `start` and `end` are local times (2026-10-14 09:00) or ISO instants; with no"
-                      " `end` the event lasts an hour. Anything you change later is kept as a version.")
-    :parameters (obj {:title text :start world-time :end world-time :location text :description text}
+                      " `end` the event lasts an hour. With `all_day` true it is a whole day: `start` is"
+                      " its date (2026-11-11) and `end`, if it runs longer, its last day. Anything you"
+                      " change later is kept as a version.")
+    :parameters (obj {:title text :start world-time :end world-time :location text :description text
+                      :all_day (assoc flag :description "A whole day or days, with dates and no times.")}
                      "title" "start")
     :run (fn [sys actor labels args]
            (str "Added event " (new-event (submit sys actor labels :calendar/add (event-args args))) "."))}
@@ -402,9 +408,11 @@
     :grant :private
     :description (str "Change an event on your own calendar. Give only what changes; an empty `location`"
                       " or `description` clears it. Say `why` when it is not obvious. The calendar app"
-                      " sees the new version, and the earlier ones are kept.")
+                      " sees the new version, and the earlier ones are kept. `all_day` true makes it a"
+                      " whole day (dates, no times), false a timed one.")
     :parameters (obj {:event {:type "integer" :description "The event's number."}
-                      :title text :start world-time :end world-time :location text :description text :why text}
+                      :title text :start world-time :end world-time :location text :description text :why text
+                      :all_day (assoc flag :description "A whole day or days, with dates and no times.")}
                      "event")
     :run (fn [sys actor labels args]
            (submit sys actor labels :calendar/update (event-args args))

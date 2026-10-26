@@ -354,6 +354,9 @@
   (when iso
     (.format (.atZone (Instant/parse iso) ^ZoneId zone) (DateTimeFormatter/ofPattern "EEE d MMM HH:mm"))))
 
+(defn- ready-day [^String iso-date]
+  (.format (java.time.LocalDate/parse iso-date) (DateTimeFormatter/ofPattern "EEE d MMM")))
+
 (defn ready-age
   "How long ago `iso` was, briefly: \"just now\", \"5m ago\", \"3h ago\",
   \"2d ago\", and the date once it is a week old."
@@ -404,7 +407,13 @@
                                            (wrap (str (ready-kind it) ": " title
                                                       (when-let [a (ready-age at now zone)] (str " (" a ")")))
                                                  room))
-                              (when start [(str indent (ready-when start zone))])
+                              (cond
+                                (get it "allDay")
+                                [(str indent (ready-day (get it "startDate"))
+                                      (when-not (= (get it "startDate") (get it "lastDate"))
+                                        (str " to " (ready-day (get it "lastDate"))))
+                                      ", all day")]
+                                start [(str indent (ready-when start zone))])
                               (body lines (ready-lines-each it))
                               (when from [(str indent from)])
                               (for [r (take-last 1 replies)]

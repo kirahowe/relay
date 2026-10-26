@@ -463,6 +463,43 @@
     (is (= ["just now" "just now" "5m ago" "3h ago" "2d ago" "16 Oct"]
            (map ago [-30 59 300 (* 3 3600) (* 2 86400) (* 10 86400)])))))
 
+(defn- all-day-wire
+  "The wire item of an all-day event added from `first-day` to `last-day`,
+  as _relay/ready sends it."
+  [first-day last-day]
+  (let [w (ct/run (seed) "clerk" :calendar/add (cond-> {:title "Away" :start first-day :all_day true}
+                                                  last-day (assoc :end last-day)))]
+    (is (nil? (:rejected w)) (:why w))
+    (first (filter #(= "event" (get % "kind")) (workspace/ready-items (:state w) {})))))
+
+(deftest an-all-day-event-reaches-the-wire-and-relay-ready-as-days
+  ;; The wire says which days, the last one included, and relay ready
+  ;; says them with no time of day.
+  (let [two (all-day-wire "2026-11-11" "2026-11-12")
+        one (all-day-wire "2026-11-11" nil)
+        now (Instant/parse "2026-10-26T12:00:00Z")]
+    (is (= {"allDay" true "startDate" "2026-11-11" "lastDate" "2026-11-12"}
+           (select-keys two ["allDay" "startDate" "lastDate"])))
+    (is (= {"allDay" true "startDate" "2026-11-11" "lastDate" "2026-11-11"}
+           (select-keys one ["allDay" "startDate" "lastDate"]))
+        "a single day ends on the day it starts")
+    (let [out-two (render/ready [two] (ZoneId/of "America/Toronto") now)
+          out-one (render/ready [one] (ZoneId/of "America/Toronto") now)]
+      (is (= "  Wed 11 Nov to Thu 12 Nov, all day" (second out-two)))
+      (is (= "  Wed 11 Nov, all day" (second out-one)))
+      (is (not-any? #(re-find #"\d\d:\d\d" %) (concat out-two out-one)) "no time of day"))))
+
+(defspec an-all-day-events-last-day-is-its-span-less-one 30
+  (prop/for-all [offset (gen/choose 30 400)
+                 span (gen/choose 1 5)]
+    (let [first-day (.plusDays (java.time.LocalDate/parse "2026-10-26") offset)
+          last-day (.plusDays first-day (dec span))
+          it (all-day-wire (str first-day) (str last-day))]
+      (and (= (str first-day) (get it "startDate"))
+           (= (dec span) (.between java.time.temporal.ChronoUnit/DAYS
+                                   (java.time.LocalDate/parse (get it "startDate"))
+                                   (java.time.LocalDate/parse (get it "lastDate"))))))))
+
 (deftest relay-ready-marks-text-it-cut
   (let [now (Instant/parse "2026-10-26T12:00:00Z")
         out (render/ready [{"id" "prepared:1" "kind" "draft" "title" "Long" "at" (str now)
