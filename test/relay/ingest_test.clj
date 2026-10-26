@@ -118,7 +118,7 @@
           [m] (memos w)]
       (is (= ["contaminated" "mail:unverified-operator"] (:labels m))
           "the label never carries the operator's own address on mail relay did not trust")
-      (is (= "Unverified mail in the operator's name: Hi" (get-in m [:data :subject])))
+      (is (= "Unverified mail in your name: Hi" (get-in m [:data :subject])))
       (is (str/includes? (get-in m [:data :body]) "could not confirm"))
       (let [shown (relay.provenance/drew-on (:labels m))]
         (is (= "Drew on: a mail that says it is from you, not verified" shown))

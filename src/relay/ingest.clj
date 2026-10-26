@@ -331,7 +331,7 @@
                      (attachments-text attachments))}))
       {:from "dispatcher" :labels ["contaminated" (if (:claims-operator verdict) unverified-operator-label (mail-label sender))]
        :subject (one-line (str (if (:claims-operator verdict)
-                                 "Unverified mail in the operator's name"
+                                 "Unverified mail in your name"
                                  (str "Mail from " (or sender "an unknown sender")))
                                ": " subject) 200)
        :body (str "A mail came in to your mailbox. " outside-note "\n"
