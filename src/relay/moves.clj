@@ -79,8 +79,12 @@
   the one that made it: those `id` made for its moves now back, and those
   another call made for moves now back when one of `tos`, the targets put
   back by this undo, is inside it. Never one already removed or kept for
-  something new by an earlier undo, or one a later call not undone took
-  something out of (its undo needs it)."
+  something new by an earlier undo, one a later call not undone took
+  something out of (its undo needs it), or one a move not undone put
+  something into, by the call that made it or a later one: a folder goes
+  only when every move into it is undone, even when its file was taken
+  out by hand. An earlier call's move into the same path went into
+  another folder, gone before this one was made."
   [calls id back tos]
   (let [back-of (fn [k] (cond-> (set (:undone k)) (= id (:id k)) (into back)))
         left-of (fn [k] (remove #((back-of k) (:index %)) (:done k)))]
@@ -89,12 +93,15 @@
            :let [back (back-of k)
                  gone (into (set (:removed k)) (:kept k))
                  needed (for [l calls :when (> (:id l) (:id k)) s (left-of l)]
-                          (:from ((:moves l) (:index s))))]
+                          (:from ((:moves l) (:index s))))
+                 moved-in (for [l calls :when (>= (:id l) (:id k)) s (left-of l)]
+                            (:to ((:moves l) (:index s))))]
            s (:done k) :when (back (:index s))
            d (:created s)
            :when (or (= id (:id k)) (some #(files/under? % d) tos))
            :when (not (gone d))
-           :when (not (some #(and (not= % d) (files/under? % d)) needed))]
+           :when (not (some #(and (not= % d) (files/under? % d)) needed))
+           :when (not (some #(and (not= % d) (files/under? % d)) moved-in))]
        [(:id k) d]))))
 
 (defn undo!
@@ -137,7 +144,7 @@
                                       {:step s
                                        :why (str "Move " k " has moved "
                                                  (if (= p (:to (paths s))) (show p) (str "something at " (show p)))
-                                                 " since. relay undo " k " first, then " again " puts "
+                                                 " since. Undo move " k " first; then undoing move " id " again puts "
                                                  (show (:to (paths s))) " back.")}
                                       (let [w (files/world-now (paths s))
                                             why (files/undo-problem (paths s) (:fingerprint s) w show again)]
@@ -154,9 +161,14 @@
            (empty? (:done c)) (usage! (str "Move " id " moved nothing."))
            (empty? all-left) (usage! (str "Move " id " is already undone."))
            (empty? left) (usage! (str "Those files of move " id " are already back."))
+           ;; :reasons alone go to a client, which gives its own headline.
            (every? #(and (:why %) (not (:by-hand %))) @checked)
-           {:refused (concat [(str "Move " id " was not undone, and nothing changed:")]
-                             (map #(str "  " (:why %)) @checked))}
+           (let [reasons (mapv :why @checked)]
+             {:refused (into [(if (seq (:undone c))
+                                (str "Nothing more went back from move " id ":")
+                                (str "Move " id " was not undone, and nothing changed:"))]
+                             (map #(str "  " %) reasons))
+              :reasons reasons})
            :else
            (let [doable (map :step (remove :why @checked))
                  by-hand (map :step (filter :by-hand @checked))
@@ -178,6 +190,10 @@
                                  (:to ((:moves k) (:index s))))
                  kept (vec (remove (fn [d] (some #(files/under? % d) pending-after)) kept))
                  by-folder (fn [ds] (vec (for [[k d] sweep :when (some #{d} ds)] {:call k :path d})))
+                 ;; A folder reads relative to the folder granted to the
+                 ;; call that made it.
+                 show-dir (fn [d] (let [k (some (fn [[k x]] (when (= x d) k)) sweep)]
+                                    ((if (= k id) show (shower (core/move-call state k))) d)))
                  n (count back)]
              (inbound/submit! sys {:type :files/undo :actor core/operator
                                    :args (cond-> {:call id :steps (vec (sort back))
@@ -189,7 +205,9 @@
              {:summary (str "Put back " n (when (not= n (count left)) (str " of " (count left)))
                             (if (= 1 (count left)) " file." " files."))
               :ok (cond-> [(str "Undid move " id ": put back " n " of " (count left) "."
-                                (when (seq removed) (str " Removed " (plural (count removed) "empty folder") " moves had made.")))]
+                                (when (seq removed)
+                                  (str " Removed " (plural (count removed) "empty folder") " moves had made: "
+                                       (str/join ", " (map show-dir removed)) ".")))]
                     (seq by-hand) (into (map #(str "  " (show (:from (paths %))) ": you put it back yourself.") by-hand))
                     (seq skipped) (into (concat [(str "Not put back:")] (map #(str "  " %) skipped)))
                     (seq kept) (conj (str "Kept " (str/join ", " (map show kept)) ": something new is in it."))
@@ -219,8 +237,9 @@
   (if (empty? calls)
     "You have moved no files."
     (str/join "\n\n"
-              (for [{:keys [id at moves done undone status stopped emptied]} (take-last n calls)
-                    :let [undone (set undone)]]
+              (for [{:keys [id at moves done undone status stopped] :as c} (take-last n calls)
+                    :let [undone (set undone)
+                          emptied (move-view/still-empty calls c)]]
                 (str/join "\n"
                           (concat [(str "Move " id ", " at ": "
                                         (case status

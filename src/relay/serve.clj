@@ -199,10 +199,10 @@
   (relay.moves/undo!): the result as the hub takes it, :lines when it was
   undone, else B9's reason as the refusal."
   [sys id]
-  (let [{:keys [ok refused summary]} (moves/undo-outcome sys id)]
+  (let [{:keys [ok refused reasons summary]} (moves/undo-outcome sys id)]
     (if ok
       {:ok true :lines ok :summary summary}
-      {:rejection :refused :message (str/join " " (map str/trim refused))})))
+      {:rejection :refused :message (str/join " " (map str/trim (or reasons refused)))})))
 
 (declare start-conversation!)
 

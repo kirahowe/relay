@@ -338,23 +338,29 @@
   [calls zone]
   (if (empty? calls)
     ["No files have been moved."]
-    (mapcat (fn [{:keys [id actor at moves done undone status stopped roots emptied]}]
+    (mapcat (fn [{:keys [id actor at moves done undone status stopped roots] :as c}]
               (let [undone (set undone)
                     stamp (.format (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm")
                                   (.atZone ^java.time.Instant at zone))]
                 (concat [(str "Move " id ", " stamp ", by " actor ": "
                               (case status
                                 :moving "relay stopped before it could record what moved; check by hand"
-                                :moved (str (count done) " of " (count moves) " moved"
-                                            (cond (and (seq done) (= (count undone) (count done))) ", all undone"
-                                                  (seq undone) (str ", " (count undone) " undone")
-                                                  stopped (str ", stopped: " stopped))))
+                                :moved (cond
+                                         (and (seq done) (= (count undone) (count done)))
+                                         (str (count done) " of " (count moves) " moved, all undone")
+                                         (seq undone)
+                                         (str (- (count done) (count undone)) " of " (count done) " still moved ("
+                                              (count undone) " put back)"
+                                              (when stopped (str "; it stopped: " stopped)))
+                                         :else
+                                         (str (count done) " of " (count moves) " moved"
+                                              (when stopped (str ", stopped: " stopped)))))
                               ".")]
                         (if (= :moving status)
                           (map move-line moves)
                           ;; One line per file, relative to the granted folder.
                           (map #(str "  " %) (move-view/file-lines roots (for [{:keys [index]} done] [index (moves index)])
-                                                                   undone emptied))))))
+                                                                   undone (move-view/still-empty calls c)))))))
             calls)))
 
 ;; --- the edges: what is on the disk

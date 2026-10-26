@@ -305,7 +305,7 @@
     (testing "relay undo puts everything back and removes only the folders it made"
       (let [r (cli/execute ["--data" (:data-dir sys) "undo" (str call)])]
         (is (= 0 (:exit r)) (pr-str r))
-        (is (re-find #"put back 2 of 2.*Removed 2 empty folder" (first (:out r)))))
+        (is (re-find #"put back 2 of 2.*Removed 2 empty folders moves had made: Taxes/2025/Returns, Bank\." (first (:out r)))))
       (is (= before (snapshot *dir*)))
       (is (= [{:call call :steps [0 1] :removed [{:call call :path (str root "/Taxes/2025/Returns")} {:call call :path (str root "/Bank")}]}]
              (mapv :data (events sys "files/undone"))))
@@ -493,7 +493,9 @@
         c2 (call! [{:from (str root "/new/c.pdf") :to (str root "/b/c.pdf")}])]
     (let [r (moves/undo! sys c1)]
       (is (re-find #"put back 1 of 2" (first (:ok r))))
-      (is (some #(str/includes? % (str "Move " c2 " has moved new/c.pdf since. relay undo " c2 " first")) (:ok r)))
+      (is (some #(str/includes? % (str "Move " c2 " has moved new/c.pdf since. Undo move " c2 " first; then"
+                                       " undoing move " c1 " again puts new/c.pdf back.")) (:ok r))
+          "which later move, and that undoing it first helps")
       (is (fs/directory? (str root "/new")) "move 2's undo puts c.pdf back in new"))
     (is (:ok (moves/undo! sys c2)))
     (is (:ok (moves/undo! sys c1)))
@@ -519,8 +521,8 @@
             c3 (call! [{:from (str root "/Downloads/confirmation.pdf") :to (str root "/s.pdf")}])]
         (let [r (moves/undo! sys c1)]
           (is (str/includes? (str/join "\n" (:refused r))
-                             (str "Move " c3 " has moved something at Downloads/confirmation.pdf since. relay undo " c3
-                                  " first, then relay undo " c1 " puts x/c.pdf back."))))
+                             (str "Move " c3 " has moved something at Downloads/confirmation.pdf since. Undo move " c3
+                                  " first; then undoing move " c1 " again puts x/c.pdf back."))))
         (doseq [c [c3 c2 c1]] (is (:ok (moves/undo! sys c)) (str "undo " c)))
         (is (= original (snapshot *dir*)))))))
 
@@ -976,7 +978,9 @@
       (spit to "edited by Kira")
       (let [answer (client-undo sys call)]
         (is (= -32000 (get-in answer ["error" "code"])))
-        (is (re-find #"was not undone, and nothing changed: .*changed since it was moved" (get-in answer ["error" "message"]))))
+        (is (re-find #"changed since it was moved" (get-in answer ["error" "message"])))
+        (is (not (re-find #"(?i)not undone" (get-in answer ["error" "message"])))
+            "relay-tui says Not undone. itself, so the reason is not prefixed with it again"))
       (is (= call (:undo (move-item sys call))) "it can still be undone")
       (spit to "bank october"))
     (testing "the client's undo is relay undo"
@@ -1080,6 +1084,23 @@
       (testing "undo fills it again, so it is no longer said"
         (is (:ok (moves/undo! sys call)))
         (is (not-any? #(str/starts-with? % "Left empty") (:lines (move-item sys call))))))
+    (testing "an undo that puts back only some of what came from it fills it too"
+      (fs/create-dirs (str root "/drafts"))
+      (spit (str root "/drafts/one.md") "1")
+      (spit (str root "/drafts/two.md") "2")
+      (move sys [{:from (str root "/drafts/one.md") :to (str root "/done/one.md")}
+                 {:from (str root "/drafts/two.md") :to (str root "/done/two.md")}])
+      (let [call (:seq (last (events sys "files/moving")))]
+        (is (some #{"Left empty: drafts"} (:lines (move-item sys call))))
+        (is (:ok (moves/undo! sys call #{1})))
+        (let [it (move-item sys call)]
+          (is (not-any? #(str/starts-with? % "Left empty") (:lines it)))
+          (is (= ["1 of 2 still moved (1 put back) in root" "drafts/one.md → done/one.md" "drafts/two.md → done/two.md (undone)"]
+                 (:lines it)))
+          (is (= "2 files, 1 put back" (:title it))))
+        (let [out (:out (cli/execute ["--data" (:data-dir sys) "moves"]))]
+          (is (some #(re-find (re-pattern (str "Move " call ", .*: 1 of 2 still moved \\(1 put back\\)\\.")) %) out) (pr-str out))
+          (is (not-any? #(str/includes? % "Left empty: drafts") out)))))
     (testing "a granted folder is never called empty"
       (let [r (move sys [{:from (str root "/Downloads/confirmation.pdf") :to (str root "/c.pdf")}
                          {:from (str root "/Downloads/statement-oct.pdf") :to (str root "/s.pdf")}])]
@@ -1121,3 +1142,35 @@
       (is (str/includes? msg "Bank/statement.pdf has changed since it was moved there."))
       (is (not (str/includes? msg (str *dir*)))))
     (is (empty? (events sys "memo/sent")) "nothing put back, so nothing to tell")))
+
+(deftest undo-keeps-a-folder-while-a-move-into-it-is-not-undone
+  ;; The call made Filed for its first move; its second also went into
+  ;; Filed. Kira took that file out by hand, so Filed is empty, but its
+  ;; move is not undone: the folder stays until every move into it is.
+  (let [{:keys [sys root]} (world! *dir*)
+        _ (move sys [{:from (str root "/Downloads/confirmation.pdf") :to (str root "/Filed/c.pdf")}
+                     {:from (str root "/Downloads/statement-oct.pdf") :to (str root "/Filed/s.pdf")}])
+        call (:seq (last (events sys "files/moving")))]
+    (fs/move (str root "/Filed/s.pdf") (str root "/s.pdf"))
+    (let [{:keys [ok]} (moves/undo! sys call #{0})]
+      (is (re-find #"put back 1 of 1" (first ok)))
+      (is (not (re-find #"Removed" (first ok)))))
+    (is (fs/directory? (str root "/Filed")) "the second move's undo still needs it")
+    (fs/move (str root "/s.pdf") (str root "/Filed/s.pdf"))
+    (let [{:keys [ok]} (moves/undo! sys call)]
+      (is (re-find #"Removed 1 empty folder moves had made: Filed\." (first ok))))
+    (is (not (fs/exists? (str root "/Filed"))))))
+
+(deftest a-repeat-undo-says-nothing-more-went-back
+  (let [{:keys [sys root]} (world! *dir*)
+        _ (move sys [{:from (str root "/Downloads/confirmation.pdf") :to (str root "/Filed/c.pdf")}
+                     {:from (str root "/Downloads/statement-oct.pdf") :to (str root "/Filed/s.pdf")}])
+        call (:seq (last (events sys "files/moving")))]
+    (spit (str root "/Filed/s.pdf") "edited")
+    (is (:ok (moves/undo! sys call)) "the first undo puts back what it can")
+    (let [{:keys [refused]} (moves/undo! sys call)]
+      (is (= (str "Nothing more went back from move " call ":") (first refused)))
+      (is (some #(str/includes? % "Filed/s.pdf has changed since it was moved there.") refused)))
+    (let [msg (get-in (client-undo sys call) ["error" "message"])]
+      (is (str/includes? msg "Filed/s.pdf has changed since it was moved there."))
+      (is (not (re-find #"(?i)not undone|nothing more" msg)) "relay-tui gives the headline"))))

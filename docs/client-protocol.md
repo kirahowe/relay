@@ -243,7 +243,7 @@ command line instead.
   The item then comes changed, with `undone` once all of it is back.
 - Errors: -32000 with the reason when nothing could go back, touching
   nothing: each file that could not, and why, relative to the granted
-  folder; or the move was already undone, there is no such move, or
+  folder, with no headline (the client says it was not undone); or the move was already undone, there is no such move, or
   relay stopped during the move (the reason then lists the moves to
   check by hand).
 - relay-tui: `u` on a move item in the ready view; the status line shows

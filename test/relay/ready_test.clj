@@ -163,8 +163,15 @@
             :lines ["3 files in notes, into 2 folders"
                     "board mtg.md → meetings/2026-09-01-board-meeting.md"
                     "rehearsal.txt → choir/rehearsal.txt"
-                    "a.txt → choir/a.txt (undone)"]}
-           (move-view/view roots shown #{2})))
+                    "a.txt → choir/a.txt"]}
+           (move-view/view roots shown #{})))
+    (testing "a partly undone move says how many are still moved, and lists those first"
+      (is (= {:title "3 files, 1 put back"
+              :lines ["2 of 3 still moved (1 put back) in notes"
+                      "rehearsal.txt → choir/rehearsal.txt"
+                      "a.txt → choir/a.txt"
+                      "board mtg.md → meetings/2026-09-01-board-meeting.md (undone)"]}
+             (move-view/view roots shown #{0}))))
     (is (= {:title "board mtg.md"
             :lines ["1 file in notes" "board mtg.md → meetings/2026-09-01-board-meeting.md"]}
            (move-view/view roots (take 1 shown) #{})))
@@ -180,6 +187,22 @@
                                       [[0 {:from "/h/notes/x/a.txt" :to "/h/notes/y/a.txt"}]
                                        [1 {:from "/h/notes/x/b.txt" :to "/h/notes/z/b.txt"}]]
                                       #{})))))))
+
+(deftest left-empty-names-only-folders-nothing-has-gone-back-into
+  (let [call {:id 3 :moves [{:from "/r/old/a.md" :to "/r/new/a.md"} {:from "/r/old/b.md" :to "/r/new/b.md"}
+                            {:from "/r/junk/c.md" :to "/r/new/c.md"}]
+              :done [{:index 0} {:index 1} {:index 2}] :undone [] :emptied ["/r/junk" "/r/old"]}]
+    (is (= ["/r/junk" "/r/old"] (move-view/still-empty [call] call)))
+    (is (= ["/r/junk"] (move-view/still-empty [(assoc call :undone [1])] (assoc call :undone [1])))
+        "an undo put b.md back in old")
+    (testing "a later move, not undone, that put something in it"
+      (let [later {:id 5 :moves [{:from "/r/x.md" :to "/r/junk/x.md"}] :done [{:index 0}] :undone []}]
+        (is (= ["/r/old"] (move-view/still-empty [call later] call)))
+        (is (= ["/r/junk" "/r/old"] (move-view/still-empty [call (assoc later :undone [0])] call))
+            "undone again, so it is empty again")))
+    (testing "an earlier move does not count: it came before the folder was emptied"
+      (let [earlier {:id 1 :moves [{:from "/r/x.md" :to "/r/junk/x.md"}] :done [{:index 0}] :undone []}]
+        (is (= ["/r/junk" "/r/old"] (move-view/still-empty [earlier call] call)))))))
 
 (def gen-segment (gen/elements ["a" "b c" "x.md" "2026-09-01" "notes"]))
 

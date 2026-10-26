@@ -46,15 +46,34 @@
             (str (when many? (str (file-name r) ": ")) (subs p (inc (count r))))
             p))))))
 
+(defn still-empty
+  "The folders call `c` left empty (its :emptied) that nothing has gone
+  back into since, as far as the log knows: no undo of `c` or of a later
+  call put a file back in one, and no later move that is not undone put
+  one there. `calls` are every move call, `c` among them. Pure."
+  [calls c]
+  (let [later (filter #(>= (:id %) (:id c)) calls)
+        undone-of (fn [k] (set (:undone k)))
+        filled (concat
+                ;; put back where they came from, by an undo
+                (for [k later i (undone-of k)] (:from ((:moves k) i)))
+                ;; moved in by a later call that is not undone
+                (for [k later :when (> (:id k) (:id c))
+                      {:keys [index]} (:done k) :when (not ((undone-of k) index))]
+                  (:to ((:moves k) index))))]
+    (vec (remove (fn [d] (some #(under? d %) filled)) (:emptied c)))))
+
 (defn view
   "How a files_move call reads to the operator, given its `roots` (the
   folders it was granted, or nil to use the folder every path shares):
   {:title :lines}, the lines being a summary, then one line per file,
   \"from → to\" relative to the granted folder, then a line naming the
-  folders the call left empty (`emptied`), while any of it is not undone.
-  When the files are in several granted folders, each line starts with
-  its folder's short name. `shown` is [[index move]]; `undone` the set of
-  indexes put back."
+  folders the call left empty (`emptied`, those still empty: still-empty),
+  while any of it is not undone. When some of it is undone, the summary
+  says how many are still moved, and those come first. When the files
+  are in several granted folders, each line starts with its folder's
+  short name. `shown` is [[index move]]; `undone` the set of indexes put
+  back."
   ([roots shown undone] (view roots shown undone nil))
   ([roots shown undone emptied]
    (let [paths (mapcat (fn [[_ m]] [(:from m) (:to m)]) shown)
@@ -64,13 +83,20 @@
          many? (> (count names) 1)
          show (shower roots paths)
          n (count shown)
+         back (count (filter (fn [[i _]] (undone i)) shown))
          dirs (count (distinct (map (fn [[_ m]] (parent-path (second (rel (:to m))))) shown)))
          files (str n (if (= 1 n) " file" " files"))
-         all-undone? (and (seq shown) (every? (fn [[i _]] (undone i)) shown))]
-     {:title (if (= 1 n) (file-name (:from (second (first shown)))) files)
-      :lines (cond-> (into [(str files (when (seq names) (str " in " (str/join ", " names)))
-                                 (when (and (> n 1) (> dirs 1)) (str ", into " dirs " folders")))]
-                           (for [[i m] shown
+         in (when (seq names) (str " in " (str/join ", " names)))
+         partly? (< 0 back n)
+         all-undone? (and (seq shown) (= back n))]
+     {:title (cond (= 1 n) (file-name (:from (second (first shown))))
+                   partly? (str files ", " back " put back")
+                   :else files)
+      :lines (cond-> (into [(if partly?
+                              (str (- n back) " of " n " still moved (" back " put back)" in)
+                              (str files in (when (and (> n 1) (> dirs 1)) (str ", into " dirs " folders"))))]
+                           ;; What is still moved first, then what went back.
+                           (for [[i m] (sort-by (fn [[i _]] (boolean (undone i))) shown)
                                  :let [[rn from] (rel (:from m)) [_ to] (rel (:to m))]]
                              (str (when (and many? rn) (str rn ": ")) from " → " to (when (undone i) " (undone)"))))
                (and (seq emptied) (not all-undone?))

@@ -121,8 +121,9 @@
   "A files_move call: what moved where, which role moved it, and whether
   the operator can still undo it (relay undo, _relay/undo). A call relay
   never finished can still be asked to undo: undo then lists its moves to
-  check by hand."
-  [c]
+  check by hand. `calls` are every call, to tell which folders it left
+  empty are empty still."
+  [calls c]
   (let [undone (set (:undone c))
         moving? (= :moving (:status c))
         shown (vec (if moving?
@@ -130,7 +131,7 @@
                      (for [{:keys [index]} (:done c)] [index ((:moves c) index)])))
         left (core/move-steps-left c)
         all-undone? (and (not moving?) (seq (:done c)) (empty? left))
-        {:keys [title lines]} (when (seq shown) (move-view/view (:roots c) shown undone (:emptied c)))]
+        {:keys [title lines]} (when (seq shown) (move-view/view (:roots c) shown undone (move-view/still-empty calls c)))]
     {:id (str "move:" (:id c)) :kind :move :at (or (:finished-at c) (:at c)) :seq (:id c)
      :title (cond
               moving? "relay stopped while it moved these; check them by hand"
@@ -156,7 +157,7 @@
      (for [c (core/board state false)
            :when (not= core/operator (:owner c))]
        (finding-item state c)))
-   (fn [state] (map move-item (core/move-calls state)))])
+   (fn [state] (let [calls (core/move-calls state)] (map #(move-item calls %) calls)))])
 
 (def default-limit 60)
 
