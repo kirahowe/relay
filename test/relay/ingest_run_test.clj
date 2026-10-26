@@ -5,6 +5,7 @@
   Mail is put into mailpit over SMTP with the headers a receiving server
   would add, forged ones included."
   (:require [babashka.fs :as fs]
+            [clojure.edn]
             [babashka.http-client :as http]
             [babashka.process :as p]
             [cheshire.core :as json]
@@ -254,7 +255,15 @@
         (is (= "ingest/failed" (:type e)))
         (is (= "the calendar answered 302" (get-in e [:data :error])))
         (is (not (str/includes? (pr-str e) "token")) "the URL, a secret, is not recorded")
-        (is (= 3 (count @requests)) "the redirect was not followed"))
+        (is (= 3 (count @requests)) "the redirect was not followed")
+        (testing "relay poll says so, again and again, and fails"
+          ;; Regression: it exited 0, and a failure the same as the last
+          ;; read as nothing new.
+          (spit (str (:data-dir sys) "/relay.edn")
+                (pr-str (assoc (clojure.edn/read-string (slurp (str (:data-dir sys) "/relay.edn")))
+                               :ingest {"cal" {:kind :ics :url (str base "/moved-token/basic.ics") :to "steward"}})))
+          (is (= {:exit 1 :out ["cal: could not check it: the calendar answered 302"]}
+                 (update (cli/execute ["--data" (:data-dir sys) "poll"]) :out vec)))))
       (finally (stop) (fs/delete-tree dir)))))
 
 (deftest a-calendar-that-answers-with-something-else-removes-nothing

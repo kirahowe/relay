@@ -218,18 +218,22 @@
 (defn poll-line
   "What relay poll says for one source: `events` the poll appended (nil
   when it did not poll), and `started` the GitHub repositories it saw for
-  the first time, which only mark where watching begins. Pure."
-  [source-name src events started]
-  (let [memos (count (filter #(= "memo/sent" (:type %)) events))
-        failed (first (filter #(#{"ingest/failed" "error"} (:type %)) events))]
-    (str source-name ": "
-         (cond
-           (nil? events) (str "not checked, since " (:to src) " is not a role.")
-           failed (str "could not check it: " (get-in failed [:data :error]))
-           (and (zero? memos) (seq started))
-           (str "now watching " (and-list started) "; new issues and pull requests show up from the next check.")
-           (zero? memos) "nothing new."
-           :else (str memos " new memo" (when (> memos 1) "s") " for " (:to src) ".")))))
+  the first time, which only mark where watching begins, and `still` the
+  source's recorded failure when this poll failed the same way. Pure."
+  ([source-name src events started] (poll-line source-name src events started nil))
+  ([source-name src events started still]
+   (let [memos (count (filter #(= "memo/sent" (:type %)) events))
+         failed (first (filter #(#{"ingest/failed" "error"} (:type %)) events))]
+     (str source-name ": "
+          (cond
+            (nil? events) (str "not checked, since " (:to src) " is not a role.")
+            failed (str "could not check it: " (get-in failed [:data :error]))
+            ;; The same failure as last time, which is not recorded again.
+            still (str "could not check it: " still)
+            (and (zero? memos) (seq started))
+            (str "now watching " (and-list started) "; new issues and pull requests show up from the next check.")
+            (zero? memos) "nothing new."
+            :else (str memos " new memo" (when (> memos 1) "s") " for " (:to src) "."))))))
 
 (defn poll-now!
   "Polls the named source, or every one, now, due or not (relay poll).
@@ -243,5 +247,9 @@
     (vec (for [[n src] sources]
            (let [watched (set (keep :repo (filter map? (:cursor (core/ingest-record (inbound/current-state sys) n)))))
                  started (when (= :github (:kind src)) (remove watched (:repos src)))
-                 events (try (poll! sys n) (catch Exception e [{:type "error" :data {:error (ex-message e)}}]))]
-             (poll-line n src events started))))))
+                 events (try (poll! sys n) (catch Exception e [{:type "error" :data {:error (ex-message e)}}]))
+                 ;; A failure the same as the last is not recorded again,
+                 ;; so it is read from the source's record.
+                 still (when (and (some? events) (not-any? #(= "ingest/polled" (:type %)) events))
+                         (get-in (inbound/current-state sys) [:ingest n :failing :error]))]
+             (poll-line n src events started still))))))

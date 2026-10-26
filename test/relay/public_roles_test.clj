@@ -180,12 +180,12 @@
                   (run-before "steward" :memo/send {:to "scout" :subject "Old" :body "Secret."} ["private"]))]
         (is (seq (core/unread-memos (:state w) "scout")) "the old memo is there")
         (is (re-find #"no role called" (str (refusal #(in-wake w "scout" (fn [w] (run w "scout" :memo/send {:to "steward" :subject "s" :body "b"} [])))))))))
-    (testing "its memo is labelled as from the web even from a session that read nothing"
+    (testing "its memo is labelled as from outside, and from the web, even from a session that read nothing"
       (let [w (in-wake w "scout" #(run % "scout" :memo/send {:to "steward" :subject "Found" :body "Three."} []))
             back (first (core/unread-memos (:state w) "steward"))]
         (is (= ["contaminated"] (:labels back)))
         (is (:public back))
-        (is (some #(str/includes? % "[from the web]") (render/memo java.time.ZoneOffset/UTC back {:from-web? #(config/public? cfg %)})))))))
+        (is (= ["search:web"] (core/sources-of (:state w) (:id back) (:labels back))))))))
 
 (deftest a-public-role-s-memos-and-its-own-writes-are-public
   (let [w (in-wake (world) "scout"

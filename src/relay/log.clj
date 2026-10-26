@@ -151,7 +151,7 @@
 (defn transact!
   "The only way anything is written. Under the lock, calls `(decide events)`
   with every event so far; it returns a sequence of new events as maps of
-  :type, :actor, :data and optionally :labels and :public. They are given their seq and
+  :type, :actor, :data and optionally :labels, :public and :sources. They are given their seq and
   recording time and appended together, and are returned. A decide function
   that throws appends nothing.
 
@@ -199,7 +199,10 @@
                                          :data (or data {})}
                                   ;; Set by relay.core on an item a public
                                   ;; writer wrote; absent means not public.
-                                  (true? (:public draft)) (assoc :public true)))
+                                  (true? (:public draft)) (assoc :public true)
+                                  ;; What its writer read directly
+                                  ;; (relay.provenance), when it said.
+                                  (sequential? (:sources draft)) (assoc :sources (vec (sort (distinct (:sources draft)))))))
                               drafts))
                 ;; Round trip through JSON so the caller gets back exactly
                 ;; what a later read will see.

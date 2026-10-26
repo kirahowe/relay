@@ -401,12 +401,12 @@
              (map #(get-in % ["subject" "text"]) (get (workspace/messages-changed s1 (workspace/log-rev s0)) "messages"))))
       (is (nil? (workspace/messages-changed s1 (workspace/log-rev s1)))))))
 
-(deftest a-message-from-outside-is-marked-for-the-client
+(deftest a-message-from-outside-has-its-links-broken-for-the-client
   (let [msg (assoc (messages/message {:kind "note" :subject "See https://evil.example" :sections [["Go to https://evil.example"]]})
                    :id 1 :rev 1 :thread 1 :created-at (at "2026-10-26T12:00:00Z") :labels ["contaminated"] :deliveries {})
         wire (channels/wire msg)]
-    (is (= {"text" "[from outside] See hxxps://evil[.]example" "outsider" true} (get wire "subject")))
-    (is (= "[from outside] Go to hxxps://evil[.]example" (get-in wire ["sections" 0 "items" 0 "text"])))))
+    (is (= {"text" "See hxxps://evil[.]example" "outsider" true} (get wire "subject")))
+    (is (= "Go to hxxps://evil[.]example" (get-in wire ["sections" 0 "items" 0 "text"])))))
 
 (deftest the-hub-sends-messages-to-its-subscribers
   (let [[s0 s1] (wire-states)

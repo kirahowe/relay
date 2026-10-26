@@ -21,6 +21,7 @@
             [relay.ingest :as ingest]
             [relay.mailbox :as mailbox]
             [relay.messages :as messages]
+            [relay.provenance :as provenance]
             [relay.schedule :as schedule]
             [relay.search :as search]
             [relay.skills :as skills]
@@ -101,6 +102,29 @@
     (apply union (:labels item) colls)
     (apply content-labels (:labels item) colls)))
 
+(defn sources-of
+  "The sources (relay.provenance) of what the event `seq` wrote: those it
+  recorded, or, for an event that recorded none (one an ingestor or the
+  dispatcher wrote, or one an older relay wrote), what its `labels` name,
+  which says at least as much."
+  [state seq labels]
+  (if-let [s (get-in state [:sources seq])]
+    s
+    (provenance/sources labels)))
+
+(defn event-sources
+  "The sources an event carries (sources-of), read from the event itself
+  as evolve folds it."
+  [{:keys [sources labels]}]
+  (if (sequential? sources) (vec sources) (provenance/sources labels)))
+
+(defn note-collects?
+  "Whether relay.edn has a daily note, which collects what can wait: new
+  GitHub items from people and sources relay cannot check go into it
+  rather than out at once."
+  [config]
+  (some? (digest/at-time config)))
+
 (def harness-outcomes
   "How a wake's harness run ended. Only \"ran\" means the role got to work;
   the others are the harness's own failures and count against no memo."
@@ -132,6 +156,10 @@
    ;; Every label any event has carried, which bounds what a session that
    ;; could read anything in relay may have seen.
    :seen-labels []
+   ;; The sources of the events that recorded theirs, by seq: the outside
+   ;; text the session that wrote each one read directly in its wake
+   ;; (relay.provenance), which is what the operator is shown.
+   :sources {}
    :next-seq 1 :last-at nil})
 
 (defn- blank? [s] (or (not (string? s)) (str/blank? s)))
@@ -803,9 +831,11 @@
   `before` (the state before it) to `after`, or nil: {:what skill |
   routine | note | role, :change added | changed | removed, :owner
   :name, :before what it replaced (nil when it was new), :delta lines
-  added and removed}. :seq, :at, :actor and :labels are the event's."
-  [before after {:keys [seq at actor labels type data]}]
-  (let [base {:seq seq :at at :actor actor :labels (union labels)}
+  added and removed, :peek one line of what it now says}. :seq, :at,
+  :actor, :labels and :sources are the event's: the sources, what the
+  session read directly, decide whether the daily note flags it."
+  [before after {:keys [seq at actor labels type data] :as event}]
+  (let [base {:seq seq :at at :actor actor :labels (union labels) :sources (event-sources event)}
         ch (fn [m] (merge base m))]
     (case type
       ("doc/put" "doc/removed")
@@ -816,7 +846,8 @@
             (ch {:what "skill" :owner owner :name (skill-name (:path data)) :path (:path data)
                  :change (cond (= "doc/removed" type) "removed" prev "changed" :else "added")
                  :before (when prev {:version (:seq prev)})
-                 :delta (digest/line-delta (:content prev) (:content data))}))))
+                 :delta (digest/line-delta (:content prev) (:content data))
+                 :peek (when (= "doc/put" type) (digest/peek (:content prev) (:content data)))}))))
 
       ("routine/written" "routine/removed")
       (let [{:keys [owner name]} data
@@ -828,6 +859,7 @@
                :change (cond (= "routine/removed" type) "removed" prev "changed" :else "added")
                :before (when prev (select-keys prev [:schedule :instructions :labels :public]))
                :delta (digest/line-delta (:instructions prev) (:instructions data))
+               :peek (when (= "routine/written" type) (digest/peek (:instructions prev) (:instructions data)))
                :schedule (when (and (= "routine/written" type) (not= (:schedule prev) (:schedule now)))
                            (:schedule now))})))
 
@@ -838,7 +870,8 @@
           (ch {:what "note" :owner owner :name name
                :change (cond (= "note/removed" type) "removed" prev "changed" :else "added")
                :before (when prev (select-keys prev [:text :labels :public]))
-               :delta (digest/line-delta (:text prev) (:text data))})))
+               :delta (digest/line-delta (:text prev) (:text data))
+               :peek (when (= "note/written" type) (digest/peek (:text prev) (:text data)))})))
 
       ("role/added" "role/updated" "role/removed")
       (let [id (:id data)
@@ -849,7 +882,10 @@
                :before (when (= "role/updated" type) (role-snapshot prev))
                :delta (when-not (= "role/removed" type)
                         (digest/line-delta (when (= "role/updated" type) (:instructions prev))
-                                           (:instructions (role after id))))})))
+                                           (:instructions (role after id))))
+               :peek (when-not (= "role/removed" type)
+                       (digest/peek (when (= "role/updated" type) (:instructions prev))
+                                    (:instructions (role after id))))})))
       nil)))
 
 (defn recipe-changes [state] (:recipe-changes state))
@@ -891,6 +927,7 @@
                            " may read. relay refuses to read it.")
                       {:event event})))
     (-> (evolve* state event)
+        (cond-> (sequential? (:sources event)) (assoc-in [:sources seq] (vec (:sources event))))
         (note-recipe-change state event)
         (update :seen-labels union labels)
         (assoc :next-seq (inc seq) :last-at (inst at)))))
@@ -1148,7 +1185,7 @@
     (= "budget-reached" origin)
     (update-in [:budget-told week] (fnil max 0) percent)))
 
-(defn- add-message [state {:keys [seq at labels]} data]
+(defn- add-message [state {:keys [seq at labels] :as event} data]
   (let [parent (get-in state [:messages (:in-reply-to data)])]
     (-> (cond-> state
           ;; Web work that runs again ends the alert that said it stopped.
@@ -1157,6 +1194,7 @@
         (assoc-in [:messages seq]
                   (-> (dissoc data :route)
                       (assoc :id seq :created-at (inst at) :rev seq :labels (union labels)
+                             :sources (event-sources event)
                              :thread (or (:thread parent) seq)
                              :deliveries (messages/deliveries (:route data)))))
         (told data at))))
@@ -1227,10 +1265,11 @@
 ;; calls out of a session and records each one (:prepared/record), so
 ;; the client's ready view (relay.ready) can say what is waiting and
 ;; where.
-(defmethod evolve* "prepared/recorded" [state {:keys [seq at actor data labels]}]
+(defmethod evolve* "prepared/recorded" [state {:keys [seq at actor data labels] :as event}]
   (-> state
       (assoc-in [:prepared seq] (assoc (select-keys data [:tool :call :title :where :preview])
-                                       :id seq :at (inst at) :role actor :labels (union labels)))
+                                       :id seq :at (inst at) :role actor :labels (union labels)
+                                       :sources (event-sources event)))
       (assoc-in [:prepared-calls (str (:tool data) "/" (:call data))] seq)))
 
 (defn- fact-version [{:keys [seq at actor labels public]} change {:keys [topic text valid-from valid-to]}]
@@ -1296,18 +1335,20 @@
                                                    :why (:why data)
                                                    :start (some-> (:start old) str) :end (some-> (:end old) str))))))
 
-(defmethod evolve* "files/moving" [state {:keys [seq at actor labels data]}]
+(defmethod evolve* "files/moving" [state {:keys [seq at actor labels data] :as event}]
   (assoc-in state [:moves seq] (cond-> {:id seq :actor actor :at (inst at) :labels (union labels)
+                                        :sources (event-sources event)
                                         :moves (:moves data) :status :moving :done [] :undone [] :removed []}
                                  ;; The folders the role was granted, as they were then; a call
                                  ;; from before this was recorded has none.
                                  (not-empty (:roots data)) (assoc :roots (vec (:roots data))))))
 
-(defmethod evolve* "files/moved" [state {:keys [at labels data]}]
+(defmethod evolve* "files/moved" [state {:keys [at labels data] :as event}]
   (update-in state [:moves (:call data)]
              #(-> % (assoc :status :moved :done (vec (:done data)) :stopped (:stopped data)
                            :finished-at (inst at))
-                  (update :labels union labels))))
+                  (update :labels union labels)
+                  (update :sources (fn [ss] (provenance/sources (concat ss (event-sources event))))))))
 
 (defmethod evolve* "files/undone" [state {:keys [at data]}]
   (update-in state [:moves (:call data)]
@@ -1360,9 +1401,16 @@
   caller's labels, and `copied`, the labels of any text it copies from
   elsewhere."
   ([tx type data] (emit tx type data []))
-  ([{:keys [state now actor] :as tx} type data copied]
+  ([tx type data copied] (emit tx type data copied nil))
+  ([{:keys [state now actor] :as tx} type data copied copied-sources]
    (let [event (cond-> {:seq (:next-seq state) :at (str now) :type type :actor actor
                         :labels (union (:labels tx) copied) :data data}
+                 ;; What the writer read directly in its wake, when its
+                 ;; command said (relay.provenance), with the sources of
+                 ;; any text it copies: those given, else what the copied
+                 ;; text's labels name.
+                 (or (contains? tx :sources) (some? copied-sources))
+                 (assoc :sources (provenance/sources (concat (:sources tx) (or copied-sources copied))))
                  ;; Only an item, and only from a public writer (decide).
                  (and (:public tx) (public-item-events type)) (assoc :public true))]
      (-> tx
@@ -1440,14 +1488,16 @@
 
 (defn- send-memo
   "Sends a memo. `copied` is the labels of text it copies, such as a
-  routine's instructions."
+  routine's instructions, and `copied-sources` that text's sources, when
+  known."
   ([tx m] (send-memo tx m []))
-  ([tx {:keys [from to subject body routine about]} copied]
+  ([tx m copied] (send-memo tx m copied nil))
+  ([tx {:keys [from to subject body routine about]} copied copied-sources]
    (let [tx (emit tx "memo/sent" (cond-> {:from from :to to :subject subject :body body}
                                    routine (assoc :routine routine)
                                    ;; A dead letter's memo names the letter it is about.
                                    about (assoc :about about))
-                  copied)]
+                  copied copied-sources)]
      (if (= operator to)
        (tell tx "memo-for-operator" "note" "normal" subject
              [{:text body :refs [(str "[[memo:" (last-id tx) "]]")]}]
@@ -1514,7 +1564,9 @@
                        :body (cond-> report
                                operators? (str "\n\nrelay has told the operator, so do not tell them again."))
                        :about letter-id}
-                    copied))
+                    copied
+                    ;; It quotes the memo and what was said about it.
+                    (concat (sources-of state (:id m) (:labels m)) (provenance/sources (:labels letter)))))
 
       operators? tx
 
@@ -1595,13 +1647,16 @@
   (when-not (and (or (nil? labels) (sequential? labels)) (every? known-label? labels))
     (reject! (str "Unknown labels " (pr-str labels) "; relay knows only "
                   (str/join " and " (sort label-names)) ", and labels naming where something came from.")))
+  (when (and (contains? command :sources)
+             (not (and (sequential? (:sources command)) (every? provenance/source? (:sources command)))))
+    (reject! "A command's sources are labels naming where something came from."))
   (let [public-role (and (active-role? state actor) (public-caller? state config actor (:session-wake command)))]
     ;; A public role's session never holds private (agentloop forbids it),
     ;; so a call claiming it is refused before it can write anything.
     (when (and public-role (private? labels))
       (reject! :forbidden (str actor " is a public role, and this call came from a session holding private."
                                " relay refused it.")))
-    (:events (decide* {:state state :events [] :now now :config config :actor actor
+    (:events (decide* (cond-> {:state state :events [] :now now :config config :actor actor
                        :labels (union labels) :session-wake (:session-wake command)
                        ;; Whether what this command writes is public: the
                        ;; operator says so with --public, a public role's
@@ -1617,6 +1672,7 @@
                                                             (and (= actor (:role w)) (= :running (:status w))
                                                                  (:public-session w)))
                                               :else false))}
+                        (contains? command :sources) (assoc :sources (provenance/sources (:sources command))))
                       command))))
 
 (defn run-command
@@ -1730,7 +1786,8 @@
       ;; A scout's memo comes from the web, whatever its session has read
       ;; so far.
       (public-actor? tx)
-      (send-memo tx {:from actor :to to :subject subject :body body} [contaminated-label])
+      (send-memo tx {:from actor :to to :subject subject :body body} [contaminated-label]
+                 (conj (vec (:sources tx)) "search:web"))
       ;; A house role's memo to a scout is public as written (decision 6):
       ;; the role chose what to put in it, and nobody signs it off. Its
       ;; session's other labels stay as provenance.
@@ -1833,6 +1890,17 @@
   (when-not (= dispatcher actor)
     (reject! :forbidden "Only the dispatcher does that.")))
 
+(defn- own-first
+  "The memos a wake takes: those with no outside source (the operator's
+  own, her verified replies, routines, roles' work) in a wake of their
+  own when any are waiting, and the rest, the mailbox, GitHub and
+  calendar, in the next. A wake's work is shaped by every memo it read,
+  so a request of hers taken with a stranger's mail would read as drawn
+  on that mail."
+  [state memos]
+  (let [{own false outside true} (group-by #(provenance/outside? (sources-of state (:id %) (:labels %))) memos)]
+    (if (seq own) (vec own) (vec outside))))
+
 (defn- start-wake
   "What :wake/start does once the role is known to be free."
   [{:keys [state config now actor] :as tx} {{role-id :role :keys [note dispatched chat pid pid-start]} :args}]
@@ -1851,9 +1919,10 @@
       (reject! :forbidden "Only the operator can open a conversation."))
     (let [;; A wake starts with the memos the role may be shown, in a fresh
           ;; session unless the last one was cut short.
-          memos (cond chat []
-                      dispatched (waiting-memos state config role-id now)
-                      :else (deliverable-memos state config role-id))
+          memos (own-first state
+                           (cond chat []
+                                 dispatched (waiting-memos state config role-id now)
+                                 :else (deliverable-memos state config role-id)))
           public (public-role? config role-id)
           ;; A session from before a public role was public is not carried
           ;; on as one: it may hold private text that no label records.
@@ -2271,7 +2340,10 @@
   (dispatcher-only! tx)
   (let [{:keys [subject items still fix]} (or (setup-problems problem) (reject! (str "No setup problem " (pr-str problem) ".")))
         requests (vec (when (integer? wake) (unmet-requests state wake)))
-        event {:tool tool :problem problem :memos (mapv :memo requests)}]
+        event (cond-> {:tool tool :problem problem :memos (mapv :memo requests)}
+                ;; The wake it stopped, so the daily note can say a grant
+                ;; search did not run.
+                (integer? wake) (assoc :wake wake))]
     (cond
       (not (get-in state [:tools-broken tool]))
       (-> (emit tx "tool/broken" event)
@@ -2290,7 +2362,9 @@
 
 (defmethod evolve* "tool/broken" [state {:keys [data]}]
   (reduce #(assoc-in %1 [:setup-told %2] true)
-          (assoc-in state [:tools-broken (:tool data)] (:problem data))
+          (cond-> (assoc-in state [:tools-broken (:tool data)] (:problem data))
+            (get-in state [:wakes (:wake data)])
+            (update-in [:wakes (:wake data) :tool-failures] (fnil conj #{}) (:problem data)))
           (:memos data)))
 
 (defmethod evolve* "tool/working" [state {:keys [seq data]}]
@@ -2411,7 +2485,10 @@
         tx (with-public tx (:public r)
              #(send-memo % {:from dispatcher :to owner :subject name :body instructions
                             :routine name}
-                         (:labels r)))
+                         (:labels r)
+                         ;; What shaped the routine when it was written,
+                         ;; not all its writer had in context.
+                         (sources-of (:state tx) (:version r) (:labels r))))
         memo-id (:seq (first (filter #(= "memo/sent" (:type %))
                                      (rseq (:events tx)))))]
     (emit tx "routine/fired" {:owner owner :name name :memo memo-id
@@ -2608,7 +2685,7 @@
       (reject! "A message is sections of items."))
     (let [kind (if parent "reply" "note")
           ;; Only relay numbers what the operator can act on (the daily note).
-          sections (mapv (fn [sec] (update sec :items (fn [its] (mapv #(if (map? %) (dissoc % :action) %) its)))) sections)
+          sections (mapv (fn [sec] (update sec :items (fn [its] (mapv #(if (map? %) (dissoc % :action :link :labels) %) its)))) sections)
           draft (try (messages/message {:kind kind :urgency urgency :subject subject :sections sections
                                         :in-reply-to in-reply-to})
                      (catch clojure.lang.ExceptionInfo e (reject! (ex-message e))))]
@@ -2668,10 +2745,15 @@
   [tx parent to memo channel text]
   (let [note? (= "daily-note" (:origin parent))
         tell-role? (not (and note? (digest/only-acts? text (:numbered parent))))
+        ;; Her verified words have no outside source, whatever the
+        ;; message she answers drew on: the labels it quotes still bound
+        ;; what the memo may hold (I3), but what is done at her request is
+        ;; hers, and quiet (decision 14).
         tx (cond-> tx
-             tell-role? (with-public false
-                          #(send-memo % {:from operator :to to :subject (:subject memo) :body (:body memo)}
-                                      (union (:labels memo) (:labels parent)))))]
+             tell-role? (-> (with-public (dissoc tx :sources) false
+                              #(send-memo % {:from operator :to to :subject (:subject memo) :body (:body memo)}
+                                          (union (:labels memo) (:labels parent)) []))
+                            (cond-> (contains? tx :sources) (assoc :sources (:sources tx)))))]
     (-> tx
         (emit "message/replied" (cond-> {:message (:id parent) :channel channel :text text}
                                   tell-role? (assoc :memo (last-id tx))))
@@ -2781,7 +2863,8 @@
         tx (if (and f (= error (:error f))) tx (emit tx "ingest/failed" {:source source :error error}))
         f (:failing (ingest-record (:state tx) source))
         patience (Duration/ofMinutes (:outage-patience-minutes config))]
-    (if (and (not (:told f)) (not (.isBefore now (.plus ^Instant (:since f) patience))))
+    (if (and (not (:told f)) (not (note-collects? config))
+             (not (.isBefore now (.plus ^Instant (:since f) patience))))
       (tell tx "ingest-failing" "alert" "normal" (str "Could not check " source)
             [(str "relay has not been able to check " source " since " (:since f)
                   ". The last try said: " error)
@@ -2853,7 +2936,9 @@
 (defmethod evolve* "digest/composed" [state {:keys [seq data]}]
   ;; A note with nothing to say is not sent, and `relay note now` may make
   ;; the day's again once there is something.
-  (assoc state :daily {:date (:date data) :seq seq :sent (not (false? (:sent data)))}))
+  ;; The note listed the GitHub items people opened, so they are told.
+  (cond-> (assoc state :daily {:date (:date data) :seq seq :sent (not (false? (:sent data)))})
+    (contains? data :github) (assoc :github-news [])))
 
 (defmethod evolve* "digest/part-written" [state {:keys [seq at data labels]}]
   (assoc-in state [:daily-parts (:part data)] {:seq seq :at (inst at) :items (vec (:items data)) :labels (union labels)}))
@@ -2901,14 +2986,50 @@
      :changes (cond->> (recipe-changes state)
                 (nil? since) (filterv #(not (.isBefore ^Instant (inst (:at %)) floor))))}))
 
+(defn- problem-lines
+  "What relay could not check, one line a source, for the note."
+  [state config]
+  (let [zone (config/zone config)
+        fmt (DateTimeFormatter/ofPattern "EEE d MMM HH:mm" java.util.Locale/ENGLISH)]
+    (vec (for [[source {:keys [failing]}] (sort-by key (:ingest state))
+               :when failing]
+           (str "relay could not check " source " since "
+                (.format fmt (.atZone ^Instant (:since failing) zone)) ". The last try said: " (:error failing))))))
+
+(defn grant-search
+  "What relay knows of the grant search since the event `since`
+  (relay.digest/grant-search-states), from the ended wakes of the
+  routine relay.edn's :daily-note :grants names: nil when it names none,
+  :not-run when no wake took one of its memos, :key-failing when the
+  last such wake found the web search key not working or it is still
+  not set up (tool/broken), else :ran."
+  [state config since]
+  (when-let [[owner name] (digest/grant-routine config)]
+    (let [ran (->> (vals (:wakes state))
+                   (filter #(and (= owner (:role %)) (> (:id %) (or since 0)) (not= :running (:status %))
+                                 (some (fn [m] (= name (:routine (memo state m)))) (:memos %))))
+                   (sort-by :id))]
+      (cond
+        (empty? ran) :not-run
+        ;; A broken key is told once, so a later wake that met it again
+        ;; records nothing: it is failing while it is still broken.
+        (or (contains? (set (:tool-failures (last ran))) "search-key")
+            (some #{"search-key"} (vals (:tools-broken state))))
+        :key-failing
+        :else :ran))))
+
 (defn compose-note
   "The note for `date` as relay.digest composes it from the state."
-  [state date ^Instant now]
+  [state config date ^Instant now]
   (let [{:keys [since changes]} (note-changes state now)]
     (digest/compose {:date date :changes changes :since since :written (written-parts state)
-                     :dismissed (set (keys (:dismissed state)))})))
+                     :dismissed (set (keys (:dismissed state)))
+                     :github (:github-news state)
+                     :github? (boolean (some #(= :github (:kind (val %))) (:ingest config)))
+                     :problems (problem-lines state config)
+                     :grant-search (grant-search state config since)})))
 
-(defmethod decide* :digest/compose [{:keys [state now] :as tx} {{:keys [date]} :args}]
+(defmethod decide* :digest/compose [{:keys [state config now] :as tx} {{:keys [date]} :args}]
   ;; Recorded once a day under the log's lock, so two ticks cannot both
   ;; make one, and a restart makes none twice. A note with nothing to say
   ;; is recorded and not sent; it does not stop the day's being made again
@@ -2919,8 +3040,9 @@
     (when (when-let [made (daily-date state)]
             (or (.isAfter made d) (and (= made d) (not (false? (get-in state [:daily :sent]))))))
       (reject! :invalid (str "The daily note for " d " was already made.")))
-    (let [{:keys [subject sections numbered flagged]} (compose-note state d now)]
-      (cond-> (emit tx "digest/composed" {:date (str d) :sent (some? sections) :flagged flagged})
+    (let [{:keys [subject sections numbered flagged]} (compose-note state config d now)]
+      (cond-> (emit tx "digest/composed" {:date (str d) :sent (some? sections) :flagged flagged
+                                          :github (count (:github-news state))})
         sections (tell "daily-note" "digest" "normal" subject nil :sections sections
                        :date (str d) :numbered numbered)))))
 
@@ -3126,21 +3248,18 @@
 
 ;; GitHub items from people, one push a tick
 
-(defmethod decide* :github/announce [{:keys [state] :as tx} _]
+(defmethod decide* :github/announce [{:keys [state config] :as tx} _]
+  ;; With a daily note, new items wait for it: nothing about them is
+  ;; urgent. Without one they go out, all of a tick's in one message.
   (dispatcher-only! tx)
   (let [news (:github-news state)]
-    (if (empty? news)
+    (if (or (empty? news) (note-collects? config))
       tx
-      (let [one (when-not (next news) (first news))
-            items (for [{:keys [repo number kind title user url]} news]
-                    {:text (str (str/capitalize (str kind)) " #" number " in " repo " by " user ": "
-                                (ingest/one-line title 200) " " url)
-                     :refs []
-                     :labels ["contaminated" (ingest/github-label repo)]})]
+      (let [one (when-not (next news) (first news))]
         (-> tx
-            (tell "github-news" "note" "normal"
+            (tell "github-news" "note" "low"
                   (if one (str "New " (:kind one) " in " (:repo one)) (str (count news) " new on GitHub"))
-                  nil :sections [{:list (boolean (next news)) :items (vec items)}])
+                  nil :sections (digest/github-sections news))
             (emit "github/announced" {:count (count news)}))))))
 
 ;; knowledge

@@ -522,13 +522,13 @@
       (is (= [:move "statement-oct.pdf" call call] ((juxt :kind :title :undo :move) it)))
       (is (= ["1 file in root" "Downloads/statement-oct.pdf → Bank/statement.pdf"] (:lines it))
           "relative to the folder she granted, under its short name; no role named")
-      (is (= "from a mail by eve@example.net" (get wire "from")))
+      (is (= "Drew on: a mail from eve@example.net" (get wire "from")))
       (is (= {"move" call "role" "steward" "undo" call "undone" false "seq" call}
              (select-keys wire ["move" "role" "undo" "undone" "seq"]))))
     (testing "relay ready names the command that undoes it"
       (let [out (:out (cli/execute ["--data" (:data-dir sys) "ready"]))]
-        (is (some #(re-matches #"Moved: statement-oct\[\.\]pdf \(.*\)" %) out) "from outside, so what reads as a link is broken")
-        (is (some #(str/ends-with? % "Bank/statement[.]pdf") out) "a move shows where it went, not cut")
+        (is (some #(re-matches #"Moved: statement-oct\.pdf \(.*\)" %) out) "a file name is no link, so it is left as it is")
+        (is (some #(str/ends-with? % "Bank/statement.pdf") out) "a move shows where it went, not cut")
         (is (not-any? #(str/includes? % (str *dir*)) out) "and never the full path")
         (is (some #{(str "  Undo: relay undo " call)} out))))
     (testing "undo is refused cleanly, with B9's reason, when the file changed"

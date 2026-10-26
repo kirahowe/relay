@@ -155,7 +155,10 @@
             ;; private things, so it may have the web.
             "scout" (cond-> {:public true} scout-web? (assoc :tools ["web_search" "web_fetch"]))}}
     ;; The daily note, which the steward writes the suggestions of.
-    daily-note? (assoc :daily-note {:at daily-note-at :role "steward"})))
+    ;; With the web, the scout's routine is the grant search, so the
+    ;; note can say when it did not run.
+    daily-note? (assoc :daily-note (cond-> {:at daily-note-at :role "steward"}
+                                     scout-web? (assoc :grants "scout/grant-search")))))
 
 (defn render-settings
   "relay.edn's text for `settings`."

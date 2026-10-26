@@ -232,11 +232,11 @@
     (testing "a role's memo from before the marker is from outside, its link broken"
       (let [m (core/memo s 3)]
         (is (= #{"contaminated" "private"} (set (:labels m))))
-        (is (= "[from outside] see hxxps://evil[.]example/?q=secret" (shown (:labels m) (:body m))))))
+        (is (= "see hxxps://evil[.]example/?q=secret" (shown (:labels m) (:body m))))))
     (testing "a role's fact from before the marker likewise"
       (let [f (core/fact-as-known (first (vals (:facts s))) nil)]
         (is (= #{"contaminated" "private"} (set (:labels f))))
-        (is (re-find #"^\[from outside\] .*evil\[\.\]example" (shown (:labels f) (:text f))))))
+        (is (re-find #"evil\[\.\]example" (shown (:labels f) (:text f))))))
     (testing "what the operator wrote is hers"
       (is (= [] (:labels (core/memo s 5)))))
     (testing "a public memo from before the marker is not public any more"

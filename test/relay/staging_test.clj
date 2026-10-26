@@ -111,7 +111,8 @@
           (let [c (config/load-config made)
                 r (core/routine state "steward" "daily-note")
                 skill (core/doc-version state "skills/steward/daily-note.md" {})]
-            (is (= {:at "07:30" :role "steward"} (:daily-note c)))
+            (is (= {:at "07:30" :role "steward" :grants "scout/grant-search"} (:daily-note c))
+                "with the scout's grant search, so the note can say when it did not run")
             (is (= :active (:status r)))
             (is (= "daily 07:10" (:schedule r)) "before the note goes out")
             (is (str/includes? (:instructions r) "daily_note_write"))

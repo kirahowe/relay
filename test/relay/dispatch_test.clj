@@ -267,9 +267,9 @@
   (let [procs (doall (for [_ (range 3)]
                        (p/process [relay-bin "wake" "clerk" "--data" (str *dir* "/data")]
                                   {:out :string :err :string})))
-        results (map (comp str/trim :out deref) procs)]
-    (is (= 1 (count (filter #(str/starts-with? % "ran") results))) (pr-str results))
-    (is (= 2 (count (filter #(str/starts-with? % "busy") results))) (pr-str results))))
+        results (map #(let [r (deref %)] (str/trim (str (:out r) (:err r)))) procs)]
+    (is (= 1 (count (filter #(str/starts-with? % "Clerk ran (wake") results))) (pr-str results))
+    (is (= 2 (count (filter #(str/starts-with? % "Clerk is busy") results))) (pr-str results))))
 
 (deftest the-data-directory-comes-from-the-flag-or-the-config-file
   (let [file (str *dir* "/config.edn")
@@ -511,8 +511,12 @@
     (doseq [args [["help"] ["--help"] ["-h"] ["--data" data "--help"] ["help" "--data" data]]]
       (let [r (cli/execute args)]
         (is (= 0 (:exit r)) (pr-str args))
-        (is (= (str/split-lines cli/usage) (:out r)) (pr-str args))
+        (is (= (str/split-lines cli/short-usage) (:out r)) (pr-str args))
         (is (not (fs/exists? (str *dir* "/argv.txt"))) (str "no client ran for " (pr-str args)))))
+    (testing "the short usage reads on a phone: every line at most 60 characters"
+      (is (every? #(<= (count %) 60) (str/split-lines cli/short-usage))))
+    (testing "relay help all lists every command"
+      (is (= (str/split-lines cli/usage) (:out (cli/execute ["help" "all"])))))
     (is (not-any? #(str/includes? % "relay chat") (str/split-lines cli/usage)) "chat is not listed")
     (is (nil? (cli/command-of ["--help"])))))
 

@@ -25,6 +25,7 @@
   text, so they add no labels to the card. `text-labels` is the union of
   the labels of the text the card shows now; relay.core adds private."
   (:require [clojure.string :as str]
+            [relay.provenance :as provenance]
             [relay.text :as text])
   (:import (java.time Instant)))
 
@@ -326,6 +327,12 @@
   [{:keys [seq labels]} m]
   (assoc m :labels (union labels) :rev seq))
 
+(defn- event-sources
+  "The sources an event recorded (relay.provenance), or for one that
+  recorded none, what its labels name."
+  [{:keys [sources labels]}]
+  (if (sequential? sources) (vec sources) (provenance/sources labels)))
+
 (defn add
   "The cards once a card/added event is folded in."
   [cards {:keys [seq at actor data] :as event}]
@@ -333,7 +340,8 @@
         el #(written event (select-keys % [:id :text]))]
     (assoc cards seq
            (cond-> {:id seq :kind card-kind :owner actor :added-at (Instant/parse at) :rev seq
-                    :status :active :title (written event {:text title}) :next next}
+                    :status :active :title (written event {:text title}) :next next
+                    :sources (event-sources event)}
              (= "checklist" card-kind) (assoc :items (mapv #(assoc (el %) :done false) items))
              (= "tracker" card-kind) (assoc :rows (mapv el rows) :columns (mapv el columns) :cells {})
              (= "note" card-kind) (assoc :note (written event {:text text}))))))
@@ -379,9 +387,13 @@
       "write" (update card :note rewrite))))
 
 (defn change
-  "The cards once a card/changed event is folded in."
+  "The cards once a card/changed event is folded in. A card keeps the
+  sources of every event that wrote it, as a move does: an edit shaped by
+  a page makes the card shaped by it too."
   [cards {:keys [seq data] :as event}]
-  (update cards (:card data) #(assoc (apply-op % (:op data) event) :rev seq)))
+  (update cards (:card data) #(-> (apply-op % (:op data) event)
+                                  (assoc :rev seq)
+                                  (update :sources (fn [ss] (provenance/sources (concat ss (event-sources event))))))))
 
 ;; --- the text form
 

@@ -59,11 +59,13 @@
 
 (defn send!
   "Sends rendered messages through one channel's edge. Throws when it
-  could not."
-  [channel msgs parent]
-  (case (:kind channel)
-    :email (mail/send! channel (channels/email channel msgs parent))
-    :push (push/push! channel (channels/push channel msgs))))
+  could not. `opts` are what the email renderer needs to know beyond the
+  messages (relay.channels/email)."
+  ([channel msgs parent] (send! channel msgs parent {}))
+  ([channel msgs parent opts]
+   (case (:kind channel)
+     :email (mail/send! channel (channels/email channel msgs parent opts))
+     :push (push/push! channel (channels/push channel msgs)))))
 
 (defn deliver!
   "Delivers messages, by id, through one configured channel, as one, and
@@ -77,7 +79,9 @@
         result (cond
                  (empty? msgs) nil
                  (nil? channel) {:error (str "relay.edn no longer has the channel " channel-name ".") :final true}
-                 :else (try (send! channel msgs #(core/message state %))
+                 :else (try (send! channel msgs #(core/message state %)
+                                   {:mailed? #(= :delivered (get-in (core/message state %) [:deliveries channel-name :status]))
+                                    :replies? (boolean (some #(= :pop3 (:kind (val %))) (:ingest config)))})
                             {:ok true}
                             (catch Exception e {:error (or (ex-message e) (str (class e)))})))]
     (when result

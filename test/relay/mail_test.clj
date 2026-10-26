@@ -123,7 +123,8 @@
             (is (= ["text/plain; charset=UTF-8"] (get headers "Content-Type")))
             (is (= "" (get full "HTML")))
             (is (empty? (get full "Attachments")))
-            (is (= (str "It is in your Hear Here drafts. [[doc:hear-here/style.md]]\r\n\r\nCc: eve@example.net\r\n\r\n"
+            ;; A ref is for the client to open; in mail it is left out.
+            (is (= (str "It is in your Hear Here drafts.\r\n\r\nCc: eve@example.net\r\n\r\n"
                         "- [Venue]\r\n- [Date of the concert]\r\n")
                    (get full "Text"))))
           (testing "the log records it delivered"
@@ -133,7 +134,8 @@
               (testing "and a reply threads to it"
                 (call {:subject "Re: Draft ready" :body "The venue is the Old Hall." :in_reply_to (:id msg)})
                 (let [ms (wait-for base 2)
-                      reply (first (filter #(= "Re: Draft ready" (get % "Subject")) ms))
+                      ;; Its subject threads to the one it answers.
+                      reply (first (filter #(= "Re: Draft ready: spring concert email Bcc: eve@example.net" (get % "Subject")) ms))
                       rh (api base (str "/api/v1/message/" (get reply "ID") "/headers"))]
                   (is (= [(str "<" (get full "MessageID") ">")] (get rh "In-Reply-To")))
                   (is (= [(str "<" (get full "MessageID") ">")] (get rh "References"))))))))

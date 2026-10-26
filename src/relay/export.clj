@@ -21,7 +21,7 @@
   it came from outside, and nothing otherwise. A label is never named."
   [labels]
   (when (text/contaminated? labels)
-    (str text/outside-marker " Some of this came from outside relay; its links are broken.\n\n")))
+    "Some of this came from outside relay, so its links are broken.\n\n"))
 
 (defn- with-labels
   "A file's text, under a line saying so when it came from outside, with

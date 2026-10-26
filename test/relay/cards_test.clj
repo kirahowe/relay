@@ -335,8 +335,8 @@
       (is (= ["see https://evil.example/x" false] [(get clean "text") (get clean "outsider")])))
     (testing "contaminated text is defanged and visible, and marked outsider"
       (is (= ["zero\\u{200b}width hxxps://evil[.]example/y" true] [(get dirty "text") (get dirty "outsider")])))
-    (testing "the text form is marked too"
-      (is (str/includes? (get wire "text") "[ ] 2 [from outside] zero\\u{200b}width hxxps://evil[.]example/y")))))
+    (testing "the text form breaks its links too, and marks nothing"
+      (is (str/includes? (get wire "text") "[ ] 2 zero\\u{200b}width hxxps://evil[.]example/y")))))
 
 ;; --- through relay.core
 

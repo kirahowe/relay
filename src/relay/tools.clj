@@ -24,6 +24,7 @@
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [cheshire.core :as json]
+            [clojure.edn]
             [clojure.java.io :as io]
             [clojure.set :as set]
             [clojure.string :as str]
@@ -38,6 +39,7 @@
             [relay.json :as strict]
             [relay.messages :as messages]
             [relay.moves :as moves]
+            [relay.provenance :as provenance]
             [relay.refs :as refs]
             [relay.shell :as shell]
             [relay.shown :as shown])
@@ -61,11 +63,12 @@
        (when (pos? attempts) (str " Left open by " attempts " earlier wake(s)."))
        "\n\n" (str/replace body #"(?m)^" "  ") "\n"))
 
-(declare ^:dynamic *wake*)
+(declare ^:dynamic *wake* ^:dynamic *sources*)
 
 (defn- submit [sys actor labels type args]
   (inbound/submit! sys (cond-> {:type type :actor actor :args args :labels labels}
-                         *wake* (assoc :session-wake *wake*))))
+                         *wake* (assoc :session-wake *wake*)
+                         *sources* (assoc :sources *sources*))))
 
 (defn- created-memo [events]
   (:seq (first (filter #(= "memo/sent" (:type %)) events))))
@@ -163,13 +166,26 @@
     (refs/doc-ref path version)))
 
 (defn- show
-  "Joins what a read shows, each piece {:text :labels}: the texts, and the
-  union of their labels."
+  "Joins what a read shows, each piece {:text :labels :sources}: the
+  texts, the union of their labels, and the union of their sources (what
+  each piece's own text was shaped by, relay.provenance), which is what
+  the reading session counts as read directly."
   [items sep]
   {:content (str/join sep (map :text items))
-   :labels (apply core/union (map :labels items))})
+   :labels (apply core/union (map :labels items))
+   :sources (provenance/sources (mapcat #(if (contains? % :sources) (:sources %) (:labels %)) items))})
 
-(defn- item [text labels] {:text text :labels labels})
+(defn- item
+  "A piece of what a read shows: its text, the labels showing it adds,
+  and, when given, its sources; without them its labels stand in."
+  ([text labels] {:text text :labels labels})
+  ([text labels sources] {:text text :labels labels :sources (vec sources)}))
+
+(defn- src
+  "The sources of a thing relay keeps, as reading it counts them: what
+  the event that wrote it recorded (relay.core/sources-of)."
+  [state x]
+  (core/sources-of state (or (:version x) (:seq x) (:id x)) (:labels x)))
 
 (defn- public-reader?
   "Whether a read is a public role's. It is shown public items only, and
@@ -199,7 +215,7 @@
                           (filter #(core/shown-to-public? % (core/memo-labels state %))))]
               (if (empty? memos)
                 "Nothing is waiting for you."
-                (show (for [m memos] (item (fmt-memo m) (core/memo-labels state m))) "\n"))))}
+                (show (for [m memos] (item (fmt-memo m) (core/memo-labels state m) (src state m))) "\n"))))}
 
    "roles"
    {:class :read
@@ -283,7 +299,7 @@
                 ;; A routine's instructions become a memo's body when it
                 ;; fires, so they are content like a memo's.
                 (show (for [{:keys [name schedule instructions] :as r} rs]
-                        (item (str name " (" schedule ")\n  " instructions) (core/item-labels r)))
+                        (item (str name " (" schedule ")\n  " instructions) (core/item-labels r) (src state r)))
                       "\n\n"))))}
 
    "routine_write"
@@ -317,7 +333,7 @@
                                           {:public (public-reader? state config actor)})]
               (if (empty? found)
                 "No facts match."
-                (show (for [f found] (item (fmt-fact config f) (core/item-labels f))) "\n"))))}
+                (show (for [f found] (item (fmt-fact config f) (core/item-labels f) (src state f))) "\n"))))}
 
    "fact_history"
    {:class :read
@@ -331,7 +347,8 @@
                 (update (show (for [v (:versions f)
                                     :when (or (not public) (core/fact-shown-to-public? state v))]
                                 (item (str "- " (fmt-version config v))
-                                      (core/item-labels v (core/version-labels state v))))
+                                      (core/item-labels v (core/version-labels state v))
+                                      (src state v)))
                               "\n")
                         :content #(str "Fact " fact " " (refs/ref :fact fact) (when (:supersedes f) (str ", which replaced fact " (:supersedes f)))
                                        "\n" %)))))}
@@ -386,7 +403,7 @@
             (let [found (core/calendar-events state {:all all :as-of (or (core/world-time config as_of "as_of") now)})]
               (if (empty? found)
                 "Your calendar has no events."
-                (show (for [e found] (item (fmt-event config e) (core/item-labels e))) "\n"))))}
+                (show (for [e found] (item (fmt-event config e) (core/item-labels e) (src state e))) "\n"))))}
 
    "calendar_add"
    {:class :edit
@@ -459,7 +476,7 @@
               (if (empty? entries)
                 "The journal is empty."
                 (show (for [{:keys [id at text] :as e} entries]
-                        (item (str (local-time config at) " " (refs/ref :journal id) "\n" text) (core/item-labels e)))
+                        (item (str (local-time config at) " " (refs/ref :journal id) "\n" text) (core/item-labels e) (src state e)))
                       "\n\n"))))}
 
    "journal_write"
@@ -487,7 +504,7 @@
                                    (when (every? (set (core/item-labels n)) (core/id-labels state (own actor args)))
                                      (str " " (refs/ref :note (str (own actor args) "/" name))))
                                    "\n\n" text)
-                              (core/item-labels n)))
+                              (core/item-labels n) (src state n)))
                       "\n\n"))))}
 
    "docs"
@@ -503,7 +520,8 @@
                 (show (for [{:keys [path at actor content] :as v} ds]
                         (item (str path " (" (count content) " characters, last written "
                                    (local-time config at) " by " actor ") " (refs/doc-ref path nil))
-                              (core/union (core/version-labels state v) (core/path-labels state path))))
+                              (core/union (core/version-labels state v) (core/path-labels state path))
+                              []))
                       "\n"))))}
 
    "doc_get"
@@ -524,7 +542,7 @@
                     (:removed v) (core/reject! :not-found (str path " was removed in version " (:seq v) "."))
                     :else (show [(item (str (:content v)
                                             (some->> (doc-ref state path (core/item-labels v) (:seq v)) (str "\n\n")))
-                                       (core/item-labels v))]
+                                       (core/item-labels v) (src state v))]
                                 ""))))}
 
    "doc_history"
@@ -541,7 +559,7 @@
                         (item (str "version " seq ", " (local-time config at) " by " actor
                                    (if removed ": removed" (str ", " (count content) " characters"))
                                    (some->> (doc-ref state path (core/version-labels state v) seq) (str " ")))
-                              (core/version-labels state v)))
+                              (core/version-labels state v) []))
                       "\n"))))}
 
    "doc_put"
@@ -611,14 +629,15 @@
               (show (concat
                      [(item "For the next daily note:" [])]
                      (for [part digest/parts
-                           :let [{:keys [items labels at]} (get written part)]]
+                           :let [{:keys [items labels at] part-seq :seq} (get written part)]]
                        (item (if (seq items)
                                (str "  " part ", written " (local-time config at)
                                     ":\n" (str/join "\n" (for [{:keys [text offer key]} items]
                                                             (str "    - " text (when offer (str " " offer))
                                                                  (when key (str " [key " key "]"))))))
                                (str "  " part ": nothing yet."))
-                             (if (seq items) (core/content-labels labels) [])))
+                             (if (seq items) (core/content-labels labels) [])
+                             (if (seq items) (core/sources-of state part-seq labels) [])))
                      [(item (if (seq dismissed)
                               (str "The operator turned these down. Do not suggest them again:\n"
                                    (str/join "\n" (map #(str "  - " (:text %)) dismissed)))
@@ -630,7 +649,8 @@
                                                     (str "  - " (digest/change-line c) " (change " (:seq c) ")"
                                                          (when (flagged (:seq c)) ", shaped by outside text: relay lists it itself")))))
                               "No role changed how it works since the last note.")
-                            (apply core/union (map :labels shown)))])
+                            (apply core/union (map :labels shown))
+                            (mapcat digest/change-sources shown))])
                     "\n")))}
 
    "daily_note_write"
@@ -679,7 +699,10 @@
                        (core/board state archived))]
               (if (empty? cs)
                 "The board is empty."
-                (show (for [c cs] (item (cards/text-form c) (core/card-labels c))) "\n\n"))))}
+                ;; A card keeps the sources of every event that wrote
+                ;; it, its edits included.
+                (show (for [c cs] (item (cards/text-form c) (core/card-labels c)
+                                        (or (:sources c) (src state c)))) "\n\n"))))}
 
    "card_add"
    {:class :write
@@ -774,6 +797,12 @@
   "The wake whose session made the call being run, as relay named it in the
   harness's tool command. A public role's call writes public items only
   when that wake is running and began public."
+  nil)
+
+(def ^:dynamic *sources*
+  "What the session making the call being run has read directly in its
+  wake (relay.provenance/direct), which everything the call writes
+  records as its sources."
   nil)
 
 (defn strict-json-value
@@ -1032,7 +1061,12 @@
    :parameters (obj {:command {:type "string" :description "The command, run with sh -c in /scratch."}}
                     "command")
    :run (fn [sys _ session-labels {:keys [command]}]
-          (shell/sh! (shell/context (:data-dir sys) (:config sys)) session-labels command))})
+          ;; What it shows is the operator's own files, which are hers,
+          ;; and scratch, which only sessions write: what is there came
+          ;; through them, as their journals do, so it is no source of
+          ;; its own. Its labels still say everything scratch may hold.
+          (assoc (shell/sh! (shell/context (:data-dir sys) (:config sys)) session-labels command)
+                 :sources []))})
 
 (defn files-tool
   "`files_move`, for a role granted :files: moves and renames inside the
@@ -1053,7 +1087,7 @@
    :run (fn [sys actor labels {:keys [moves]}]
           (when-not (every? #(and (map? %) (= #{:from :to} (set (keys %)))) moves)
             (throw (ex-info "Each move is {\"from\": ..., \"to\": ...}, and nothing else." {})))
-          (moves/move-files! sys actor labels (vec moves) {:session-wake *wake*}))})
+          (moves/move-files! sys actor labels (vec moves) {:session-wake *wake* :sources *sources*}))})
 
 (defn offered
   "The tools a role is offered, by name: relay's own, less those that need a
@@ -1161,10 +1195,11 @@
      public? (assoc :forbid_labels [core/private-label]))))
 
 (defn- result
-  "A tool's text and labels from what its function returned."
+  "A tool's text, labels and sources from what its function returned."
   [r]
   (if (map? r)
     (cond-> {:ok (:content r) :labels (core/union (:labels r))}
+      (contains? r :sources) (assoc :sources (provenance/sources (:sources r)))
       (:display r) (assoc :display (:display r)))
     {:ok r :labels []}))
 
@@ -1282,6 +1317,52 @@
       (do (note! :tool/working {:tool tool-name}) result)
       :else result)))
 
+(defn- reads-dir [data-dir role wake-id]
+  (fs/path data-dir "runs" role (str wake-id) "read"))
+
+(defn record-read!
+  "Keeps the sources of one result handed back to a wake's session, a
+  file each, so calls run at once never write over each other. Nothing
+  for a result with none."
+  [data-dir role wake-id sources]
+  (when (and data-dir wake-id (seq sources))
+    (let [d (reads-dir data-dir role wake-id)]
+      (fs/create-dirs d)
+      (spit (str (fs/path d (str (System/currentTimeMillis) "-" (random-uuid) ".edn"))) (pr-str (vec sources))))))
+
+(defn recorded-reads
+  "The sources of every result kept for these wakes."
+  [data-dir role wake-ids]
+  (vec (for [id wake-ids
+             :let [d (reads-dir data-dir role id)]
+             :when (fs/directory? d)
+             f (sort (map str (fs/glob d "*.edn")))
+             :let [v (try (clojure.edn/read-string (slurp f)) (catch Exception _ nil))]
+             :when (sequential? v)
+             l v :when (string? l)]
+         l)))
+
+(defn session-sources
+  "What a role's session, holding `labels`, has read directly so far in
+  wake `wake` and the wakes it resumed (relay.provenance/direct): the
+  memos those wakes were for, what relay's tool command handed back, and
+  the labels of its MCP tools it holds. A call that names no wake of the
+  role's, or a role whose harness cannot say what its session held,
+  counts everything its labels name, the safe way."
+  [sys state config role-id labels wake]
+  (let [wakes (when (and wake (:data-dir sys)) (shown/session-wakes state role-id wake))]
+    (if (or (empty? wakes) (script-role? state config role-id))
+      (provenance/sources labels)
+      (provenance/direct
+       {:carried (for [w wakes m (get-in state [:wakes w :memos])
+                       :let [memo (core/memo state m)]
+                       :when memo
+                       l (core/sources-of state m (:labels memo))]
+                   l)
+        :read (recorded-reads (:data-dir sys) role-id wakes)
+        :session labels
+        :mcp (for [[_ t] (:tools config) :when (config/mcp-tool? t) l (:labels t)] l)}))))
+
 (defn call!
   "Runs one tool call for a role, made by a session holding `labels`, and
   returns {:ok text :labels} or {:error text :labels}: the text to give
@@ -1315,11 +1396,34 @@
       (let [args (cond-> (or args {}) (not (contains? (:tools config) tool-name)) coerce-input)]
         (if-let [problem (input-problem (:parameters tool) args)]
           {:error problem :labels []}
-          (binding [*call-id* call-id *wake* wake]
-            (noting-setup sys state tool-name
-                          (if (= :egress (:class tool))
-                            (egress-call! sys state role-id tool-name tool args labels wake)
-                            (refuse-private sys role-id tool-name (run-tool sys role-id tool args labels))))))))))
+          (binding [*call-id* call-id *wake* wake
+                    *sources* (session-sources sys state config role-id labels wake)]
+            (let [raw (if (= :egress (:class tool))
+                        (egress-call! sys state role-id tool-name tool args labels wake)
+                        (refuse-private sys role-id tool-name (run-tool sys role-id tool args labels)))
+                  r (noting-setup sys state tool-name raw)
+                  ;; What the session read directly: an outside tool's
+                  ;; page or search, or the sources of what relay showed.
+                  read (cond
+                         (not (map? r)) []
+                         ;; Setup trouble is relay's own text: nothing
+                         ;; was read.
+                         (not (identical? r raw)) []
+                         (contains? (:tools config) tool-name)
+                         (provenance/tool-sources args (core/union (:labels tool) (:labels r)))
+                         ;; A refusal of relay's own quotes the session's
+                         ;; own call back to it, which is nothing new.
+                         (:error r) []
+                         (contains? r :sources) (:sources r)
+                         :else (provenance/sources (:labels r)))]
+              ;; Provenance only: labels still bound what the session
+              ;; holds, so a record that fails costs the operator words,
+              ;; never safety.
+              (try (record-read! (:data-dir sys) role-id wake read)
+                   (catch Exception e
+                     (binding [*out* *err*]
+                       (println (str "relay could not record what " role-id " read: " (ex-message e))))))
+              (cond-> r (map? r) (dissoc :sources)))))))))
 
 ;; --- the envelope a harness sends for each call
 

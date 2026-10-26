@@ -33,7 +33,7 @@
   any move may not be made. The call is recorded before anything moves
   (files/moving) and what it did after (files/moved), so a relay stopped
   between the two leaves a call that says to check by hand."
-  [sys actor labels moves & [{:keys [session-wake]}]]
+  [sys actor labels moves & [{:keys [session-wake sources]}]]
   (lock! (:data-dir sys)
     (fn []
       (let [roots (files/real-roots (:files (config/grants (:config sys) actor)) (:data-dir sys))
@@ -41,7 +41,8 @@
             steps (files/plan moves roots)
             submit (fn [type args]
                      (inbound/submit! sys (cond-> {:type type :actor actor :args args :labels labels}
-                                            session-wake (assoc :session-wake session-wake))))
+                                            session-wake (assoc :session-wake session-wake)
+                                            sources (assoc :sources sources))))
             asked (mapv #(select-keys % [:from :to]) steps)
             call (:seq (first (submit :files/start {:moves asked :roots roots})))
             [done stopped]

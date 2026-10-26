@@ -263,9 +263,16 @@
   (let [edit? (set (for [[n t] (:tools (:config sys)) :when (= :edit (:class t))] (name n)))]
     (when (seq edit?)
       (doseq [c (agentloop/parse-calls text)
-              :when (edit? (:tool c))]
+              :when (edit? (:tool c))
+              :let [labels (held-labels known (:labels c))
+                    state (inbound/current-state sys)]]
         (try (inbound/submit! sys {:type :prepared/record :actor role-id :session-wake wake-id
-                                   :labels (held-labels known (:labels c))
+                                   :labels labels
+                                   ;; What the session had read directly by
+                                   ;; the end of the wake: relay cannot tell
+                                   ;; which of it came before the call.
+                                   :sources (tools/session-sources sys state (:config sys) role-id
+                                                                   (concat known (:labels c)) wake-id)
                                    :args (ready/prepared-args c)})
              (catch Exception e
                (binding [*out* *err*]

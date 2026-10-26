@@ -39,4 +39,12 @@
                                (str "url: " url "\nstatus: 200\n\nThe Arts Fund. Apply at <https://apply.example.org/form>.")
                                (str "1. Arts Fund\n   https://arts.example.org/fund\n   Grants for small choirs.\n"))
                     :is_error false :labels ["contaminated"]})))
+    ;; A stand-in for webtool read by a house role: a page names itself,
+    ;; and a search answers with a list.
+    "page" (reply {:content (if (get-in call ["input" "page"])
+                              "Holiday hours: ask about them before booking."
+                              "1. Arts Fund, grants for small choirs.")
+                   :is_error false :labels ["contaminated"]})
+    ;; webtool when its search key does not work.
+    "nokey" (reply {:content "api_key_command failed: exit status 1" :is_error true :labels ["contaminated"]})
     "baddisplay" (reply {:content "a" :labels [] :display {:title "t" :body "b" :labels [] :ref "shown:x"}})))

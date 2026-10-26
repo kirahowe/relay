@@ -39,6 +39,7 @@
   A high-urgency message goes at once, digest or not.
   Deliveries that come due together on one channel at a tick go as one."
   (:require [clojure.string :as str]
+            [relay.provenance :as provenance]
             [relay.text :as text])
   (:import (java.time Instant LocalDate LocalTime ZoneId ZonedDateTime)))
 
@@ -113,15 +114,25 @@
               text
               "\n\nTo answer back, use tell_operator with in_reply_to " (:id parent) ".")})
 
+(defn link?
+  "Whether a string is a link relay may give an item: one https URL,
+  nothing else."
+  [s]
+  (boolean (and (string? s) (re-matches #"https://[A-Za-z0-9.\-]+(/[A-Za-z0-9._~%!$&'()*+,;=:@/\-]*)?" s))))
+
 (defn item
-  "An item from text, or from {:text :refs :labels :action}. An action
-  is what the operator can do to the item, which only relay sets: {:op
-  \"revert\" | \"dismiss\" :n number}, from the daily note
-  (relay.digest)."
+  "An item from text, or from {:text :refs :labels :action :link}. An
+  action is what the operator can do to the item, which only relay sets:
+  {:op \"revert\" | \"dismiss\" :n number}, from the daily note
+  (relay.digest). A link is one relay built itself from what it knows
+  (a GitHub item's repository and number), which every channel keeps
+  followable even when the item's text came from outside; only relay
+  sets it too."
   [x]
-  (let [{:keys [text refs labels action]} (if (map? x) x {:text x})]
+  (let [{:keys [text refs labels action link]} (if (map? x) x {:text x})]
     (cond-> {:text (str text) :refs (vec (distinct (filter string? refs)))}
       (seq labels) (assoc :labels (vec (sort (distinct labels))))
+      (link? link) (assoc :link link)
       (and (map? action) (#{"revert" "dismiss"} (:op action)) (pos-int? (:n action)))
       (assoc :action (select-keys action [:op :n])))))
 
@@ -350,30 +361,73 @@
          channel)))
 
 ;; --- what the operator is shown of a message's text
+;;
+;; A message's text reads as written. Its links are broken when its
+;; labels say an outsider may have written any of it (the security bound,
+;; whatever the operator is told about where it came from), and refs
+;; become words. Where it came from is said once, in a footer line, and
+;; only for a role's message: relay's own alerts and notes say what they
+;; are themselves.
+
+(defn display
+  "Text of a message as the operator reads it, before the edge makes it
+  safe for its screen: refs as words, links broken when it came from
+  outside (relay.text/for-operator)."
+  [labels s]
+  (text/for-operator labels (text/refs-as-words s)))
 
 (defn shown
-  "Text of a message for the operator, from a source with `labels`: from
-  outside defanged and marked (relay.text/for-operator), then every
-  hidden character made visible, once."
+  "display, with every hidden character made visible once, for a
+  terminal or the client."
   [labels s]
-  (text/visible (text/for-operator labels s)))
+  (text/visible (display labels s)))
 
 (defn shown-line
   "shown, as one line."
   [labels s]
-  (text/visible-line (text/for-operator labels (squeeze-line s))))
+  (text/visible-line (display labels (squeeze-line s))))
+
+(defn plain
+  "display, for a mail app or a phone: hidden characters taken out and
+  said so (relay.text/visible-plain). They are taken out first, before
+  links are broken: one inside a host would hide it from defang, and
+  taking it out after would put the live link together again."
+  [labels s]
+  (let [[t n] (text/strip-hidden s)]
+    (str (display labels t) (text/hidden-note n))))
+
+(defn plain-line
+  "plain, as one line."
+  [labels s]
+  (plain labels (squeeze-line s)))
 
 (defn item-labels
   "The labels an item is shown with: its own and the message's."
   [msg it]
   (vec (sort (distinct (concat (:labels msg) (:labels it))))))
 
+(def role-origins
+  "What relay records a role's own message as having told: these say
+  where they came from in a footer."
+  #{"told" "memo-for-operator"})
+
+(defn drew-on
+  "The footer line saying what outside text a role's message drew on
+  (relay.provenance/drew-on), or nil: for relay's own messages, for the
+  operator's own threads, and when the role read nothing from outside."
+  [{:keys [origin sources labels]}]
+  (when (role-origins origin)
+    (provenance/drew-on (if (sequential? sources) sources (provenance/sources labels)))))
+
 (defn one-line
   "A message as one short line of text for a push's body: its first
   item, made one line and cut to `n` characters."
   [msg n]
   (let [it (first (mapcat :items (:sections msg)))]
-    (if it (clip-cp (shown-line (item-labels msg it) (:text it)) n) "")))
+    (if it
+      (let [l (clip-cp (plain-line (item-labels msg it) (:text it)) n)]
+        (if (:link it) (str l " " (:link it)) l))
+      "")))
 
 ;; --- the settings
 
@@ -418,13 +472,23 @@
     (str where " has " (str/join ", " (map pr-str (sort (remove #{:kind :via :url :topic :token-command :token-file :command :path :link} (keys ch)))))
          ", which a push channel does not take.")))
 
-(def email-keys #{:kind :url :from :to :user :credentials-command :timeout-seconds})
+(def email-keys #{:kind :url :from :from-name :to :user :credentials-command :timeout-seconds})
 
-(defn- email-problem [where {:keys [url from to user credentials-command timeout-seconds] :as ch}]
+(defn from-name?
+  "Whether a string can be the name a mail is from: one line of at most
+  60 characters, with no quote, backslash, angle bracket or control
+  character, so it cannot break the From header it goes in."
+  [s]
+  (boolean (and (string? s) (not (str/blank? s)) (<= (count s) 60)
+                (not (re-find #"[\"\\<>\p{Cntrl}]" s)))))
+
+(defn- email-problem [where {:keys [url from from-name to user credentials-command timeout-seconds] :as ch}]
   (cond
     (smtp-url-problem url) (str where " has :url " (pr-str url) ", which cannot be used: " (smtp-url-problem url) ".")
     (not (address? from)) (str where " needs :from, the agent's own address, such as \"agent@example.org\".")
     (not (address? to)) (str where " needs :to, your address, such as \"you@example.org\". It is the only recipient.")
+    (and (some? from-name) (not (from-name? from-name)))
+    (str where " has a :from-name that cannot go in a mail header: one line of up to 60 characters, with no quotes or angle brackets.")
     (and (some? user) (not (and (string? user) (not (str/blank? user)) (not (re-find #"[\s\"\\]" user)))))
     (str where " has a :user that is not a login name.")
     (and (some? credentials-command) (not (argv? credentials-command)))

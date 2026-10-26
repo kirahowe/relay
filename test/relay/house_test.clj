@@ -504,23 +504,24 @@
         (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "clerk" :title "C" :instructions "x"}})
         (inbound/submit! sys {:type :doc/put :actor "clerk" :labels ["contaminated"] :args {:path "web.md" :content nasty}})
         (inbound/submit! sys {:type :doc/put :actor "clerk" :args {:path "mine.md" :content "mine"}})
-        (testing "a scout's memo in the inbox is from the web"
+        (testing "a scout's memo in the inbox says who sent it once, and its links are broken"
           (inbound/submit! sys {:type :role/add :actor "operator" :public true
                                 :args {:id "scout" :title "S" :instructions "x"}})
           (inbound/submit! sys {:type :memo/send :actor "scout" :public true :labels ["contaminated"]
                                 :args {:to "operator" :subject "Found three" :body "See https://grants.example.org/"}})
           (let [inbox (str/join "\n" (:out (relay data "inbox")))]
-            (is (str/includes? inbox "[from the web] Found three"))
+            (is (str/includes? inbox "[5] Found three\n    from scout,"))
+            (is (not (str/includes? inbox "[from")))
             (is (not (str/includes? inbox "https://grants")))))
         (let [shown (str/join "\n" (:out (relay data "doc" "web.md")))]
-          (is (str/includes? shown "[from outside]"))
+          (is (str/includes? shown "hxxps://evil[.]example"))
           (is (not (str/includes? shown "contaminated")))
           (is (not (str/includes? shown "https://evil"))))
         (let [out (str (fs/create-temp-dir {:prefix "relay-export"}) "/x")]
           (relay data "export" out)
           (let [web (slurp (str out "/docs/web.md"))
                 mine (slurp (str out "/docs/mine.md"))]
-            (is (str/starts-with? web "[from outside]"))
+            (is (str/starts-with? web "Some of this came from outside relay, so its links are broken."))
             (is (not (str/includes? web "\u001b")))
             (is (str/includes? web "hxxps://evil[.]example"))
             (is (= "mine" mine) "the operator's own text has no line about where it came from")
