@@ -119,8 +119,10 @@ she sends it, it is hers.
 ## Invariants (property-test targets)
 
 - I1 **No way out of the house.** For any generated relay.edn, every
-  session relay builds for a house role names no `egress` tool, no
-  remote MCP server and no `act` tool; the steward's shell runs only
+  session relay builds for a house role names no `egress` tool and no
+  `act` tool (the class no longer exists); a remote MCP tool given to a
+  house role is class `read` or `edit`, so what leaves goes only to a
+  provider Kira configured, into her own account; the steward's shell runs only
   under a runner command that includes `--network none`. Pentest: from
   inside the steward shell, TCP, UDP, DNS and unix sockets to the host
   all fail.
@@ -254,6 +256,18 @@ material for what it removes, and documents what it adds.
 - Done when: `bb test` and `bb verify` pass with no SKIPPED sibling
   tests; I3, I5 and I8 have property tests; the remaining pentests
   pass.
+
+B2 notes (orchestrator, 2026-10-25):
+- `relay connect` proposes a tool that is not read-only as off; Kira
+  turns it on as `edit` in the connection file. There is no `act`.
+- `egress` tools may be granted only to public roles; config refuses one
+  on a house role.
+- Delete the TTY confirmation codes outright; nothing needs them.
+- Until B5, a memo from a house role to a public role is refused with a
+  plain reason (declassify is gone; B5 opens the door with O1).
+- The staging stand-in campaign tool becomes a draft-only `edit` tool.
+- Eval cases and pentests that only test removed behaviour are deleted;
+  the rest keep passing (B9 rewrites them properly).
 
 ### B3: the steward's shell (relay, after B2)
 - A `:house` section in relay.edn: the runner argv template (default
