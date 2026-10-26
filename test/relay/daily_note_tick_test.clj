@@ -108,16 +108,34 @@
     (submit! sys "steward" :digest/write-part {:part "ahead" :items [{:text "Dentist, Fri" :key "dentist"}]})
     (submit! sys "dispatcher" :digest/compose {:date "2026-10-26"})
     (let [c (:seq (last (core/recipe-changes (inbound/current-state sys))))
-          {:keys [exit out]} (relay "changes")]
+          {:keys [exit out]} (relay "changes")
+          venues (first (filter #(str/includes? % "Changed the note") out))]
       (is (= 0 exit))
-      (is (str/includes? (last out) (str c "  ")))
-      (is (str/includes? (last out) "Changed the note \"venues\" (1 line added, 1 removed), shaped by a mail that says it is from eve@example[.]net"))
-      (is (= {:exit 0 :out [(str "Undid change " c ": Changed the note \"venues\" (1 line added, 1 removed). What was there before is back.")]}
-             (relay "revert" (str "change:" c))))
+      (is (str/starts-with? venues "1.  ") "the note's number, the same one a reply and the client use")
+      (is (not (some #(str/includes? % (str c)) (butlast out))) "never the log's own number")
+      (is (str/includes? venues "Changed the note \"venues\" (1 line added, 1 removed), shaped by a mail that says it is from eve@example[.]net"))
+      (is (str/starts-with? (last out) "To undo one: relay revert <n> for item n of the latest daily note"))
+      ;; Regression (U1): `relay revert 1` took 1 as the log's number, and
+      ;; removed the first role ever added.
+      (is (= {:exit 0 :out ["Put the note \"venues\" back as it was."]} (relay "revert" "1")))
       (is (= "Old Hall" (get-in (inbound/current-state sys) [:notes "steward" "venues" :text])))
-      (let [out (:out (relay "changes"))]
-        (is (str/ends-with? (last (butlast out)) ", undone"))
-        (is (str/ends-with? (last out) ", by you") "undoing is a change too, the operator's"))
+      (is (= :active (:status (core/role (inbound/current-state sys) "steward"))))
+      (let [out (:out (relay "changes"))
+            changes (remove #(or (str/blank? %) (str/starts-with? % "To undo one")) out)]
+        (is (str/ends-with? (last (butlast changes)) ", undone"))
+        (testing "an undo says it cannot itself be undone, and has no handle"
+          (is (str/ends-with? (last changes) ", by you, which cannot be undone"))
+          (is (not (re-find #"^c\d+ " (last changes))))))
+      (is (thrown? Exception (relay "revert" "1")) "once")
+      (is (thrown? Exception (relay "revert" "2")) "item 2 is a suggestion, not a change")
       (is (= {:exit 0 :out ["Dropped \"Dentist, Fri\". It will not be suggested again."]} (relay "dismiss" "2")))
       (is (contains? (:dismissed (inbound/current-state sys)) "ahead/dentist"))
-      (is (thrown? Exception (relay "revert" "memo:3"))))))
+      (is (thrown? Exception (relay "revert" "change:3")))
+      (testing "a change no note numbered is undone by its handle"
+        (let [line (first (filter #(str/includes? % "New note \"venues\"") (:out (relay "changes"))))
+              handle (second (re-find #"^(c\d+) " line))]
+          (is (some? handle) line)
+          (is (= {:exit 0 :out ["Removed the new note \"venues\"."]} (relay "revert" handle)))
+          (is (nil? (get-in (inbound/current-state sys) [:notes "steward" "venues"])))
+          (is (thrown? Exception (relay "revert" handle)) "once")
+          (is (thrown? Exception (relay "revert" "c999")) "a handle relay changes does not list"))))))

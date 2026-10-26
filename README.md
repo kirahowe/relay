@@ -508,22 +508,32 @@ now` again once the steward has written its parts. `relay
 routine run [<role>] <name>` runs any routine at once, as the tick runs
 it when it comes due, and wakes its role to do it.
 
-Each change and each suggestion has a number. To undo a change, run
-`relay revert <change>` (the note gives the number), use the key in the
-client (`_relay/messages/act`), or reply "revert 1" to the note, by mail
-or from the client's ready view.
+Each change and each suggestion in a note has one number, and the same
+number works everywhere. To undo change 1, reply "revert 1" to the
+note, by mail or from the client's ready view, use the key in the client
+(`_relay/messages/act`), or run `relay revert 1`. `relay revert 1 <note>`
+undoes item 1 of an earlier note.
 Undoing puts back what was there before the change, or removes what it
 added. When you undo several changes to the same thing, in any order,
 you end up with the version from before all of them, never one that
-another of those changes wrote. A removed role cannot come back under its old name. To turn a
-suggestion down for good, run `relay dismiss <item>`, use the client, or
-reply "not 2". relay records it, drops it from every later note, and
-shows it to the note's writer so it is not suggested again. A reply
-takes the same path whichever channel brings it, and the note's writer
-reads it too. A mailed reply is acted on only when it is verified as
-yours (see "The mailbox and other sources"); one from the client is yours
-already. relay answers in the thread with what it did. `relay changes` lists the latest
-changes, with their numbers.
+another of those changes wrote. A new role or a removed one is listed
+with no number: removing a role is for good, since its name is never
+used again, so relay will not do it as an undo, and a removed role
+cannot come back. To turn a suggestion down for good, reply "not 2",
+use the client, or run `relay dismiss 2`. relay records it, drops it
+from every later note, and shows it to the note's writer so it is not
+suggested again. A mailed reply is acted on only when it is verified as
+yours (see "The mailbox and other sources"); one from the client is
+yours already. relay answers once, in the thread, on the channel the
+reply came through: a reply in the client gets its answer in the client,
+and nothing is pushed. A reply that says only "revert" and "not" goes to
+nobody else. One that says more also goes to the note's writer.
+The note then marks each item done. `relay changes` lists the latest
+changes, each with its number in a note. A change no note numbered has
+a handle instead, such as `c12`: one past the note's first 40, one made
+since the latest note, a quiet one, or one of your own. `relay revert
+c12` undoes it. An undo cannot itself be undone, and `relay changes`
+says so beside it, as it does for a new or removed role.
 
 The note goes out at most once a day. If the Mac was asleep at the time,
 it goes out at the first tick after, the same day. A day the Mac sleeps

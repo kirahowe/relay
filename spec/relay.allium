@@ -849,6 +849,8 @@ entity RecipeChange {
     -- The change before it to the same thing, or null for the first.
     prior: RecipeChange?
     reverted: Boolean
+    -- The change this one undid, when an undo made it.
+    undo_of: RecipeChange?
 }
 
 entity NotePart {
@@ -1415,8 +1417,11 @@ rule ReplyToAMessage {
         ensures: message.memo.status = read   -- answered; closed by the operator
     if message.origin = daily_note:
         ensures: what the reply asks for ("revert N", "not N") is done
-            (RevertChange, DismissSuggestion), and relay answers in the
-            thread with what it did
+            (RevertChange, DismissSuggestion), and relay answers once in the
+            thread with what it did, on the reply's own channel only (the
+            client alone for a reply from the client)
+        if the reply says nothing but "revert N" and "not N":
+            ensures: no memo is sent; relay has done all it asks
 
     @guidance
         -- The reply is the operator's own, so the memo is trusted (I5). It
@@ -2983,8 +2988,10 @@ rule MakeDailyNote {
         -- in code; no model writes it or can leave a change out of it
         -- (decision 14). Each says what changed in one line, where the
         -- outside text came from in plain words, and how to undo it
-        -- (relay revert <change>, or reply "revert N"). Past 40 it
-        -- counts the rest. The parts are what the note's role wrote
+        -- (reply "revert N"; relay revert N takes the same N). A new or
+        -- removed role is listed with the reason it cannot be undone
+        -- and no number. Past 40 it counts the rest, which relay changes
+        -- lists with their handles. The parts are what the note's role wrote
         -- with daily_note_write: ahead, grants, github, learned.
         -- Suggestions in ahead and grants are numbered so the operator
         -- can drop one. No role, tool, label or class is named in the
@@ -3012,10 +3019,16 @@ rule WriteNotePart {
 
 rule RevertChange {
     when: OperatorReverts(change)
-    -- relay revert <change>, _relay/messages/act on a revert item, or
+    -- relay revert N [note], _relay/messages/act on a revert item, or
     -- a reply "revert N" to the note from any channel (ReplyToAMessage).
+    -- N is the note's number for the change. A change no note numbered
+    -- (past the note's 40, after the latest note, quiet, or the
+    -- operator's own) goes by its handle in relay changes, c and its
+    -- place among all changes: relay revert cK. The log's own number is
+    -- never shown to the operator.
     requires: not change.reverted
-    requires: change.what != role or change.change != removed
+    requires: change.what != role or change.change = changed
+    requires: change.undo_of = null
     ensures: change.reverted = true
     ensures: what change replaced is put back, with the labels of the
         text it restores; what it made new is removed

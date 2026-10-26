@@ -203,7 +203,8 @@ command line instead.
   `in_reply_to`. A daily note is relay's own but can be answered too:
   the memo goes to the role that writes it (`:daily-note :role`), and
   "revert 1" or "not 2" in the reply is done as `_relay/messages/act`
-  would, with relay's answer in the thread.
+  would, with relay's answer in the thread, delivered to the client
+  alone. A reply that says nothing else makes no memo.
 - Errors: -32000 with relay's reason: no such message, a message relay
   wrote itself other than the daily note ("there is nobody to answer
   it"), or a role that is gone.
@@ -237,8 +238,8 @@ command line instead.
   is put back), and one whose op is `"dismiss"` is dropped for good, from
   this note and every later one.
 - Errors: -32602 for the params; -32000 for relay's refusal, such as an
-  item the note does not have, one done already, or a change to a role
-  that was removed.
+  item the note does not have, one done already, or adding or removing a
+  role, which is never undone.
 - The act is the operator's, with no labels. The message's `rev` moves
   and `_relay/messages/changed` sends it again, with the item's
   `action.done` set.

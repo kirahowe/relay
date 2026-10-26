@@ -146,11 +146,13 @@ Every command needs the data directory, from --data <dir> or from the file
                                       (the tick starts it when it is missing)
   relay changes [-n <count>]          the latest changes roles made to how they
                                       work (skills, routines, notes, roles),
-                                      each with its number
+                                      with the number a daily note gave each
   relay note [now]                    show the daily note as it would go out now;
                                       with now, make today's and send it
-  relay revert <change>               put back what a change replaced, such as one
-                                      the daily note flags
+  relay revert <item> [<note>]        undo a change the latest daily note (or note
+                                      <note>) flags, by its number there
+  relay revert c<k>                   undo any other change, by the handle relay
+                                      changes gives it
   relay dismiss <item> [<note>]       drop a suggestion of the latest daily note
                                       (or of note <note>) for good
   relay poll [<source>]               check relay.edn's :ingest sources now (the
@@ -699,23 +701,34 @@ id public too.")
                (dispatch/announce-github! sys)
                (apply result 0 said))
       "note" (note! sys more)
-      "changes" (let [st (state)]
-                  (lines (digest/changes-lines (core/recipe-changes st) (or (:reverted st) #{}) zone
+      "changes" (let [st (state)
+                      notes (filter #(= "daily-note" (:origin %)) (vals (:messages st)))]
+                  (lines (digest/changes-lines (core/recipe-changes st) (or (:reverted st) #{})
+                                               (digest/note-numbers notes) (:id (core/latest-note st)) zone
                                                (or (:tail opts) 30))))
-      "revert" (let [id (digest/parse-change-ref (first more))]
-                 (when-not id (fail! "usage: relay revert <change>, a number from the daily note or relay changes"))
-                 (submit! sys :change/revert {:change id})
-                 (result 0 (str "Undid change " id ": " (digest/change-line (core/recipe-change-by-seq (state) id))
-                                ". What was there before is back.")))
-      "dismiss" (let [[n note] more
-                      k (some-> n parse-long)
-                      m (some-> note parse-long)]
-                  (when-not k (fail! "usage: relay dismiss <item> [<note>], an item's number in the daily note"))
-                  (submit! sys :digest/act (cond-> {:n k :op "dismiss"} m (assoc :message m)))
-                  (let [st (state)
-                        msg (if m (core/message st m) (core/latest-note st))
-                        item (first (filter #(= k (:n %)) (:numbered msg)))]
-                    (result 0 (str "Dropped \"" (text/visible-line (str (:text item))) "\". It will not be suggested again."))))
+      ;; An item's number in the daily note, the one a reply and the client
+      ;; use: the latest note's, or the note named after it.
+      "dismiss"
+      (let [[n note] more
+            k (some-> n parse-long)
+            m (some-> note parse-long)]
+        (when-not k (fail! "usage: relay dismiss <item> [<note>], an item's number in the daily note"))
+        (submit! sys :digest/act (cond-> {:n k :op "dismiss"} m (assoc :message m)))
+        (let [st (state)
+              msg (if m (core/message st m) (core/latest-note st))]
+          (result 0 (text/visible-line (core/acted-line st msg k)))))
+      ;; The same, or the handle relay changes gives a change no note
+      ;; numbered (digest/revert-target).
+      "revert"
+      (let [{:keys [error change n message]} (digest/revert-target (core/recipe-changes (state)) more)]
+        (when error (fail! error))
+        (if change
+          (do (submit! sys :change/revert {:change change})
+              (result 0 (text/visible-line (digest/undone-line (core/recipe-change-by-seq (state) change)))))
+          (do (submit! sys :digest/act (cond-> {:n n :op "revert"} message (assoc :message message)))
+              (let [st (state)
+                    msg (if message (core/message st message) (core/latest-note st))]
+                (result 0 (text/visible-line (core/acted-line st msg n)))))))
       "connect" (let [[n url] more
                       config (:config sys)]
                   (when-not (and n url)

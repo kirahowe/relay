@@ -8,7 +8,7 @@
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
             [relay.digest :as digest])
-  (:import (java.time Instant LocalDate LocalTime ZoneId)))
+  (:import (java.time Instant LocalDate LocalTime ZoneId ZoneOffset)))
 
 (defn- quick [n property]
   (let [result (tc/quick-check n property)]
@@ -161,18 +161,25 @@
                         dismissed (gen/set (gen/elements ["ahead/maple" "grants/arts" "ahead/dentist-fri-10-00"]))]
            (let [note (digest/compose {:date (LocalDate/parse "2026-10-26") :changes changes :since since
                                        :written written :dismissed dismissed})
-                 want (map :seq (oracle-flagged changes since))
+                 flagged (oracle-flagged changes since)
+                 want (map :seq flagged)
+                 ;; Adding or removing a role cannot be undone, so it
+                 ;; is listed with the reason and no number.
+                 undoable (map :seq (remove #(and (= "role" (:what %)) (#{"added" "removed"} (:change %))) flagged))
                  reverts (filter #(= "revert" (:op %)) (:numbered note))
                  texts (mapcat :items (:sections note))]
-             (and (= want (map :change reverts) (:flagged note))
-                  ;; Each is in the text, with its number and the command.
-                  (every? (fn [{:keys [n change]}]
+             (and (= want (:flagged note))
+                  (= undoable (map :change reverts))
+                  ;; Each is in the text, with its number and only that.
+                  (every? (fn [{:keys [n]}]
                             (some #(and (str/starts-with? (:text %) (str n ". "))
-                                        (str/includes? (:text %) (str "relay revert " change))
-                                        (str/includes? (:text %) (str "reply \"revert " n "\""))
+                                        (str/includes? (:text %) (str "Reply \"revert " n "\" to undo it."))
                                         (= {:op "revert" :n n} (:action %)))
                                   texts))
                           reverts)
+                  (not-any? #(re-find #"relay revert" (:text %)) texts)
+                  ;; Every flagged change is in the text, numbered or not.
+                  (= (count want) (count (filter #(re-find #", shaped by " (:text %)) texts)))
                   ;; The flagged section is first.
                   (or (empty? want) (= "Changes to check" (:heading (first (:sections note)))))
                   ;; Numbers run 1, 2, 3 ... in order.
@@ -209,7 +216,7 @@
     (is (= "Daily note for Monday 26 October: 1 change to check" (:subject note)))
     (is (= ["Changes to check" "Coming up" "What I learned" nil] (map :heading (:sections note))))
     (is (= (str "1. Changed the how-to \"grants\" (2 lines added), shaped by a mail that says it is from"
-                " eve@example[.]net. To undo it: relay revert 4, or reply \"revert 1\".")
+                " eve@example[.]net. Reply \"revert 1\" to undo it.")
            (:text (first (:items (first (:sections note)))))))
     (is (= "2. Interview with Maple Co, Thu 29 Oct 10:00 Want prep notes?"
            (:text (first (:items (second (:sections note)))))))
@@ -257,12 +264,86 @@
            (= [{:op (if (#{"revert" "Revert" "undo"} w) "revert" "dismiss") :n n}]
               (digest/reply-acts (str pad w " " n pad) numbered)))))
 
-(deftest a-change-ref-is-read
-  (is (= 123 (digest/parse-change-ref "123")))
-  (is (= 123 (digest/parse-change-ref "change:123")))
-  (is (= 123 (digest/parse-change-ref "[[change:123]]")))
-  (is (nil? (digest/parse-change-ref "memo:123")))
-  (is (nil? (digest/parse-change-ref nil))))
+(deftest a-reply-of-only-acts-needs-nobody-to-read-it
+  (is (digest/only-acts? "revert 1" numbered))
+  (is (digest/only-acts? "Undo 1.\n\nnot 3" numbered))
+  (is (digest/only-acts? "not this one" [{:n 1 :op "revert"} {:n 2 :op "dismiss"}]))
+  (is (not (digest/only-acts? "revert 1\nThanks, and book the hall too." numbered)))
+  (is (not (digest/only-acts? "Please revert the change about grants" numbered)))
+  (is (not (digest/only-acts? "" numbered))))
+
+(deftest what-an-undo-did-is-said-plainly
+  ;; Regression (U1): undoing a new how-to said it "is back as it was".
+  (is (= "Removed the new how-to \"office-hours-questions\"."
+         (digest/undone-line {:what "skill" :name "office-hours-questions" :change "added"})))
+  (is (= "Put the routine \"morning\" back as it was." (digest/undone-line {:what "routine" :name "morning" :change "changed"})))
+  (is (= "Brought back the note \"vendors\"." (digest/undone-line {:what "note" :name "vendors" :change "removed"})))
+  (is (= "Dropped \"Prep notes for the Riverbend interview\". It will not be suggested again."
+         (digest/dropped-line "Prep notes for the Riverbend interview")))
+  (testing "adding or removing a role is never undone, and the reason is plain"
+    (is (digest/revert-refusal {:what "role" :name "scout" :change "added"}))
+    (is (digest/revert-refusal {:what "role" :name "scout" :change "removed"}))
+    (is (nil? (digest/revert-refusal {:what "role" :name "scout" :change "changed"})))
+    (is (nil? (digest/revert-refusal {:what "skill" :name "x" :change "added"})))))
+
+(def ^:private gen-note
+  (gen/let [changes (gen/fmap #(vec (map-indexed (fn [i c] (assoc c :seq (inc i))) %)) (gen/vector gen-change 0 8))
+            written gen-written
+            id (gen/choose 1 50)]
+    (assoc (digest/compose {:date (LocalDate/parse "2026-10-26") :changes changes :since 0 :written written
+                            :dismissed #{}})
+           :id id :changes changes)))
+
+(deftest a-number-in-a-note-names-one-change-that-can-be-undone
+  ;; For any note, each number names exactly one item; a revert number
+  ;; names exactly one change, which can be undone; and relay changes
+  ;; shows that same number for it and never the log's.
+  (quick 300
+         (prop/for-all [notes (gen/vector gen-note 1 3)]
+           (let [notes (map-indexed (fn [i m] (assoc m :id (inc i))) notes)
+                 latest (last notes)
+                 numbers (digest/note-numbers notes)
+                 by-seq (into {} (for [c (:changes latest)] [(:seq c) c]))
+                 lines (digest/changes-lines (:changes latest) #{} numbers (:id latest) toronto 100)]
+             (and (= (count (:numbered latest)) (count (distinct (map :n (:numbered latest)))))
+                  (every? (fn [{:keys [op change]}]
+                            (or (not= "revert" op)
+                                (and (some? (by-seq change)) (digest/revertable? (by-seq change)))))
+                          (:numbered latest))
+                  (every? (fn [{:keys [op n change]}]
+                            (or (not= "revert" op) (= [n (:id latest)] (get numbers change))))
+                          (:numbered latest))
+                  (every? (fn [{:keys [op n change]}]
+                            (or (not= "revert" op)
+                                (some #(str/starts-with? % (str n ".  ")) lines)))
+                          (:numbered latest)))))))
+
+(deftest relay-revert-takes-a-notes-number-or-a-changes-handle
+  (let [changes [{:seq 4} {:seq 9} {:seq 12}]]
+    (is (= {:n 3} (digest/revert-target changes ["3"])))
+    (is (= {:n 3 :message 12} (digest/revert-target changes ["3" "12"])))
+    (is (= {:change 9} (digest/revert-target changes ["c2"])) "a handle is a place among the changes, not a seq")
+    (is (= {:change 12} (digest/revert-target changes ["C3"])))
+    (is (= "relay changes lists no change c4." (:error (digest/revert-target changes ["c4"]))))
+    (doseq [bad [[] ["x"] ["c"] ["c0"] ["c2" "5"] ["3" "x"] ["3" "4" "5"] ["-1"]]]
+      (is (:error (digest/revert-target changes bad)) (pr-str bad)))))
+
+(deftest relay-changes-names-how-to-undo-each
+  (let [at "2026-10-26T13:00:00Z"
+        changes [{:seq 4 :at at :what "note" :name "a" :change "added" :actor "steward" :labels []}
+                 {:seq 9 :at at :what "role" :name "helper" :change "added" :actor "steward" :labels []}
+                 {:seq 12 :at at :what "note" :name "b" :change "added" :actor "steward" :labels ["contaminated"]}
+                 {:seq 15 :at at :what "note" :name "c" :change "added" :actor "steward" :labels []}]
+        lines (digest/changes-lines changes #{15} {12 [1 30]} 30 ZoneOffset/UTC 10)]
+    (is (str/starts-with? (nth lines 0) "c1  "))
+    (is (str/starts-with? (nth lines 1) "    "))
+    (is (str/ends-with? (nth lines 1) ", which cannot be undone"))
+    (is (str/starts-with? (nth lines 2) "1.  "))
+    (is (str/starts-with? (nth lines 3) "    "))
+    (is (str/ends-with? (nth lines 3) ", undone"))
+    (is (= "To undo one: relay revert <n> for item n of the latest daily note; relay revert c<k> for any other."
+           (last lines)))
+    (is (not-any? #(re-find #"\b(9|15)\b" %) lines) "the log's numbers are never shown")))
 
 (deftest a-long-list-of-changes-is-counted-past-what-fits
   (let [changes (vec (for [i (range 1 61)]

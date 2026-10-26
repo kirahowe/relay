@@ -1402,10 +1402,16 @@
         ;; that threw here would undo the transaction telling it.
         msg (messages/message (messages/fit {:kind kind :urgency urgency :subject subject
                                              :sections sections :in-reply-to (:in-reply-to about)}))
-        zone (some-> (:timezone config) ZoneId/of)]
+        zone (some-> (:timezone config) ZoneId/of)
+        settings (or (:messages config) messages/default-settings)
+        ;; :only-channel answers on that one channel, at once, or on the
+        ;; client alone when it is not a configured channel.
+        only (:only-channel about)
+        routed (if (contains? about :only-channel)
+                 (assoc msg :route (if (contains? (:channels settings) only) [{:channel only :due (str now)}] []))
+                 (messages/routed settings zone msg now))]
     (emit tx "message/created"
-          (merge (dissoc about :labels :sections :in-reply-to) {:origin origin}
-                 (messages/routed (or (:messages config) messages/default-settings) zone msg now))
+          (merge (dissoc about :labels :sections :in-reply-to :only-channel) {:origin origin} routed)
           (:labels about))))
 
 (defn- quote-block [s] (str "> " (str/replace (str s) "\n" "\n> ")))
@@ -2646,16 +2652,22 @@
   quotes the message's subject, so it carries the message's labels. The
   memo she was told the message from, if any, is closed. A reply to a
   daily note that says \"revert 1\" or \"not 2\" is done in code here,
-  whichever channel brought it; the role still reads the reply."
+  whichever channel brought it. A reply that says nothing else
+  (digest/only-acts?) goes to no role: relay has done all it asks, and
+  waking a model only to say so would cost a wake and a second answer."
   [tx parent to memo channel text]
-  (let [tx (with-public tx false
-             #(send-memo % {:from operator :to to :subject (:subject memo) :body (:body memo)}
-                         (union (:labels memo) (:labels parent))))]
+  (let [note? (= "daily-note" (:origin parent))
+        tell-role? (not (and note? (digest/only-acts? text (:numbered parent))))
+        tx (cond-> tx
+             tell-role? (with-public false
+                          #(send-memo % {:from operator :to to :subject (:subject memo) :body (:body memo)}
+                                      (union (:labels memo) (:labels parent)))))]
     (-> tx
-        (emit "message/replied" {:message (:id parent) :memo (last-id tx) :channel channel :text text})
+        (emit "message/replied" (cond-> {:message (:id parent) :channel channel :text text}
+                                  tell-role? (assoc :memo (last-id tx))))
         (answered-memo parent text)
-        (cond-> (= "daily-note" (:origin parent))
-          (-> (act-on-reply parent text)
+        (cond-> note?
+          (-> (act-on-reply parent text channel)
               (merge (select-keys tx [:actor :labels :public])))))))
 
 (defn- record-mail*
@@ -2841,9 +2853,20 @@
               state (:keys data))
       (acted (:message data) (:n data) "dismissed")))
 
+(defn- mark-undo
+  "Marks the change an undo made, the event `put` (change/reverted's
+  :put), :undo-of the change it undid."
+  [state put undone]
+  (let [cs (:recipe-changes state)
+        i (dec (count cs))]
+    (if (and put (>= i 0) (= put (:seq (nth cs i))))
+      (assoc-in state [:recipe-changes i :undo-of] undone)
+      state)))
+
 (defmethod evolve* "change/reverted" [state {:keys [data]}]
   (-> state
       (update :reverted (fnil conj #{}) (:change data))
+      (mark-undo (:put data) (:change data))
       (acted (:message data) (:n data) "reverted")))
 
 (defn written-parts
@@ -2973,28 +2996,37 @@
                                   {:owner owner :name name :text (:text before)} (:labels before))
                      cur (emit tx "note/removed" {:owner owner :name name})
                      :else tx)))
-      "role" (case change
-               "added" (if (active-role? state owner)
-                         (decide* tx {:type :role/remove :args {:id owner}})
-                         tx)
-               "changed" (do (live!)
-                             (emit (assoc tx :public (true? (:public before))) "role/updated"
-                                   (assoc (select-keys before [:title :instructions :reports-to :harness :model]) :id owner)
-                                   (:labels before)))
-               "removed" (reject! :invalid (str "The role " owner " was removed, and a removed role cannot"
-                                                " come back under its old name. Add it again under a new one."))))))
+      ;; Adding or removing a role is never undone (digest/revert-refusal):
+      ;; a removed role's name is never used again, so an undo that
+      ;; took one away could not itself be undone.
+      "role" (if-let [why (digest/revert-refusal c)]
+               (reject! :invalid why)
+               (do (live!)
+                   (emit (assoc tx :public (true? (:public before))) "role/updated"
+                         (assoc (select-keys before [:title :instructions :reports-to :harness :model]) :id owner)
+                         (:labels before)))))))
 
 (defn- revert!
+  "Undoes change `change-seq` as the operator, or refuses with a plain
+  reason: a change that cannot be undone (digest/revert-refusal), or one
+  undone already. Every undo revert-change does leaves the thing as it
+  was before the change, so what relay then says it did is so; one that
+  emits nothing found it that way already."
   [{:keys [state] :as tx} change-seq {:keys [message n]}]
   (let [c (or (recipe-change-by-seq state change-seq)
-              (reject! :not-found (str "There is no change " change-seq " to undo.")))]
+              (reject! :not-found "There is no such change to undo."))]
     (when (contains? (:reverted state) change-seq)
-      (reject! :invalid (str "Change " change-seq " was undone already.")))
-    (-> tx
-        (assoc :actor operator :labels [] :public false)
-        (emit "change/reverted" (cond-> {:change change-seq} message (assoc :message message :n n)))
-        (revert-change c)
-        (assoc :actor (:actor tx) :labels (:labels tx) :public (:public tx)))))
+      (reject! :invalid "That change was undone already."))
+    (when-let [why (digest/revert-refusal c)] (reject! :invalid why))
+    (let [tx' (revert-change (assoc tx :actor operator :labels [] :public false) c)
+          ;; What it put back, when it put back anything, so the change
+          ;; that made is known as an undo (mark-undo).
+          put (when (> (count (:events tx')) (count (:events tx))) (last-id tx'))]
+      (-> tx'
+          (emit "change/reverted" (cond-> {:change change-seq}
+                                    put (assoc :put put)
+                                    message (assoc :message message :n n)))
+          (assoc :actor (:actor tx) :labels (:labels tx) :public (:public tx))))))
 
 (defn- dismiss! [tx m {:keys [n keys text labels]}]
   (-> tx
@@ -3024,6 +3056,10 @@
     (reject! :forbidden "Only the operator undoes a change or drops a suggestion.")))
 
 (defmethod decide* :change/revert [{:keys [state] :as tx} {{:keys [change]} :args}]
+  ;; The undo itself, by the change's own number, which the operator is
+  ;; never shown: the command line resolves a handle from relay changes
+  ;; (digest/revert-target) to it, and a note's number goes through
+  ;; :digest/act.
   (operator-act! tx)
   (when-not (integer? change) (reject! "Name the change to undo by its number."))
   ;; Undone from the note it was flagged in, when it was, so the note
@@ -3043,32 +3079,40 @@
             (or (latest-note state) (reject! :not-found "There is no daily note yet.")))]
     (act-on-note tx m n op)))
 
-(defn- act-text [m {:keys [op n]} outcome]
-  (let [item (first (filter #(= n (:n %)) (:numbered m)))]
-    (cond
-      (string? outcome) (str n ": " outcome)
-      (= "revert" op) (str n ": undone. " (:text item) " is back as it was.")
-      :else (str n ": dropped. It will not come back."))))
+(defn acted-line
+  "What relay did with item `n` of daily note `m`, in plain words: the
+  undo or the drop it made (digest/undone-line, digest/dropped-line),
+  read from `state`, the state after it."
+  [state m n]
+  (let [{:keys [op change text labels]} (first (filter #(= n (:n %)) (:numbered m)))]
+    (if (= "revert" op)
+      (digest/undone-line (recipe-change-by-seq state change))
+      (digest/dropped-line text labels))))
 
 (defn- act-on-reply
   "Acts on what the operator's reply to a daily note asks for (relay.
   digest/reply-acts), each on its own: one that cannot be done says why
-  and stops no other. Then tells the operator, in the thread, what was
-  done."
-  [tx m text]
+  and stops no other. Then tells the operator once, in the thread, what
+  was done, on the channel the reply came through and no other: a reply
+  in the client is answered in the client alone, and nothing is pushed."
+  [tx m text channel]
   (let [acts (digest/reply-acts text (:numbered m))]
     (if (empty? acts)
       tx
-      (let [[tx lines] (reduce (fn [[tx lines] {:keys [op n] :as a}]
-                                 (try [(act-on-note (assoc tx :actor operator :labels [] :public false) m n op)
-                                       (conj lines (act-text m a nil))]
+      (let [[tx lines] (reduce (fn [[tx lines] {:keys [op n]}]
+                                 (try (let [tx (act-on-note (assoc tx :actor operator :labels [] :public false) m n op)]
+                                        [tx (conj lines (str n ": " (acted-line (:state tx) m n)))])
                                       (catch clojure.lang.ExceptionInfo e
                                         (if (rejection e)
-                                          [tx (conj lines (act-text m a (ex-message e)))]
+                                          [tx (conj lines (str n ": " (ex-message e)))]
                                           (throw e)))))
-                               [tx []] acts)]
+                               [tx []] acts)
+            ;; The lines name the items, so they carry the items' labels.
+            labels (union (mapcat :labels (filter #(some #{(:n %)} (map :n acts)) (:numbered m)))
+                          (:labels m))]
         (tell (assoc tx :actor dispatcher :labels [] :public false)
-              "daily-note-acted" "reply" "normal" (str "Re: " (:subject m)) lines :in-reply-to (:id m))))))
+              "daily-note-acted" "reply" "normal" (str "Re: " (:subject m)) lines :in-reply-to (:id m)
+              :only-channel channel :labels labels)))))
 
 ;; GitHub items from people, one push a tick
 

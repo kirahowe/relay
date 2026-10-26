@@ -191,7 +191,9 @@
           (pos? removed) (str " (" (n removed "removed") ")")
           :else "")))
 
-(defn- thing [{:keys [what name labels]}]
+(defn thing
+  "A thing a change is to, in words: how-to \"x\", routine \"x\"..."
+  [{:keys [what name labels]}]
   ;; A name chosen in a session that read outside text may be that text's
   ;; choice: a domain in it must not become a link.
   (let [name (if (outside? labels) (text/defang name) name)]
@@ -210,6 +212,45 @@
          "removed" (str "Removed the " (thing c)))
        (when (and delta (not= "removed" change)) (lines-text delta))
        (when schedule (str ", now " schedule))))
+
+(defn revert-refusal
+  "Why change `c` cannot be undone, in plain words, or nil when it can.
+  Adding or removing a role cannot be undone cleanly: a role's name
+  is never used again once it is removed, so taking a new one away would
+  be for good, and a removed one cannot come back. Nor can an undo
+  (:undo-of, the change it undid)."
+  [{:keys [what change undo-of] :as c}]
+  (cond
+    ;; An undo puts back the version from before every change undone to
+    ;; that thing, so undoing it again could never bring back what it
+    ;; took away; it would only say so.
+    undo-of "It undid an earlier change, and relay does not undo an undo."
+    (= "role" what)
+    (case change
+      "added" (str "Taking away the new " (thing c) " cannot be undone, so relay does not do it from here.")
+      "removed" (str "The " (thing c) " was removed, and a removed role cannot come back.")
+      nil)))
+
+(defn revertable? [c] (nil? (revert-refusal c)))
+
+(defn undone-line
+  "What undoing change `c` did, in plain words, for the operator."
+  [{:keys [change] :as c}]
+  (case change
+    "added" (str "Removed the new " (thing c) ".")
+    "changed" (str "Put the " (thing c) " back as it was.")
+    "removed" (str "Brought back the " (thing c) ".")))
+
+(defn dropped-line
+  "What dropping a suggestion did, naming it. Its text came from a session
+  with `labels`; when that session read outside text, a domain in it
+  must not become a link."
+  ([text] (dropped-line text []))
+  ([text labels]
+   (let [t (str text)
+         t (if (> (count t) 120) (str (subs t 0 119) "…") t)
+         t (if (outside? labels) (text/defang t) t)]
+     (str "Dropped \"" (messages/squeeze-line t) "\". It will not be suggested again."))))
 
 (defn flagged
   "The changes to check: those after event `since` that a role (never
@@ -249,7 +290,10 @@
   `dismissed` the keys of suggestions the operator turned down.
   :numbered is what each number in the note stands for:
   {:n :op \"revert\" :change seq :text} or {:n :op \"dismiss\" :part
-  :keys :text}."
+  :keys :text}. The number is the only one the operator is shown for an
+  item: a reply, the client and `relay revert` all take it. A flagged
+  change that cannot be undone (revert-refusal) is listed with the
+  reason and gets no number."
   [{:keys [^LocalDate date changes since written dismissed]}]
   (let [flags (flagged changes since)
         n (atom 0)
@@ -257,10 +301,12 @@
         number! (fn [entry] (let [k (swap! n inc)] (swap! numbered conj (assoc entry :n k)) k))
         shown-flags (take flags-shown flags)
         flag-items (vec (for [c shown-flags]
-                          (let [k (number! {:op "revert" :change (:seq c) :text (change-line c)})]
-                            {:text (str k ". " (change-line c) ", shaped by " (source-phrase (:labels c))
-                                        ". To undo it: relay revert " (:seq c) ", or reply \"revert " k "\".")
-                             :action {:op "revert" :n k}})))
+                          (if-let [why (revert-refusal c)]
+                            {:text (str (change-line c) ", shaped by " (source-phrase (:labels c)) ". " why)}
+                            (let [k (number! {:op "revert" :change (:seq c) :text (change-line c)})]
+                              {:text (str k ". " (change-line c) ", shaped by " (source-phrase (:labels c))
+                                          ". Reply \"revert " k "\" to undo it.")
+                               :action {:op "revert" :n k}}))))
         flag-items (cond-> flag-items
                      (> (count flags) flags-shown)
                      (conj {:text (str "And " (plural (- (count flags) flags-shown) "more change")
@@ -317,25 +363,91 @@
       [{:op "dismiss" :n (:n (first dismissals))}]
       :else [])))
 
+(defn only-acts?
+  "Whether a reply to a note says nothing but what reply-acts reads: every
+  line it has is a \"revert 1\" or \"not 2\", or it is only \"not this
+  one\". relay does what such a reply asks in code, so nobody needs to
+  read it."
+  [text numbered]
+  (let [lines (remove str/blank? (map str/trim (str/split-lines (str text))))]
+    (boolean (and (seq lines)
+                  (every? #(seq (reply-acts % numbered)) lines)))))
+
 ;; --- for the command line
 
-(defn parse-change-ref
-  "The change a ref names, as its number: 123, change:123 or
-  [[change:123]]. Nil for anything else."
-  [s]
-  (some-> (re-matches #"\s*(?:\[\[)?(?:change:)?(\d{1,18})(?:\]\])?\s*" (str s)) second parse-long))
+(defn note-numbers
+  "What number each change has in the daily notes, {change-seq [n
+  note-id]}, from the notes (messages with :numbered), the latest note's
+  number winning. A change no note numbered has none."
+  [notes]
+  (into {} (for [m (sort-by :id notes)
+                 {:keys [op n change]} (:numbered m)
+                 :when (= "revert" op)]
+             [change [n (:id m)]])))
+
+(defn change-handle
+  "The handle relay changes gives a change no daily note numbered: c and
+  its place among all the changes, counting from 1. The log only grows,
+  so a change keeps its handle. It is never a number, so it cannot be
+  taken for an item of a note."
+  [ordinal]
+  (str "c" ordinal))
+
+(defn revert-target
+  "What `relay revert` is asked to undo, from its arguments: [\"3\"] is
+  item 3 of the latest daily note, {:n 3}; [\"3\" \"12\"] item 3 of note
+  12, {:n 3 :message 12}; [\"c7\"] the change relay changes gives handle
+  c7, {:change <its seq>}. {:error why} for anything else."
+  [changes [a b :as args]]
+  (let [usage (str "usage: relay revert <item> [<note>], an item's number in the daily note,"
+                   " or relay revert c<k>, a change relay changes lists")]
+    (if-let [[_ k] (re-matches #"(?i)c(\d{1,9})" (str/trim (str a)))]
+      (let [k (parse-long k)]
+        (cond
+          (some? b) {:error usage}
+          (<= 1 k (count changes)) {:change (:seq (nth changes (dec k)))}
+          :else {:error (str "relay changes lists no change c" k ".")}))
+      (let [k (some-> a str str/trim (->> (re-matches #"\d{1,9}")) parse-long)
+            m (some-> b str str/trim (->> (re-matches #"\d{1,18}")) parse-long)]
+        (cond
+          (or (nil? k) (> (count args) 2) (and (some? b) (nil? m))) {:error usage}
+          m {:n k :message m}
+          :else {:n k})))))
 
 (defn changes-lines
-  "The latest `n` changes to how roles work, newest last, one line each:
-  its number, when, what it did, and where outside text came from when
-  some shaped it."
-  [changes reverted ^ZoneId zone n]
-  (let [fmt (DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm")]
+  "The latest `n` of `changes` (all of them, oldest first) to how roles
+  work, newest last, one line each: how to name it to relay revert, when,
+  what it did, and where outside text came from when some shaped it. A
+  change a daily note numbered goes by that number (`numbers`,
+  note-numbers', `latest` the newest note's id), saying which note when
+  it was an earlier one; any other that can be undone by its handle
+  (change-handle). One that cannot be undone, or was, says so and has
+  neither. The log's own numbers are never shown."
+  [changes reverted numbers latest ^ZoneId zone n]
+  (let [fmt (DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm")
+        shown (take-last n (map-indexed (fn [i c] [(inc i) c]) changes))
+        ref (fn [[i {:keys [seq] :as c}]]
+              (let [[k note] (get numbers seq)]
+                (cond k (if (= note latest) [:latest (str k ".")] [:earlier (str k " in note " note)])
+                      (or (contains? reverted seq) (not (revertable? c))) nil
+                      :else [:handle (change-handle i)])))
+        refs (map ref shown)
+        kinds (set (keep first refs))]
     (if (empty? changes)
       ["No role has changed how it works yet."]
-      (vec (for [{:keys [seq at labels actor] :as c} (take-last n changes)]
-             (str seq "  " (.format fmt (.atZone (Instant/parse (str at)) zone)) "  " (change-line c)
-                  (when (= "operator" actor) ", by you")
-                  (when (and (not (#{"operator" "dispatcher"} actor)) (outside? labels))
-                    (str ", shaped by " (source-phrase labels)))
-                  (when (contains? reverted seq) ", undone")))))))
+      (vec (concat
+            (for [[[_ {:keys [seq at labels actor] :as c}] [_ r]] (map vector shown refs)]
+              (str (or r "  ")
+                   "  " (.format fmt (.atZone (Instant/parse (str at)) zone)) "  " (change-line c)
+                   (when (= "operator" actor) ", by you")
+                   (when (and (not (#{"operator" "dispatcher"} actor)) (outside? labels))
+                     (str ", shaped by " (source-phrase labels)))
+                   (cond (contains? reverted seq) ", undone"
+                         (not (revertable? c)) ", which cannot be undone")))
+            (when (seq kinds)
+              ["" (str "To undo one: "
+                       (str/join "; " (keep identity
+                                            [(when (:latest kinds) "relay revert <n> for item n of the latest daily note")
+                                             (when (:earlier kinds) "relay revert <n> <note> for one of an earlier note")
+                                             (when (:handle kinds) "relay revert c<k> for any other")]))
+                       ".")]))))))

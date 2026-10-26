@@ -77,7 +77,12 @@
   {:id (str "message:" (:id m)) :kind :message :at (:created-at m) :seq (:id m)
    :message (:id m) :message-kind (:kind m) :urgency (:urgency m) :thread (:thread m)
    :title (:subject m)
-   :lines (vec (for [sec (:sections m) it (:items sec)] (:text it)))
+   ;; A daily note's item the operator acted on says so where it stands.
+   :lines (vec (for [sec (:sections m) {:keys [text action]} (:items sec)
+                     :let [done (get (:acted m) (:n action))]]
+                 (cond-> text
+                   (= "reverted" done) (str " (undone)")
+                   (= "dismissed" done) (str " (dropped)"))))
    :labels (vec (:labels m))
    :replies (vec (:replies m))
    ;; The daily note is relay's own, but its writer hears the answer

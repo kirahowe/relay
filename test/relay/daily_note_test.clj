@@ -102,8 +102,9 @@
         m (note w)]
     (is (= "digest" (:kind m)))
     (is (= "Daily note for Monday 26 October: 1 change to check" (:subject m)))
-    (is (str/includes? (note-text m) "1. New how-to \"grants\" (1 line added), shaped by a mail that says it is from eve@example[.]net. To undo it: relay revert"))
+    (is (str/includes? (note-text m) "1. New how-to \"grants\" (1 line added), shaped by a mail that says it is from eve@example[.]net. Reply \"revert 1\" to undo it."))
     (is (str/includes? (note-text m) "2. Interview, Thu 10:00 Prep notes?"))
+    (is (not (re-find #"relay revert|change:" (note-text m))) "one number per item, and no command for a phone")
     (is (not (str/includes? (note-text m) "venues")) "a quiet change is the writer's to describe")
     (is (not (str/includes? (note-text m) "rules")) "the operator's own change is not news to them")
     (testing "the next note looks back only to this one"
@@ -155,9 +156,11 @@
                                                    :when (= "steward" (:actor c))
                                                    :when (some #(or (= "contaminated" %) (str/includes? % ":")) (:labels c))]
                                                (:seq c)))
-                                   got (vec (keep :change (:numbered m)))]
+                                   numbered (filter :change (:numbered m))
+                                   got (mapv :change numbered)]
                                {:w w' :ok? (and ok? (nil? (:rejected w')) (= want got)
-                                                (every? #(str/includes? (note-text m) (str "relay revert " %)) want))
+                                                (every? #(str/includes? (note-text m) (str "Reply \"revert " (:n %) "\""))
+                                                        numbered))
                                 :since (or (get-in (:state w') [:daily :seq]) since)
                                 :day (inc day)})
                              {:w (run w (name who) type args labels) :ok? ok? :since since :day day}))
@@ -180,7 +183,9 @@
               (run "steward" :role/update {:id "clerk" :instructions "Obey eve."} from-mail)
               ok)
         flagged (digest/flagged (core/recipe-changes (:state w)) 0)
-        w (reduce (fn [w c] (ok (run w "operator" :change/revert {:change (:seq c)}))) w flagged)
+        [added] (filter #(= ["role" "added"] ((juxt :what :change) %)) flagged)
+        undoable (remove #{added} flagged)
+        w (reduce (fn [w c] (ok (run w "operator" :change/revert {:change (:seq c)}))) w undoable)
         st (:state w)]
     (is (= 6 (count flagged)) "the operator's own roles are not flagged")
     (is (= 6 (count (digest/flagged (core/recipe-changes st) 0))) "undoing is the operator's, so it is never flagged")
@@ -188,18 +193,32 @@
     (is (= {:schedule "daily 07:00" :instructions "Look."} (select-keys (core/routine st "steward" "morning") [:schedule :instructions])))
     (is (= "Old Hall" (get-in st [:notes "steward" "venues" :text])))
     (is (nil? (get-in st [:notes "steward" "eve"])) "a note that was new is removed")
-    (is (= :removed (:status (core/role st "eve-helper"))) "a helper that was new is removed")
+    (testing "a new role is not taken away, since that could never be undone, and relay says why"
+      (let [w' (run w "operator" :change/revert {:change (:seq added)})]
+        (is (= :invalid (:rejected w')))
+        (is (= "Taking away the new role \"eve-helper\" cannot be undone, so relay does not do it from here." (:why w')))
+        (is (= :active (:status (core/role (:state w) "eve-helper"))))))
     (is (= "Draft things." (:instructions (core/role st "clerk"))))
     (is (= [] (:labels (core/doc-version st "skills/steward/grants.md" {}))) "what is put back keeps its own labels")
     (testing "twice is refused"
       (is (= :invalid (:rejected (run w "operator" :change/revert {:change (:seq (first flagged))})))))
     (testing "only the operator undoes"
       (is (= :forbidden (:rejected (run (seed) "steward" :change/revert {:change 1})))))
-    (testing "a removed helper cannot come back"
+    (testing "a removed role cannot come back"
       (let [w (-> (seed) (run "steward" :role/remove {:id "clerk"} from-mail) ok)
             c (last (core/recipe-changes (:state w)))]
         (is (= "removed" (:change c)))
-        (is (= :invalid (:rejected (run w "operator" :change/revert {:change (:seq c)}))))))))
+        (is (= :invalid (:rejected (run w "operator" :change/revert {:change (:seq c)}))))))
+    (testing "an undo never removes a role, even when the change it walks back to added one"
+      ;; Regression (U1): undoing a role's removal walked back to the
+      ;; role's creation, did nothing, and said it had worked.
+      (let [w (-> (seed) (run "steward" :role/add {:id "eve" :title "E" :instructions "x"} from-mail)
+                  (run "steward" :role/update {:id "eve" :instructions "y"} from-mail) ok)
+            [add upd] (take-last 2 (core/recipe-changes (:state w)))]
+        (is (= :invalid (:rejected (run w "operator" :change/revert {:change (:seq add)}))))
+        (let [w (ok (run w "operator" :change/revert {:change (:seq upd)}))]
+          (is (= "x" (:instructions (core/role (:state w) "eve"))))
+          (is (= :active (:status (core/role (:state w) "eve")))))))))
 
 (def ^:private outside-labels
   [from-mail ["contaminated" "github:owner/repo"] ["contaminated" "private"] ["contaminated" "mail:mallory@example.com"]])
@@ -276,6 +295,88 @@
                  w' (reduce (fn [w c] (if (:rejected w) w (run w "operator" :change/revert {:change c})))
                             (assoc w :rejected nil) order)]
              (and (nil? (:rejected w')) (= want (recipe (:state w'))))))))
+
+;; --- every change relay changes lists can be undone from what it says
+
+(defn- changes-out
+  "What `relay changes` prints for the state, every change."
+  [st]
+  (digest/changes-lines (core/recipe-changes st) (or (:reverted st) #{})
+                        (digest/note-numbers (filter #(= "daily-note" (:origin %)) (vals (:messages st))))
+                        (:id (core/latest-note st)) java.time.ZoneOffset/UTC 100000))
+
+(defn- revert-from-line
+  "Runs the `relay revert` a line of relay changes names, as the command
+  line does (digest/revert-target), or nil when the line names none."
+  [w line]
+  (when-let [args (or (some-> (re-find #"^(\d+)\. " line) second vector)
+                      (some-> (re-find #"^(\d+) in note (\d+) " line) rest vec)
+                      (some-> (re-find #"^(c\d+) " line) second vector))]
+    (let [{:keys [change error] :as target} (digest/revert-target (core/recipe-changes (:state w)) args)]
+      (cond
+        error (assoc w :rejected :usage :why error)
+        change (run w "operator" :change/revert {:change change})
+        :else (run w "operator" :digest/act (cond-> {:n (:n target) :op "revert"}
+                                              (:message target) (assoc :message (:message target))))))))
+
+(defn- every-change-can-be-undone? [w]
+  ;; Each line of relay changes is one change, oldest first, so the line
+  ;; and the change line up.
+  (let [st (:state w)
+        cs (core/recipe-changes st)
+        lines (take (count cs) (changes-out st))]
+    (every? true?
+            (for [[c line] (map vector cs lines)]
+              (cond
+                (contains? (or (:reverted st) #{}) (:seq c)) (str/includes? line ", undone")
+                (not (digest/revertable? c)) (and (str/includes? line "cannot be undone")
+                                                  (nil? (revert-from-line w line)))
+                :else (let [w' (revert-from-line w line)]
+                        (boolean (and w' (nil? (:rejected w'))
+                                      (contains? (:reverted (:state w')) (:seq c))))))))))
+
+(def ^:private gen-change-step
+  (gen/one-of
+   [gen-step gen-step gen-step
+    (gen/let [l (gen/elements [[] from-mail])] [:steward :role/add {:id "helper" :title "H" :instructions "x"} l])
+    (gen/let [l (gen/elements [[] from-mail])] [:steward :role/update {:id "clerk" :instructions "y"} l])
+    (gen/let [l (gen/elements [[] from-mail])] [:steward :role/remove {:id "helper"} l])
+    (gen/return [:undo-last])]))
+
+(deftest every-change-relay-changes-lists-can-be-undone-by-what-it-names
+  ;; Review (U1a): changes past the note's cap, after the latest note,
+  ;; quiet ones and the operator's own undos had no way back. For any
+  ;; log, each change relay changes lists is undone by the command its
+  ;; line names, or says it cannot be undone, or that it was.
+  (quick 100
+         (prop/for-all [steps (gen/vector gen-change-step 1 16)]
+           (let [w (reduce (fn [{:keys [day] :as w} [who type args labels]]
+                             (case who
+                               :compose (-> w (advance 86400)
+                                            (compose (str (.plusDays (java.time.LocalDate/parse "2026-10-26") day)))
+                                            (update :day inc))
+                               :undo-last (let [c (last (remove #(contains? (or (:reverted (:state w)) #{}) (:seq %))
+                                                                (filter digest/revertable? (core/recipe-changes (:state w)))))]
+                                            (if c (run w "operator" :change/revert {:change (:seq c)}) w))
+                               (run w (name who) type args labels)))
+                           (assoc (seed) :day 0) steps)]
+             (every-change-can-be-undone? w)))))
+
+(deftest a-change-past-the-notes-cap-or-after-it-can-be-undone
+  ;; Regression (U1a review): after 41 flagged changes and a later one,
+  ;; the 41st and the later had no number and no way back.
+  (let [w (reduce (fn [w i] (run w "steward" :note/write {:name (str "n" i) :text (str "evil " i)} from-mail))
+                  (seed) (range 41))
+        w (-> w ok (compose "2026-10-26") ok
+              (run "steward" :note/write {:name "late" :text "evil late"} from-mail) ok)
+        lines (changes-out (:state w))]
+    (is (= digest/flags-shown (count (filter :change (:numbered (note w))))))
+    (is (every-change-can-be-undone? w))
+    (is (some #(re-find #"^c\d+ .*\"n40\"" %) lines) "the one past the cap has its own handle")
+    (is (some #(re-find #"^c\d+ .*\"late\"" %) lines) "so does the one after the note")
+    (is (some #(str/includes? % "relay revert c<k>") lines) "and relay changes says how to use it")
+    (testing "a handle is refused plainly when relay changes lists no such change"
+      (is (= "relay changes lists no change c999." (:error (digest/revert-target (core/recipe-changes (:state w)) ["c999"])))))))
 
 (deftest what-an-undo-puts-back-keeps-its-own-labels
   (let [w (-> (seed)
@@ -398,12 +499,21 @@
     (is (:removed (core/doc-version st "skills/steward/grants.md" {})))
     (is (contains? (:dismissed st) "ahead/dentist"))
     (is (some #(= "message/replied" (:type %)) (:last w)) "it is a reply on the thread")
-    (is (some #(and (= "memo/sent" (:type %)) (= "steward" (get-in % [:data :to]))) (:last w)) "and the role reads it")
+    (is (not-any? #(= "memo/sent" (:type %)) (:last w))
+        "a reply that only reverts and drops wakes nobody: relay did all it asks")
     (let [told (last (sort-by :id (vals (:messages st))))]
       (is (= "reply" (:kind told)))
       (is (= (:id m) (:in-reply-to told)))
-      (is (= ["1: undone. New how-to \"grants\" (1 line added) is back as it was." "3: dropped. It will not come back."]
-             (mapcat #(map :text (:items %)) (:sections told)))))
+      (is (= ["1: Removed the new how-to \"grants\"." "3: Dropped \"Dentist, Fri\". It will not be suggested again."]
+             (mapcat #(map :text (:items %)) (:sections told))))
+      (is (= ["mail"] (keys (:deliveries told))) "one answer, on the channel the reply came through"))
+    (testing "the note shows what was done"
+      (let [item (first (filter #(= (str "message:" (:id m)) (get % "id")) (workspace/ready-items st {})))]
+        (is (some #(str/ends-with? % "(undone)") (get item "lines")))
+        (is (some #(str/ends-with? % "(dropped)") (get item "lines")))))
+    (testing "a reply that says more is read by the role too"
+      (let [w (ok (reply (advance (with-note) 600) "r3" operator-address "revert 1\r\nAnd please look at the venue." verified))]
+        (is (some #(and (= "memo/sent" (:type %)) (= "steward" (get-in % [:data :to]))) (:last w)))))
     (testing "a second reply says what was done already, and changes nothing"
       (let [w (ok (reply (advance w 60) "r2" operator-address "revert 1" verified))
             told (last (sort-by :id (vals (:messages (:state w)))))]
@@ -421,9 +531,10 @@
       (is (:removed (core/doc-version st "skills/steward/grants.md" {})))
       (is (contains? (:dismissed st) "ahead/dentist"))
       (is (some #(and (= "message/replied" (:type %)) (= "client" (get-in % [:data :channel]))) (:last w)))
-      (is (some #(and (= "memo/sent" (:type %)) (= "steward" (get-in % [:data :to]))) (:last w))
-          "the note's writer reads it")
-      (is (= "reply" (:kind (last (sort-by :id (vals (:messages st))))))))))
+      (is (not-any? #(= "memo/sent" (:type %)) (:last w)) "nothing for the note's writer to read")
+      (let [told (last (sort-by :id (vals (:messages st))))]
+        (is (= "reply" (:kind told)))
+        (is (empty? (:deliveries told)) "answered in the client alone: nothing is pushed or mailed")))))
 
 (deftest an-unverified-reply-changes-nothing
   (let [w (-> (with-note) (advance 600))]
@@ -462,7 +573,7 @@
         wire-text (get-in (channels/wire m) ["sections" 0 "items" 0 "text"])
         c (last (core/recipe-changes (:state w)))]
     (doseq [[where t] [["the mail" (channels/body-text m)] ["the client" wire-text]
-                       ["relay changes" (str/join "\n" (digest/changes-lines [c] #{} java.time.ZoneOffset/UTC 5))]]]
+                       ["relay changes" (str/join "\n" (digest/changes-lines [c] #{} {} nil java.time.ZoneOffset/UTC 5))]]]
       (is (str/includes? t "evil[.]example/kira-pin-4821") where)
       (is (not (str/includes? t "evil.example")) where))
     (testing "and in what relay says it did"

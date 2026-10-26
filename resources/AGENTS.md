@@ -241,8 +241,9 @@ that names the thing and stays the same from day to day. Write plainly,
 and never name roles, tools or labels. relay itself lists, at the top,
 every change that text from outside shaped, and you cannot leave one
 out. When the operator answers the note, you get the answer as
-a memo. relay has already done any "revert" or "not" in it, so act only
-on the rest.
+a memo, unless it said nothing but "revert" and "not": relay does those
+itself and answers. When a memo comes, relay has already done any
+"revert" or "not" in it, so act only on the rest.
 
 ## What relay knows
 
