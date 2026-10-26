@@ -1335,6 +1335,16 @@ refused. It never deletes and never copies, so a move to another disk is
 refused. The folders a target needs are made. relay checks every move in
 a call before it makes any, and if one is refused, none is made.
 
+A shell mount you marked `:trusted true` holds only your own files, so
+what the shell reads there is clean. relay therefore refuses any move
+into it from outside your trusted mounts, whatever the steward has read:
+a download cannot be filed among your notes, where it would read as
+yours. A folder counts by where it came from, and the target is checked
+as the disk sees it, so another case of the name or a link to the folder
+does not get around it. Moves within a trusted folder, out of one, or
+between untrusted places go ahead. If you want an outside file in your
+notes, move it there yourself.
+
 Each call is a move in the log with a number, recorded before anything
 moves and again after with what moved, a fingerprint of each thing
 moved, the folders it made, and the folders it left empty. relay never

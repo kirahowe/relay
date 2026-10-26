@@ -3334,6 +3334,14 @@ rule MoveFiles {
         -- the folders; m.from is a file or a folder holding no link;
         -- m.from is not one of the folders and holds none of them;
         -- nothing exists at m.to; m.from and m.to are on one disk
+    requires: no_outside_move_into_trusted(moves)
+        -- A trusted mount reads as the operator's own, so nothing from
+        -- outside one may be filed in one, whatever the session read:
+        -- for each move m, real(m.to) touches no trusted mount, or
+        -- real(m.from) lies inside a trusted mount's real path. The
+        -- target is compared as the disk does (case, accents,
+        -- firmlinks, links, file identity); a moved folder counts by
+        -- where it came from.
     requires: no_overlapping_moves(moves)
         -- no two moves touch the same path or one inside another
 

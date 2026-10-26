@@ -218,7 +218,7 @@
   form it was given."
   "/System/Volumes/Data")
 
-(defn- unfirm
+(defn unfirm
   "`p` as the path it is the same file as, without the data volume prefix."
   [p]
   (cond (= p firmlink-root) "/"
@@ -256,10 +256,10 @@
   [mount where]
   (or (path-problem mount) (place-problem mount where)))
 
-(defn- ancestors-or-self [p]
+(defn ancestors-or-self [p]
   (take-while some? (iterate #(when-not (= "/" %) (parent-of %)) p)))
 
-(defn- same-file? [a b]
+(defn same-file? [a b]
   (try (java.nio.file.Files/isSameFile (fs/path a) (fs/path b))
        (catch java.io.IOException _ false)))
 

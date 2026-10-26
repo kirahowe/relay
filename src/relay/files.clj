@@ -26,6 +26,13 @@
     deletes, and never copies: a move to another disk is refused rather
     than copied and removed.
   - A writable folder itself is never moved, nor a folder holding one.
+  - Nothing is moved into a shell mount marked trusted, or made to hold
+    one, from outside every trusted mount (trust-problem), whatever the
+    session's labels: the shell reads such a folder as the operator's
+    own, so a stranger's file filed there would read as clean. Targets
+    are compared as the disk does (case, accents, firmlinks, links and
+    file identity); a source counts as inside only by its exact real
+    path. A moved folder is judged by where it came from.
   - The folders a target needs are made, and recorded, so undo removes
     only the folders it made, and only when they are empty again.
 
@@ -149,6 +156,37 @@
     (under? real source-real) "a folder cannot go inside itself"
     (not same-disk) "it is on another disk, and relay moves only within one disk"))
 
+(defn- fold
+  "A path as a case-insensitive disk compares it: composed, lower case."
+  [p]
+  (str/lower-case (java.text.Normalizer/normalize (shell/unfirm p) java.text.Normalizer$Form/NFC)))
+
+(defn trust-problem
+  "Why a move from `from` to `to`, both real paths, may not be made because
+  it would bring something from outside into a folder the operator marked
+  trusted (relay.shell), or nil. What is in such a folder is the
+  operator's own to the shell, so its results are clean; a session must
+  not be able to file a stranger's text there, whatever it holds.
+
+  `trusted` are the trusted mounts, each {:path as written, :inside its
+  real path or nil when it does not exist, :forms every way of writing
+  it}. A move comes from a trusted folder only when `from`, firmlinks
+  aside, is exactly inside one's real path. It goes into one when `to`
+  is in or holds any form of it, compared as a case-insensitive disk
+  does, or when the edge found the target's folder is the same file
+  (`same-file`, the :path of each mount so found). A moved folder is
+  judged by where it came from."
+  [from to same-file trusted]
+  (let [from (shell/unfirm from)
+        inside? (some #(and (:inside %) (under? from (shell/unfirm (:inside %)))) trusted)
+        hit (first (filter (fn [{:keys [path forms]}]
+                             (or (contains? same-file path)
+                                 (some #(touches? (fold to) (fold %)) forms)))
+                           trusted))]
+    (when (and hit (not inside?))
+      (str "it would bring a file from outside into " (:path hit) ", which holds only the operator's own"
+           " files. If they want it there, they can move it there themselves"))))
+
 (defn batch-problems
   "Moves of one call that touch the same place: each as [i j], 0-based.
   `resolved` are {:from :to} real paths."
@@ -215,8 +253,11 @@
 
 ;; --- pure: what the steward and the operator are told
 
-(defn tool-description [roots]
+(defn tool-description [roots & [trusted]]
   (str "Move or rename files and folders inside the folders you may organize: " (str/join ", " roots) ". "
+       (when (seq trusted)
+         (str "The operator keeps only their own files in " (str/join ", " trusted) ": nothing from"
+              " outside those folders may be moved into them. "))
        "Give each move's full path, from and to. relay checks every move before it makes any, and makes"
        " none if one is refused: nothing is overwritten or deleted, a move whose target exists is"
        " refused, and the folders a target needs are made. Within one call no two moves may touch the"
@@ -398,10 +439,32 @@
          (catch FileAlreadyExistsException e
            (when-not (and (= "dir" (kind d)) (= d (real d))) (throw e))))))
 
+(defn trusted-places
+  "The trusted :mounts of relay.edn's :house, for trust-problem: each with
+  its real path when it exists, and every form of it."
+  [house]
+  (vec (for [m (:mounts house)
+             :when (shell/mount-trusted? m)
+             :let [p (shell/mount-path m)
+                   r (real p)]]
+         {:path p :inside r
+          :forms (vec (distinct (remove nil? [p (shell/unfirm p) r (some-> r shell/unfirm)])))})))
+
+(defn- same-file-mounts
+  "The trusted mounts that the real folder `base`, or one above it, is the
+  same file as, by :path: a name a path check would not see."
+  [base trusted]
+  (if-not base
+    #{}
+    (set (for [{:keys [path inside]} trusted
+               :when (and inside (some #(shell/same-file? % inside) (shell/ancestors-or-self base)))]
+           path))))
+
 (defn plan
   "Each move's real paths and what a target needs, or throws a refusal
-  listing every move that may not be made."
-  [moves roots]
+  listing every move that may not be made. `trusted` (trusted-places):
+  none may bring something from outside into a trusted folder."
+  [moves roots & [trusted]]
   (let [shape (for [[i {:keys [from to]}] (map-indexed vector moves)
                     :let [why (or (some->> (path-problem from) (str "from: "))
                                   (some->> (path-problem to) (str "to: ")))]
@@ -414,7 +477,10 @@
                                            (refuse! (str "Nothing was moved.\n" from ": relay could not look at it."))))]
                           {:from (:real s) :to (:real t) :source s :target t
                            :problem (or (some->> (source-problem s roots) (str from ": "))
-                                        (some->> (target-problem t (:real s) roots) (str to ": ")))
+                                        (some->> (target-problem t (:real s) roots) (str to ": "))
+                                        (some->> (trust-problem (:real s) (:real t)
+                                                                (same-file-mounts (:base t) trusted) trusted)
+                                                 (str to ": ")))
                            :create (when (and (:base t) (:real t)) (creates (:base t) (:real t)))})))
         problems (or (seq (keep :problem resolved))
                      (for [[i j] (batch-problems resolved)]

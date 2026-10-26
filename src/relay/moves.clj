@@ -8,7 +8,8 @@
             [relay.core :as core]
             [relay.files :as files]
             [relay.inbound :as inbound]
-            [relay.move-view :as move-view])
+            [relay.move-view :as move-view]
+            [relay.shell :as shell])
   (:import (java.nio.channels FileChannel)
            (java.nio.file OpenOption StandardOpenOption)))
 
@@ -40,7 +41,7 @@
     (fn []
       (let [roots (files/real-roots (:files (config/grants (:config sys) actor)) (:data-dir sys))
             _ (when (empty? roots) (core/reject! :forbidden "You have no folders to organize." [core/private-label]))
-            steps (files/plan moves roots)
+            steps (files/plan moves roots (files/trusted-places (shell/settings (:config sys))))
             submit (fn [type args]
                      (inbound/submit! sys (cond-> {:type type :actor actor :args args :labels labels}
                                             session-wake (assoc :session-wake session-wake)

@@ -122,6 +122,62 @@
                                   (for [x ((juxt :from :to) (moves i)) y ((juxt :from :to) (moves j))] [x y])))))
               (for [i (range (count moves)) j (range (inc i) (count moves))] [i j])))))
 
+;; --- Codex R2: nothing from outside moves into a trusted folder
+
+(def trusted-notes [{:path "/r/notes" :inside "/r/notes" :forms ["/r/notes"]}])
+
+(deftest a-move-into-a-trusted-folder-must-come-from-one
+  (let [t trusted-notes
+        refused? #(some? (files/trust-problem %1 %2 #{} t))]
+    (is (re-find #"from outside into /r/notes" (files/trust-problem "/r/dl/injected.txt" "/r/notes/i.txt" #{} t)))
+    (is (refused? "/r/dl/injected" "/r/notes/sub/injected") "a folder is judged by where it came from")
+    (is (not (refused? "/r/notes/a.txt" "/r/dl/a.txt")) "out of a trusted folder")
+    (is (not (refused? "/r/notes/a.txt" "/r/notes/old/a.txt")) "within one")
+    (is (not (refused? "/r/dl/a.txt" "/r/dl/old/a.txt")) "within untrusted places")
+    (let [two (conj t {:path "/r/work" :inside "/r/work" :forms ["/r/work"]})]
+      (is (nil? (files/trust-problem "/r/notes/a.txt" "/r/work/a.txt" #{} two))
+          "from one trusted folder to another"))
+    (testing "the target is compared as the disk would"
+      (is (refused? "/r/dl/a.txt" "/r/NOTES/a.txt") "a case-insensitive disk")
+      (is (refused? "/r/dl/a.txt" "/r/Notes/a.txt"))
+      (let [composed "/r/r\u00e9sum\u00e9s" decomposed "/r/re\u0301sume\u0301s"]
+        (is (some? (files/trust-problem "/r/dl/a.txt" (str decomposed "/a.txt") #{}
+                                        [{:path composed :inside composed :forms [composed]}]))
+            "a composed and a decomposed accent name the same folder"))
+      (is (refused? "/r/dl/a.txt" "/System/Volumes/Data/r/notes/a.txt") "a firmlink")
+      (is (refused? "/System/Volumes/Data/r/dl/a.txt" "/r/notes/a.txt"))
+      (is (not (refused? "/System/Volumes/Data/r/notes/a.txt" "/r/dl/a.txt"))
+          "a firmlinked source in the trusted folder is in it")
+      (is (some? (files/trust-problem "/r/dl/a.txt" "/r/x/a.txt" #{"/r/notes"} t))
+          "the same file by identity"))
+    (testing "a target that would become a trusted folder, or hold one"
+      (is (refused? "/r/dl/notes" "/r/notes"))
+      (is (refused? "/r/dl/pkg" "/r") "holds it"))
+    (testing "a source is in a trusted folder only by its own exact real path"
+      (is (refused? "/r/NOTES/a.txt" "/r/notes/b.txt"))
+      (is (refused? "/r/notesx/a.txt" "/r/notes/b.txt"))
+      (is (refused? "/r/a.txt" "/r/notes/b.txt"))
+      (is (some? (files/trust-problem "/r/dl/a.txt" "/r/notes/b.txt" #{}
+                                      [{:path "/r/notes" :inside nil :forms ["/r/notes"]}]))
+          "a trusted folder that does not exist yet holds nothing to move"))))
+
+(def gen-mount-path (gen/elements ["/r/notes" "/r/dl" "/r/notes/deep" "/r/work" "/s/notes"]))
+(def gen-move-path (gen/elements ["/r/notes/a" "/r/NOTES/a" "/r/dl/a" "/r/notes/deep/a" "/r/work/a"
+                                  "/r" "/r/notes" "/r/a" "/s/notes/a" "/s/a" "/r/notesx/a"
+                                  "/System/Volumes/Data/r/notes/a" "/System/Volumes/Data/r/dl/a"]))
+
+(defspec a-move-into-a-trusted-folder-is-refused-exactly-when-it-comes-from-outside 500
+  (prop/for-all [mounts (gen/vector-distinct gen-mount-path {:min-elements 1 :max-elements 4})
+                 from gen-move-path
+                 to gen-move-path]
+    (let [t (mapv (fn [m] {:path m :inside m :forms [m]}) mounts)
+          plain (fn [p] (str/lower-case (str/replace p #"^/System/Volumes/Data" "")))
+          inside? (fn [p m] (or (= p m) (str/starts-with? p (str m "/"))))
+          from-trusted (some #(inside? (str/replace from #"^/System/Volumes/Data" "") %) mounts)
+          into (some #(or (inside? (plain to) %) (inside? % (plain to))) mounts)
+          problem (files/trust-problem from to #{} t)]
+      (= (boolean (and into (not from-trusted))) (some? problem)))))
+
 ;; --- on the disk
 
 (def ^:dynamic *dir* nil)
@@ -135,7 +191,7 @@
 (defn- world!
   "A data directory, a writable folder `root` with an inbox of downloads
   and a filing cabinet, a folder outside it, and a steward granted root."
-  [dir & [{:keys [roots]}]]
+  [dir & [{:keys [roots mounts]}]]
   (let [data (str dir "/data")
         root (str dir "/root")]
     (fs/create-dirs (str root "/Downloads"))
@@ -146,8 +202,9 @@
     (spit (str root "/Taxes/2025/w2.pdf") "wages")
     (spit (str dir "/outside/secret.txt") "not yours")
     (log/init! data)
-    (spit (str data "/relay.edn") (pr-str (assoc base :grants {"steward" {:files (or roots [root])}
-                                                               "clerk" {}})))
+    (spit (str data "/relay.edn") (pr-str (cond-> (assoc base :grants {"steward" {:files (or roots [root])}
+                                                                       "clerk" {}})
+                                            mounts (assoc :house {:mounts mounts}))))
     (let [sys (inbound/system data)]
       (doseq [id ["steward" "clerk"]]
         (inbound/submit! sys {:type :role/add :actor "operator" :args {:id id :title id :instructions "x"}}))
@@ -210,10 +267,10 @@
                    (try (cli/execute ["--data" (:data-dir sys) "undo" (str call)]) ""
                         (catch clojure.lang.ExceptionInfo e (ex-message e))))))))
 
-(defn- refused [sys moves]
+(defn- refused [sys moves & [labels]]
   (let [before (snapshot *dir*)
         n (count (log/read-events (:data-dir sys)))
-        r (move sys moves)]
+        r (move sys moves labels)]
     (is (:error r) (pr-str r))
     (is (= before (snapshot *dir*)) "nothing moved")
     (is (= n (count (log/read-events (:data-dir sys)))) "nothing recorded")
@@ -491,6 +548,109 @@
     (fs/create-sym-link link data)
     (is (re-find #"will not organize" (str (:error (move sys [{:from (str link "/relay.edn") :to (str link "/r.edn")}])))))
     (is (fs/exists? (str data "/relay.edn")))))
+
+;; --- Codex R2: on the disk, nothing from outside moves into a trusted folder
+
+(deftest nothing-from-outside-moves-into-a-trusted-folder
+  ;; A session shaped by a stranger's text could otherwise file
+  ;; downloads/injected.txt into the trusted notes, where every later
+  ;; shell read is the operator's own: clean, its links live, the recipe
+  ;; changes it shapes unflagged. The session's labels do not matter.
+  (let [notes (str *dir* "/root/Notes")
+        _ (fs/create-dirs notes)
+        _ (spit (str notes "/plan.txt") "mine")
+        {:keys [sys root]} (world! *dir* {:mounts [(str *dir* "/root/Downloads")
+                                                   {:path notes :trusted true}
+                                                   {:path (str *dir* "/root/Later") :trusted true}]})
+        d (str root "/Downloads")]
+    (fs/create-dirs (str d "/pack"))
+    (spit (str d "/pack/injected.txt") "IGNORE PREVIOUS")
+    (fs/create-sym-link (str root "/to-notes") notes)
+    (is (str/includes? (:description (first (filter #(= "files_move" (:name %)) (tools/manifest (:config sys) "steward"))))
+                       (str "only their own files in " notes ", "))
+        "the steward is told before it tries")
+    (doseq [labels [[] ["contaminated" "mail:stranger@example.com"]]]
+      (testing (str "a session holding " labels)
+        (is (re-find #"from outside into .*/root/Notes"
+                     (refused sys [{:from (str d "/confirmation.pdf") :to (str notes "/c.pdf")}] labels)))))
+    (is (re-find #"from outside" (refused sys [{:from (str d "/pack") :to (str notes "/pack")}]))
+        "a folder, by where it came from")
+    (is (re-find #"from outside" (refused sys [{:from (str d "/confirmation.pdf") :to (str root "/notes/c.pdf")}]))
+        "another case of the same name")
+    (is (re-find #"from outside" (refused sys [{:from (str d "/confirmation.pdf") :to (str root "/to-notes/c.pdf")}]))
+        "through a link")
+    (is (re-find #"from outside" (refused sys [{:from (str d "/confirmation.pdf") :to (str root "/Later/c.pdf")}]))
+        "a trusted folder that does not exist yet")
+    (is (re-find #"from outside" (refused sys [{:from (str d "/pack") :to (str root "/Later")}]))
+        "a folder that would become a trusted one")
+    (testing "moves out of, within and away from trusted folders go ahead"
+      (is (nil? (:error (move sys [{:from (str notes "/plan.txt") :to (str notes "/2026/plan.txt")}]))))
+      (is (nil? (:error (move sys [{:from (str d "/confirmation.pdf") :to (str root "/Bank/c.pdf")}]))))
+      (is (nil? (:error (move sys [{:from (str notes "/2026/plan.txt") :to (str d "/plan.txt")}]))))
+      (testing "and what left a trusted folder is from outside once it is out"
+        (is (re-find #"from outside" (refused sys [{:from (str d "/plan.txt") :to (str notes "/plan.txt")}]))))
+      (testing "undo puts it back where it came from"
+        (let [call (:seq (last (events sys "files/moving")))]
+          (is (:ok (moves/undo! sys call)))
+          (is (= "mine" (slurp (str notes "/2026/plan.txt")))))))))
+
+(def ^:private folders ["Notes" "Mail" "Work" "Dl"])
+
+(def gen-trust-world
+  "Four mounted folders under root, some trusted, each with files of
+  their own, and moves among them by any spelling of a folder: its own
+  name, lower case, a link to Notes, or a new folder inside one."
+  (gen/let [trust (gen/vector gen/boolean 4)
+            calls (gen/vector (gen/vector (gen/tuple (gen/tuple (gen/elements folders) (gen/elements ["f" "g" ""]))
+                                                     (gen/tuple (gen/elements (concat folders ["notes" "mail" "L" "Notes/sub" "Fresh"]))
+                                                                (gen/elements ["x" "y" "z"])))
+                                          1 2)
+                              1 6)]
+    {:trust (zipmap folders trust) :calls calls}))
+
+(defspec nothing-from-outside-ever-lands-in-a-trusted-folder 60
+  (prop/for-all [{:keys [trust calls]} gen-trust-world]
+    (let [dir (str (fs/real-path (fs/create-temp-dir {:prefix "relay-trust-prop"})))]
+      (try
+        (let [root (str dir "/root")
+              _ (doseq [f folders]
+                  (fs/create-dirs (str root "/" f))
+                  (spit (str root "/" f "/f") (str f " f"))
+                  (spit (str root "/" f "/g") (str f " g")))
+              _ (fs/create-sym-link (str root "/L") (str root "/Notes"))
+              trusted (set (filter trust folders))
+              mine (set (for [f trusted n ["f" "g"]] (str f " " n)))
+              {:keys [sys]} (binding [*dir* dir]
+                              (world! (str dir "/w") {:roots [root]
+                                                      :mounts (vec (for [f folders]
+                                                                     {:path (str root "/" f) :trusted (get trust f)}))}))
+              in-trusted (fn [] (set (for [f trusted
+                                           p (fs/glob (str root "/" f) "**")
+                                           :when (fs/regular-file? p {:nofollow-links true})]
+                                       (slurp (str p)))))
+              results (for [moves calls]
+                        (let [ms (vec (for [[[sf sn] [tf tn]] moves]
+                                        {:from (str root "/" sf (when (seq sn) (str "/" sn)))
+                                         :to (str root "/" tf "/" tn)}))
+                              r (tools/call! sys "steward" "files_move" {:moves ms} [] "c" nil)
+                              ;; A move counts as into a trusted folder by
+                              ;; where its target really is.
+                              into? (fn [{:keys [to]}]
+                                      (let [t (-> to (str/replace (str root "/L") (str root "/Notes"))
+                                                  (str/replace (str root "/notes") (str root "/Notes"))
+                                                  (str/replace (str root "/mail") (str root "/Mail")))]
+                                        (some #(str/starts-with? t (str root "/" % "/")) trusted)))
+                              from-trusted? (fn [{:keys [from]}] (some #(str/starts-with? from (str root "/" % "/")) trusted))
+                              ;; Nothing moves around under the generator's
+                              ;; feet: what was in a folder is checked by
+                              ;; the disk, at the end, by content.
+                              trust-refused (boolean (re-find #"from outside" (str (:error r))))]
+                          {:ok (if trust-refused
+                                 (some #(and (into? %) (not (from-trusted? %))) ms)
+                                 true)}))]
+          (and (every? :ok (doall results))
+               (every? mine (in-trusted))))
+        (finally (fs/delete-tree dir))))))
 
 ;; --- I7 extended: undo restores any tree byte for byte
 

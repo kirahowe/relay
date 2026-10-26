@@ -1104,10 +1104,10 @@
   folders it may organize, carried out by relay on the host (relay.moves).
   Class edit: only the operator sees what changed, and undoes it with
   relay undo."
-  [roots]
+  [roots trusted]
   {:class :edit
    :acp-kind "move"
-   :description (files/tool-description roots)
+   :description (files/tool-description roots trusted)
    :parameters (obj {:moves {:type "array"
                              :description "The moves, in order: each {\"from\": full path, \"to\": full path}."
                              :items {:type "object"
@@ -1165,7 +1165,8 @@
              {"sh" (shell-tool config)})
            (when-let [roots (and (not (config/public? config role-id))
                                  (seq (:files (config/grants config role-id))))]
-             {"files_move" (files-tool (vec roots)) "files_moves" files-moves-tool})
+             {"files_move" (files-tool (vec roots) (mapv shell/mount-path (filter shell/mount-trusted? (:mounts (:house config)))))
+              "files_moves" files-moves-tool})
            (into {} (map external-tool (select-keys (:tools config) tools)))))))
 
 (defn grants-summary
