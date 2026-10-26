@@ -1,0 +1,13 @@
+# The steward's shell: a small Linux with the usual tools for reading and
+# sorting files. relay runs it with no network, a read-only root, Kira's
+# files mounted read-only and a scratch directory in memory (relay.house).
+# Building needs the network, to fetch the packages; running never does.
+FROM docker.io/library/alpine:3.20
+
+RUN apk add --no-cache coreutils findutils grep ripgrep gawk sed python3 \
+        sqlite jq poppler-utils file tar zip unzip util-linux \
+    && adduser -D -u 1000 -h /scratch -s /bin/sh steward
+
+USER steward
+WORKDIR /scratch
+CMD ["sleep", "infinity"]
