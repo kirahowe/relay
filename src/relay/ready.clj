@@ -55,22 +55,24 @@
 
 (def ^:private done-marks
   "How a daily note's item done since reads, after its text."
-  {"reverted" " (undone)" "dismissed" " (dropped)" "declined" " (offer declined)"})
+  {"reverted" " (undone)" "dismissed" " (dropped)" "declined" " (offer declined)" "accepted" " (offer taken up)"})
 
 (defn- message-item [state m]
   (let [;; What was done with each numbered item, from this note or any
         ;; other, or the command line.
         acted (core/note-acted state m)
-        line (fn [{:keys [text action]}] (str text (get done-marks (get acted (:n action)))))
+        item-line (fn [{:keys [text action]}] (str text (get done-marks (get acted (:n action)))))
+        ;; A listed section's items behind a dash, as mail shows them.
+        line (fn [sec it] (cond->> (item-line it) (:list sec) (str "- ")))
         numbered (into {} (map (juxt :n identity)) (:numbered m))]
     {:id (str "message:" (:id m)) :kind :message :at (:created-at m) :seq (:id m)
      :message (:id m) :message-kind (:kind m) :urgency (:urgency m) :thread (:thread m)
      :title (:subject m)
-     :lines (vec (for [sec (:sections m) it (:items sec)] (line it)))
+     :lines (vec (for [sec (:sections m) it (:items sec)] (line sec it)))
      ;; The same lines under their sections' headings, for a message read
      ;; whole; :lines stays flat, and an act's :line indexes it.
      :sections (vec (for [sec (:sections m)]
-                      {:heading (:heading sec) :lines (mapv line (:items sec))}))
+                      {:heading (:heading sec) :lines (mapv #(line sec %) (:items sec))}))
      ;; Links relay built itself, by line, kept followable.
      :links (into {} (keep-indexed (fn [i it] (when (:link it) [i (:link it)]))
                                    (for [sec (:sections m) it (:items sec)] it)))
@@ -208,14 +210,15 @@
 
 (defn- safe
   "Text for the operator: refs as words, links broken when an outsider
-  may have written it, and every hidden character made visible. The
-  \"from\" line says where it came from, so the text carries no mark of
-  its own."
+  may have written it, and every hidden character taken out and said so
+  (\"(a hidden character removed)\"), as mail says it, so a screen that
+  escapes what it prints never shows an escape twice. The \"from\" line
+  says where it came from, so the text carries no mark of its own."
   [labels s]
-  (messages/shown labels s))
+  (messages/plain labels s))
 
 (defn- safe-line [labels s]
-  (messages/shown-line labels s))
+  (messages/plain-line labels s))
 
 (defn- wire-item [{:keys [labels] :as it}]
   (let [sources (sources-of-item it)

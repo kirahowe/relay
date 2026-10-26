@@ -9,6 +9,7 @@
   channel's settings and relay's own records; the subject is one line,
   encoded, so text cannot add a header (I2)."
   (:require [clojure.string :as str]
+            [relay.digest :as digest]
             [relay.messages :as messages]
             [relay.text :as text])
   (:import (java.nio.charset StandardCharsets)
@@ -149,7 +150,10 @@
          body (if one
                 (str/join "\n\n" (remove nil? [context
                                                 (when threaded (subject-text one))
-                                                (body-text one)
+                                                ;; The daily note says how to act on
+                                                ;; it: by reply when relay reads
+                                                ;; them, else by command.
+                                                (body-text (digest/with-hints one (if replies? :reply :cli)))
                                                 (when footer (str "-- \n" footer))]))
                 (str/join "\n\n----\n\n" (for [m msgs] (str (subject-text m) "\n\n" (body-text m)))))
          headers (cond-> [["From" (from-header channel)]

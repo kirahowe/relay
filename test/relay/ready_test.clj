@@ -250,9 +250,12 @@
       (is (= (:lines it) (vec (mapcat #(get % "lines") (get (ready/wire it) "sections"))))))
     (testing "relay ready <n> shows the headings and what was done"
       (let [out (render/ready-one (ready/wire it) (ZoneId/of "UTC") (Instant/parse "2026-10-26T12:00:00Z"))]
-        (is (= ["Message 5: Daily note (just now)" "" "  Changes to check:" "  1. A change" "  And 2 more changes"
-                "" "  Ahead:" "  3. Dentist (dropped)" "  4. Taxes" "  Reply: relay reply 5 -m \"...\""]
-               out))))
+        (is (= ["Message 5: Daily note (just now)" "" "  Changes to check:" "  1. A change relay revert 1 undoes it."
+                "  And 2 more changes"
+                "" "  Ahead:" "  3. Dentist (dropped)" "  4. Taxes" "  relay dismiss N removes an item for good."
+                "  Reply: relay reply 5 -m \"...\""]
+               out)
+            "with the commands for what is not done yet")))
     (testing "a message with no headings sends no sections"
       (let [plain (assoc m :sections [{:items [{:text "Hello"}]}] :origin nil :acted nil)
             it (first (filter #(= :message (:kind %)) (ready/ready (assoc-in core/empty-state [:messages 5] plain))))]

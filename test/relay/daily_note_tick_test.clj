@@ -127,7 +127,7 @@
           (is (not (re-find #"^c\d+ " (last changes))))))
       (is (thrown? Exception (relay "revert" "1")) "once")
       (is (thrown? Exception (relay "revert" "2")) "item 2 is a suggestion, not a change")
-      (is (= {:exit 0 :out ["Dropped \"Dentist, Fri\". It will not be suggested again."]} (relay "dismiss" "2")))
+      (is (= {:exit 0 :out ["Dropped \"Dentist, Fri\". It will not be in later notes."]} (relay "dismiss" "2")))
       (is (contains? (:dismissed (inbound/current-state sys)) "ahead/dentist"))
       (is (thrown? Exception (relay "revert" "change:3")))
       (testing "a change no note numbered is undone by its handle"

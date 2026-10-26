@@ -190,7 +190,8 @@
                  ;; is listed with the reason and no number.
                  undoable (map :seq (remove #(and (= "role" (:what %)) (#{"added" "removed"} (:change %))) flagged))
                  reverts (filter #(= "revert" (:op %)) (:numbered note))
-                 texts (mapcat :items (:sections note))]
+                 ;; As a mail whose replies relay reads shows it.
+                 texts (mapcat :items (:sections (digest/with-hints note :reply)))]
              (and (= want (:flagged note))
                   (= undoable (map :change reverts))
                   ;; Each is in the text, with its number and only that.
@@ -237,13 +238,23 @@
                          "learned" {:items [{:text "I keep the venues you like in a note now."}] :labels ["private"]}}
                :dismissed #{}})]
     (is (= "Daily note for Monday 26 October: 1 change to check" (:subject note)))
-    (is (= ["Changes to check" "Coming up" "Grants" "What I learned" nil] (map :heading (:sections note)))
+    (is (= ["Changes to check" "Coming up" "Grants" "What I learned"] (map :heading (:sections note)))
         "every section, each day")
+    (is (= ["Changes to check" "Coming up" "Grants" "What I learned" nil]
+           (map :heading (:sections (digest/with-hints note :reply))))
+        "with how to act on it under them where it can be answered")
     (is (= "Nothing on grants since the last note." (:text (first (:items (nth (:sections note) 2)))))
         "relay.edn names no grant search, so relay says nothing of one")
     (is (= (str "1. Changed the how-to \"grants\" (2 lines added), shaped by a mail from"
+                " eve@example.net.")
+           (:text (first (:items (first (:sections note))))))
+        "no channel's wording in the note itself")
+    (is (= (str "1. Changed the how-to \"grants\" (2 lines added), shaped by a mail from"
                 " eve@example.net. Reply \"revert 1\" to undo it.")
-           (:text (first (:items (first (:sections note)))))))
+           (:text (first (:items (first (:sections (digest/with-hints note :reply))))))))
+    (is (str/ends-with? (:text (first (:items (first (:sections (digest/with-hints note :cli))))))
+                        " relay revert 1 undoes it."))
+    (is (= note (digest/with-hints note :push)) "a push cannot be answered, so it says nothing of how")
     (is (= "2. Interview with Maple Co, Thu 29 Oct 10:00. Want prep notes?"
            (:text (first (:items (second (:sections note)))))))
     (is (= ["contaminated" "private"] (:labels (first (:items (second (:sections note))))))
@@ -252,7 +263,12 @@
             {:n 2 :op "dismiss" :part "ahead"}]
            (map #(select-keys % [:n :op :change :part]) (:numbered note))))
     (is (= ["ahead/maple" "ahead/interview-with-maple-co-thu-29-oct-10-00"] (:keys (second (:numbered note)))))
-    (is (str/includes? (:text (first (:items (last (:sections note))))) "\"not N\""))))
+    (is (str/includes? (:text (first (:items (last (:sections (digest/with-hints note :reply)))))) "\"yes N\""))
+    (is (str/includes? (:text (first (:items (last (:sections (digest/with-hints note :cli)))))) "relay accept N"))
+    (testing "an item done says nothing more"
+      (let [done (digest/with-hints (assoc note :acted {1 "reverted" 2 "dismissed"}) :reply)]
+        (is (= (count (:sections note)) (count (:sections done))))
+        (is (not (str/includes? (:text (first (:items (first (:sections done))))) "Reply")))))))
 
 (deftest an-empty-note-says-nothing
   (is (nil? (:sections (digest/compose {:date (LocalDate/parse "2026-10-26") :changes [] :since 0
@@ -314,10 +330,10 @@
         note (fn [declined dismissed]
                (digest/compose {:date (day "2026-10-27") :changes [] :since 0 :written written
                                 :dismissed dismissed :declined declined}))
-        texts (fn [n] (map :text (mapcat :items (:sections n))))]
+        texts (fn [n] (map :text (mapcat :items (:sections (digest/with-hints n :reply)))))]
     (is (= ["1. Interview with Riverbend, Thu 29 Oct 11:00. Want prep notes?" "2. Dentist, Fri"
             "Nothing on grants since the last note." "Nothing new."
-            "Reply \"not N\" to say no to an offer; the item stays. Reply \"drop N\" to remove an item for good."]
+            "Reply \"yes N\" to take up an offer, or \"not N\" to say no to it; the item stays. Reply \"drop N\" to remove an item for good."]
            (texts (note #{} #{}))))
     (is (= "Want prep notes?" (:offer (first (:numbered (note #{} #{}))))) "the number knows its offer")
     (testing "declined, the item stays without its offer"
@@ -453,3 +469,15 @@
   (is (= "https://github.com/a/b/pull/2" (digest/github-link {:repo "a/b" :number 2 :kind "pull request"})))
   (is (nil? (digest/github-link {:repo "a/b c" :number 1})))
   (is (nil? (digest/github-link {:repo "a/b" :number -1}))))
+
+(deftest the-changes-footer-is-a-whole-sentence-before-any-note
+  (let [at "2026-10-26T10:00:00Z"
+        changes [{:seq 3 :at at :what "note" :name "a" :change "added" :actor "steward" :labels []}
+                 {:seq 7 :at at :what "note" :name "b" :change "added" :actor "steward" :labels []}]
+        lines (digest/changes-lines changes #{} {} nil ZoneOffset/UTC 10)]
+    (is (= "To undo one: relay revert c<k>, such as relay revert c2." (last lines)))))
+
+(deftest a-peek-quotes-words-not-code
+  (is (= "Look in the downloads folder for seating charts first."
+         (digest/peek "" "# Seating\n```sh\nfind downloads -iname '*seat*'\n```\nRun `find downloads -iname x` here\nLook in the downloads folder for seating charts first.")))
+  (is (= "find downloads -iname x" (digest/peek "" "```\nls\n```\nfind downloads -iname x")) "code only when nothing else is new"))

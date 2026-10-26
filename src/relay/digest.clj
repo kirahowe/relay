@@ -168,6 +168,20 @@
                  (not (.isBefore now (slot today at zone))))
         today))))
 
+(def wait-minutes
+  "How long past its time the note waits for its writer to finish what it
+  is reading, at most, so the first note of a day is not made before the
+  writer has read what came in."
+  60)
+
+(defn waits?
+  "Whether the note due for `date` waits at `now`: its writer is still
+  busy (`busy?`: working, or memos still open, such as its routine's run
+  or a new calendar), and it is less than wait-minutes past the note's
+  time. Pure."
+  [^LocalTime at ^ZoneId zone ^LocalDate date ^Instant now busy?]
+  (boolean (and busy? (.isBefore now (.plusSeconds (slot date at zone) (* 60 wait-minutes))))))
+
 (defn settings-problem
   "What is wrong with relay.edn's :daily-note, or nil. `public?` says
   whether a role is public: the note's writer reads the operator's
@@ -221,21 +235,41 @@
 
 (def ^:private peek-limit 100)
 
+(defn- outside-fences
+  "The lines of `text` that are not inside a ``` code block."
+  [text]
+  (second (reduce (fn [[in? out] l]
+                    (if (str/starts-with? (str/trim l) "```")
+                      [(not in?) out]
+                      [in? (if in? out (conj out l))]))
+                  [false []] (str/split-lines (str text)))))
+
+(defn- prose?
+  "Whether a line reads as words rather than code: no backticks, no
+  shell prompt, and at least three words."
+  [l]
+  (and (not (str/includes? l "`")) (not (re-find #"^[$>]\s" l))
+       (>= (count (re-seq #"(?U)\b\p{L}{2,}\b" l)) 3)))
+
 (defn peek
-  "One line of what a text now says, for the note: the first substantive
-  line `after` has that `before` lacks, that is not a heading or a
-  skill's `Use when:` line, without a list's dash, cut to 100 characters.
-  When it adds only headings or `Use when:` lines, the first of those,
-  without its #. Nil when it adds none."
+  "One line of what a text now says, for the note: the first line of
+  plain words `after` has that `before` lacks, that is not a heading or a
+  skill's `Use when:` line, without a list's dash, cut to 100
+  characters; a line of code (in a ``` block, with backticks or a shell
+  prompt) only when it adds nothing else. When it adds only headings or
+  `Use when:` lines, the first of those, without its #. Nil when it adds
+  none."
   [before after]
   (let [had (set (map str/trim (str/split-lines (str before))))
-        added (->> (str/split-lines (str after))
+        added (->> (outside-fences after)
                    (map str/trim)
                    (remove str/blank?)
                    (remove had))
         frame? #(or (str/starts-with? % "#") (re-find #"(?i)^use when:" %))
         clean #(str/trim (str/replace % #"^(#+|[-*]|\d+[.)])\s*" ""))
-        line (or (first (remove str/blank? (map clean (remove frame? added))))
+        body (remove str/blank? (map clean (remove frame? added)))
+        line (or (first (filter prose? body))
+                 (first body)
                  (first (remove str/blank? (map clean added))))]
     (when line
       (let [line (messages/squeeze-line line)]
@@ -321,14 +355,32 @@
   [q]
   (when-not (re-find #"[.!?]\"$" q) "."))
 
+(defn item-noun
+  "What an item of a note's part is, in a few words, for a sentence such
+  as \"Item 2 is something coming up\"."
+  [part]
+  (case part
+    "ahead" "something coming up"
+    "grants" "a grant"
+    "a suggestion"))
+
 (defn dropped-line
-  "What dropping a suggestion did, naming it. Its text came from a session
+  "What dropping an item did, naming it. Its text came from a session
   with `labels`; when that session read outside text, a domain in it
   must not become a link."
   ([text] (dropped-line text []))
-  ([text labels]
+  ([text labels] (dropped-line text labels nil))
+  ([text labels part]
    (let [q (quoted text labels)]
-     (str "Dropped " q (stop q) " It will not be suggested again."))))
+     (str "Dropped " q (stop q)
+          (if (= "ahead" part) " It will not be in later notes." " It will not be suggested again.")))))
+
+(defn accepted-line
+  "What saying yes to an item's offer did, naming both: `role` was asked
+  to do it."
+  [text offer labels role]
+  (let [t (quoted text labels)]
+    (str "Yes to " (quoted offer labels) " for " t (stop t) " " (str/capitalize (str role)) " will take it up.")))
 
 (defn declined-line
   "What turning down an item's offer did, naming both: the item stays."
@@ -374,6 +426,11 @@
    "grants" "Nothing on grants since the last note."
    "github" "Nothing new from people on GitHub."
    "learned" "Nothing new."})
+
+(def not-read-yet
+  "What the Coming up section says when its writer wrote nothing for this
+  note: it has not looked, which is not the same as nothing coming up."
+  "I haven't gone through your calendar yet today.")
 
 (defn grants-empty-line
   "What the Grants section says when nobody wrote it, from what relay
@@ -440,8 +497,9 @@
                               {:text (str (change-line c) ", shaped by " (source-phrase c) "." says " " why)
                                :labels (:labels c)}
                               (let [k (number! {:op "revert" :change (:seq c) :text (change-line c)})]
-                                {:text (str k ". " (change-line c) ", shaped by " (source-phrase c) "." says
-                                            " Reply \"revert " k "\" to undo it.")
+                                ;; How to undo it is said by each channel
+                                ;; for its medium (with-hints).
+                                {:text (str k ". " (change-line c) ", shaped by " (source-phrase c) "." says)
                                  :labels (:labels c)
                                  :action {:op "revert" :n k}})))))
         flag-items (cond-> flag-items
@@ -471,7 +529,9 @@
                   {:heading heading
                    :items (if (seq items)
                             items
-                            [{:text (if (= "grants" part) (grants-empty-line grant-search) (empty-lines part))}])})
+                            [{:text (cond (= "grants" part) (grants-empty-line grant-search)
+                                          (and (= "ahead" part) (nil? (get written part))) not-read-yet
+                                          :else (empty-lines part))}])})
         something? (or (seq flag-items) (seq problems) (seq ahead) (seq grants) (seq github-said)
                        (seq hub-sections) (seq learned))
         sections (vec (concat
@@ -483,35 +543,75 @@
                          (seq hub-sections) (cond-> hub-sections
                                               (seq github-said) (conj {:heading "GitHub" :items github-said}))
                          (or github? (seq github-said)) [(section "github" (part-headings "github") github-said)])
-                       [(section "learned" (part-headings "learned") learned)]))
-        dismiss? (some #(= "dismiss" (:op %)) @numbered)
-        offers? (some #(and (= "dismiss" (:op %)) (:offer %)) @numbered)
-        sections (cond-> sections
-                   dismiss? (conj {:items [{:text (str (when offers? "Reply \"not N\" to say no to an offer; the item stays. ")
-                                                       "Reply \"drop N\" to remove an item for good.")}]}))]
+                       [(section "learned" (part-headings "learned") learned)]))]
     {:subject (str "Daily note for " (.format date-format date)
                    (when (seq flags) (str ": " (plural (count flags) "change") " to check")))
      :sections (when something? sections)
      :numbered @numbered
      :flagged (mapv :seq flags)}))
 
+(defn undo-hint
+  "How to undo flagged change `n` of a note, for `medium` (:reply or
+  :cli)."
+  [medium n]
+  (if (= :reply medium) (str "Reply \"revert " n "\" to undo it.") (str "relay revert " n " undoes it.")))
+
+(defn act-footer
+  "The line under a note that numbers items to act on, for `medium`
+  (:reply or :cli): `offers?` when an item still offers help."
+  [medium offers?]
+  (if (= :reply medium)
+    (str (when offers? "Reply \"yes N\" to take up an offer, or \"not N\" to say no to it; the item stays. ")
+         "Reply \"drop N\" to remove an item for good.")
+    (str (when offers? "relay accept N takes up an offer; relay decline N says no to it, and the item stays. ")
+         "relay dismiss N removes an item for good.")))
+
+(defn with-hints
+  "Daily note `msg` with how to act on its numbered items said for where
+  it is read, `medium`: :reply, the words to reply with (a mail whose
+  replies relay reads); :cli, the commands. Any other medium, such as a
+  push, which cannot be answered, or the client, which shows its own
+  keys, gets the note as it is. An item done already (:acted) says
+  nothing more. Pure."
+  [msg medium]
+  (if-not (and (#{:reply :cli} medium) (seq (:numbered msg)))
+    msg
+    (let [acted (or (:acted msg) {})
+          open (remove #(get acted (:n %)) (:numbered msg))
+          open-n (set (map :n open))
+          undo #(undo-hint medium %)
+          sections (mapv (fn [sec]
+                           (update sec :items
+                                   (fn [its] (mapv (fn [it]
+                                                     (let [{:keys [op n]} (when (map? it) (:action it))]
+                                                       (if (and (= "revert" op) (open-n n))
+                                                         (update it :text #(str % " " (undo n)))
+                                                         it)))
+                                                   its))))
+                         (:sections msg))
+          dismiss (filter #(= "dismiss" (:op %)) open)
+          offers? (some :offer dismiss)
+          footer (when (seq dismiss) (act-footer medium offers?))]
+      (assoc msg :sections (cond-> sections footer (conj {:items [{:text footer}]}))))))
+
 ;; --- what the operator says back
 
 (def ^:private act-words
   {"revert" "revert" "undo" "revert" "not" "decline" "no" "decline"
-   "dismiss" "dismiss" "drop" "dismiss" "skip" "dismiss" "remove" "dismiss"})
+   "dismiss" "dismiss" "drop" "dismiss" "skip" "dismiss" "remove" "dismiss"
+   "yes" "accept" "accept" "accept" "ok" "accept"})
 
 (defn reply-acts
   "What a reply to a note asks for, as [{:op \"revert\"|\"decline\"|
-  \"dismiss\" :n}], in order: lines such as \"revert 1\", \"undo 1 and
-  3\", \"not 2\" (no to its offer; the item stays), \"drop 2, 4\" (the
-  items go for good). A reply that is only \"not this one\" (or \"not
+  \"dismiss\"|\"accept\" :n}], in order: lines such as \"revert 1\",
+  \"undo 1 and 3\", \"yes 2\" (take up its offer), \"not 2\" (no to
+  its offer; the item stays), \"drop 2, 4\" (the items go for good). A reply that is only \"not this one\" (or \"not
   this\") turns down the one suggestion's offer when the note has exactly
   one. Anything else is left to whoever reads the reply."
   [text numbered]
   (let [lines (map str/trim (str/split-lines (str text)))
         acts (vec (for [l lines
-                        :let [[_ w nums] (re-matches #"(?i)(revert|undo|not|no|dismiss|drop|skip|remove)\s+#?(\d+(?:\s*(?:,|and|&)\s*#?\d+)*)\s*[.!]?" l)]
+                        :let [[_ w nums] (re-matches #"(?i)(revert|undo|not|no|dismiss|drop|skip|remove|yes|accept|ok)\s+#?(\d+(?:\s*(?:,|and|&)\s*#?\d+)*)\s*[.!]?" l)]
                         :when w
                         num (re-seq #"\d+" nums)
                         :let [k (parse-long num)]
@@ -607,9 +707,13 @@
                    (cond (contains? reverted seq) ", undone"
                          (not (revertable? c)) ", which cannot be undone")))
             (when (seq kinds)
-              ["" (str "To undo one: "
-                       (str/join "; " (keep identity
-                                            [(when (:latest kinds) "relay revert <n> for item n of the latest daily note")
-                                             (when (:earlier kinds) "relay revert <n> <note> for one of an earlier note")
-                                             (when (:handle kinds) "relay revert c<k> for any other")]))
-                       ".")]))))))
+              ["" (if (= #{:handle} kinds)
+                    ;; No note numbered any: the handle is the one way.
+                    (str "To undo one: relay revert c<k>, such as relay revert "
+                         (second (last (filter #(= :handle (first %)) refs))) ".")
+                    (str "To undo one: "
+                         (str/join "; " (keep identity
+                                              [(when (:latest kinds) "relay revert <n> for item n of the latest daily note")
+                                               (when (:earlier kinds) "relay revert <n> <note> for one of an earlier note")
+                                               (when (:handle kinds) "relay revert c<k> for any other")]))
+                         "."))]))))))

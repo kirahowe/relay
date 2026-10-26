@@ -102,7 +102,7 @@
         m (note w)]
     (is (= "digest" (:kind m)))
     (is (= "Daily note for Monday 26 October: 1 change to check" (:subject m)))
-    (is (str/includes? (note-text m) "1. New how-to \"grants\" (1 line added), shaped by a mail from eve@example.net. It says: \"Grants\". Reply \"revert 1\" to undo it."))
+    (is (str/includes? (note-text (digest/with-hints m :reply)) "1. New how-to \"grants\" (1 line added), shaped by a mail from eve@example.net. It says: \"Grants\". Reply \"revert 1\" to undo it."))
     (is (str/includes? (note-text m) "2. Interview, Thu 10:00. Prep notes?"))
     (is (not (re-find #"relay revert|change:" (note-text m))) "one number per item, and no command for a phone")
     (is (not (str/includes? (note-text m) "venues")) "a quiet change is the writer's to describe")
@@ -159,7 +159,7 @@
                                    numbered (filter :change (:numbered m))
                                    got (mapv :change numbered)]
                                {:w w' :ok? (and ok? (nil? (:rejected w')) (= want got)
-                                                (every? #(str/includes? (note-text m) (str "Reply \"revert " (:n %) "\""))
+                                                (every? #(str/includes? (note-text (digest/with-hints m :reply)) (str "Reply \"revert " (:n %) "\""))
                                                         numbered))
                                 :since (or (get-in (:state w') [:daily :seq]) since)
                                 :day (inc day)})
@@ -469,10 +469,10 @@
       (is (= :forbidden (:rejected (run w "steward" :digest/act {:message (:id m) :n 3})))))))
 
 (deftest the-client-acts-on-a-numbered-item
-  (is (= {:command {:type :digest/act :actor "operator" :labels [] :public false :args {:message 7 :n 2}}}
+  (is (= {:command {:type :digest/act :actor "operator" :labels [] :public false :args {:message 7 :n 2 :via "client"}}}
          (workspace/messages-act-command {"message" 7 "item" 2})))
   (is (:error (workspace/messages-act-command {"message" 7})))
-  (is (= {:message 7 :n 2 :op "decline"}
+  (is (= {:message 7 :n 2 :op "decline" :via "client"}
          (get-in (workspace/messages-act-command {"message" 7 "item" 2 "op" "decline"}) [:command :args]))
       "the client can say no to an offer alone")
   (is (:error (workspace/messages-act-command {"message" 7 "item" 2 "op" "maybe"})))
@@ -509,7 +509,7 @@
     (let [told (last (sort-by :id (vals (:messages st))))]
       (is (= "reply" (:kind told)))
       (is (= (:id m) (:in-reply-to told)))
-      (is (= ["1: Removed the new how-to \"grants\"." "3: Dropped \"Dentist, Fri\". It will not be suggested again."]
+      (is (= ["1: Removed the new how-to \"grants\"." "3: Dropped \"Dentist, Fri\". It will not be in later notes."]
              (mapcat #(map :text (:items %)) (:sections told))))
       (is (= ["mail"] (keys (:deliveries told))) "one answer, on the channel the reply came through"))
     (testing "the note shows what was done"
@@ -839,7 +839,7 @@
         w (ok (run w "operator" :digest/act {:message (:id first-note) :n 1}))
         w (ok (run w "operator" :digest/act {:message (:id second-note) :n (:n (first (:numbered second-note)))}))
         st (:state w)]
-    (is (some #(str/ends-with? % "Reply \"revert 1\" to undo it. (undone)") (lines-of st first-note)))
+    (is (some #(str/ends-with? % "It says: \"Grants\". (undone)") (lines-of st first-note)))
     (is (some #(str/ends-with? % "Dentist, Fri (dropped)") (lines-of st first-note))
         "dropped from the newer note, so done in the older one too")
     (is (some #(str/ends-with? % "(dropped)") (lines-of st second-note)))
@@ -858,3 +858,60 @@
     (is (= :forbidden (:rejected (run w "clerk" :offer/outcome {:key "x" :outcome "y"}))) "only the note's writer")
     (is (:rejected (run w "steward" :offer/outcome {:key "x" :outcome ""})))
     (is (:rejected (run w "steward" :offer/outcome {:key "x" :outcome (apply str (repeat 201 "a"))})))))
+
+;; --- yes to an offer, and answers that stay out of the way
+
+(deftest yes-takes-up-the-offer-and-asks-the-writer-to-do-it
+  (let [w (-> (with-note) (advance 600))
+        m (note w)
+        w (ok (run w "operator" :message/reply {:in-reply-to (:id m) :text "yes 2"}))
+        st (:state w)
+        memo (last (sort-by :id (vals (:memos st))))
+        told (last (sort-by :id (vals (:messages st))))]
+    (is (= "accepted" (get-in (core/message st (:id m)) [:acted 2])))
+    (is (= ["operator" "steward"] [(:from memo) (:to memo)]) "the writer is woken with a memo from her")
+    (is (str/includes? (:body memo) "Interview, Thu 10:00"))
+    (is (str/includes? (:body memo) "offer_outcome under the key ahead/interview"))
+    (is (= ["2: Yes to \"Prep notes?\" for \"Interview, Thu 10:00\". Steward will take it up."]
+           (mapcat #(map :text (:items %)) (:sections told))))
+    (testing "the note shows it taken up, in place"
+      (let [item (first (filter #(= (str "message:" (:id m)) (get % "id")) (workspace/ready-items st {})))]
+        (is (some #(str/ends-with? % "Prep notes? (offer taken up)") (get item "lines")))))
+    (testing "the answer is history: everything asked was done, so Ready has no card for it"
+      (is (:resolved told))
+      (is (not-any? #(= (str "message:" (:id told)) (get % "id")) (workspace/ready-items st {}))))
+    (testing "twice is refused; an item with no offer has nothing to take up"
+      (is (= :invalid (:rejected (run w "operator" :digest/act {:message (:id m) :n 2 :op "accept"}))))
+      (is (str/includes? (:why (run w "operator" :digest/act {:message (:id m) :n 3 :op "accept"})) "no offer to take up")))
+    (testing "relay accept and the client do the same"
+      (let [w (-> (with-note) (advance 600))
+            w (ok (run w "operator" :digest/act {:message (:id (note w)) :n 2 :op "accept" :via "cli"}))]
+        (is (= "accepted" (get-in (core/message (:state w) (:id (note w))) [:acted 2])))))))
+
+(deftest an-answer-that-refused-something-stays-in-ready
+  (let [w (-> (with-note) (advance 600))
+        m (note w)
+        w (ok (run w "operator" :message/reply {:in-reply-to (:id m) :text "drop 3\nrevert 9"}))
+        told (last (sort-by :id (vals (:messages (:state w)))))]
+    (is (not (:resolved told)))
+    (is (= 1 (:refused told)))
+    (is (some #(= (str "message:" (:id told)) (get % "id")) (workspace/ready-items (:state w) {})))))
+
+(deftest a-refusal-names-what-to-do-where-the-operator-is
+  (let [w (-> (with-note) (advance 600))
+        m (note w)
+        why (fn [via n op] (:why (run w "operator" :digest/act (cond-> {:message (:id m) :n n :op op} via (assoc :via via)))))]
+    (is (= "Item 2 is something coming up, not a change. relay decline 2 says no to its offer. relay dismiss 2 removes it."
+           (why "cli" 2 "revert")))
+    (is (= "Item 3 has no offer to turn down. relay dismiss 3 removes it." (why "cli" 3 "decline")))
+    (is (= "Item 3 has no offer to turn down. Reply \"drop 3\" to remove it." (why nil 3 "decline")))
+    (is (= "Item 3 has no offer to turn down. You can drop it." (why "client" 3 "decline")))
+    (is (= "Item 1 is a change. relay revert 1 undoes it." (why "cli" 1 "dismiss")))
+    (testing "an item dropped already says so, whatever was asked"
+      (let [w (ok (run w "operator" :digest/act {:message (:id m) :n 3 :op "dismiss"}))]
+        (is (= "Item 3 was dropped already."
+               (:why (run w "operator" :digest/act {:message (:id m) :n 3 :op "decline" :via "cli"}))))))))
+
+(deftest reply-acts-reads-yes
+  (is (= [{:op "accept" :n 2} {:op "accept" :n 4}] (digest/reply-acts "yes 2\nok 4" [])))
+  (is (digest/only-acts? "Yes 2" [])))
