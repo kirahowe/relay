@@ -361,6 +361,15 @@
 
 (def ^:private relay-id #"relay\.(\d+(?:-\d+)*)\.(\d+)@([A-Za-z0-9.\-]+)")
 
+(defn relay-made-domain
+  "The domain of a mail's Message-ID when it is one relay made
+  (relay.channels/message-id), lower case, or nil."
+  [msg]
+  (some (fn [v]
+          (some (fn [[_ id]] (some-> (re-matches relay-id id) (nth 3) str/lower-case))
+                (re-seq #"<([^<>\s]+)>" (str v))))
+        (values msg "Message-ID")))
+
 (defn thread-ids
   "The Message-IDs of relay's own mail this one answers, most direct
   first: In-Reply-To's, then References' from last to first. Each as

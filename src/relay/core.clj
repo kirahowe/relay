@@ -2658,13 +2658,10 @@
           (-> (act-on-reply parent text)
               (merge (select-keys tx [:actor :labels :public])))))))
 
-(defn- record-mail
-  "One mail that came in: a memo to the source's role, and when it is the
-  operator's verified reply to a message relay sent, a reply on that
-  message's thread too."
-  [{:keys [state config] :as tx} src {:keys [raw size partial]}]
-  (let [msg (mailbox/parse (str raw))
-        verdict (ingest/mail-verdict msg config src)
+(defn- record-mail*
+  "A mail that is not the agent's own (record-mail)."
+  [{:keys [state config] :as tx} src msg size partial]
+  (let [verdict (ingest/mail-verdict msg config src)
         parent (some->> (ingest/thread-target msg (:messages state) (ingest/agent-domains config))
                         (message state))
         memo (ingest/mail-memo msg verdict parent {:partial partial :size size})
@@ -2675,6 +2672,17 @@
       (with-public tx false
         #(send-memo % {:from (:from memo) :to (:to src) :subject (:subject memo) :body (:body memo)}
                     (:labels memo))))))
+
+(defn- record-mail
+  "One mail that came in: a memo to the source's role, and when it is the
+  operator's verified reply to a message relay sent, a reply on that
+  message's thread too. The agent's own mail (relay.ingest/agents-own?)
+  is passed over: it is marked seen and becomes nothing."
+  [{:keys [config] :as tx} src {:keys [raw size partial]}]
+  (let [msg (mailbox/parse (str raw))]
+    (if (ingest/agents-own? msg config)
+      tx
+      (record-mail* tx src msg size partial))))
 
 (defn- record-github
   "A memo for every items-per-memo of each repository's fresh items. None

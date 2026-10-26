@@ -125,6 +125,69 @@
           [m] (memos w)]
       (is (= ["contaminated" "mail:unverified-operator"] (:labels m))))))
 
+(deftest the-agents-own-mail-is-passed-over
+  ;; Regression (U1): a mailbox that also holds sent mail handed the
+  ;; agent's own messages back, and the steward woke to read them.
+  (let [sent (channels/message-id {:id 7 :created-at t0} agent-address)]
+    (doseq [raw [(mail "From: Agent <agent@agent.example.org>" "To: kira@example.org" "Subject: Daily note")
+                 (mail "From: AGENT@agent.example.org" "Subject: Daily note")
+                 (mail "From: someone@else.example" (str "Message-ID: " sent) "Subject: Daily note")]]
+      (let [w (receive (seed) "own" raw)]
+        (is (nil? (:rejected w)) (:why w))
+        (is (empty? (memos w)) raw)
+        (testing "and it is seen, so the next poll does not bring it back"
+          (is (empty? (:last (receive w "own" raw))))))))
+  (testing "mail answering the agent's is not its own"
+    (let [w (receive (seed) "u9" (mail "From: Eve <eve@example.net>"
+                                       (str "In-Reply-To: " (channels/message-id {:id 7 :created-at t0} agent-address))
+                                       "Message-ID: <abc@example.net>"))]
+      (is (= 1 (count (memos w))))))
+  (testing "a Message-ID at the agent's domain that relay did not make is not its own"
+    (is (not (ingest/agents-own? (mailbox/parse (mail "From: kira@example.org" "Message-ID: <x1@agent.example.org>")) cfg)))))
+
+(defn- config-with
+  "relay.edn's email channel with these addresses."
+  [from to]
+  (config/resolve-config (assoc-in settings [:messages :channels "mail"]
+                                   {:kind :email :url "smtp://127.0.0.1:2525" :from from :to to})))
+
+(deftest the-operators-own-mail-is-never-the-agents
+  ;; Review (U1a): an address that is also the operator's never counts as
+  ;; the agent's, so her instructions are never dropped unread.
+  (doseq [[why config op] [["the agent sends as her" (config-with "kira@example.org" "kira@example.org") "kira@example.org"]
+                           ["she shares the agent's domain" (config-with agent-address "kira@agent.example.org")
+                            "kira@agent.example.org"]]]
+    (testing why
+      (doseq [raw [(mail (str "From: Kira <" op ">") verified "Message-ID: <CA+abc@mail.example.org>")
+                   (mail (str "From: " (str/upper-case op)) "Message-ID: <x2@agent.example.org>")]]
+        (is (not (ingest/agents-own? (mailbox/parse raw) config)) raw)))
+    (testing "but relay's own mail sent as her still is"
+      (let [config (config-with "kira@example.org" "kira@example.org")
+            sent (channels/message-id {:id 7 :created-at t0} "kira@example.org")]
+        (is (ingest/agents-own? (mailbox/parse (mail "From: kira@example.org" (str "Message-ID: " sent))) config)))))
+  (testing "recorded, her mail from the agent's domain is a memo"
+    (let [config (config-with agent-address "kira@agent.example.org")
+          w (seed)
+          raw (mail "From: Kira <kira@agent.example.org>" "Subject: Notes")
+          [state events] (core/run-command (:state w) {:type :ingest/record :actor "dispatcher"
+                                                       :args {:source "mailbox"
+                                                              :items [{:key "k1" :version "1" :raw raw :size (count raw)}]}}
+                                           {:now t0 :config config})]
+      (is (some? state))
+      (is (= 1 (count (filter #(= "memo/sent" (:type %)) events)))))))
+
+(defspec the-agents-own-mail-is-exactly-from-its-own-addresses 200
+  ;; For a From at the agent's domain, in any casing, agents-own? holds
+  ;; exactly for the agent's own address, never for the operator's or
+  ;; anyone else's there.
+  (let [config (config-with agent-address "kira@agent.example.org")]
+    (prop/for-all [local (gen/elements ["agent" "kira" "info" "agent2" "noreply" "a.gent"])
+                   upper? gen/boolean]
+      (let [addr (str local "@agent.example.org")
+            addr (if upper? (str/upper-case addr) addr)
+            msg (mailbox/parse (mail (str "From: Someone <" addr ">") "Message-ID: <q1@elsewhere.example>"))]
+        (= (= "agent" local) (ingest/agents-own? msg config))))))
+
 (deftest the-operators-verified-mail-is-theirs
   (let [w (receive (seed) "u1" (mail "From: Kira <kira@example.org>" verified "Subject: Notes for the concert"))
         [m] (memos w)]

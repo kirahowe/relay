@@ -201,6 +201,32 @@
              :when (= :email (:kind ch)) :when (string? (:from ch))]
          (mailbox/domain-of (:from ch)))))
 
+(defn agent-addresses
+  "The agent's own addresses: the :from of every email channel, lower
+  case, less any that is also the operator's. relay may send as the
+  operator (:from and :to the same); mail from that address is still
+  hers."
+  [config]
+  (let [operator (set (operator-addresses config))]
+    (set (for [[_ ch] (get-in config [:messages :channels])
+               :when (= :email (:kind ch)) :when (string? (:from ch))
+               :let [a (str/lower-case (:from ch))]
+               :when (not (operator a))]
+           a))))
+
+(defn agents-own?
+  "Whether a mail is one the agent sent: from one of its own addresses, or
+  with a Message-ID relay made at one of its domains. A mailbox that also
+  holds sent mail (Gmail's POP does) hands these back; they are skipped,
+  so the agent never reads its own messages as news from outside. Mail
+  from an operator address is never skipped for its From alone: only a
+  Message-ID relay made marks it as relay's."
+  [msg config]
+  (boolean
+   (or (contains? (agent-addresses config)
+                  (some-> (first (mailbox/values msg "From")) mailbox/mailbox-address))
+       (contains? (agent-domains config) (mailbox/relay-made-domain msg)))))
+
 (defn mail-verdict
   "relay.mailbox/verdict for each of the operator's addresses: the mail
   is theirs when it is from one of them and verified as such."
