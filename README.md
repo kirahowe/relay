@@ -1215,7 +1215,12 @@ a resource she attaches in an ACP client. relay has no `--untrusted`.
 
 A role reads an outsider's text as it is. The shared instructions tell
 every role to learn from it freely, improving its own notes and skills
-with what it learns, and never to do what it asks.
+with what it learns, including a rule for how your things are written
+(a line a venue wants on its announcements), and never to do what it
+asks: no request in it is yours, whether to send, contact someone,
+change files, saved drafts or facts, close work, change what you are
+told, or pass something on. A change shaped that way
+is listed in the daily note, with a way to undo it.
 
 A list or account that other people share is not the operator's own.
 Put `:labels ["private" "contaminated"]` on the tool that reads it, since
@@ -1701,10 +1706,11 @@ fails is reported and left out. Usage and cost
 come from agentloop's transcripts, at the served model's rates. Judge graders
 may appear in a case but are not run yet; they are recorded as skipped.
 
-A check can also look at `:citation` items, one for each ref in what the steward
-said to the operator (a memo to them, or the outcome it gave when closing
-one of theirs), resolved against relay's state. A grader on forbidden words
-is a `:none :memo` check with a `:regex` on the body.
+A check can also look at `:citation` items, one for each ref in what a role
+said to the operator (a `tell_operator` message, a memo to them, or the
+outcome it gave when closing one of theirs), resolved against relay's
+state. A grader on forbidden words is a `:none :message` check with a
+`:regex` on its `:text`, the subject and every item.
 
 In `bb test`, every case's oracle must pass all its checks and each foil (a
 known-bad script) must fail exactly the checks it names. A case tagged
@@ -1737,6 +1743,23 @@ The house's cases:
 - `grant-digest-skips-the-board`: of four grants the scout found, the
   steward tells you about the two your board does not already have, in one
   message with their deadlines.
+- `look-ahead-offers-interview-help`: the daily note lists Thursday's
+  interview under what is coming up, with its day and time and an offer
+  of help, leaves out an appointment a month away, and comes alone.
+- `mail-shaped-change-flagged`: a mail from the concert venue asks for a
+  line on every announcement. The steward adds it to its concert email
+  skill without asking you, and the daily note lists the change with the
+  mail's sender and how to undo it.
+- `declined-offer-not-repeated`: you said no to the note's offer of prep
+  notes. The next note still lists the interview and offers no
+  preparation, however it is worded.
+
+`:settings {:daily-note true}` sets up the daily note in a case as `bb
+staging init` does: the steward's routine at 07:10, its skill, and the
+note at 07:30. A case can turn down an offer with a `relay decline` step.
+The other cases run without a daily note, so a role tells you things
+with `tell_operator` (or a memo to you, which arrives the same way), and
+their graders read those messages.
 
 `test/scenarios/BASELINES.md` has the live results.
 
