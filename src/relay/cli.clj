@@ -39,8 +39,9 @@ Every command needs the data directory, from --data <dir> or from the file
   relay init                          make the data directory, asking for its settings
   relay status                        roles, open work, harnesses, recent wakes
   relay inbox                         memos waiting for the operator
-  relay ready                         what is ready for you: what you were told,
-                                      drafts, calendar entries, findings
+  relay ready [--all]                 what is ready for you, the 10 newest: what
+                                      you were told, drafts, calendar entries,
+                                      findings, file moves
   relay reply <message> -m <text>     answer a message from relay ready; the role
                                       that told you is woken with your answer
   relay memo <to> -s <subject>        send a memo; body from -m or stdin
@@ -429,6 +430,10 @@ id public too.")
                              :else "The shell is not running. relay house up starts it.")))
       (fail! "usage: relay house build|up|down|status"))))
 
+(def ^:private ready-shown
+  "How many of the newest items relay ready shows without --all."
+  10)
+
 (defn- command
   "Runs one command with the data directory's system. Returns {:exit :out},
   :out being the lines to print."
@@ -440,7 +445,9 @@ id public too.")
       "status" (lines (render/status (state) zone ((:clock sys)) (:config sys) (pause/recovery-lines (pause-file opts))))
       "inbox" (lines (render/inbox zone (core/unread-memos (state) core/operator)
                                    {:from-web? #(config/public? (:config sys) %)}))
-      "ready" (lines (render/ready (mapv ready/wire (ready/ready (state))) zone))
+      "ready" (let [all (ready/ready (state) {:limit Integer/MAX_VALUE})
+                    shown (if (:all opts) all (take ready-shown all))]
+                (lines (render/ready (mapv ready/wire shown) zone ((:clock sys)) (- (count all) (count shown)))))
       "reply" (let [[id] more
                     text (or (:message opts) (stdin-text))]
                 (when-not (some-> id parse-long) (fail! "usage: relay reply <message> -m <text>"))

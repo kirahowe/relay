@@ -324,9 +324,11 @@
           :else (recur words nil (conj out line)))
         (if line (conj out line) out)))))
 
-(def ^:private ready-lines-each
-  "How many lines of an item's body relay ready shows."
-  4)
+(defn- ready-lines-each
+  "How many lines of an item's body relay ready shows: more for a move,
+  whose full paths are what it is about."
+  [{:strs [kind]}]
+  (if (= "move" kind) 12 4))
 
 (defn- ready-kind [{:strs [kind message card]} ]
   (case kind
@@ -341,36 +343,68 @@
   (when iso
     (.format (.atZone (Instant/parse iso) ^ZoneId zone) (DateTimeFormatter/ofPattern "EEE d MMM HH:mm"))))
 
+(defn ready-age
+  "How long ago `iso` was, briefly: \"just now\", \"5m ago\", \"3h ago\",
+  \"2d ago\", and the date once it is a week old."
+  [^String iso ^Instant now zone]
+  (when iso
+    (let [at (Instant/parse iso)
+          secs (max 0 (.getSeconds (java.time.Duration/between at now)))]
+      (cond
+        (< secs 60) "just now"
+        (< secs 3600) (str (quot secs 60) "m ago")
+        (< secs 86400) (str (quot secs 3600) "h ago")
+        (< secs (* 7 86400)) (str (quot secs 86400) "d ago")
+        :else (.format (.atZone at ^ZoneId zone) (DateTimeFormatter/ofPattern "d MMM"))))))
+
+(defn- cut-mark
+  "`line` with the mark that more was cut after it, within `width`."
+  [line width]
+  (let [l (str line " …")]
+    (if (<= (count l) width) l (str (subs line 0 (- width 2)) " …"))))
+
 (defn ready
   "What is ready, from the wire items (relay.ready/wire), as lines of at
-  most ready-width characters. Each item is a heading at the left edge and
-  its text indented two spaces, so text that came from elsewhere never
-  starts a line of the screen's own."
-  [items zone]
-  (if (empty? items)
-    ["Nothing is ready."]
-    (let [indent "  "
-          body (fn [lines] (->> lines
-                                (mapcat #(str/split-lines (str %)))
-                                (remove str/blank?)
-                                (mapcat #(wrap % (- ready-width 2)))
-                                (take ready-lines-each)
-                                (map #(str indent %))))]
-      (vec (rest (mapcat
-                  (fn [{:strs [title lines from replies start] :as it}]
-                    (concat [""]
-                            (map-indexed (fn [i l] (if (zero? i) l (str indent l)))
-                                         (wrap (str (ready-kind it) ": " title) (- ready-width 2)))
-                            (when start [(str indent (ready-when start zone))])
-                            (body lines)
-                            (when from [(str indent from)])
-                            (for [r (take-last 1 replies)]
-                              (str indent "You replied: " (let [t (get r "text")] (if (> (count t) 30) (str (subs t 0 29) "…") t))))
-                            (when (and (get it "replyTo") (empty? replies))
-                              [(str indent "Reply: relay reply " (get it "replyTo") " -m \"...\"")])
-                            (when-let [u (get it "undo")]
-                              [(str indent "Undo: relay undo " u)])))
-                  items))))))
+  most ready-width characters. Each item is a heading at the left edge,
+  with how long ago it came, and its text indented two spaces, so text
+  that came from elsewhere never starts a line of the screen's own. Text
+  cut short ends with '…'. `more` is how many items were left out."
+  ([items zone now] (ready items zone now 0))
+  ([items zone now more]
+   (if (empty? items)
+     ["Nothing is ready."]
+     (let [indent "  "
+           room (- ready-width 2)
+           body (fn [lines n]
+                  (let [all (->> lines
+                                 (mapcat #(str/split-lines (str %)))
+                                 (remove str/blank?)
+                                 (mapcat #(wrap % room)))
+                        shown (vec (take n all))
+                        shown (if (> (count all) n)
+                                (update shown (dec n) cut-mark room)
+                                shown)]
+                    (map #(str indent %) shown)))]
+       (vec (concat
+             (rest (mapcat
+                    (fn [{:strs [title lines from replies start at] :as it}]
+                      (concat [""]
+                              (map-indexed (fn [i l] (if (zero? i) l (str indent l)))
+                                           (wrap (str (ready-kind it) ": " title
+                                                      (when-let [a (ready-age at now zone)] (str " (" a ")")))
+                                                 room))
+                              (when start [(str indent (ready-when start zone))])
+                              (body lines (ready-lines-each it))
+                              (when from [(str indent from)])
+                              (for [r (take-last 1 replies)]
+                                (str indent "You replied: " (let [t (get r "text")] (if (> (count t) 30) (str (subs t 0 29) "…") t))))
+                              (when (and (get it "replyTo") (empty? replies))
+                                [(str indent "Reply: relay reply " (get it "replyTo") " -m \"...\"")])
+                              (when-let [u (get it "undo")]
+                                [(str indent "Undo: relay undo " u)])))
+                    items))
+             (when (pos? more)
+               ["" (str "… and " more " older. relay ready --all shows every one.")])))))))
 
 ;; --- eval runs (bb eval)
 

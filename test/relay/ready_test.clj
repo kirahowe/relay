@@ -227,7 +227,7 @@
 (defspec what-the-operator-is-sent-is-safe-and-from-outside-has-no-live-links 300
   (prop/for-all [title gen-hostile line gen-hostile labels gen-outside-labels]
     (let [wires (mapv ready/wire (hostile-items title line labels))
-          shown (render/ready wires (ZoneId/of "UTC"))
+          shown (render/ready wires (ZoneId/of "UTC") (Instant/parse "2026-10-27T12:00:00Z"))
           texts (fn [w] (cons (get w "title") (get w "lines")))]
       (and (every? true? (map #(get % "outsider") wires))
            (not-any? #(re-find unsafe-chars %) shown)
@@ -426,8 +426,8 @@
 
 ;; --- relay ready
 
-(defn- lines-of [items]
-  (render/ready (mapv ready/wire items) (ZoneId/of "America/Toronto")))
+(defn- lines-of [items now]
+  (render/ready (mapv ready/wire items) (ZoneId/of "America/Toronto") now))
 
 (deftest relay-ready-is-calm-and-short
   (let [w (-> (seed)
@@ -439,23 +439,47 @@
                        ["contaminated" "private"])
               (ct/advance 60)
               (ct/run "clerk" :calendar/add {:title "Choir concert" :start "2026-11-20 19:00" :location "Town hall"}))
-        out (lines-of (items w))
+        out (lines-of (items w) (.plusSeconds ^Instant (:now w) 3600))
         mid (msg-id w)]
-    (is (= ["Calendar: Choir concert"
+    (is (= ["Calendar: Choir concert (1h ago)"
             "  Fri 20 Nov 19:00"
             "  Town hall"
             ""
-            "Draft: Concert in May"
+            "Draft: Concert in May (1h ago)"
             "  Saved draft c1, version 1, to the group Subscribers."
             "  from outside"
             ""
-            (str "Message " mid ": Concert email is drafted")
+            (str "Message " mid ": Concert email is drafted (1h ago)")
             "  It is in your drafts, ready to read."
             (str "  Reply: relay reply " mid " -m \"...\"")]
            out))
     (is (every? #(<= (count %) 60) out))
     (is (not (re-find #"(?i)contaminated|private|label|role|tool" (str/join "\n" out)))))
-  (is (= ["Nothing is ready."] (lines-of []))))
+  (is (= ["Nothing is ready."] (lines-of [] (Instant/now)))))
+
+(deftest relay-ready-says-how-long-ago-briefly
+  (let [now (Instant/parse "2026-10-26T12:00:00Z")
+        ago #(render/ready-age (str (.minusSeconds now %)) now (ZoneId/of "UTC"))]
+    (is (= ["just now" "just now" "5m ago" "3h ago" "2d ago" "16 Oct"]
+           (map ago [-30 59 300 (* 3 3600) (* 2 86400) (* 10 86400)])))))
+
+(deftest relay-ready-marks-text-it-cut
+  (let [now (Instant/parse "2026-10-26T12:00:00Z")
+        out (render/ready [{"id" "prepared:1" "kind" "draft" "title" "Long" "at" (str now)
+                            "lines" ["one" "two" "three" "four" "five"]}] (ZoneId/of "UTC") now)]
+    (is (= ["Draft: Long (just now)" "  one" "  two" "  three" "  four …"] out)))
+  (testing "a full last line keeps the width"
+    (let [now (Instant/parse "2026-10-26T12:00:00Z")
+          long (apply str (repeat 58 "x"))
+          out (render/ready [{"id" "prepared:1" "kind" "draft" "title" "T" "at" (str now)
+                              "lines" [long long long long long]}] (ZoneId/of "UTC") now)]
+      (is (str/ends-with? (last out) " …"))
+      (is (every? #(<= (count %) 60) out))))
+  (testing "nothing is marked when nothing was cut"
+    (let [now (Instant/parse "2026-10-26T12:00:00Z")]
+      (is (not-any? #(str/includes? % "…")
+                    (render/ready [{"id" "prepared:1" "kind" "draft" "title" "T" "at" (str now) "lines" ["a" "b"]}]
+                                  (ZoneId/of "UTC") now))))))
 
 (def gen-text
   (gen/fmap str/join (gen/vector (gen/elements ["a" "bb" " " "\n" "\n\n" "Draft: " "Message 1: " "verylongwordverylongword" "é" "‮" "x@y.org"]) 0 40)))
@@ -466,12 +490,21 @@
                  "from" "from the web" "at" "2026-10-26T12:00:00Z" "replyTo" 1 "replies" []}
                 {"id" "event:2" "kind" "event" "title" title "lines" [body]
                  "start" "2026-11-20T19:00:00Z" "at" "2026-10-26T12:00:00Z"}]
-          out (render/ready wire (ZoneId/of "UTC"))
+          out (render/ready wire (ZoneId/of "UTC") (Instant/parse "2026-10-26T13:00:00Z"))
           headings (remove #(or (str/blank? %) (str/starts-with? % " ")) out)]
       (and (every? #(<= (count %) 60) out)
            ;; the only lines at the left edge are relay's own headings
            (every? #(re-find #"^(Message 1|Calendar):" %) headings)
            (= 2 (count headings))))))
+
+(defspec relay-ready-marks-a-cut-exactly-when-it-cut 200
+  (prop/for-all [lines (gen/vector (gen/fmap str/join (gen/vector (gen/elements ["word " "a" "longerword " "x"]) 0 30)) 0 7)]
+    (let [now (Instant/parse "2026-10-26T12:00:00Z")
+          out (render/ready [{"id" "prepared:1" "kind" "draft" "title" "T" "at" (str now) "lines" lines}]
+                            (ZoneId/of "UTC") now)
+          wrapped (mapcat #(render/wrap % 58) (remove str/blank? lines))]
+      (and (every? #(<= (count %) 60) out)
+           (= (> (count wrapped) 4) (boolean (some #(str/ends-with? % " …") out)))))))
 
 (deftest relay-ready-and-relay-reply-through-the-cli
   (let [dir (str (fs/create-temp-dir {:prefix "relay-ready-cli"}))
@@ -487,6 +520,19 @@
         (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "clerk" :title "Clerk" :instructions "x"}})
         (inbound/submit! sys {:type :card/add :actor "clerk" :args {:kind "note" :title "A finding" :text "t"}}))
       (is (str/includes? (str/join "\n" (:out (run "ready"))) "A finding"))
+      (testing "the 10 newest, unless --all"
+        (let [sys (inbound/system data {})]
+          (doseq [i (range 12)]
+            (inbound/submit! sys {:type :card/add :actor "clerk" :args {:kind "note" :title (str "Finding " i) :text "t"}})))
+        (let [out (:out (run "ready"))
+              heads (filter #(str/starts-with? % "Board") out)]
+          (is (= 10 (count heads)))
+          (is (str/starts-with? (first heads) "Board, card ") )
+          (is (str/includes? (first heads) "Finding 11"))
+          (is (= "… and 3 older. relay ready --all shows every one." (last out))))
+        (let [out (:out (run "ready" "--all"))]
+          (is (= 13 (count (filter #(str/starts-with? % "Board") out))))
+          (is (not-any? #(str/includes? % "older") out))))
       (finally (fs/delete-tree dir)))))
 
 ;; --- the client channel

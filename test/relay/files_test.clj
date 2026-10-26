@@ -522,7 +522,8 @@
              (select-keys wire ["move" "role" "undo" "undone" "seq"]))))
     (testing "relay ready names the command that undoes it"
       (let [out (:out (cli/execute ["--data" (:data-dir sys) "ready"]))]
-        (is (some #{"Moved: statement-oct[.]pdf"} out) "from outside, so what reads as a link is broken")
+        (is (some #(re-matches #"Moved: statement-oct\[\.\]pdf \(.*\)" %) out) "from outside, so what reads as a link is broken")
+        (is (some #(str/ends-with? % "statement[.]pdf") out) "a move shows where it went, not cut")
         (is (some #{(str "  Undo: relay undo " call)} out))))
     (testing "undo is refused cleanly, with B9's reason, when the file changed"
       (spit to "edited by Kira")
