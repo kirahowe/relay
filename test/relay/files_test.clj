@@ -191,7 +191,10 @@
              (mapv :created (:done (core/move-call (inbound/current-state sys) call))))))
     (testing "relay moves lists the call"
       (let [out (:out (cli/execute ["--data" (:data-dir sys) "moves"]))]
-        (is (re-find (re-pattern (str "Move " call ", .*by steward: 2 of 2 moved")) (first out)))))
+        (is (re-find (re-pattern (str "Move " call ", .*by steward: 2 of 2 moved")) (first out)))
+        (is (every? #(<= (count %) 100) out) "short lines")
+        (is (not-any? #(str/includes? % (str *dir*)) out) "relative to the folder, never the full path")
+        (is (some #(str/includes? % "Downloads/confirmation.pdf → Taxes/2025/Returns/confirmation.pdf") out))))
     (testing "relay undo puts everything back and removes only the folders it made"
       (let [r (cli/execute ["--data" (:data-dir sys) "undo" (str call)])]
         (is (= 0 (:exit r)) (pr-str r))
@@ -517,14 +520,16 @@
         wire (ready/wire it)]
     (testing "the item says what moved where, who moved it, and where the reason came from"
       (is (= [:move "statement-oct.pdf" call call] ((juxt :kind :title :undo :move) it)))
-      (is (= ["By steward." (str from " → " to)] (:lines it)))
+      (is (= ["1 file in root" "Downloads/statement-oct.pdf → Bank/statement.pdf"] (:lines it))
+          "relative to the folder she granted, under its short name; no role named")
       (is (= "from a mail by eve@example.net" (get wire "from")))
       (is (= {"move" call "role" "steward" "undo" call "undone" false "seq" call}
              (select-keys wire ["move" "role" "undo" "undone" "seq"]))))
     (testing "relay ready names the command that undoes it"
       (let [out (:out (cli/execute ["--data" (:data-dir sys) "ready"]))]
         (is (some #(re-matches #"Moved: statement-oct\[\.\]pdf \(.*\)" %) out) "from outside, so what reads as a link is broken")
-        (is (some #(str/ends-with? % "statement[.]pdf") out) "a move shows where it went, not cut")
+        (is (some #(str/ends-with? % "Bank/statement[.]pdf") out) "a move shows where it went, not cut")
+        (is (not-any? #(str/includes? % (str *dir*)) out) "and never the full path")
         (is (some #{(str "  Undo: relay undo " call)} out))))
     (testing "undo is refused cleanly, with B9's reason, when the file changed"
       (spit to "edited by Kira")
@@ -535,12 +540,13 @@
       (spit to "bank october"))
     (testing "the client's undo is relay undo"
       (let [answer (client-undo sys call)]
-        (is (re-find #"Undid move .*put back 1 of 1" (first (get-in answer ["result" "lines"]))) (pr-str answer)))
+        (is (re-find #"Undid move .*put back 1 of 1" (first (get-in answer ["result" "lines"]))) (pr-str answer))
+        (is (= "Put back 1 file." (get-in answer ["result" "summary"]))))
       (is (= before (snapshot *dir*)))
       (let [it (move-item sys call)]
         (is (nil? (:undo it)))
         (is (:undone it))
-        (is (= "statement-oct.pdf (undone)" (:title it)))))
+        (is (= "statement-oct.pdf" (:title it)) "the kind says Moved back; the title does not say it twice")))
     (testing "once undone, a second undo is refused with the reason"
       (is (re-find #"already undone" (get-in (client-undo sys call) ["error" "message"]))))
     (testing "a move that does not exist"

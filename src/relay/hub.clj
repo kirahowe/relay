@@ -1003,7 +1003,8 @@
         :else (refuse h rid -32000 (or message "relay refused it.")))
       :undo
       (if ok
-        (answer h rid {"lines" (vec (:lines result))})
+        (answer h rid (cond-> {"lines" (vec (:lines result))}
+                        (:summary result) (assoc "summary" (:summary result))))
         (refuse h rid -32000 (or message "relay could not undo it.")))
       :card-op (card-op-result h continuation result)
       :ignore h)))

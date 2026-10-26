@@ -42,6 +42,7 @@
   each other's order, and undo can check each against the disk alone."
   (:require [babashka.fs :as fs]
             [clojure.string :as str]
+            [relay.move-view :as move-view]
             [relay.shell :as shell])
   (:import (java.io FileInputStream)
            (java.nio.file CopyOption FileAlreadyExistsException Files
@@ -210,7 +211,7 @@
   [calls zone]
   (if (empty? calls)
     ["No files have been moved."]
-    (mapcat (fn [{:keys [id actor at moves done undone status stopped]}]
+    (mapcat (fn [{:keys [id actor at moves done undone status stopped roots]}]
               (let [undone (set undone)
                     stamp (.format (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm")
                                   (.atZone ^java.time.Instant at zone))]
@@ -224,8 +225,8 @@
                               ".")]
                         (if (= :moving status)
                           (map move-line moves)
-                          (for [{:keys [index]} done]
-                            (str (move-line (moves index)) (when (undone index) " (undone)")))))))
+                          ;; One line per file, relative to the granted folder.
+                          (map #(str "  " %) (rest (:lines (move-view/view roots (for [{:keys [index]} done] [index (moves index)]) undone))))))))
             calls)))
 
 ;; --- the edges: what is on the disk

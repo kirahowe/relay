@@ -43,7 +43,7 @@
                      (inbound/submit! sys (cond-> {:type type :actor actor :args args :labels labels}
                                             session-wake (assoc :session-wake session-wake))))
             asked (mapv #(select-keys % [:from :to]) steps)
-            call (:seq (first (submit :files/start {:moves asked})))
+            call (:seq (first (submit :files/start {:moves asked :roots roots})))
             [done stopped]
             (reduce (fn [[done _] [i {:keys [from to create]}]]
                       (let [made (atom [])]
@@ -97,7 +97,9 @@
                                   :args (cond-> {:call id :steps (vec (sort undone)) :removed removed}
                                           stopped (assoc :stopped stopped))
                                   :labels []})
-            {:ok (cond-> [(str "Undid move " id ": put back " (count undone) " of " (count left) "."
+            {:summary (str "Put back " (count undone) (when (not= (count undone) (count left)) (str " of " (count left)))
+                           (if (= 1 (count left)) " file." " files."))
+             :ok (cond-> [(str "Undid move " id ": put back " (count undone) " of " (count left) "."
                                (when (seq removed) (str " Removed " (count removed) " empty folder(s) it had made.")))]
                    (seq kept) (conj (str "Kept " (str/join ", " kept) ": something new is in it."))
                    stopped (conj (str "Stopped at " stopped ". relay undo " id " tries the rest again.")))}))))))

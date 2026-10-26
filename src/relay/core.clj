@@ -1297,8 +1297,11 @@
                                                    :start (some-> (:start old) str) :end (some-> (:end old) str))))))
 
 (defmethod evolve* "files/moving" [state {:keys [seq at actor labels data]}]
-  (assoc-in state [:moves seq] {:id seq :actor actor :at (inst at) :labels (union labels)
-                                :moves (:moves data) :status :moving :done [] :undone [] :removed []}))
+  (assoc-in state [:moves seq] (cond-> {:id seq :actor actor :at (inst at) :labels (union labels)
+                                        :moves (:moves data) :status :moving :done [] :undone [] :removed []}
+                                 ;; The folders the role was granted, as they were then; a call
+                                 ;; from before this was recorded has none.
+                                 (not-empty (:roots data)) (assoc :roots (vec (:roots data))))))
 
 (defmethod evolve* "files/moved" [state {:keys [at labels data]}]
   (update-in state [:moves (:call data)]
@@ -3470,7 +3473,7 @@
 
 (defn- move-path? [p] (and (string? p) (str/starts-with? p "/") (<= (count p) 4096)))
 
-(defmethod decide* :files/start [{:keys [config actor] :as tx} {{:keys [moves]} :args}]
+(defmethod decide* :files/start [{:keys [config actor] :as tx} {{:keys [moves roots]} :args}]
   (when (#{operator dispatcher} actor)
     (reject! :forbidden "Only a role granted folders to organize moves files."))
   (when (or (public-actor? tx) (empty? (:files (config/grants config actor))))
@@ -3478,7 +3481,11 @@
   (when-not (and (vector? moves) (<= 1 (count moves) max-moves-per-call)
                  (every? #(and (map? %) (move-path? (:from %)) (move-path? (:to %))) moves))
     (reject! :invalid (str "A call moves 1 to " max-moves-per-call " files, each from and to a full path.")))
-  (emit tx "files/moving" {:moves (mapv #(select-keys % [:from :to]) moves)} [private-label]))
+  (when-not (or (nil? roots) (and (vector? roots) (<= (count roots) 50) (every? move-path? roots)))
+    (reject! :invalid "The folders a call moved within are full paths."))
+  (emit tx "files/moving" (cond-> {:moves (mapv #(select-keys % [:from :to]) moves)}
+                            (seq roots) (assoc :roots roots))
+        [private-label]))
 
 (defn- fingerprint? [f]
   (and (map? f) (#{"file" "dir"} (:kind f))))
