@@ -117,16 +117,32 @@
   [settings]
   (when-let [why (messages/settings-problem settings)] (problem! why)))
 
+(defn main-role
+  "The main role's id, as relay.edn names it: its :dead-letter-handler,
+  else steward, relay's default."
+  [config]
+  (let [h (:dead-letter-handler config)]
+    (if (and (string? h) (not (str/blank? h))) h "steward")))
+
 (def removed-keys
-  "Settings relay no longer has, and what took their place. README:
-  Upgrading lists them too."
+  "Settings relay no longer has, and what took their place: a sentence,
+  or a function of the settings that gives one (removed-key-problem).
+  README: Upgrading lists them too."
   {:notify "relay.edn has :notify, which relay no longer has. Say where messages go with :messages; setup/relay.example.edn shows how."
-   :brief (str "relay.edn has :brief, which relay no longer has. The daily note replaces the morning brief:"
-               " set :daily-note {:at \"07:30\" :role \"steward\"}, and read your own calendar with an :ics"
-               " source in :ingest. setup/relay.example.edn shows how.")
+   ;; It names the main role, the one dead letters go to.
+   :brief (fn [config]
+            (str "relay.edn has :brief, which relay no longer has. The daily note replaces the morning brief:"
+                 " set :daily-note {:at \"07:30\" :role " (pr-str (main-role config)) "}, and read your own"
+                 " calendar with an :ics source in :ingest. setup/relay.example.edn shows how."))
    :chat-client "relay.edn has :chat-client, which is now :client. Rename it."
    :verifier (str "relay.edn has :verifier, which relay no longer has: relay no longer checks research reports."
                   " A scout answers with a memo. Remove it.")})
+
+(defn removed-key-problem
+  "Why relay.edn's removed key `k` is refused, for these settings."
+  [k config]
+  (let [why (removed-keys k)]
+    (if (fn? why) (why config) why)))
 
 (def settings-keys
   "Every top-level key relay.edn may have. Anything else is refused, so a
@@ -665,7 +681,7 @@
   [{:keys [tools grants max-attempts] client :client :as config}]
   (collecting
    (concat
-    (for [[k why] (sort-by key removed-keys) :when (contains? config k)] #(problem! why))
+    (for [k (sort (keys removed-keys)) :when (contains? config k)] #(problem! (removed-key-problem k config)))
     [#(when-let [why (unknown-keys-problem config)] (problem! why))
      #(check-required config)
      #(check-messages (:messages config))

@@ -29,6 +29,13 @@
   (doseq [k [:notify :brief :verifier]]
     (is (str/includes? (problem (assoc complete k {})) "no longer has") (str k))))
 
+(deftest the-removed-brief-names-the-main-role
+  (is (str/includes? (problem (assoc complete :brief {})) ":daily-note {:at \"07:30\" :role \"steward\"}")
+      "relay's default main role")
+  (let [said (problem (assoc complete :brief {} :dead-letter-handler "hub"))]
+    (is (str/includes? said ":daily-note {:at \"07:30\" :role \"hub\"}"))
+    (is (not (str/includes? said "steward")))))
+
 (deftest the-format-is-the-one-relay-reads
   (is (nil? (problem (assoc complete :format config/settings-format))))
   (is (nil? (problem complete)) ":format is optional")
