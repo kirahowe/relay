@@ -26,8 +26,8 @@ They go through the same filters as the `journal` and `facts` tools: a
 public role sees only public items, and a house role sees them all. The
 wake's labels are those of everything its prompt holds.
 
-A role has no files and no shell. It works only through tools, each one a
-`relay tool <name>` call made as that role:
+A role has no files and no shell of its own. It works only through
+tools, each one a `relay tool <name>` call made as that role:
 
 - memos: `inbox`, `roles`, `memo_send`, `memo_close`, `memo_block`
 - routines: `routines`, `routine_write`, `routine_remove`
@@ -45,6 +45,8 @@ A role has no files and no shell. It works only through tools, each one a
   `role_remove`
 - `dead_letters_retry`, for the dead letter handler and roles granted
   `:may-add`
+- `sh`, for a house role granted `:shell`: a command run in the steward's
+  shell, a Linux container with no network (see The steward's shell)
 - any external command the operator defines in `relay.edn` and grants
 
 Every memo stays open until its recipient closes it, saying what it did,
@@ -409,6 +411,55 @@ A list or account that other people share is not the operator's own.
 Put `:labels ["private" "contaminated"]` on the tool that reads it, since
 others write it too, and give no role a tool that changes it, since
 others would see the change.
+
+### The steward's shell
+
+A house role granted `:shell true` gets the `sh` tool. It runs a command
+with `sh -c` in a Linux container that relay keeps running for the data
+directory, and the role reads what the command printed. The model's code
+runs there and nowhere else; the harness stays on the host. relay.edn
+says how it runs:
+
+```clojure
+:house {:mounts ["/Users/you/notes" "/Users/you/Documents/grants"]
+        ;; :runner ["container"]   ; the default, Apple container; ["docker"] or ["podman"] on Linux
+        ;; :timeout-seconds 60     ; per command, enforced inside the VM
+        ;; :output-limit 32768     ; bytes kept of stdout and of stderr
+        ;; :cpus 2 :memory "2G"
+        }
+:grants {"hub" {:shell true}}
+```
+
+relay builds every argument the runner gets. The container always runs
+with `--network none`, a read-only root, `/scratch` and `/tmp` in memory,
+and each path in `:mounts` read-only at the same path inside. relay.edn
+can name only the runner program, never an option, so it cannot give the
+shell a network, a port or a writable mount. relay refuses `:shell` for
+a public role, and refuses a mount that is, holds or sits inside the
+data directory, the home directory, relay's settings, or a place where
+keys, passwords, tokens or browser profiles are kept (`~/.ssh`,
+`~/Library/Keychains` and the rest of the list agentloop's workbench
+used). A path under `/System/Volumes/Data`, the same files by another
+name on macOS, is checked as the path it stands for. relay checks again
+when it starts the container, with symbolic links resolved and by file
+identity.
+
+The container and its image are named after the data directory, so two
+data directories never share one. `relay house build` builds the image
+from `resources/house/Containerfile` (Alpine with coreutils, find, grep,
+rg, awk, sed, python3, sqlite3, jq, pdftotext, file, tar and zip); that
+needs the network, running it does not. `relay house up` starts the
+shell, `relay house down` removes it with its scratch files, and `relay
+house status` says how it is. The tick starts it when it is missing or
+when `:house` has changed, and so does the first `sh` call.
+
+What a command prints shows your files, so it is labelled `private`.
+`/scratch` lasts until the container restarts, so every result also
+carries the labels of every session that ran a command since then: text
+a session read in a stranger's mail and left in scratch is still from
+outside when a later session reads it. relay reads those labels when a
+command starts and again when it ends, so a command that runs while
+another session writes to scratch carries that session's labels too.
 
 #### What you are shown
 
@@ -1211,6 +1262,11 @@ outsider's text and assumes it obeys perfectly, then checks that:
 - a remote MCP tool reached over HTTP never shows the model its fixed or
   hidden arguments, refuses a call that names one, and takes a changed
   definition the same way
+- a command in the steward's shell cannot reach the network or the host
+  by TCP, UDP, DNS, vsock or a unix socket, cannot change the operator's
+  files, and cannot see relay's data directory; the scout has no shell
+  (this one needs Apple `container`, builds the shell's image, and
+  removes its own container and image by name)
 - clean, everyday use works
 
 Run it from this directory:

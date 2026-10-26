@@ -58,9 +58,10 @@ contract HarnessAdapter {
         -- call.
 
     @invariant OffersOnlyTheRolesTools
-        -- A role has no file access and no shell. All it can do is call
-        -- the tools it has been offered, by name. See the Tools
-        -- contract.
+        -- A role has no file access and no shell of its own. All it can
+        -- do is call the tools it has been offered, by name, sh among
+        -- them for a house role granted shell (StewardShell). See the
+        -- Tools contract.
 
     @invariant ExitCodeIsNotTheVerdict
         -- A harness can exit cleanly having done nothing. Whether a
@@ -103,9 +104,9 @@ contract NotificationChannel {
 }
 
 contract Tools {
-    -- A role has no file or shell access. Everything it does is a call to a
-    -- tool, and every call that changes anything goes through the same
-    -- inbound path as that role.
+    -- A role has no file or shell access of its own. Everything it does
+    -- is a call to a tool, and every call that changes anything goes
+    -- through the same inbound path as that role.
 
     @invariant ToolsAreNamedAndClassed
         -- Every tool has a name and one class: read (returns content
@@ -435,6 +436,10 @@ entity Role {
     -- output is private, the dead letter handler's job or a script
     -- harness.
     is_public: Boolean
+    -- Granted :shell in the settings: the role is offered sh, which
+    -- runs commands in the steward's shell (StewardShell). Never a
+    -- public role's, and only with a :house section.
+    has_shell: Boolean
     -- The wake to carry on from, when the last one was cut short.
     interrupted_wake: Wake?
     -- Set when a wake's MCP tools could not be set up, until a wake of
@@ -3024,6 +3029,32 @@ invariant NoWayOutOfTheHouse {
         role.offered_tools.all(t => t.class != egress)
     for memo in Memos where recipient != null and recipient.is_public and sender.kind = role:
         memo.public
+    -- A remote server's tool reaches a house role only as read or edit,
+    -- so what it is given goes into the operator's own account there.
+    for role in Roles where not is_public:
+        role.offered_tools.all(t => not t.is_remote_mcp or t.class in {read, edit})
+}
+
+invariant StewardShell {
+    -- sh runs a command in one container per data directory, named
+    -- after it. relay composes every runner argument: no network, a
+    -- read-only root, scratch and /tmp in memory, and each configured
+    -- path mounted read-only at its own path. The settings name only the
+    -- runner program, and refuse a mount that is, holds or sits in the
+    -- data directory, the home directory or a known place for secrets,
+    -- A path under /System/Volumes/Data is checked as the path it
+    -- stands for, and when the container starts the check runs again
+    -- with links resolved and by file identity.
+    -- A command's time limit is kept by timeout inside the VM.
+    for role in Roles where role.has_shell:
+        not role.is_public
+    -- What a command prints is private, and carries the labels of every
+    -- session that ran a command since the container started and before
+    -- this command ended, since any of them could have left text in
+    -- scratch that it read.
+    for result in ShellResults:
+        "private" in result.labels
+        includes_all(result.labels, result.container.scratch_labels)
 }
 
 invariant OldLogsStillFold {
