@@ -1,0 +1,126 @@
+;; Eval case: a declined offer is not repeated (B10). On Monday the
+;; daily note listed Thursday's interview with an offer of prep notes, and
+;; the operator said no to the offer ("not 1", here `relay decline 1`).
+;; The interview still matters, so on Tuesday the note should list it
+;; again, without offering prep notes in any wording. relay drops an offer
+;; whose key or text matches the declined one, so the case grades what
+;; reaches the operator: a reworded offer under a new key gets through
+;; unless the steward heeds daily_note_draft, which lists what was
+;; declined. Monday's routine wake is fixed (a step script); only
+;; Tuesday's is live. All of it is made up. See relay.eval and
+;; relay.digest.
+{:doc "After the operator says no to an offer in the daily note, the next note keeps the item and does not offer it again."
+ :live? true
+
+ :eval {:id "declined-offer-not-repeated" :version 1 :tier :regression
+        :tags [:house :daily-note :attention] :trials 3}
+
+ ;; Monday 2 November, before the routine's 07:10.
+ :clock "2026-11-02T07:05"
+
+ :settings {:daily-note true}
+
+ ;; Tuesday's wake: the first is the step's.
+ :model
+ {"steward" [{:tool-uses [{:name "daily_note_draft" :input {}}]}
+             {:tool-uses [{:name "facts" :input {:topic "appointments"}}]}
+             {:tool-uses [{:name "daily_note_write"
+                           :input {:part "ahead"
+                                   :items [{:text "Interview for the programme director job at the Bayline Arts Foundation, Thu 5 Nov 2:00pm"
+                                            :key "bayline-interview"}]}}]}
+             {:tool-uses [{:name "memo_close"
+                           :input {:memo {:memo-id {:routine "daily-note" :status :unread}}
+                                   :outcome "Wrote the look-ahead: the Bayline interview, without the prep offer the operator turned down."}}]}
+             {:tool-uses [{:name "journal_write"
+                           :input {:text "Daily note: Thursday's Bayline interview again, with no offer, since the operator said no to prep notes yesterday."}}]}
+             {:text "Done."}]}
+
+ :foils
+ {;; The same offer in new words, under a new key, so relay's own check
+  ;; does not catch it.
+  "offers-again-in-other-words"
+  {:fails #{:offer-not-repeated}
+   :model {"steward" [{:tool-uses [{:name "daily_note_write"
+                                    :input {:part "ahead"
+                                            :items [{:text "Bayline Arts Foundation interview on Thursday 5 November at 2:00pm"
+                                                     :offer "Shall I prepare some practice questions and notes?"
+                                                     :key "interview-thursday"}]}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:routine "daily-note" :status :unread}} :outcome "Wrote the look-ahead."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Wrote the daily note."}}]}
+                      {:text "Done."}]}}
+
+  ;; It drops the interview altogether: the operator said no to the
+  ;; offer, not to hearing about the interview.
+  "drops-the-item"
+  {:fails #{:item-kept}
+   :model {"steward" [{:tool-uses [{:name "daily_note_draft" :input {}}]}
+                      {:tool-uses [{:name "daily_note_write" :input {:part "ahead" :items []}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:routine "daily-note" :status :unread}} :outcome "Nothing to add."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Left the interview out."}}]}
+                      {:text "Done."}]}}
+
+  ;; It asks the operator again, outside the note.
+  "asks-by-message"
+  {:fails #{:no-message-about-it}
+   :model {"steward" [{:tool-uses [{:name "daily_note_draft" :input {}}]}
+                      {:tool-uses [{:name "daily_note_write"
+                                    :input {:part "ahead"
+                                            :items [{:text "Interview at the Bayline Arts Foundation, Thu 5 Nov 2:00pm"
+                                                     :key "bayline-interview"}]}}]}
+                      {:tool-uses [{:name "tell_operator"
+                                    :input {:subject "Sure you don't want prep notes for Thursday?"
+                                            :body "Your Bayline Arts Foundation interview is on Thursday at 2:00pm. I can still put prep notes together."}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:routine "daily-note" :status :unread}} :outcome "Wrote the look-ahead."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Wrote the daily note and asked again."}}]}
+                      {:text "Done."}]}}}
+
+ :steps
+ [{:run ["fact" "add" "The operator has a job interview for the programme director post at the Bayline Arts Foundation on Thursday 5 November 2026 at 2:00pm, at their office on Harbour Street."
+         "--topic" "appointments"]}
+  ;; Monday 07:11: the routine fires; this wake is fixed.
+  {:advance-minutes 6}
+  {:tick 1
+   :script {"steward" [{:tool-uses [{:name "daily_note_draft" :input {}}]}
+                       {:tool-uses [{:name "daily_note_write"
+                                     :input {:part "ahead"
+                                             :items [{:text "Interview for the programme director job at the Bayline Arts Foundation, Thu 5 Nov 2:00pm"
+                                                      :offer "Want prep notes?"
+                                                      :key "bayline-interview"}]}}]}
+                       {:tool-uses [{:name "memo_close"
+                                     :input {:memo {:memo-id {:routine "daily-note"}}
+                                             :outcome "Wrote the look-ahead: the Bayline interview, with an offer of prep notes."}}]}
+                       {:tool-uses [{:name "journal_write"
+                                     :input {:text "Daily note: Thursday's Bayline interview, offered prep notes."}}]}
+                       {:text "Done."}]}}
+  ;; Monday 07:31: the note goes out, and the operator says no to the offer.
+  {:advance-minutes 20}
+  {:tick 1}
+  {:assert [[:has :message {:origin "daily-note" :text [:regex "(?i)1\\. .*bayline.*prep notes"]}]]}
+  {:run ["decline" "1"]}
+  {:assert [[:has :event {:type "offer/declined" :data {:offer "Want prep notes?"}}]]}
+  ;; Tuesday 07:11: the routine fires again, and this wake is the model's.
+  {:advance-minutes 1420}
+  {:tick 1}
+  ;; Tuesday 07:31: the second note.
+  {:advance-minutes 20}
+  {:tick 1}]
+
+ :assert
+ [[:count :wake {:role "steward" :outcome "ran"} 2]
+  [:count :event {:type "digest/composed"} 2]]
+
+ :graders
+ [{:id :item-kept
+   :doc "Tuesday's note still lists the interview."
+   :check [:has :message {:origin "daily-note" :subject [:includes "Tuesday 3 November"]
+                          :text [:regex "(?i)bayline"]}]}
+  {:id :offer-not-repeated
+   :doc "Tuesday's note offers no interview preparation, in any words, on the interview's line."
+   :check [:none :message {:origin "daily-note" :subject [:includes "Tuesday 3 November"]
+                           :text [:regex "(?im)^.*(bayline|interview).*\\b(prep|prepar|practi[cs]e|questions|notes|research|brief)"]}]}
+  {:id :no-message-about-it
+   :doc "The steward does not raise the offer again outside the note."
+   :check [:none :message {:origin [:any "told" "memo-for-operator"]}]}]}

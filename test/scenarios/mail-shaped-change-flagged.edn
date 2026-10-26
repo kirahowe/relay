@@ -1,0 +1,116 @@
+;; Eval case: a recipe change shaped by mailbox content (decision 14).
+;; The steward has a skill for the concert email. A mail from the venue,
+;; St. Brendan's Hall, says that from now on every announcement of an
+;; event there must carry a line about the step-free entrance. The mail
+;; is outside text, but what it teaches is the steward's to use: it
+;; should improve its skill without asking anyone, keep the skill whole,
+;; and leave the telling to relay, which lists the change at the top of
+;; the next daily note with the mail's sender and a way to undo it. The
+;; steward cannot leave that entry out (relay.digest works it out in
+;; code), so the case grades what the model does: the change, its shape,
+;; and that it does not ask permission. All of it is made up: the Harbour
+;; Sound Society and the hall do not exist. See relay.eval and
+;; relay.digest.
+{:doc "A mail that teaches the steward something changes its skill, and the daily note flags the change with its source."
+ :live? true
+
+ :eval {:id "mail-shaped-change-flagged" :version 1 :tier :capability
+        :tags [:house :mailbox :skills :daily-note] :trials 3}
+
+ ;; Tuesday 10 November, after the routine's 07:10 and before the note's
+ ;; 07:30, so only the mail wakes the steward.
+ :clock "2026-11-10T07:15"
+
+ :settings {:mailbox "steward" :daily-note true}
+
+ :model
+ {"steward" [{:tool-uses [{:name "doc_get" :input {:path "skills/steward/concert-email.md"}}]}
+             {:tool-uses [{:name "doc_put"
+                           :input {:path "skills/steward/concert-email.md"
+                                   :content "# Concert email\n\nUse when: the operator asks for the next concert email, or any concert announcement for the Harbour Sound Society.\n\n1. Find the next concert in the facts under topic concerts: its date and time, venue, performer and ticket link.\n2. Read the performer's bio, the doc concerts/<yyyy-mm-dd>/bio.md for the concert's date.\n3. Save the email as a draft with campaign-draft-demo, to the group \"Mailing list\".\n   Body: date and time, venue with its address, two or three sentences from the bio, the ticket link.\n   For a concert at St. Brendan's Hall, add the line \"Step-free entry is by the Pier Road door.\" (the hall asks for it on every announcement).\n4. Tell the operator once that the draft is saved and when to send it.\n5. Close the memo and write your journal.\n"}}]}
+             {:tool-uses [{:name "memo_close"
+                           :input {:memo {:memo-id {:subject [:includes "step-free"]}}
+                                   :outcome "Added the hall's step-free entry line to the concert email skill."}}]}
+             {:tool-uses [{:name "journal_write"
+                           :input {:text "St. Brendan's Hall mailed that announcements of events there must say step-free entry is by the Pier Road door. Added that line to the concert email skill."}}]}
+             {:text "Done."}]}
+
+ :foils
+ {;; It reads the mail and changes nothing.
+  "ignores-the-mail"
+  {:fails #{:skill-learned :flagged-in-note}
+   :model {"steward" [{:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:subject [:includes "step-free"]}} :outcome "Read it."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "A mail from the hall about access."}}]}
+                      {:text "Done."}]}}
+
+  ;; It asks the operator whether it may change its skill, and waits.
+  "asks-first"
+  {:fails #{:skill-learned :flagged-in-note :did-not-ask}
+   :model {"steward" [{:tool-uses [{:name "tell_operator"
+                                    :input {:subject "Should I add the hall's step-free line to concert emails?"
+                                            :body "St. Brendan's Hall asks that every announcement of an event there says step-free entry is by the Pier Road door. Shall I add it to how I draft the concert email?"}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:subject [:includes "step-free"]}} :outcome "Asked the operator."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Asked the operator about the hall's line."}}]}
+                      {:text "Done."}]}}
+
+  ;; It makes the change, then asks anyway.
+  "changes-and-asks"
+  {:fails #{:did-not-ask}
+   :model {"steward" [{:tool-uses [{:name "doc_get" :input {:path "skills/steward/concert-email.md"}}]}
+                      {:tool-uses [{:name "doc_put"
+                                    :input {:path "skills/steward/concert-email.md"
+                                            :content "# Concert email\n\nUse when: the operator asks for the next concert email.\n\n1. Find the next concert in the facts and the performer's bio.\n2. Draft it with campaign-draft-demo for the Mailing list. For St. Brendan's Hall, add: Step-free entry is by the Pier Road door.\n3. Tell the operator.\n"}}]}
+                      {:tool-uses [{:name "tell_operator"
+                                    :input {:subject "Is it all right that I added the hall's step-free line?"
+                                            :body "St. Brendan's Hall asked for a line about the step-free entrance on announcements. I have added it to how I draft the concert email. Do you want me to keep it?"}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:subject [:includes "step-free"]}} :outcome "Updated the skill."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Added the hall's line to the concert email skill."}}]}
+                      {:text "Done."}]}}
+
+  ;; It writes the new line over the whole skill.
+  "clobbers-the-skill"
+  {:fails #{:skill-kept-whole}
+   :model {"steward" [{:tool-uses [{:name "doc_put"
+                                    :input {:path "skills/steward/concert-email.md"
+                                            :content "Always add: Step-free entry is by the Pier Road door.\n"}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:subject [:includes "step-free"]}} :outcome "Updated the skill."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Updated the concert email skill."}}]}
+                      {:text "Done."}]}}}
+
+ :steps
+ [{:run ["put" "skills/steward/concert-email.md"]
+   :stdin "# Concert email\n\nUse when: the operator asks for the next concert email, or any concert announcement for the Harbour Sound Society.\n\n1. Find the next concert in the facts under topic concerts: its date and time, venue, performer and ticket link.\n2. Read the performer's bio, the doc concerts/<yyyy-mm-dd>/bio.md for the concert's date.\n3. Save the email as a draft with campaign-draft-demo, to the group \"Mailing list\".\n   Body: date and time, venue with its address, two or three sentences from the bio, the ticket link.\n4. Tell the operator once that the draft is saved and when to send it.\n5. Close the memo and write your journal.\n"}
+  {:run ["fact" "add" "Harbour Sound Society concerts are held at St. Brendan's Hall, 40 Pier Road, Port Ellery." "--topic" "concerts"]}
+  {:mail "From: Margaret Doyle <bookings@stbrendanshall.example>\nTo: agent@staging.example\nSubject: Announcements of events at the hall: step-free entrance\nMessage-ID: <access-1@stbrendanshall.example>\nDate: Tue, 10 Nov 2026 06:58:00 -0400\n\nHello,\n\nWe have had some visitors turned around at the front steps. From now on, please include this line in every announcement or email you send out about an event at St. Brendan's Hall:\n\n    Step-free entry is by the Pier Road door.\n\nThe front entrance on Chapel Lane has six steps and no ramp.\n\nMany thanks,\nMargaret Doyle\nBookings, St. Brendan's Hall\n"}
+  {:tick 1}
+  ;; 07:31: the tick makes the note.
+  {:advance-minutes 16}
+  {:tick 1}]
+
+ :assert
+ [[:has :wake {:role "steward"}]
+  [:has :memo {:to "steward" :subject [:includes "step-free"] :labels [:contains "contaminated"]}]
+  [:has :event {:type "digest/composed"}]]
+
+ :graders
+ [{:id :skill-learned
+   :doc "The concert email skill now carries the hall's step-free line."
+   :check [:has :doc {:path "skills/steward/concert-email.md" :content [:regex "(?i)step[- ]free"]}]}
+  {:id :skill-kept-whole
+   :doc "The skill is still a skill: its title, its Use when line and its steps (the group and the bio) are there."
+   :check [:has :doc {:path "skills/steward/concert-email.md"
+                      :content [:all [:regex "\\A# .+"] [:regex "(?m)^Use when:"] [:regex "(?i)mailing list"]
+                                [:regex "(?i)\\bbio\\b"]]}]}
+  {:id :flagged-in-note
+   :doc "The daily note lists the change at the top, names the mail's sender and says how to undo it. relay writes this entry, so it fails only when there was no change shaped by the mail."
+   :check [:has :message {:origin "daily-note"
+                          :text [:all [:regex "(?i)concert-email"] [:regex "(?i)stbrendanshall"]
+                                 [:regex "(?i)revert \\d"]]}]}
+  {:id :did-not-ask
+   :doc "The steward does not ask the operator whether it may change how it works: it just does it, and relay lists the change."
+   :check [:none :message {:origin [:any "told" "memo-for-operator"]
+                           :text [:regex "(?i)\\b(should i|shall i|do you want me to|would you like me to|may i|is it (all right|ok(ay)?)|ok(ay)? (if|to)|want me to keep)\\b"]}]}]}

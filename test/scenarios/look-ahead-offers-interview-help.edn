@@ -1,0 +1,160 @@
+;; Eval case: the look-ahead in the daily note. The operator told relay
+;; about a job interview on Thursday, and about a dentist's appointment a
+;; month away. On Monday morning the steward's daily-note routine runs, as
+;; `bb staging init` sets it up (07:10, with the skill
+;; skills/steward/daily-note.md), and the tick makes the note at 07:30.
+;; The note should list the interview under what is coming up, with its
+;; day and time and an offer of help that fits it, such as prep notes;
+;; leave the far-off appointment out; and come alone, with no separate
+;; message. The interview is not Maple Co's: the daily_note_write tool's
+;; own description uses that one as its example, and copying the example
+;; would prove nothing. All of it is made up. See relay.eval and
+;; relay.digest.
+{:doc "The daily note's look-ahead lists Thursday's interview with an offer of help."
+ :live? true
+
+ :eval {:id "look-ahead-offers-interview-help" :version 1 :tier :capability
+        :tags [:house :daily-note :attention] :trials 3}
+
+ ;; Monday 2 November, before the routine's 07:10.
+ :clock "2026-11-02T07:05"
+
+ :settings {:daily-note true}
+
+ :model
+ {"steward" [{:tool-uses [{:name "daily_note_draft" :input {}}]}
+             {:tool-uses [{:name "clock" :input {}}]}
+             {:tool-uses [{:name "calendar" :input {}}
+                          {:name "cards" :input {}}
+                          {:name "facts" :input {:topic "appointments"}}]}
+             {:tool-uses [{:name "daily_note_write"
+                           :input {:part "ahead"
+                                   :items [{:text "Interview for the programme director job at the Bayline Arts Foundation, Thu 5 Nov 2:00pm"
+                                            :offer "Want me to put together prep notes on the foundation?"
+                                            :key "bayline-interview"}]}}]}
+             {:tool-uses [{:name "memo_close"
+                           :input {:memo {:memo-id {:routine "daily-note"}}
+                                   :outcome "Wrote the look-ahead: one item, the Bayline interview on Thursday."}}]}
+             {:tool-uses [{:name "journal_write"
+                           :input {:text "Daily note: one thing in the next two weeks, Thursday's Bayline interview, with an offer of prep notes. The dentist on 30 November is further out."}}]}
+             {:text "Done."}]}
+
+ :foils
+ {;; It lists the interview and offers nothing.
+  "lists-without-an-offer"
+  {:fails #{:offers-help}
+   :model {"steward" [{:tool-uses [{:name "daily_note_draft" :input {}}]}
+                      {:tool-uses [{:name "daily_note_write"
+                                    :input {:part "ahead"
+                                            :items [{:text "Interview at the Bayline Arts Foundation, Thu 5 Nov 2:00pm"
+                                                     :key "bayline-interview"}]}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:routine "daily-note"}} :outcome "Wrote the look-ahead."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Wrote the daily note."}}]}
+                      {:text "Done."}]}}
+
+  ;; It writes nothing for the note: the routine's memo is closed as if
+  ;; there were nothing coming up.
+  "writes-nothing"
+  {:fails #{:ahead-written :interview-listed :offers-help}
+   :model {"steward" [{:tool-uses [{:name "daily_note_draft" :input {}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:routine "daily-note"}} :outcome "Nothing coming up."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Nothing for the daily note."}}]}
+                      {:text "Done."}]}}
+
+  ;; It gets the day wrong: the interview is on Thursday the 5th.
+  "wrong-day"
+  {:fails #{:interview-listed}
+   :model {"steward" [{:tool-uses [{:name "daily_note_draft" :input {}}]}
+                      {:tool-uses [{:name "daily_note_write"
+                                    :input {:part "ahead"
+                                            :items [{:text "Interview at the Bayline Arts Foundation, Fri 6 Nov 2:00pm"
+                                                     :offer "Want prep notes?" :key "bayline-interview"}]}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:routine "daily-note"}} :outcome "Wrote the look-ahead."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Wrote the daily note."}}]}
+                      {:text "Done."}]}}
+
+  ;; It lists everything it knows of, the month-away dentist too.
+  "looks-too-far"
+  {:fails #{:two-weeks-only}
+   :model {"steward" [{:tool-uses [{:name "daily_note_draft" :input {}}]}
+                      {:tool-uses [{:name "daily_note_write"
+                                    :input {:part "ahead"
+                                            :items [{:text "Interview at the Bayline Arts Foundation, Thu 5 Nov 2:00pm"
+                                                     :offer "Want prep notes?" :key "bayline-interview"}
+                                                    {:text "Dentist, Dr. Okafor, Mon 30 Nov 9:00am" :key "dentist"}]}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:routine "daily-note"}} :outcome "Wrote the look-ahead."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Wrote the daily note."}}]}
+                      {:text "Done."}]}}
+
+  ;; It also messages the operator about the interview, outside the note.
+  "tells-separately"
+  {:fails #{:only-the-note}
+   :model {"steward" [{:tool-uses [{:name "daily_note_draft" :input {}}]}
+                      {:tool-uses [{:name "daily_note_write"
+                                    :input {:part "ahead"
+                                            :items [{:text "Interview at the Bayline Arts Foundation, Thu 5 Nov 2:00pm"
+                                                     :offer "Want prep notes?" :key "bayline-interview"}]}}]}
+                      {:tool-uses [{:name "tell_operator"
+                                    :input {:subject "Want prep notes for Thursday's interview?"
+                                            :body "Your Bayline Arts Foundation interview is on Thursday at 2:00pm."}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:routine "daily-note"}} :outcome "Wrote the look-ahead."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Wrote the daily note and told the operator."}}]}
+                      {:text "Done."}]}}
+
+  ;; It explains the machinery in the note.
+  "names-the-machinery"
+  {:fails #{:no-internals}
+   :model {"steward" [{:tool-uses [{:name "daily_note_draft" :input {}}]}
+                      {:tool-uses [{:name "daily_note_write"
+                                    :input {:part "ahead"
+                                            :items [{:text "Interview at the Bayline Arts Foundation, Thu 5 Nov 2:00pm (from the facts tool)"
+                                                     :offer "Want prep notes?" :key "bayline-interview"}]}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:routine "daily-note"}} :outcome "Wrote the look-ahead."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Wrote the daily note."}}]}
+                      {:text "Done."}]}}}
+
+ :steps
+ [{:run ["fact" "add" "The operator has a job interview for the programme director post at the Bayline Arts Foundation on Thursday 5 November 2026 at 2:00pm, at their office on Harbour Street."
+         "--topic" "appointments"]}
+  {:run ["fact" "add" "The operator's next dental cleaning is with Dr. Okafor on Monday 30 November 2026 at 9:00am."
+         "--topic" "appointments"]}
+  ;; 07:11: the routine fires and the steward writes its parts.
+  {:advance-minutes 6}
+  {:tick 1}
+  ;; 07:31: the tick makes the note.
+  {:advance-minutes 20}
+  {:tick 1}]
+
+ :assert
+ [[:has :wake {:role "steward"}]
+  [:has :memo {:to "steward" :routine "daily-note"}]
+  [:has :event {:type "digest/composed"}]]
+
+ :graders
+ [{:id :ahead-written
+   :doc "The steward wrote the note's look-ahead with daily_note_write."
+   :check [:has :tool-call {:role "steward" :name "daily_note_write" :input {:part "ahead"} :verdict "allow" :error false}]}
+  {:id :interview-listed
+   :doc "The note lists the interview, with its day (Thursday or the 5th) and its time."
+   :check [:has :message {:origin "daily-note"
+                          :text [:regex "(?im)^(?=.*bayline)(?=.*(\\bthu|\\b5(th)?\\s+nov|nov(ember|\\.)?\\s+5\\b))(?=.*(\\b2(:00)?\\s*(pm|p\\.m\\.)|\\b14:00)).*$"]}]}
+  {:id :offers-help
+   :doc "The interview's line carries an offer of help that fits an interview: prep, practice questions, notes or research."
+   :check [:has :message {:origin "daily-note"
+                          :text [:regex "(?im)^.*bayline.*\\b(prep|prepar|practi[cs]e|questions|notes|research|brief)"]}]}
+  {:id :two-weeks-only
+   :doc "The month-away dentist is not in the note: the look-ahead covers two weeks."
+   :check [:none :message {:origin "daily-note" :text [:regex "(?i)dentist|dental|okafor"]}]}
+  {:id :only-the-note
+   :doc "The note is the only thing the operator is told: nothing here is urgent."
+   :check [:none :message {:origin [:any "told" "memo-for-operator"]}]}
+  {:id :no-internals
+   :doc "The note uses none of relay's internal words."
+   :check [:none :message {:origin "daily-note"
+                           :text [:regex "(?i)\\b(roles?|tools?|grants? (to|for) (a|the) role|labels?|labelled|contaminated|quarantine[ds]?|web access|research role|steward|daily_note)\\b"]}]}]}
