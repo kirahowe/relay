@@ -1,6 +1,7 @@
 (ns relay.staging-test
   "Staging data: what it holds, and where it may be made."
   (:require [babashka.fs :as fs]
+            [cheshire.core]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [clojure.test.check :as tc]
@@ -66,7 +67,7 @@
   (let [home (temp)
         dir (str home "/stage")]
     (try
-      (let [made (init! {:dir dir :home home})
+      (let [made (init! {:dir dir :home home :scout-web? true})
             sys (inbound/system made)
             state (inbound/current-state sys)]
         (testing "the settings are the ones staging promises"
@@ -85,8 +86,39 @@
         (testing "artificial roles and facts"
           (is (= #{"hub" "clerk" "scout"} (set (core/active-role-ids state))))
           (is (= 3 (count (:facts state)))))
+        (testing "a scout with the web: webtool's search and fetch, beside this repository"
+          (let [c (config/load-config made)]
+            (is (= #{"web_search" "web_fetch"} (set (config/role-tools c "scout"))))
+            (doseq [[t cmd] [["web_search" "search"] ["web_fetch" "fetch"]]]
+              (is (= :egress (get-in c [:tools t :class])))
+              (is (= ["--config" (str made "/webtool.json") cmd] (rest (get-in c [:tools t :command]))))
+              (is (str/ends-with? (first (get-in c [:tools t :command])) "/webtool/bin/webtool")))
+            (is (= {"snapshot_dir" (str made "/web-snapshots")
+                    "search" {"backend" "brave" "api_key_command" ["security" "find-generic-password" "-s" "relay-brave" "-w"]}}
+                   (cheshire.core/parse-string (slurp (str made "/webtool.json")))))
+            (is (nil? (core/unwakeable-reason state c "scout")))))
+        (testing "and a daily grant search, public, which it can send to the hub"
+          (let [r (core/routine state "scout" "grant-search")]
+            (is (= :active (:status r)))
+            (is (= "daily 07:00" (:schedule r)))
+            (is (:public r))
+            (is (str/includes? (:instructions r) "Harbour Sound Society"))
+            (is (core/role-text-public? state "hub"))))
         (testing "it is marked, so --force may empty it again"
           (is (fs/exists? (fs/path made staging/marker)))))
+      (finally (fs/delete-tree home)))))
+
+(deftest scenarios-get-no-real-web
+  (let [home (temp)
+        made (init! {:dir (str home "/stage") :home home})]
+    (try
+      (let [c (config/load-config made)
+            state (inbound/current-state (inbound/system made))]
+        (is (empty? (config/role-tools c "scout")))
+        (is (not (contains? (:tools c) "web_fetch")))
+        (is (not (fs/exists? (str made "/webtool.json"))))
+        (is (nil? (core/routine state "scout" "grant-search")))
+        (is (= #{4 5 6} (set (keys (:facts state)))) "ids scenarios rely on"))
       (finally (fs/delete-tree home)))))
 
 (deftest init-refuses-and-forces-by-the-rules
