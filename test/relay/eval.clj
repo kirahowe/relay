@@ -5,7 +5,7 @@
     :eval     {:id \"fact-validity-window\" :version 1 :tier :regression
                :tags [:knowledge] :trials 5}
     :graders  [{:id :valid-to :check [...] :gating? true :doc \"...\"} ...]
-    :foils    {\"no-end-date\" {:model {\"hub\" [reply ...]} :fails #{:valid-to}}}
+    :foils    {\"no-end-date\" {:model {\"steward\" [reply ...]} :fails #{:valid-to}}}
     :skip-defaults #{:journal-each-wake}
 
   and usually :clock and :settings, which relay.scenario describes. Its

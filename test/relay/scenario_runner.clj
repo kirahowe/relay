@@ -336,7 +336,8 @@
         _ (staging/init! (cond-> {:dir dir :force? force? :operator-config operator-config
                                   :repo-root (:repo-root opts ".")}
                            (or temp? fresh?) (assoc :check? false)
-                           fixed (assoc :clock clock)))
+                           fixed (assoc :clock clock)
+                           (:daily-note (:settings s)) (assoc :daily-note? true)))
         dir (staging/canonical dir (System/getProperty "user.home"))
         ;; relay opens no folder inside its data directory or under the
         ;; home directory, so the folder a :files grant opens is a

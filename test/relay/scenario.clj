@@ -7,13 +7,13 @@
 
     {:doc    \"what it shows\"
      :live?  true                    ; may also run against the real model (default false)
-     :model  {\"hub\" [reply ...]}     ; scripted replies, mock mode only
+     :model  {\"steward\" [reply ...]} ; scripted replies, mock mode only
      :steps  [step ...]
      :assert [assertion ...]}        ; checked after the last step
 
   Steps, run in order:
 
-    {:run [\"memo\" \"hub\" \"-s\" \"Subject\" \"-m\" \"Body\"]  ; a relay command, as the operator
+    {:run [\"memo\" \"steward\" \"-s\" \"Subject\" \"-m\" \"Body\"]  ; a relay command, as the operator
      :stdin \"text\"                                         ; optional
      :exit 0}                                               ; expected exit code, default 0
     {:tick 3}                  ; relay's dispatcher pass, three times; wakes run to the end
@@ -69,7 +69,7 @@
                  place in the run) :name :input :verdict (agentloop's: allow
                  or deny) :error :result.
     :citation    one per ref (relay.refs) in a memo to the operator, in
-                 the outcome the hub gave when closing a memo from the
+                 the outcome the steward gave when closing a memo from the
                  operator, or in a role's tell_operator message, as
                  relay.refs/resolve gives it (:ref :kind :status :title
                  :text :labels), with :memo or :message, the id of what
@@ -111,7 +111,10 @@
               staging ones), and :files true, which opens a folder of
               made-up files for files_move; and :mailbox, the role the
               agent's mailbox reports to, for :mail steps. The mailbox is
-              never polled: a :mail step is how mail arrives.
+              never polled: a :mail step is how mail arrives. And
+              :daily-note true, the daily note as `bb staging init` sets
+              it up: the steward writes it, from its daily-note routine
+              at 07:10 and its skill, and the tick makes it at 07:30.
     :files    {\"Receipts/2026-10.txt\" \"text\"}, the files a :files grant's
               folder starts with. The folder is made outside the staging
               directory, as relay requires, and removed with it. In the
@@ -403,7 +406,8 @@
   "The relay commands a scenario may run. Everything here changes or reads
   only the data directory."
   #{"status" "inbox" "memo" "close" "roles" "add" "update" "remove" "routines" "routine" "unroutine"
-    "retry" "wake" "facts" "fact" "notes" "journal" "docs" "doc" "put" "log" "cards" "card"})
+    "retry" "wake" "facts" "fact" "notes" "journal" "docs" "doc" "put" "log" "cards" "card"
+    "decline"})
 
 (defn path-option?
   "Whether a command-line argument picks a path: the data directory, the
@@ -441,7 +445,10 @@
     (cond
       (nil? settings) []
       (not (map? settings)) [":settings is a map."]
-      (seq (remove #{:grants :mailbox} (keys settings))) [":settings may hold only :grants and :mailbox."]
+      (seq (remove #{:grants :mailbox :daily-note} (keys settings)))
+      [":settings may hold only :grants, :mailbox and :daily-note."]
+      (and (contains? settings :daily-note) (not (true? (:daily-note settings))))
+      [":settings :daily-note is true: the steward writes the daily note, as bb staging init sets it up."]
       (and (contains? settings :mailbox) (not (and (string? (:mailbox settings))
                                                     (re-matches #"[a-z][a-z0-9-]{0,39}" (:mailbox settings)))))
       [":settings :mailbox is the id of the role the mailbox reports to, such as \"steward\"."]
