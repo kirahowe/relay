@@ -9,7 +9,6 @@
 | --- | --- | --- | --- |
 | [48](48-judge-remote-tool-definitions-with-a-decision-model.md) | Judge remote tool definitions with a decision model | feature | P2 |
 | [49](49-haiku-leaves-the-memo-or-journal-undone-before-an-act-call.md) | Haiku leaves the memo or journal undone before an act call | bug | P2 |
-| [71](71-let-bb-deploy-stop-and-restart-relay-serve-itself.md) | Let bb deploy stop and restart relay serve itself | feature | P2 |
 | [72](72-use-the-sidebar-s-empty-space-under-the-roles.md) | Use the sidebar's empty space under the roles | feature | P2 |
 | [76](76-fix-the-s5-acp-disconnect-and-s5-acp-wrong-request-id.md) | Fix the s5-acp-disconnect and s5-acp-wrong-request-id pentest scenarios | bug | P2 |
 | [81](81-tell-every-connection-a-request-was-settled-after-a-detach.md) | Tell every connection a request was settled after a detach and a race | bug | P2 |
@@ -32,7 +31,6 @@
 | [57](57-make-hidden-characters-visible-in-card-text-that-roles-and.md) | Make hidden characters visible in card text that roles and resolve get | bug | P2 |
 | [61](61-fork-acp-go-sdk-and-decode-with-encoding-json-v2.md) | Fork acp-go-sdk and decode with encoding/json/v2 | feature | P2 |
 | [84](84-try-relay-from-the-phone-with-agmente.md) | Try relay from the phone with Agmente | chore | P2 |
-| [36](36-clean-up-after-an-interrupted-deploy-and-leave-no-check.md) | Clean up after an interrupted deploy, and leave no check dirs in TMPDIR | bug | P3 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
 | [83](83-speed-up-the-slowest-remaining-test-namespaces.md) | Speed up the slowest remaining test namespaces | chore | P3 |
 | [86](86-fix-agentloop-s-flaky-testgroupleaderisasentinel.md) | Fix agentloop's flaky TestGroupLeaderIsASentinel | bug | P3 |
@@ -114,4 +112,6 @@
 | [17](17-set-up-the-job-search-role.md) | Set up the job search role | feature | P2 |
 | [34](34-give-the-quarantined-reader-a-read-only-fetch-that-takes-no.md) | Give the quarantined reader a read-only fetch that takes no free URLs | feature | P2 |
 | [68](68-have-bb-deploy-check-for-a-running-relay-service.md) | Have bb deploy check for a running relay service | feature | P2 |
+| [71](71-let-bb-deploy-stop-and-restart-relay-serve-itself.md) | Let bb deploy stop and restart relay serve itself | feature | P2 |
 | [18](18-set-up-the-grant-search-role.md) | Set up the grant search role | feature | P3 |
+| [36](36-clean-up-after-an-interrupted-deploy-and-leave-no-check.md) | Clean up after an interrupted deploy, and leave no check dirs in TMPDIR | bug | P3 |

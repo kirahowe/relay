@@ -711,7 +711,6 @@ The invariants come from `docs/plans/house.md`. Tests are in
 ## Reading list
 
 - `README.md`: setup, settings and daily use.
-- `DEPLOY.md`: moving Kira's live relay to the house and to the Homebrew install.
 - `resources/AGENTS.md`: what relay tells its own roles.
 - `spec/relay.allium`: the rules as a specification.
 - `docs/messages.md`: messages, routing and channels in detail.

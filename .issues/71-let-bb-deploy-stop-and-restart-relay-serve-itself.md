@@ -34,3 +34,9 @@ terminal. acp-tui's ctrl+s or stopping the service are the only ways.
 
 - 2026-10-25: #68 asked for the same check and left Kira the same choice.
   It was dropped as a duplicate, and its criteria are merged above.
+
+## Dropped (2026-10-26)
+
+bb deploy and its pause file are gone (relay#88). relay runs from its
+Homebrew install, and an upgrade is `brew upgrade` plus `brew services
+restart relay`, so there is no deploy to stop serve or to clean up after.

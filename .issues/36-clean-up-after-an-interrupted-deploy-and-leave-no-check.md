@@ -22,3 +22,9 @@ runs. Nothing has confirmed where they came from.
 ## Plan
 
 ## Log
+
+## Dropped (2026-10-26)
+
+bb deploy and its pause file are gone (relay#88). relay runs from its
+Homebrew install, and an upgrade is `brew upgrade` plus `brew services
+restart relay`, so there is no deploy to stop serve or to clean up after.

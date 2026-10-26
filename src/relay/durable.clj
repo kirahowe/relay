@@ -1,6 +1,6 @@
 (ns relay.durable
-  "Writes that have reached storage before they return. The pause file and
-  the deploy record exist so that a crash leaves a way back, which a write
+  "Writes that have reached storage before they return, so that a crash
+  leaves what was written (the steward shell's state, say), which a write
   still in the operating system's cache would not."
   (:require [babashka.fs :as fs])
   (:import (java.nio ByteBuffer)

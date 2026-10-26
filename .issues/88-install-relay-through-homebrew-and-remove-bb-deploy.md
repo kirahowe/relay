@@ -73,3 +73,16 @@ pushed): 48ca8bc "Add relay, agentloop, relay-tui and webtool".
 
 Kira's steps are DEPLOY.md's "The switch". relay#71 (bb deploy restarts
 serve) and relay#36 (interrupted deploy cleanup) no longer apply.
+
+## The switch (2026-10-26)
+
+Kira switched the live relay over, walked through step by step: old
+launchd jobs booted out, checkouts moved to main, brew install from the
+pushed tap, the fixed relay.edn put in place, the service started, hub
+given the steward text and the daily note. The leftovers (old plists,
+~/.local/bin links, deploy records, the .next workspaces) went to the
+Trash, and DEPLOY.md, a one-off guide, was removed.
+
+One slip on the way: a re-run of the log export with `>` truncated the
+backup before the new relay refused the old relay.edn. It was made
+again with the old relay from a temporary workspace at 877fdba.
