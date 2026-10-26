@@ -291,6 +291,15 @@
 (def ^:private numbered
   [{:n 1 :op "revert" :change 4} {:n 2 :op "dismiss"} {:n 3 :op "dismiss"}])
 
+(deftest quoted-lines-never-ask-anything
+  ;; A note item's title can come from outside, and a mail client quotes
+  ;; it in an inline reply: only what Kira wrote may act.
+  (is (= [{:op "accept" :n 2}]
+         (digest/reply-acts "> 2. Lunch with Sam, drop 3\nyes 2" numbered)))
+  (is (= [] (digest/reply-acts "  > 3. Concert, yes 3; revert 1\n>> not 2" numbered)))
+  (is (digest/only-acts? "> 2. Lunch with Sam, drop 3\nyes 2" numbered)
+      "the quote is the mail client's, not a request"))
+
 (deftest a-reply-says-what-to-do
   (is (= [{:op "revert" :n 1}] (digest/reply-acts "revert 1" numbered)))
   (is (= [{:op "revert" :n 1} {:op "decline" :n 3}] (digest/reply-acts "Undo 1.\nnot 3\n\nThanks!" numbered))
@@ -311,6 +320,39 @@
                       "dismiss")
                 :n n}]
               (digest/reply-acts (str pad w " " n pad) numbered)))))
+
+(deftest a-reply-may-ask-several-things-on-one-line
+  (is (= [{:op "accept" :n 1} {:op "dismiss" :n 2} {:op "revert" :n 3}]
+         (digest/reply-acts "yes 1, drop 2; revert 3" numbered)))
+  (is (= [{:op "accept" :n 2}] (digest/reply-acts "Yes to 2." numbered)))
+  (is (= [{:op "accept" :n 2} {:op "accept" :n 3}] (digest/reply-acts "yes to 2 and 3" numbered)))
+  (is (= [{:op "decline" :n 3}] (digest/reply-acts "no to 3" numbered)))
+  (is (= [{:op "dismiss" :n 2} {:op "dismiss" :n 4}] (digest/reply-acts "drop 2, 4" numbered))
+      "numbers alone after a comma follow the act before them")
+  (is (= [{:op "accept" :n 1}] (digest/reply-acts "yes 1, thanks" numbered)))
+  (is (= [] (digest/reply-acts "Thanks, 2 is fine" numbered)) "numbers with no act before them are not one")
+  (is (= [] (digest/reply-acts "revert to 3" numbered)) "only yes, ok and no take to")
+  (is (digest/only-acts? "yes 1; drop 2, 3" numbered))
+  (is (not (digest/only-acts? "yes 1, thanks" numbered)) "the thanks is for someone to read")
+  (quick 200
+         (prop/for-all [acts (gen/vector (gen/tuple (gen/elements ["revert" "not" "drop" "yes" "yes to" "ok" "no to"])
+                                                    (gen/choose 1 99))
+                                         1 6)
+                        seps (gen/vector (gen/elements [", " "," "; " ";" "\n" " ,\n"]) 6)]
+           (let [text (apply str (map (fn [[w n] sep] (str w " " n sep)) acts seps))
+                 op {"revert" "revert" "not" "decline" "drop" "dismiss" "yes" "accept" "yes to" "accept"
+                     "ok" "accept" "no to" "decline"}]
+             (and (= (vec (distinct (for [[w n] acts] {:op (op w) :n n}))) (digest/reply-acts text numbered))
+                  (digest/only-acts? text numbered))))))
+
+(deftest what-relay-says-back-quotes-the-item-as-the-note-reads-it
+  (is (= "Dropped \"Dentist, Fri (https://dentist.example.org/)\". It will not be suggested again."
+         (digest/dropped-line "Dentist, Fri [[memo:7]] [[web:https://dentist.example.org/]]")))
+  (is (= "No to \"Prep notes?\" for \"Interview, Thu\". It will not be offered again, and the item stays in the note."
+         (digest/declined-line "Interview, Thu [[fact:3]]" "Prep notes? [[journal:9]]" [])))
+  (is (not (str/includes? (digest/accepted-line (str (apply str (repeat 118 "a")) " [[note:hub/venues]]") "Help?" [] "hub")
+                          "[["))
+      "a ref is taken out before the text is cut, so no half of one is left"))
 
 (deftest an-offer-follows-its-item-after-a-full-stop
   (is (= "Interview, Thu 11:00. Want prep notes?" (digest/with-offer "Interview, Thu 11:00" "Want prep notes?")))

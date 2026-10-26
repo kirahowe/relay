@@ -594,8 +594,13 @@ use the client, or run `relay decline 2`. The item stays, in this note
 and later ones, without that offer. To remove an item for good, reply
 "drop 2", use the client, or run `relay dismiss 2`. relay records it,
 drops it from every later note, and shows it to the note's writer so it
-is not suggested again. "not" on an item with no offer changes nothing:
-relay says the item has no offer and that "drop" removes it. Each
+is not suggested again. One reply can ask several things, one to a line
+or split by commas and semicolons ("yes 1, drop 2; revert 3"), and
+"yes to 2" and "no to 2" read as "yes 2" and "not 2". "not" on an item
+with no offer changes nothing: relay says the item has no offer and
+that "drop" removes it. What relay says back about an item quotes it as
+the note reads it. `relay revert` on a suggestion says it is not a
+change, even when it was dropped already. Each
 refusal names what to do in the words of where you are: a command at
 the command line, a word to reply with in mail. How to act on the items
 is said the same way: a mail whose replies relay reads ends with the

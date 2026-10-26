@@ -522,7 +522,7 @@
     (testing "a second reply says what was done already, and changes nothing"
       (let [w (ok (reply (advance w 60) "r2" operator-address "revert 1" verified))
             told (last (sort-by :id (vals (:messages (:state w)))))]
-        (is (= ["1: Item 1 was undone already."] (mapcat #(map :text (:items %)) (:sections told))))))))
+        (is (= ["Item 1, a change to the how-to \"grants\", was undone already."] (mapcat #(map :text (:items %)) (:sections told))))))))
 
 (deftest a-reply-from-the-client-acts-like-a-mailed-one
   (let [w (-> (with-note) (advance 600))
@@ -807,7 +807,7 @@
         w (ok (run w "operator" :message/reply {:in-reply-to (:id m) :text (str "not " n)}))
         st (:state w)
         told (last (sort-by :id (vals (:messages st))))]
-    (is (= [(str n ": Item " n " has no offer to turn down. Reply \"drop " n "\" to remove it.")]
+    (is (= [(str "Item " n ", \"Dentist, Fri\", has no offer to turn down. Reply \"drop " n "\" to remove it.")]
            (mapcat #(map :text (:items %)) (:sections told))))
     (is (nil? (get-in (core/message st (:id m)) [:acted n])))
     (is (not (contains? (:dismissed st) "ahead/dentist")))
@@ -901,16 +901,19 @@
   (let [w (-> (with-note) (advance 600))
         m (note w)
         why (fn [via n op] (:why (run w "operator" :digest/act (cond-> {:message (:id m) :n n :op op} via (assoc :via via)))))]
-    (is (= "Item 2 is something coming up, not a change. relay decline 2 says no to its offer. relay dismiss 2 removes it."
+    (is (= "Item 2, \"Interview, Thu 10:00\", is something coming up, not a change. relay decline 2 says no to its offer. relay dismiss 2 removes it."
            (why "cli" 2 "revert")))
-    (is (= "Item 3 has no offer to turn down. relay dismiss 3 removes it." (why "cli" 3 "decline")))
-    (is (= "Item 3 has no offer to turn down. Reply \"drop 3\" to remove it." (why nil 3 "decline")))
-    (is (= "Item 3 has no offer to turn down. You can drop it." (why "client" 3 "decline")))
-    (is (= "Item 1 is a change. relay revert 1 undoes it." (why "cli" 1 "dismiss")))
+    (is (= "Item 3, \"Dentist, Fri\", has no offer to turn down. relay dismiss 3 removes it." (why "cli" 3 "decline")))
+    (is (= "Item 3, \"Dentist, Fri\", has no offer to turn down. Reply \"drop 3\" to remove it." (why nil 3 "decline")))
+    (is (= "Item 3, \"Dentist, Fri\", has no offer to turn down. You can drop it." (why "client" 3 "decline")))
+    (is (= "Item 1 is a change to the how-to \"grants\". relay revert 1 undoes it." (why "cli" 1 "dismiss")))
     (testing "an item dropped already says so, whatever was asked"
       (let [w (ok (run w "operator" :digest/act {:message (:id m) :n 3 :op "dismiss"}))]
-        (is (= "Item 3 was dropped already."
-               (:why (run w "operator" :digest/act {:message (:id m) :n 3 :op "decline" :via "cli"}))))))))
+        (is (= "Item 3, \"Dentist, Fri\", was dropped already."
+               (:why (run w "operator" :digest/act {:message (:id m) :n 3 :op "decline" :via "cli"}))))
+        (testing "except that undoing what is no change says that first"
+          (is (= "Item 3, \"Dentist, Fri\", is something coming up, not a change."
+                 (:why (run w "operator" :digest/act {:message (:id m) :n 3 :op "revert" :via "cli"})))))))))
 
 (deftest reply-acts-reads-yes
   (is (= [{:op "accept" :n 2} {:op "accept" :n 4}] (digest/reply-acts "yes 2\nok 4" [])))

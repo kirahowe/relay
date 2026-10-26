@@ -343,11 +343,15 @@
     "changed" (str "Put the " (thing c) " back as it was.")
     "removed" (str "Brought back the " (thing c) ".")))
 
-(defn- quoted [text labels]
-  (let [t (str text)
-        t (if (> (count t) 120) (str (subs t 0 119) "…") t)
+(defn quoted
+  "An item's text quoted in what relay says back about it, as the note
+  reads it: refs as words (relay.text/refs-as-words), one line, at most
+  120 characters, and links broken when it came from outside."
+  [text labels]
+  (let [t (str/trim (messages/squeeze-line (text/refs-as-words (str text))))
+        t (if (> (cp-count t) 120) (str (str/trimr (subs t 0 (.offsetByCodePoints ^String t 0 119))) "…") t)
         t (if (outside? labels) (text/defang t) t)]
-    (str "\"" (str/trim (messages/squeeze-line t)) "\"")))
+    (str "\"" t "\"")))
 
 (defn- stop
   "The full stop after quoted text `q`, unless the quote already ends a
@@ -601,39 +605,78 @@
    "dismiss" "dismiss" "drop" "dismiss" "skip" "dismiss" "remove" "dismiss"
    "yes" "accept" "accept" "accept" "ok" "accept"})
 
+(def ^:private act-pattern
+  ;; A word, then numbers: "revert 1", "undo 1 and 3", "drop #2 & 4",
+  ;; "yes to 2". Only yes, ok and no take "to".
+  #"(?i)(?:(yes|ok|no)\s+to|(revert|undo|not|no|dismiss|drop|skip|remove|yes|accept|ok))\s+#?(\d+(?:\s*(?:and|&)\s*#?\d+)*)\s*[.!]?")
+
+(def ^:private more-pattern
+  ;; Numbers alone, after an act in the same line: the 3 of "drop 2, 3".
+  #"(?i)(?:and\s+|&\s*)?#?(\d+(?:\s*(?:and|&)\s*#?\d+)*)\s*[.!]?")
+
+(defn- clauses
+  "A reply's lines, each split at commas and semicolons into its
+  clauses, trimmed, the empty ones dropped: [[clause ...] ...]. A
+  quoted line (one that starts with >) is the mail client's copy of the
+  note, whose item titles may come from outside, so it never asks
+  anything."
+  [text]
+  (vec (for [l (str/split-lines (str text))
+             :when (not (str/starts-with? (str/triml l) ">"))
+             :let [cs (vec (remove str/blank? (map str/trim (str/split l #"[,;]"))))]
+             :when (seq cs)]
+         cs)))
+
+(defn- clause-acts
+  "What the clauses of one line ask for, in order, each as [op ns] or
+  nil when it asks nothing: numbers alone follow the act before them in
+  the line."
+  [cs]
+  (first (reduce (fn [[out op] c]
+                   (if-let [[_ w-to w nums] (re-matches act-pattern c)]
+                     (let [op (act-words (str/lower-case (or w-to w)))] [(conj out [op nums]) op])
+                     (if-let [[_ nums] (when op (re-matches more-pattern c))]
+                       [(conj out [op nums]) op]
+                       [(conj out nil) nil])))
+                 [[] nil] cs)))
+
 (defn reply-acts
   "What a reply to a note asks for, as [{:op \"revert\"|\"decline\"|
-  \"dismiss\"|\"accept\" :n}], in order: lines such as \"revert 1\",
-  \"undo 1 and 3\", \"yes 2\" (take up its offer), \"not 2\" (no to
-  its offer; the item stays), \"drop 2, 4\" (the items go for good). A reply that is only \"not this one\" (or \"not
-  this\") turns down the one suggestion's offer when the note has exactly
-  one. Anything else is left to whoever reads the reply."
+  \"dismiss\"|\"accept\" :n}], in order. Lines are split at commas and
+  semicolons too, so one line can ask several things: \"revert 1\",
+  \"undo 1 and 3\", \"yes 2\" or \"yes to 2\" (take up its offer), \"not
+  2\" (no to its offer; the item stays), \"drop 2, 4\" (the items go for
+  good), \"yes 1; drop 3\". A reply that is only \"not this one\" (or
+  \"not this\") turns down the one suggestion's offer when the note has
+  exactly one. Anything else is left to whoever reads the reply."
   [text numbered]
-  (let [lines (map str/trim (str/split-lines (str text)))
-        acts (vec (for [l lines
-                        :let [[_ w nums] (re-matches #"(?i)(revert|undo|not|no|dismiss|drop|skip|remove|yes|accept|ok)\s+#?(\d+(?:\s*(?:,|and|&)\s*#?\d+)*)\s*[.!]?" l)]
-                        :when w
+  (let [acts (vec (for [cs (clauses text)
+                        [op nums] (keep identity (clause-acts cs))
                         num (re-seq #"\d+" nums)
                         :let [k (parse-long num)]
                         :when (and k (< k 1000000))]
-                    {:op (act-words (str/lower-case w)) :n k}))
+                    {:op op :n k}))
         dismissals (filter #(= "dismiss" (:op %)) numbered)]
     (cond
       (seq acts) (vec (distinct acts))
-      (and (re-matches #"(?i)\s*not\s+this(\s+one)?\s*[.!]?\s*" (str/join " " (remove str/blank? lines)))
+      (and (re-matches #"(?i)\s*not\s+this(\s+one)?\s*[.!]?\s*"
+                       (str/join " " (remove str/blank? (map str/trim (str/split-lines (str text))))))
            (= 1 (count dismissals)))
       [{:op "decline" :n (:n (first dismissals))}]
       :else [])))
 
 (defn only-acts?
-  "Whether a reply to a note says nothing but what reply-acts reads: every
-  line it has is a \"revert 1\" or \"not 2\", or it is only \"not this
-  one\". relay does what such a reply asks in code, so nobody needs to
-  read it."
+  "Whether a reply to a note says nothing but what reply-acts reads:
+  every clause of every line is a \"revert 1\" or \"not 2\" (or numbers
+  after one), or it is only \"not this one\". relay does what such a
+  reply asks in code, so nobody needs to read it."
   [text numbered]
-  (let [lines (remove str/blank? (map str/trim (str/split-lines (str text))))]
-    (boolean (and (seq lines)
-                  (every? #(seq (reply-acts % numbered)) lines)))))
+  (let [cs (clauses text)
+        parsed (map clause-acts cs)]
+    (boolean (and (seq cs)
+                  (or (every? #(every? some? %) parsed)
+                      ;; No act in it, yet something to do: not this one.
+                      (and (not-any? #(some some? %) parsed) (seq (reply-acts text numbered))))))))
 
 ;; --- for the command line
 

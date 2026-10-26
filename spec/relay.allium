@@ -1504,7 +1504,9 @@ rule ReplyToAMessage {
         ensures: message.memo.status = read   -- answered; closed by the operator
     if message.origin = daily_note:
         ensures: NoteReplyActedOn(message: message, text: text, channel: channel)
-            -- what the reply asks for ("revert N", "not N", "drop N") is
+            -- what the reply asks for ("revert N", "not N", "drop N",
+            -- "yes N" or "yes to N", on lines or split by commas and
+            -- semicolons, numbers alone after one taking its word) is
             -- done (RevertChange, AcceptOffer, DeclineOffer,
             -- DismissSuggestion), and relay answers once in the thread
             -- with what it did, on the reply's own channel only (the

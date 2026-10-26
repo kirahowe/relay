@@ -3421,20 +3421,29 @@
   [{:keys [state] :as tx} m n op via]
   (let [{item-op :op :as item} (numbered! m n)
         op (or op item-op)
-        say #(act-sentence via % n)]
-    (when-let [done (item-done state m item)]
-      (when-not (and (#{"declined" "accepted"} done) (= "dismiss" op))
-        (reject! :invalid (str "Item " n " was " (done-words done) " already."))))
+        say #(act-sentence via % n)
+        ;; The item named as the note reads it, quoted, with no refs.
+        change (when (= "revert" item-op) (recipe-change-by-seq state (:change item)))
+        named (if (= "revert" item-op)
+                (str "Item " n (when change (str ", a change to the " (digest/thing change) ",")))
+                (str "Item " n ", " (digest/quoted (:text item) (:labels item)) ","))
+        done (item-done state m item)]
+    ;; Asking to undo what is no change says so first: whatever was done
+    ;; with it, there is nothing to undo.
+    (when (and (= "dismiss" item-op) (= "revert" op))
+      (reject! :invalid (str named " is " (digest/item-noun (:part item)) ", not a change."
+                             (when-not done
+                               (str " " (when (:offer item) (str (say "decline") " ")) (say "dismiss"))))))
+    (when (and done (not (and (#{"declined" "accepted"} done) (= "dismiss" op))))
+      (reject! :invalid (str named " was " (done-words done) " already.")))
     (cond
       (and (= "revert" item-op) (not= "revert" op))
-      (reject! :invalid (str "Item " n " is a change. " (say "revert")))
-      (and (= "dismiss" item-op) (= "revert" op))
-      (reject! :invalid (str "Item " n " is " (digest/item-noun (:part item)) ", not a change. "
-                             (when (:offer item) (str (say "decline") " ")) (say "dismiss")))
+      (reject! :invalid (str "Item " n " is a change" (when change (str " to the " (digest/thing change))) ". "
+                             (say "revert")))
       (and (= "decline" op) (nil? (:offer item)))
-      (reject! :invalid (str "Item " n " has no offer to turn down. " (say "dismiss")))
+      (reject! :invalid (str named " has no offer to turn down. " (say "dismiss")))
       (and (= "accept" op) (nil? (:offer item)))
-      (reject! :invalid (str "Item " n " has no offer to take up.")))
+      (reject! :invalid (str named " has no offer to take up.")))
     (case op
       "revert" (revert! tx (:change item) {:message (:id m) :n n})
       "accept" (accept! tx m item)
@@ -3500,7 +3509,8 @@
                                                 [tx (conj lines (str n ": " (acted-line (:state tx) m n (:config tx)))) refused])
                                               (catch clojure.lang.ExceptionInfo e
                                                 (if (rejection e)
-                                                  [tx (conj lines (str n ": " (ex-message e))) (inc refused)]
+                                                  ;; A refusal names the item itself.
+                                                  [tx (conj lines (ex-message e)) (inc refused)]
                                                   (throw e)))))
                                        [tx [] 0] acts)
             ;; The lines name the items, so they carry the items' labels.
