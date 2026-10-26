@@ -66,19 +66,21 @@
  ;;              :credentials-command ["security" "find-generic-password" "-s" "relay-pop" "-w"]
  ;;              :authserv-id "mx.example.org" :to "steward"}
  ;;  "repos"    {:kind :github :repos ["owner/repo"] :to "steward"}
+ ;;             ; :api-url "https://github.example.com/api/v3" for GitHub Enterprise
  ;;  "calendar" {:kind :ics :url "https://calendar.example.org/you.ics" :to "steward"}}
 
  ;; relay serve's WebSocket listener, for a phone client over the tailnet
  ;; (README: Reaching relay from your phone). It listens on 127.0.0.1 at
  ;; :port, for clients that send the token :token-command prints. Leave it
  ;; out for no listener. :default-role is where a session with no role
- ;; goes ("hub" unless set); :allowed-origins lists browser origins let in
+ ;; goes ("steward" unless set); :allowed-origins lists browser origins let in
  ;; (none unless set).
  ;; :serve {:websocket {:port 8765
  ;;                     :token-command ["security" "find-generic-password" "-s" "relay-websocket" "-w"]}}
 
- ;; The role that is sent dead letters to sort out.
- :dead-letter-handler "hub"
+ ;; The role that is sent dead letters to sort out: your main role, the
+ ;; steward. "steward" unless set.
+ :dead-letter-handler "steward"
 
  ;; A weekly budget in US dollars for all roles together. relay tells
  ;; you when the week's spend (from Monday) reaches 80% of it and 100%.
@@ -90,7 +92,7 @@
  ;; for it (what is coming up, grants, GitHub, what it learned). Nothing
  ;; is sent on a day with nothing to say. Your own calendar comes in as
  ;; an :ics source in :ingest. Leave it out for no note.
- ;; :daily-note {:at "07:30" :role "hub"}
+ ;; :daily-note {:at "07:30" :role "steward"}
 
  ;; Tools beyond relay's own, each an external command given the call's
  ;; arguments after its own, with no -- in between: such a tool must
@@ -243,12 +245,13 @@
  ;;         :timeout-seconds 60}
 
  ;; What each role is granted beyond relay's own tools: :tools, :may-add,
- ;; :public and :shell, and nothing else. A public role, a scout, never holds
+ ;; :public, :shell and :files, and nothing else. :files lists folders the
+ ;; role may tidy, with moves you can undo (README: Organizing files). A public role, a scout, never holds
  ;; your private things, so it may search and browse. It is shown only
  ;; what is public (written with --public, or by a public role), and it
  ;; may not have :may-add, a tool whose :labels include "private", or the
  ;; dead letter handler's job.
  :grants
- {"hub" {:may-add true :tools ["rem-read" "rem"]}
-  ;; Add it with relay add scout --public, so its own text is public.
+ {"steward" {:may-add true :tools ["rem-read" "rem"]}
+  ;; relay init adds it; by hand: relay add scout --public --title Scout < setup/scout.md
   "scout" {:public true :tools ["web"]}}}

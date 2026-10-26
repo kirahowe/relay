@@ -43,7 +43,7 @@
   and cannot guess, :timezone, :default-harness and :harnesses, is
   required in relay.edn; `relay init` asks for it. Without :messages,
   every message is the client's to show and goes nowhere else."
-  {:dead-letter-handler "hub"
+  {:dead-letter-handler "steward"
    :wake-timeout-minutes 30
    ;; A memo a wake carries and leaves open is retried after a wait that
    ;; doubles from the base up to the ceiling, and dead-lettered once it
@@ -78,11 +78,67 @@
   (when-let [why (messages/settings-problem settings)] (problem! why)))
 
 (def removed-keys
-  "Settings relay no longer has, and what took their place."
+  "Settings relay no longer has, and what took their place. README:
+  Upgrading lists them too."
   {:notify "relay.edn has :notify, which relay no longer has. Say where messages go with :messages; setup/relay.example.edn shows how."
    :brief (str "relay.edn has :brief, which relay no longer has. The daily note replaces the morning brief:"
                " set :daily-note {:at \"07:30\" :role \"steward\"}, and read your own calendar with an :ics"
-               " source in :ingest. setup/relay.example.edn shows how.")})
+               " source in :ingest. setup/relay.example.edn shows how.")
+   :chat-client "relay.edn has :chat-client, which is now :client. Rename it."
+   :verifier (str "relay.edn has :verifier, which relay no longer has: relay no longer checks research reports."
+                  " A scout answers with a memo. Remove it.")})
+
+(def settings-keys
+  "Every top-level key relay.edn may have. Anything else is refused, so a
+  misspelled section such as :mesages is not silently ignored."
+  #{:format :timezone :default-harness :harnesses :messages :ingest :client :tools :mcp-servers
+    :connections :grants :dead-letter-handler :wake-timeout-minutes :max-attempts
+    :retry-base-seconds :retry-ceiling-seconds :limit-probe-minutes :outage-patience-minutes
+    :runaway-wakes :runaway-window-minutes :house :budget :serve :daily-note})
+
+(def settings-format
+  "The :format relay init writes in relay.edn. Optional, but when it is
+  there it must be this."
+  1)
+
+(defn- edit-distance
+  "The Levenshtein distance between two strings."
+  [^String a ^String b]
+  (let [n (count b)]
+    (peek (reduce (fn [prev [i ca]]
+                    (reduce (fn [row j]
+                              (conj row (min (inc (peek row))
+                                             (inc (nth prev (inc j)))
+                                             (+ (nth prev j) (if (= ca (nth b j)) 0 1)))))
+                            [(inc i)] (range n)))
+                  (vec (range (inc n)))
+                  (map-indexed vector a)))))
+
+(defn did-you-mean
+  "The known keyword closest to `k` in spelling, when it is close enough
+  to be a likely typo (at most a third of its letters differ), or nil.
+  Ties go to the first in sorted order. Pure."
+  [k known]
+  (let [s (if (keyword? k) (name k) (str k))
+        scored (for [c (sort-by name known)
+                     :let [d (edit-distance s (name c))]
+                     :when (<= d (max 1 (quot (count (name c)) 3)))]
+                 [d c])]
+    (when (seq scored) (second (first (sort-by first scored))))))
+
+(defn unknown-keys-problem
+  "Why relay.edn's top-level keys cannot be used, as a sentence, or nil:
+  a key relay does not know, with the known key it is most likely a typo
+  of. Removed keys are refused with their own reason first (removed-keys).
+  Pure."
+  [settings]
+  (when-let [unknown (seq (sort-by str (remove #(or (settings-keys %) (removed-keys %)) (keys settings))))]
+    (let [k (first unknown)
+          guess (did-you-mean k settings-keys)]
+      (str "relay.edn has " (pr-str k) ", which relay does not know."
+           (if guess
+             (str " Did you mean " guess "?")
+             " README: Settings lists what relay.edn can hold.")))))
 
 (def efforts #{"low" "medium" "high" "xhigh" "max"})
 
@@ -129,6 +185,11 @@
   :pubic cannot leave a role able to hold private data."
   #{:tools :may-add :public :shell :files})
 
+(def removed-grant-keys
+  "Grants relay no longer has: research reports, the quarantined reader and
+  the workbench, whose work the steward's shell and the scouts do now."
+  #{:reports :quarantine :workbench})
+
 (defn- check-grants
   "Checks each role's grants, and what a public role may not have. A public
   role's session never holds private, so it is granted nothing whose
@@ -144,10 +205,14 @@
     ;; symbol here would grant nothing, :public included.
     (when-not (role-id? role)
       (problem! (str "relay.edn grants to " (pr-str role) ", which is not a role id: a string of lower case"
-                     " letters, digits and hyphens, starting with a letter, such as \"hub\", and not one of "
+                     " letters, digits and hyphens, starting with a letter, such as \"steward\", and not one of "
                      (str/join ", " (sort reserved-role-ids)) ".")))
     (when-not (map? g)
       (problem! (str "The grants for " role " in relay.edn are not a map, such as {:tools [\"fetch\"]}.")))
+    (when-let [gone (seq (filter #(contains? g %) (sort removed-grant-keys)))]
+      (problem! (str "The grants for " role " in relay.edn name " (str/join " and " (map pr-str gone))
+                     ", which relay no longer has. Remove " (if (next gone) "them" "it")
+                     ". A role can be granted " (str/join ", " (sort (map str grant-keys))) ".")))
     (when-let [unknown (seq (remove grant-keys (keys g)))]
       (problem! (str "The grants for " role " in relay.edn name " (str/join ", " (map pr-str (sort-by str unknown)))
                      ", which relay does not know. A role can be granted "
@@ -218,13 +283,13 @@
   "What `:serve {:websocket ...}` takes when it leaves them out: the role a
   session/new without _meta relay/role goes to, and the browser origins
   allowed in (none)."
-  {:default-role "hub" :allowed-origins []})
+  {:default-role "steward" :allowed-origins []})
 
 (defn websocket-problem
   "What is wrong with `:serve`, the relay service's settings, as a
   sentence for the operator, or nil. Its one setting is :websocket, the
   listener a phone reaches the service through:
-  {:port 8765 :token-command [...] :default-role \"hub\" :allowed-origins []}."
+  {:port 8765 :token-command [...] :default-role \"steward\" :allowed-origins []}."
   [serve]
   (let [example (str "{:websocket {:port 8765 :token-command [\"security\" \"find-generic-password\" \"-s\""
                      " \"relay-websocket\" \"-w\"]}}")
@@ -246,7 +311,7 @@
            (when (some? token-command) (str ", not " (pr-str token-command))) ".")
       (and (contains? ws :default-role) (not (role-id? default-role)))
       (str "relay.edn's :serve :websocket has :default-role " (pr-str default-role)
-           ", which is not a role id such as \"hub\".")
+           ", which is not a role id such as \"steward\".")
       (and (contains? ws :allowed-origins)
            (not (and (vector? allowed-origins) (every? #(and (string? %) (not (str/blank? %))) allowed-origins))))
       (str "relay.edn's :serve :websocket has :allowed-origins " (pr-str allowed-origins)
@@ -473,6 +538,7 @@
   "Returns the config, or throws describing the first problem found."
   [{:keys [tools grants max-attempts] client :client :as config}]
   (doseq [[k why] (sort-by key removed-keys) :when (contains? config k)] (problem! why))
+  (when-let [why (unknown-keys-problem config)] (problem! why))
   (check-required config)
   (check-messages (:messages config))
   (when-let [why (ingest/settings-problem (:ingest config) #(true? (get-in config [:grants % :public])))]
@@ -486,6 +552,9 @@
       (problem! (str "Tool " tool-name " in relay.edn has " (str/join " and " (map pr-str gone))
                      ", which relay no longer has: no call waits for you. Remove "
                      (if (next gone) "them." "it."))))
+    (when (= :act class)
+      (problem! (str "Tool " tool-name " has :class :act, which relay no longer has: relay never acts as you."
+                     " Make it a drafting tool with :class :edit, or remove it.")))
     (when-not (tool-classes class)
       (throw (ex-info (str "Tool " tool-name " needs a :class, one of "
                            (sort (map name tool-classes)) ".")
@@ -540,13 +609,85 @@
 (defn resolve-config
   "Defaults overlaid with the operator's settings."
   [settings]
+  (when (and (contains? settings :format) (not= settings-format (:format settings)))
+    (problem! (str "relay.edn has :format " (pr-str (:format settings)) "; relay reads format "
+                   settings-format ". Leave :format out, or set it to " settings-format ".")))
   (validate (merge defaults (dissoc settings :format))))
+
+(defn expand-home
+  "`path` with a leading ~ (alone or before a /) replaced by `home`; any
+  other value as it is. Pure."
+  [path home]
+  (cond (not (string? path)) path
+        (= "~" path) home
+        (str/starts-with? path "~/") (str home (subs path 1))
+        :else path))
+
+(defn expand-paths
+  "relay.edn's settings with a leading ~ expanded in the paths written by
+  hand: the shell's :mounts and each role's :files. Only a vector is
+  touched, so a malformed setting is still refused as written. Pure."
+  [settings home]
+  (let [each #(if (vector? %) (mapv (fn [p] (expand-home p home)) %) %)]
+    (cond-> settings
+      (vector? (get-in settings [:house :mounts])) (update-in [:house :mounts] each)
+      (map? (:grants settings))
+      (update :grants (fn [gs] (into {} (for [[r g] gs]
+                                          [r (if (and (map? g) (contains? g :files)) (update g :files each) g)])))))))
+
+(defn read-settings
+  "relay.edn's text as data. Text that is not EDN, such as a section half
+  uncommented, is refused with the reader's reason and where it found it,
+  not a stack trace."
+  [text]
+  (try (edn/read-string text)
+       (catch Exception e
+         (let [{:keys [row col]} (ex-data e)]
+           (problem! (str "relay.edn is not valid EDN: " (or (ex-message e) (.getName (class e)))
+                          (when row (str " (line " row (when col (str ", column " col)) ")"))
+                          ". Check the section you last edited."))))))
+
+(defn- main-role-guess
+  "The role among `role-ids` that is most likely the steward: the first
+  house role that may add roles, else the first house role, else nil."
+  [config role-ids]
+  (let [house (remove #(true? (get-in config [:grants % :public])) role-ids)]
+    (or (first (filter #(:may-add (get-in config [:grants %])) house)) (first house))))
+
+(defn role-name-problems
+  "Sentences for the operator about settings that name the steward by an
+  id no active role has, while other roles exist: :dead-letter-handler,
+  and :serve :websocket :default-role. Each says the likely fix. Without
+  this, an install whose main role has another id (one made before the
+  default was steward) would quietly send dead letters to the operator,
+  tell every role a wrong name and route phone conversations nowhere.
+  Pure. `role-ids` are the active roles."
+  [config role-ids]
+  (let [ids (set role-ids)
+        guess (main-role-guess config (sort role-ids))
+        said (fn [setting v default what fix]
+               (str "relay.edn's " setting " is " (pr-str v)
+                    (when (= v default) " (relay's default when it is not set)")
+                    ", but there is no role " v ", so " what "."
+                    (when guess (str " Your main role looks like " guess ": set " fix " " (pr-str guess) "."))))
+        handler (:dead-letter-handler config)
+        ws (get-in config [:serve :websocket])]
+    (when (seq ids)
+      (cond-> []
+        (not (ids handler))
+        (conj (said ":dead-letter-handler" handler (:dead-letter-handler defaults)
+                    "work another role cannot finish has no role to go to" ":dead-letter-handler"))
+        (and ws (not (ids (:default-role ws))))
+        (conj (said ":serve :websocket :default-role" (:default-role ws) (:default-role websocket-defaults)
+                    "a phone conversation that names no role has no one to talk to" ":default-role"))))))
 
 (defn load-config [data-dir]
   (let [file (fs/path data-dir "relay.edn")]
     (when-not (fs/exists? file)
       (problem! (str data-dir " has no relay.edn. Run `relay init` to make one.")))
-    (let [config (resolve-config (connections/expand data-dir (edn/read-string (slurp (str file)))
+    (let [settings (read-settings (slurp (str file)))
+          settings (if (map? settings) (expand-paths settings (System/getProperty "user.home")) settings)
+          config (resolve-config (connections/expand data-dir settings
                                                      {:classes tool-classes :labels label-names}))]
       ;; Where the files to mount, and the folders to organize, may not be
       ;; depends on this machine: the home directory and the data
