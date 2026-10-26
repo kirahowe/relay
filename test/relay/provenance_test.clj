@@ -24,7 +24,7 @@
 ;; --- the pure part
 
 (def gen-label
-  (gen/elements ["private" "contaminated" "mail:dana@riverbend.test" "github:kira/tidy"
+  (gen/elements ["private" "contaminated" "mail:dana@riverbend.test" "github:kira/tidy" "files:downloads"
                  "ics:calendar" "ics:holidays" "web:office-holidays.html" "search:web"
                  "mail:unverified-operator" "mail:unknown"]))
 
@@ -54,7 +54,7 @@
       (if (provenance/outside? ls)
         (and (str/starts-with? line "Drew on: ")
              (not (str/includes? line "\n"))
-             (not (re-find #"contaminated|private|ics:|github:|mail:|web:|search:" line)))
+             (not (re-find #"contaminated|private|ics:|github:|mail:|web:|search:|files:" line)))
         (nil? line)))))
 
 (deftest sources-in-words
@@ -69,7 +69,10 @@
     (is (= ["the web page hxxps://evil[.]example/x"] (provenance/phrases ["web:https://evil.example/x"]))))
   (is (= "GitHub (a/b), the work calendar, a mail from x@y.test and 1 more"
          (provenance/summary ["mail:x@y.test" "github:a/b" "ics:work" "web:p.html"])))
-  (is (= "GitHub (a/b) and a mail from x@y.test" (provenance/summary ["mail:x@y.test" "github:a/b"]))))
+  (is (= "GitHub (a/b) and a mail from x@y.test" (provenance/summary ["mail:x@y.test" "github:a/b"])))
+  (testing "a folder of the operator's mounted in the shell, not marked trusted"
+    (is (= ["your files in downloads"] (provenance/phrases ["files:downloads" "contaminated" "private"])))
+    (is (= "(from your files)" (provenance/mark ["files:downloads"])))))
 
 (defspec a-mark-is-short-and-names-no-label 300
   (prop/for-all [ls gen-labels]

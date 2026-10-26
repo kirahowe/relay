@@ -122,3 +122,8 @@
            (is (str/starts-with? (ex-message e) "relay.edn is not valid EDN: "))
            (is (str/includes? (ex-message e) "Check the section you last edited."))))
     (babashka.fs/delete-tree dir)))
+
+(deftest a-trusted-mount-expands-a-leading-tilde-too
+  (is (= [{:path "/h/notes" :trusted true} "/h/Downloads"]
+         (get-in (config/expand-paths {:house {:mounts [{:path "~/notes" :trusted true} "~/Downloads"]}} "/h")
+                 [:house :mounts]))))

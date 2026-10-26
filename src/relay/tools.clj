@@ -1093,12 +1093,11 @@
    :parameters (obj {:command {:type "string" :description "The command, run with sh -c in /scratch."}}
                     "command")
    :run (fn [sys _ session-labels {:keys [command]}]
-          ;; What it shows is the operator's own files, which are hers,
-          ;; and scratch, which only sessions write: what is there came
-          ;; through them, as their journals do, so it is no source of
-          ;; its own. Its labels still say everything scratch may hold.
-          (assoc (shell/sh! (shell/context (:data-dir sys) (:config sys)) session-labels command)
-                 :sources []))})
+          ;; Its sources are the mounted folders not marked trusted, which
+          ;; may hold what a stranger wrote (relay.shell/provenance).
+          ;; Scratch is no source of its own; its labels still say
+          ;; everything scratch may hold.
+          (shell/sh! (shell/context (:data-dir sys) (:config sys)) session-labels command))})
 
 (defn files-tool
   "`files_move`, for a role granted :files: moves and renames inside the

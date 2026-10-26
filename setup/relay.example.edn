@@ -243,8 +243,10 @@
  ;; home directory and places that hold keys or passwords. Build its image
  ;; with relay house build, which needs the network; the tick starts it.
  ;; :runner is the container program: ["container"] (the default), or
- ;; ["docker"] or ["podman"] on Linux. Leave it out for no shell.
- ;; :house {:mounts ["/Users/you/notes"]
+ ;; ["docker"] or ["podman"] on Linux. Leave it out for no shell. A plain
+ ;; path is read as outside text, since it may hold what others wrote;
+ ;; {:path ... :trusted true} marks a folder of only your own writing.
+ ;; :house {:mounts ["/Users/you/Downloads" {:path "/Users/you/notes" :trusted true}]
  ;;         :timeout-seconds 60}
 
  ;; What each role is granted beyond relay's own tools: :tools, :may-add,

@@ -625,12 +625,14 @@
 
 (defn expand-paths
   "relay.edn's settings with a leading ~ expanded in the paths written by
-  hand: the shell's :mounts and each role's :files. Only a vector is
+  hand: the shell's :mounts (a path, or a mount's :path) and each role's
+  :files. Only a vector is
   touched, so a malformed setting is still refused as written. Pure."
   [settings home]
-  (let [each #(if (vector? %) (mapv (fn [p] (expand-home p home)) %) %)]
+  (let [each #(if (vector? %) (mapv (fn [p] (expand-home p home)) %) %)
+        mount #(if (and (map? %) (contains? % :path)) (update % :path expand-home home) (expand-home % home))]
     (cond-> settings
-      (vector? (get-in settings [:house :mounts])) (update-in [:house :mounts] each)
+      (vector? (get-in settings [:house :mounts])) (update-in [:house :mounts] (partial mapv mount))
       (map? (:grants settings))
       (update :grants (fn [gs] (into {} (for [[r g] gs]
                                           [r (if (and (map? g) (contains? g :files)) (update g :files each) g)])))))))

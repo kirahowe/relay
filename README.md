@@ -271,6 +271,11 @@ names match. `relay init` now writes `:dead-letter-handler` out, so a
 later change of default cannot move yours. A role granted `:shell` needs
 a `:house` section.
 
+A plain path in `:house :mounts` now counts as outside text, so every
+shell result reads as from those folders and links in what follows are
+broken. Mark a folder that holds only what you wrote as `{:path
+"~/notes" :trusted true}`.
+
 The commands for research reports (`relay review`, `relay verify`,
 `relay ledger`, `relay trust-level`), for held calls and their codes,
 and `--untrusted` are gone too: nothing waits for you, and what you
@@ -682,7 +687,11 @@ subscriber that polls now and then still hears of it, and is then
 dropped. An event that ended more than 30 days ago is dropped too; the
 log keeps it. The feed carries at most 1000 events, counting both kinds,
 so adding and removing in a loop cannot grow it. Text is escaped and stripped of control and invisible
-characters, so what a role writes cannot add a property or an event.
+characters, so what a role writes cannot add a property or an event. A
+calendar app makes links live, so when outside text shaped an event (the
+session that wrote it had read a stranger's mail, say), every link in its
+title, location and description is broken the way it is in a message to
+you: `https://` becomes `hxxps://` and the dots in the host become `[.]`.
 
 The feed is on the WebSocket listener (see Reaching relay from your
 phone), on that port and no other, so it is reachable only where that
@@ -1236,7 +1245,8 @@ runs there and nowhere else; the harness stays on the host. relay.edn
 says how it runs:
 
 ```clojure
-:house {:mounts ["/Users/you/notes" "/Users/you/Documents/grants"]
+:house {:mounts ["/Users/you/Downloads"
+                 {:path "/Users/you/notes" :trusted true}]
         ;; :runner ["container"]   ; the default, Apple container; ["docker"] or ["podman"] on Linux
         ;; :timeout-seconds 60     ; per command, enforced inside the VM
         ;; :output-limit 32768     ; bytes kept of stdout and of stderr
@@ -1273,7 +1283,18 @@ when it is missing or when `:house` has changed, and so does the first
 `sh` call. A mount may start with `~`, which relay expands to your home
 directory.
 
-What a command prints shows your files, so it is labelled `private`.
+A mounted folder can hold what someone else wrote: a download, a cloned
+repository, a saved mail. relay treats each mount as outside text unless
+you mark it `{:path "..." :trusted true}`, which says everything in it is
+yours. relay cannot tell which files a command read, so while any
+untrusted folder is mounted, every `sh` result counts as outside text
+from each such folder. Links in what the steward then tells you are
+broken, the message says it drew on "your files in downloads", and a
+change to how a role works that it shaped is flagged in the daily note.
+With only trusted mounts, results are yours and nothing is flagged.
+
+What a command prints shows your files, so it is labelled `private`, and
+`contaminated` with a source for each untrusted folder.
 `/scratch` lasts until the container restarts, so every result also
 carries the labels of every session that ran a command since then: text
 a session read in a stranger's mail and left in scratch is still from

@@ -3287,7 +3287,10 @@ rule ServeCalendarFeed {
     -- last. The feed's token is HMAC-SHA256 of a fixed text keyed with
     -- the listener's token: it opens the feed and nothing else, and the
     -- listener's token does not open the feed. relay calendar url prints
-    -- the URL with it.
+    -- the URL with it. Text is stripped of hidden characters, and an
+    -- event whose labels say outside text shaped it has every link in
+    -- its title, location and description broken, as a message to the
+    -- operator has, since a calendar app makes links live.
     requires: request.path = "/calendar.ics" and request.method = GET
     requires: request.token = feed_token(config.serve.websocket.token)
 }
@@ -3870,10 +3873,17 @@ invariant StewardShell {
     -- What a command prints is private, and carries the labels of every
     -- session that ran a command since the container started and before
     -- this command ended, since any of them could have left text in
-    -- scratch that it read.
+    -- scratch that it read. A mount is outside text unless the settings
+    -- mark it {:trusted true}: relay cannot tell what a command read, so
+    -- while any untrusted folder is mounted, every result is contaminated
+    -- and names each such folder (files:<name>) as its source.
     for result in ShellResults:
         "private" in result.labels
         includes_all(result.labels, result.container.scratch_labels)
+        result.container.untrusted_mounts != [] implies
+            ("contaminated" in result.labels
+             and result.sources = result.container.untrusted_mounts.map(m => mount_label(m)))
+        result.container.untrusted_mounts = [] implies result.sources = []
 }
 
 invariant NothingTheStewardDoesDestroys {

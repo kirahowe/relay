@@ -15,7 +15,8 @@
 
     {:runner [\"container\"]      ; the program, default Apple container;
                                   ; [\"docker\"] or [\"podman\"] on Linux
-     :mounts [\"/Users/you/notes\"] ; read-only, at the same path inside
+     :mounts [\"/Users/you/Downloads\" ; read-only, at the same path inside
+              {:path \"/Users/you/notes\" :trusted true}]
      :image \"...\"                ; default derived from the data directory
      :timeout-seconds 60          ; per command, enforced inside the VM
      :output-limit 32768          ; bytes kept of each of stdout and stderr
@@ -25,8 +26,16 @@
   two tests, never share a container or an image.
 
   Provenance: what a command prints shows the operator's files, so it is
-  private. The scratch directory outlives a session, so whatever a session
-  could have left there carries over: relay keeps the union of the labels
+  private. A mounted folder may also hold what someone else wrote (a
+  download, a cloned repository, a saved mail), so a mount is outside
+  text unless the operator marks it {:trusted true}. relay cannot tell
+  which files a command read, so while any mount is not trusted, every
+  result is contaminated and names each such folder as its source
+  (files:<folder>), as a mail names its sender. With only trusted mounts
+  a result is the operator's own.
+
+  The scratch directory outlives a session, so whatever a session could
+  have left there carries over: relay keeps the union of the labels
   of every session that ran a command since the container started, and
   every result carries it. A session that read a stranger's mail and wrote
   to /scratch cannot pass that text to a later session as clean."
@@ -79,6 +88,35 @@
     (some #(or (= p %) (str/starts-with? p (str % "/"))) ["/proc" "/sys" "/dev" "/tmp" "/scratch" "/etc" "/bin" "/sbin" "/usr" "/lib"])
     "it would cover part of the shell's own system"))
 
+(def mount-keys #{:path :trusted})
+
+(defn mount-path
+  "The path of one :mounts entry: the entry itself, or its :path."
+  [m]
+  (if (map? m) (:path m) m))
+
+(defn mount-trusted?
+  "Whether a :mounts entry is marked as holding only what the operator
+  wrote. A plain path is not."
+  [m]
+  (and (map? m) (true? (:trusted m))))
+
+(defn mount-paths
+  "The paths of :house's mounts, in order."
+  [house]
+  (mapv mount-path (:mounts house)))
+
+(defn- mount-entry-problem
+  "Why one :mounts entry cannot be used as written, or nil."
+  [m]
+  (cond
+    (map? m) (cond
+               (or (not (contains? m :path)) (seq (remove mount-keys (keys m))))
+               "a mount is a path, or {:path \"/Users/you/notes\" :trusted true}"
+               (not (boolean? (get m :trusted false))) ":trusted is true or false"
+               :else (path-problem (:path m)))
+    :else (path-problem m)))
+
 (defn settings-problem
   "What is wrong with relay.edn's :house, as a sentence, or nil."
   [house]
@@ -98,11 +136,12 @@
       (str where " has :runner " (pr-str runner) ", which names a network. relay runs the shell with no"
            " network and composes its options itself; :runner is only the program.")
       (and (contains? house :mounts) (not (vector? mounts)))
-      (str where " has :mounts " (pr-str mounts) "; it is a vector of absolute paths.")
-      (some #(path-problem %) mounts)
-      (let [m (first (filter path-problem mounts))]
-        (str where " cannot mount " (pr-str m) ": " (path-problem m) "."))
-      (and (seq mounts) (not (apply distinct? mounts)))
+      (str where " has :mounts " (pr-str mounts) "; it is a vector of absolute paths, each a string"
+           " or {:path \"/Users/you/notes\" :trusted true}.")
+      (some mount-entry-problem mounts)
+      (let [m (first (filter mount-entry-problem mounts))]
+        (str where " cannot mount " (pr-str m) ": " (mount-entry-problem m) "."))
+      (and (seq mounts) (not (apply distinct? (map mount-path mounts))))
       (str where " names a path twice in :mounts.")
       (and (contains? house :image) (not (and (string? image) (re-matches image-pattern image))))
       (str where " has :image " (pr-str image) ", which is not an image name such as \"relay-shell:latest\".")
@@ -243,7 +282,7 @@
 (defn mounts-problem
   "The first mount in :house that may not be mounted, as a sentence, or nil."
   [house where]
-  (first (for [m (:mounts house)
+  (first (for [m (mount-paths house)
                :let [why (mount-problem m where)]
                :when why]
            (str "relay.edn's :house cannot mount " m ": " why "."))))
@@ -327,12 +366,38 @@
     (reduce (fn [acc part] (if (or (empty? acc) (str/ends-with? acc "\n")) (str acc part) (str acc "\n" part)))
             "" parts)))
 
-(defn result-labels
-  "The labels of what a command printed: private, since it shows the
-  operator's files, and whatever any session that used the shell since the
-  container started could have left in scratch."
-  [scratch-labels]
-  (vec (sort (distinct (cons "private" scratch-labels)))))
+(def ^:private label-limit
+  "The most characters of a folder's name its source keeps."
+  90)
+
+(defn mount-label
+  "The source label naming a mounted folder: files:<its last name>, lower
+  case, with anything outside the label charset as a hyphen."
+  [path]
+  (let [n (-> (str/lower-case (or (last (str/split (str path) #"/")) ""))
+              (str/replace #"[^a-z0-9_.@+\-]+" "-")
+              (str/replace #"^[-.]+|-+$" ""))
+        n (subs n 0 (min (count n) label-limit))]
+    (str "files:" (if (str/blank? n) "folder" n))))
+
+(defn mount-sources
+  "The sources every result carries: each mounted folder not marked
+  trusted, since relay cannot tell what a command read."
+  [house]
+  (vec (sort (distinct (map (comp mount-label mount-path) (remove mount-trusted? (:mounts house)))))))
+
+(defn provenance
+  "{:labels :sources} of what a command printed. Labels: private, since it
+  shows the operator's files; contaminated and each untrusted folder when
+  any is mounted; and whatever any session that used the shell since the
+  container started could have left in scratch. Sources, what the
+  operator is told it drew on: the untrusted folders. Scratch is no
+  source of its own: what is there came through sessions, which carry
+  their own."
+  [house scratch-labels]
+  (let [srcs (mount-sources house)]
+    {:labels (vec (sort (distinct (concat ["private"] (when (seq srcs) (cons "contaminated" srcs)) scratch-labels))))
+     :sources srcs}))
 
 ;; --- the edges: running the runner
 
@@ -424,7 +489,7 @@
         real-dir (real-data-dir data-dir)
         home (str (fs/real-path (System/getProperty "user.home")))
         names (names house real-dir)
-        mounts (vec (for [m (:mounts house)]
+        mounts (vec (for [m (mount-paths house)]
                       (let [real (when (fs/exists? m) (str (fs/real-path m)))]
                         (when-not real
                           (throw (ex-info (str "relay.edn's :house mounts " m ", which does not exist.")
@@ -552,8 +617,8 @@
 (defn sh!
   "Runs `command` in the container for a session holding `session-labels`.
   Starts the container first when relay has not started it with the
-  current settings. Returns {:content :labels}; throws when the shell
-  cannot be reached at all."
+  current settings. Returns {:content :labels :sources} (provenance);
+  throws when the shell cannot be reached at all."
   [{:keys [data-dir house names spec] :as ctx} session-labels command]
   (let [{:keys [timeout-seconds output-limit] :as h} (merge defaults house)
         _ (when-not (= spec (:spec (read-state data-dir))) (up! ctx))
@@ -571,13 +636,14 @@
         ;; session running beside it could have written there before it
         ;; ended. A container replaced meanwhile empties the second part,
         ;; never the first.
-        labels (result-labels (concat before (scratch-labels data-dir)))]
+        {:keys [labels sources]} (provenance house (concat before (scratch-labels data-dir)))]
     (when (:timed-out r)
       (throw (ex-info "The shell did not answer." {:relay/labels labels})))
     {:content (result-text (assoc r :timed-out (and (contains? #{124 137} (:exit r))
                                                     (>= (:ms r) (* 1000 timeout-seconds))))
                            h)
-     :labels labels}))
+     :labels labels
+     :sources sources}))
 
 ;; --- the tool
 
@@ -585,7 +651,7 @@
   (let [{:keys [mounts timeout-seconds output-limit]} (merge defaults house)]
     (str "Run a shell command with sh -c on your own Linux machine. It has no network. "
          (if (seq mounts)
-           (str "The operator's files are there read-only, at the same paths: " (str/join ", " mounts) ". ")
+           (str "The operator's files are there read-only, at the same paths: " (str/join ", " (map mount-path mounts)) ". ")
            "None of the operator's files are mounted. ")
          "Write only under " scratch ", which is the working directory and is kept between"
          " commands until the machine restarts. It has coreutils, find, grep, rg, awk, sed, python3,"

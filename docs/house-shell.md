@@ -105,7 +105,7 @@ sequenceDiagram
     R->>C: start it again, run the command once more
   end
   R->>S: read scratch labels again (under the lock)
-  R-->>A: {content, labels: private + labels before + labels now}
+  R-->>A: {content, labels: private + untrusted folders + labels before + labels now}
   A-->>M: tool_result
 ```
 
@@ -149,7 +149,13 @@ flowchart LR
   D["relay house down / up<br/>new container"] -->|"scratch emptied"| E[("scratch labels []")]
 ```
 
-What a command prints shows Kira's files, so it is `private`. `/scratch`
+What a command prints shows Kira's files, so it is `private`. A mount
+may hold a stranger's text (a download, a cloned repository), so each is
+outside text unless relay.edn marks it `{:path ... :trusted true}`. relay
+cannot tell which files a command read, so while any untrusted folder is
+mounted, every result is also `contaminated` and names each such folder
+as its source (`files:<name>`, shown to Kira as "your files in <name>").
+With only trusted mounts a result has no source. `/scratch`
 outlives a session, so relay records each session's labels before it runs
 a command, and every result carries all the labels recorded since the
 container started. Session B above was clean, but it reads what session A

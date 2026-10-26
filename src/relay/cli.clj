@@ -521,7 +521,8 @@ id public too.")
                           (not image-present) "The shell is not running, and its image is not built. Run relay house build."
                           :else "The shell is not running. relay house up starts it.")
                         (if (seq mounts)
-                          (cons "It sees, read-only:" (map #(str "  " %) mounts))
+                          (cons "It sees, read-only:"
+                                (map #(str "  " (shell/mount-path %) (when (shell/mount-trusted? %) " (trusted)")) mounts))
                           ["It sees none of your folders: :house has no :mounts."])))
       (fail! "usage: relay house build|up|down|remove|status"))))
 

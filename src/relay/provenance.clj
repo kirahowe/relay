@@ -19,7 +19,8 @@
 
   A source is a label that names an outsider: `contaminated` (something
   from outside, no more known), or kind:what such as
-  mail:dana@example.org, github:kira/tidy, ics:calendar, and two that
+  mail:dana@example.org, github:kira/tidy, ics:calendar, files:downloads
+  (a folder mounted in the shell and not marked trusted), and two that
   relay records itself and never sends to agentloop: web:<page or URL>
   for a page a tool read, and search:web for a web search."
   (:require [clojure.string :as str]
@@ -107,6 +108,7 @@
                     :else (str "the " what " calendar"))
         "web" (str "the web page " (text/defang (cut (text/without-hidden what) 80)))
         "search" "a web search"
+        "files" (str "your files in " (text/without-hidden what))
         "something from outside"))))
 
 (defn phrases
@@ -155,6 +157,7 @@
       "mail" "a mail"
       "github" "GitHub"
       "ics" "a calendar"
+      "files" "your files"
       nil)))
 
 (defn mark
