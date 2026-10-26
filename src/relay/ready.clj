@@ -257,6 +257,25 @@
   [it]
   (wire-item it))
 
+(defn zone-name
+  "relay.edn's :timezone as a client is sent it: the zone's normalized
+  region id, so an alias reads as the zone it is. UTC in any spelling is
+  \"UTC\", and a fixed offset is the Etc zone with that offset when
+  there is one (\"Etc/GMT-2\" for +02:00), since clients look names up
+  in the IANA database. An offset no Etc zone has stays an offset."
+  [timezone]
+  (let [z (.normalized (java.time.ZoneId/of timezone))]
+    (if-not (instance? java.time.ZoneOffset z)
+      (.getId z)
+      (let [secs (.getTotalSeconds ^java.time.ZoneOffset z)
+            hours (quot secs 3600)
+            etc (when (zero? (rem secs 3600))
+                  ;; Etc zones are POSIX-signed: Etc/GMT-2 is two hours east.
+                  (str "Etc/GMT" (if (pos? hours) "-" "+") (abs hours)))]
+        (cond (zero? secs) "UTC"
+              (and etc (contains? (java.time.ZoneId/getAvailableZoneIds) etc)) etc
+              :else (.getId z))))))
+
 (defn answer
   "The _relay/ready answer: {\"rev\" log-rev \"items\" [wire form]}."
   [state rev opts]

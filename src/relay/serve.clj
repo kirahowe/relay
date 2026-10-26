@@ -31,6 +31,7 @@
             [relay.ics :as ics]
             [relay.inbound :as inbound]
             [relay.moves :as moves]
+            [relay.ready :as ready]
             [relay.roster :as roster]
             [relay.websocket :as ws]
             [relay.workspace :as workspace]
@@ -154,7 +155,7 @@
    ;; What the loop thread itself raises (a connection it gave up on)
    ;; goes here, so the loop never waits on its own full queue.
    :own (LinkedBlockingQueue.) :loop-thread (atom nil)
-   :hub (atom (hub/hub {:mode mode})) :conns (atom {}) :convs (atom {}) :next-conn (atom 0)
+   :hub (atom (hub/hub {:mode mode :timezone (some-> (:timezone (:config sys)) ready/zone-name)})) :conns (atom {}) :convs (atom {}) :next-conn (atom 0)
    :closed-any (atom false)})
 
 (defn- enqueue!

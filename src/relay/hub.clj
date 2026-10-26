@@ -107,13 +107,15 @@
 
 (defn hub
   "An empty hub. Options: :mode, :service or :embedded; :replay-cap;
-  :max-pending; :max-per-conversation."
-  [{:keys [mode replay-cap max-pending max-per-conversation]
+  :max-pending; :max-per-conversation; :timezone, the zone name a
+  _relay/ready answer gives (relay.ready/zone-name of relay.edn's)."
+  [{:keys [mode replay-cap max-pending max-per-conversation timezone]
     :or {replay-cap default-replay-cap max-pending default-max-pending
          max-per-conversation default-max-per-conversation}}]
   (when-not (#{:service :embedded} mode)
     (throw (ex-info "A hub's mode is :service or :embedded." {:mode mode})))
   {:mode mode :replay-cap replay-cap :max-pending max-pending :max-per-conversation max-per-conversation
+   :timezone timezone
    :conns {} :convs {} :requests {} :next-rid 0 :roster [] :state nil :awaiting clojure.lang.PersistentQueue/EMPTY})
 
 ;; --- effects and lines
@@ -295,7 +297,8 @@
     (cond
       why (refuse h rid -32602 why)
       (nil? state) (refuse h rid -32000 "relay has not read what is ready yet. Try again.")
-      :else (let [answer* (workspace/ready-answer state (params-of msg))]
+      :else (let [answer* (cond-> (workspace/ready-answer state (params-of msg))
+                            (:timezone h) (assoc "timezone" (:timezone h)))]
               (-> h (assoc-in [:conns cid :ready] (ready/by-id (get answer* "items")))
                   (assoc-in [:conns cid :ready-limit] (or (get (params-of msg) "limit") ready-limit))
                   (answer rid answer*))))))

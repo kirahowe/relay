@@ -14,6 +14,7 @@
             [relay.core-test :as ct]
             [relay.dispatch :as dispatch]
             [relay.harness.agentloop :as agentloop]
+            [relay.hub :as hub]
             [relay.hub-test :as ht]
             [relay.inbound :as inbound]
             [relay.log :as log]
@@ -782,6 +783,35 @@
     (testing "a parameter it does not take is refused"
       (let [[_ fx] (ht/say h 1 (ht/req 6 "_relay/ready" {:sessionId "s1"}))]
         (is (= -32602 (get-in (first (ht/writes fx 1)) ["error" "code"])))))))
+
+(deftest the-ready-answer-names-the-operators-zone
+  (testing "the hub sends relay.edn's zone, by its region name, with the items"
+    (let [h (-> (first (ht/run (hub/hub {:mode :service :timezone (ready/zone-name "US/Eastern")})
+                               {:event :log-changed :roster ht/roster :state (hub-state (told-w))}))
+                (ht/opened 1))
+          [_ fx] (ht/say h 1 (ht/req 5 "_relay/ready" {}))
+          answer (get (first (ht/writes fx 1)) "result")]
+      (is (= "US/Eastern" (get answer "timezone")))
+      (is (seq (get answer "items")))))
+  (testing "UTC in any of its spellings is UTC, and a whole-hour offset an Etc zone"
+    (is (= "UTC" (ready/zone-name "UTC")))
+    (is (= "UTC" (ready/zone-name "Etc/UTC")))
+    (is (= "UTC" (ready/zone-name "GMT")))
+    (is (= "Etc/GMT-2" (ready/zone-name "UTC+2")))
+    (is (= "Etc/GMT+3" (ready/zone-name "-03:00")))
+    (is (= "America/Halifax" (ready/zone-name "America/Halifax")))))
+
+(defspec a-zone-name-keeps-the-zones-offsets 200
+  (prop/for-all [id (gen/one-of [(gen/elements (sort (ZoneId/getAvailableZoneIds)))
+                                 (gen/fmap #(str (java.time.ZoneOffset/ofTotalSeconds (* 900 %))) (gen/choose -56 56))])
+                 secs (gen/choose 0 4102444800)]
+    (let [named (ready/zone-name id)
+          at (Instant/ofEpochSecond secs)]
+      (and (= (.getOffset (.getRules (ZoneId/of id)) at) (.getOffset (.getRules (ZoneId/of named)) at))
+           (= named (ready/zone-name named))
+           (or (contains? (ZoneId/getAvailableZoneIds) named)
+               ;; Only an offset no Etc zone has stays an offset.
+               (= named (.getId (.normalized (ZoneId/of id)))))))))
 
 (deftest the-hub-takes-a-reply-as-the-operators
   (let [w (told-w)

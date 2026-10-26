@@ -139,8 +139,13 @@ command line instead.
 - Params: `{"limit": int}`, how many of the newest items to send, from 1
   to 500 (60 when left out), or `{}`. Anything else, `sessionId` included,
   is refused (-32602).
-- Answer: `{"rev": int, "items": [Item]}`, newest first. `rev` is the seq
-  of the log's last event. This is the client channel's view of
+- Answer: `{"rev": int, "timezone": string, "items": [Item]}`, items
+  newest first. `rev` is the seq of the log's last event. `timezone` is
+  the zone relay shows times in, relay.edn's `:timezone` as an IANA name
+  (its normalized region id, such as `"America/Halifax"`; UTC in any
+  spelling is `"UTC"`, and a whole-hour offset is its `Etc/GMT` zone), so
+  a client can show times as relay does. `_relay/ready/changed` does not
+  repeat it. This is the client channel's view of
   everything prepared for the operator: what relay told her, drafts a
   role made with an edit tool that is not relay's own, entries on the
   agent's calendar that have not ended, findings a role put on the
