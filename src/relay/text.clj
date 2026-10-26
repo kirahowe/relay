@@ -344,29 +344,31 @@
 
 (defn report-lines
   "What to tell the operator about a report: one plain line per kind of
-  change, empty when nothing changed. Never mentions labels."
-  [{:keys [removed normalized? mixed]}]
-  (let [from "from what you pasted."
-        n #(get removed % 0)
-        shown (take 3 mixed)]
-    (vec
-     (concat
-      (when (pos? (n :control)) [(str "Removed " (plural (n :control) "control character" "control characters") " " from)])
-      (when (pos? (n :invisible)) [(str "Removed " (plural (n :invisible) "invisible character" "invisible characters") " " from)])
-      (when (pos? (n :bidi)) [(str "Removed " (plural (n :bidi) "text-direction character" "text-direction characters") " " from)])
-      (when (pos? (n :tag)) [(str "Removed " (plural (n :tag) "hidden tag character" "hidden tag characters") " " from)])
-      (when (pos? (n :separator))
-        [(str "Turned " (plural (n :separator) "unusual line separator" "unusual line separators") " into ordinary line breaks.")])
-      (when normalized? ["Put some combined characters into their standard form."])
-      (for [{:keys [word scripts reads-as whole-script]} shown]
-        (cond
-          reads-as (str "The word \"" (clip word) "\" uses look-alike letters; it reads as \"" (clip reads-as) "\".")
-          whole-script (str "The word \"" (clip word) "\" is written in " (first scripts)
-                            " letters that look like Latin ones.")
-          :else (str "The word \"" (clip word) "\" mixes " (str/join " and " scripts)
-                     " letters, so it may not be what it looks like.")))
-      (when (> (count mixed) 3)
-        [(str (- (count mixed) 3) " more words mix letters from different alphabets.")])))))
+  change, empty when nothing changed. Never mentions labels. `from` names
+  where the characters were removed from, \"from what you pasted.\" unless
+  given, for an entry point whose reader is not the operator."
+  ([report] (report-lines report "from what you pasted."))
+  ([{:keys [removed normalized? mixed]} from]
+   (let [n #(get removed % 0)
+         shown (take 3 mixed)]
+     (vec
+      (concat
+       (when (pos? (n :control)) [(str "Removed " (plural (n :control) "control character" "control characters") " " from)])
+       (when (pos? (n :invisible)) [(str "Removed " (plural (n :invisible) "invisible character" "invisible characters") " " from)])
+       (when (pos? (n :bidi)) [(str "Removed " (plural (n :bidi) "text-direction character" "text-direction characters") " " from)])
+       (when (pos? (n :tag)) [(str "Removed " (plural (n :tag) "hidden tag character" "hidden tag characters") " " from)])
+       (when (pos? (n :separator))
+         [(str "Turned " (plural (n :separator) "unusual line separator" "unusual line separators") " into ordinary line breaks.")])
+       (when normalized? ["Put some combined characters into their standard form."])
+       (for [{:keys [word scripts reads-as whole-script]} shown]
+         (cond
+           reads-as (str "The word \"" (clip word) "\" uses look-alike letters; it reads as \"" (clip reads-as) "\".")
+           whole-script (str "The word \"" (clip word) "\" is written in " (first scripts)
+                             " letters that look like Latin ones.")
+           :else (str "The word \"" (clip word) "\" mixes " (str/join " and " scripts)
+                      " letters, so it may not be what it looks like.")))
+       (when (> (count mixed) 3)
+         [(str (- (count mixed) 3) " more words mix letters from different alphabets.")]))))))
 
 (defn sanitize-input
   "The one function every operator entry point calls: a string, or any

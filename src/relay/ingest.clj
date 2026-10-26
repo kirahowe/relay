@@ -26,7 +26,8 @@
   (:require [cheshire.core :as json]
             [clojure.string :as str]
             [relay.ics-feed :as ics-feed]
-            [relay.mailbox :as mailbox])
+            [relay.mailbox :as mailbox]
+            [relay.text :as text])
   (:import (java.time Instant ZoneId)))
 
 (def kinds #{:pop3 :github :ics})
@@ -251,28 +252,49 @@
                        :when v]
                    (str h ": " (one-line (mailbox/decode-words v) 300)))))
 
+(defn- operators-own
+  "A trusted memo cleaned like anything else the operator writes
+  (relay.text/sanitize-input; decision 5, I6). The command line tells the
+  operator what was removed; nobody is at a terminal when mail arrives,
+  so what changed is said in plain lines at the end of the memo, where
+  the role reads it and the operator can see it."
+  [memo]
+  (let [{:keys [value report]} (text/sanitize-input (select-keys memo [:subject :body]))
+        notes (text/report-lines report "from the operator's mail.")]
+    (cond-> (merge memo value)
+      (seq notes) (update :body str "\n\n" (str/join "\n" notes)))))
+
+(defn reply-text
+  "The operator's own words in a mail that answers a message: the text
+  without its quoted tail, cleaned like the memo it becomes."
+  [msg]
+  (:value (text/sanitize-input (mailbox/without-quoted-tail (:text (mailbox/text-of msg))))))
+
 (defn mail-memo
   "The memo a mail becomes: {:from :subject :body :labels :reply-to}.
   `verdict` is mail-verdict's; `parent` the message it answers, if any;
-  `partial` whether only its headers were read (it was too big)."
+  `partial` whether only its headers were read (it was too big). The
+  operator's own mail is sanitized (operators-own); mail from outside is
+  kept as it came, since it is marked as outside text."
   [msg verdict parent {:keys [partial size]}]
   (let [{:keys [text attachments]} (if partial {:text "" :attachments []} (mailbox/text-of msg))
         subject (some-> (first (mailbox/values msg "Subject")) mailbox/decode-words (one-line 150))
         subject (if (str/blank? subject) "(no subject)" subject)
         sender (:from verdict)]
     (if (:trusted verdict)
-      (if parent
-        {:from "operator" :labels [] :reply-to (:id parent)
-         :subject (one-line (str "Re: " (:subject parent)) 200)
-         :body (str "The operator answered your message \"" (one-line (:subject parent) 150) "\" by mail:\n\n"
-                    (clip (mailbox/without-quoted-tail text) text-limit)
-                    (attachments-text attachments))}
-        {:from "operator" :labels []
-         :subject subject
-         :body (str "The operator sent this to your mailbox from their own address.\n\n"
-                    (header-lines msg) "\n\n"
-                    (if partial (str "It is too big to read here (" (size-text size) ").") (clip text text-limit))
-                    (attachments-text attachments))})
+      (operators-own
+       (if parent
+         {:from "operator" :labels [] :reply-to (:id parent)
+          :subject (one-line (str "Re: " (:subject parent)) 200)
+          :body (str "The operator answered your message \"" (one-line (:subject parent) 150) "\" by mail:\n\n"
+                     (clip (mailbox/without-quoted-tail text) text-limit)
+                     (attachments-text attachments))}
+         {:from "operator" :labels []
+          :subject subject
+          :body (str "The operator sent this to your mailbox from their own address.\n\n"
+                     (header-lines msg) "\n\n"
+                     (if partial (str "It is too big to read here (" (size-text size) ").") (clip text text-limit))
+                     (attachments-text attachments))}))
       {:from "dispatcher" :labels ["contaminated" (if (:claims-operator verdict) unverified-operator-label (mail-label sender))]
        :subject (one-line (str (if (:claims-operator verdict)
                                  "Unverified mail in the operator's name"

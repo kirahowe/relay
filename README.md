@@ -383,9 +383,13 @@ This happens in the command line's writes (`relay memo`, `put`, `add`,
 `fact`, `card`, `wake --note` and the rest, with the lines on stderr), in
 a conversation's prompt blocks and embedded resources (the lines arrive as
 a short message at the start of the turn, marked `_meta` `relay/notice`),
-and in card edits from a client (the answer's `notes`). Code that adds
-another way in, such as the channels and replies of the messages and
-mailbox work, calls the same function, `relay.text/sanitize-input`,
+in card edits from a client (the answer's `notes`), and in mail from your
+own verified address: a reply to a message, or anything you forward to
+the agent's mailbox. Nobody is at a terminal when mail arrives, so the
+lines go at the end of the memo the role gets, such as `Removed 1
+invisible character from the operator's mail.` Mail from anyone else is
+left as it came, since it is already marked as from outside. Code that
+adds another way in calls the same function, `relay.text/sanitize-input`,
 which takes a string or any data holding strings and returns the cleaned
 value with the lines to tell you.
 

@@ -3278,13 +3278,14 @@ invariant PastesAreSanitized {
     -- Text the operator types, pastes or attaches is cleaned where it
     -- enters (relay.text/sanitize-input): the command line's writes, a
     -- conversation's prompt blocks and embedded resources, a card edit
-    -- from a client; the mailbox's replies and the channels' replies call
-    -- the same function. Invisible, bidi-control, tag, control and
-    -- private-use characters are removed, line separators become line
+    -- from a client, the operator's verified mail (a reply and a
+    -- forward); the channels' replies call the same function. Mail from
+    -- outside is left as it came. Invisible, bidi-control, tag, control
+    -- and private-use characters are removed, line separators become line
     -- breaks, the rest is NFC, and printable ASCII is never touched.
-    -- Cleaning twice gives the same text. Each change is told to the
-    -- operator in one plain line; mixed-alphabet words are flagged and
-    -- kept.
+    -- Cleaning twice gives the same text. Each change is told in one plain
+    -- line: to the operator where they typed it, at the end of the memo
+    -- for mail; mixed-alphabet words are flagged and kept.
     for text in OperatorText:
         sanitize(sanitize(text)) = sanitize(text)
         not has_hidden_characters(sanitize(text))

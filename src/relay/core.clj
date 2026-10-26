@@ -2270,7 +2270,7 @@
     (if reply?
       (emit tx "message/replied" {:message (:id parent) :memo (last-id tx)
                                   :channel (email-channel-for config (:from verdict))
-                                  :text (mailbox/without-quoted-tail (:text (mailbox/text-of msg)))})
+                                  :text (ingest/reply-text msg)})
       tx)))
 
 (defn- record-github

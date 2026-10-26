@@ -17,6 +17,7 @@
             [relay.ics :as ics]
             [relay.ics-feed :as ics-feed]
             [relay.ingest :as ingest]
+            [relay.mailbox :as mailbox]
             [relay.mailbox-test :as mt]
             [relay.test-support :as support]
             [relay.text :as text]
@@ -184,6 +185,56 @@
         (let [w (receive w "f2" (mail "From: kira@example.org" verified (str "In-Reply-To: " bad)))]
           (is (empty? (of-type w "message/replied")) bad)
           (is (= [] (:labels (first (memos w)))) "it is still the operator's own mail"))))))
+
+(def hidden
+  "The operator's words with a zero-width space and a right-to-left
+  override in them, and the same words as they should come out."
+  {:dirty "Meet at the Old\u200b Hall \u202eon Friday." :clean "Meet at the Old Hall on Friday."})
+
+(defn- utf8-mail
+  "A raw mail, as the mailbox reader gets one, whose text is UTF-8."
+  [headers body]
+  (mailbox/bytes->raw
+   (.getBytes (str (str/join "\r\n" (concat headers ["Content-Type: text/plain; charset=utf-8"]))
+                   "\r\n\r\n" body "\r\n\r\nOn Mon, you wrote:\r\n> Which venue?\r\n")
+              "UTF-8")))
+
+(defn- clean? [s]
+  (and (not (re-find #"[\u200b\u202e]" s)) (= s (:text (text/sanitize s)))))
+
+(deftest the-operators-own-mail-is-sanitized
+  (testing "a verified reply: the memo and the reply on the thread"
+    (let [[w msg] (told-by-clerk)
+          mid (channels/message-id msg agent-address)
+          w (receive w "h1" (utf8-mail ["From: kira@example.org" verified "Subject: Re: Which venue?" (str "In-Reply-To: " mid)]
+                                       (:dirty hidden)))
+          [m] (memos w)
+          [r] (of-type w "message/replied")
+          body (get-in m [:data :body])]
+      (is (= (:clean hidden) (get-in r [:data :text])))
+      (is (clean? (get-in r [:data :text])) "idempotent")
+      (is (str/includes? body (:clean hidden)))
+      (is (clean? body))
+      (is (str/includes? body "Removed 1 invisible character from the operator's mail."))
+      (is (str/includes? body "Removed 1 text-direction character from the operator's mail."))
+      (is (= [(:clean hidden)] (map :text (:replies (core/message (:state w) (:id msg))))))))
+  (testing "a verified forward: its subject and body"
+    (let [w (receive (seed) "h2" (utf8-mail ["From: kira@example.org" verified "Subject: =?utf-8?q?Fwd:_Notes=E2=80=8B_for_the_=E2=80=AEconcert?="]
+                                            (:dirty hidden)))
+          [m] (memos w)]
+      (is (= [] (:labels m)))
+      (is (= "Fwd: Notes for the concert" (get-in m [:data :subject])))
+      (is (clean? (get-in m [:data :subject])))
+      (is (str/includes? (get-in m [:data :body]) (:clean hidden)))
+      (is (clean? (get-in m [:data :body])))))
+  (testing "a mail from outside is kept as it came"
+    (let [w (receive (seed) "h3" (utf8-mail ["From: eve@example.net" "Subject: =?utf-8?q?Notes=E2=80=8B?="] (:dirty hidden)))
+          [m] (memos w)
+          body (get-in m [:data :body])]
+      (is (core/contaminated? (:labels m)))
+      (is (str/includes? body (:dirty hidden)))
+      (is (str/includes? (get-in m [:data :subject]) "Notes\u200b"))
+      (is (not (str/includes? body "Removed "))))))
 
 (def ^:private gen-threaded-mail
   (gen/let [{:keys [raw expected]} mt/gen-mail
