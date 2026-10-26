@@ -7,6 +7,7 @@
             [clojure.edn :as edn]
             [clojure.string :as str]
             [relay.connections :as connections]
+            [relay.files :as files]
             [relay.messages :as messages]
             [relay.shell :as shell])
   (:import (java.time ZoneId)))
@@ -121,7 +122,7 @@
 (def grant-keys
   "What a role can be granted. Anything else is refused, so a typo such as
   :pubic cannot leave a role able to hold private data."
-  #{:tools :may-add :public :shell})
+  #{:tools :may-add :public :shell :files})
 
 (defn- check-grants
   "Checks each role's grants, and what a public role may not have. A public
@@ -173,6 +174,15 @@
       (when (= :script (get-in harnesses [default-harness :kind]))
         (problem! (str "Role " role " has :shell, and the default harness is a :script harness, which gets"
                        " no tools. A role with the shell needs agentloop."))))
+    ;; :files names the folders the role may move files within
+    ;; (relay.files), apart from the shell's read-only mounts.
+    (when (contains? g :files)
+      (when-let [why (files/grant-problem role (:files g))] (problem! why))
+      (when (:public g)
+        (problem! (str "Role " role " is :public, so it may not have :files: file names are your private data.")))
+      (when (= :script (get-in harnesses [default-harness :kind]))
+        (problem! (str "Role " role " has :files, and the default harness is a :script harness, which gets"
+                       " no tools. A role that organizes files needs agentloop."))))
     (when-not (:public g)
       (doseq [t (distinct (:tools g))
               :let [{:keys [class protocol]} (get tools t)]]
@@ -481,12 +491,14 @@
       (problem! (str data-dir " has no relay.edn. Run `relay init` to make one.")))
     (let [config (resolve-config (connections/expand data-dir (edn/read-string (slurp (str file)))
                                                      {:classes tool-classes :labels label-names}))]
-      ;; Where the files to mount may not be depends on this machine: the
-      ;; home directory and the data directory itself.
-      (when-let [why (shell/mounts-problem (:house config)
-                                           {:home (str (fs/real-path (System/getProperty "user.home")))
-                                            :data-dir (str (fs/real-path data-dir))})]
-        (problem! why))
+      ;; Where the files to mount, and the folders to organize, may not be
+      ;; depends on this machine: the home directory and the data
+      ;; directory itself.
+      (let [where {:home (str (fs/real-path (System/getProperty "user.home")))
+                   :data-dir (str (fs/real-path data-dir))}]
+        (when-let [why (or (shell/mounts-problem (:house config) where)
+                           (files/roots-problem config where))]
+          (problem! why)))
       config)))
 
 (defn zone ^ZoneId [config]
