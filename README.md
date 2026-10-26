@@ -364,6 +364,29 @@ every role's system prompt, except a public role's (see below).
 A role's grants are `:tools`, `:may-add` and `:public`, and relay
 refuses any other key, so a typo cannot change what a role may hold.
 
+### What you paste
+
+Whatever you type, paste or attach is yours, and relay trusts it. It
+still cleans the text where it comes in, because a paste can carry
+characters you cannot see: zero-width runs, text-direction overrides,
+tag characters that spell out a message, terminal escapes. relay removes
+those, turns unusual line separators into line breaks, puts the text in
+Unicode's standard form (NFC), and tells you each change in one line,
+such as `Removed 3 invisible characters from what you pasted.` A word that
+mixes alphabets (a Cyrillic "а" inside a Latin word) is kept and
+flagged. Printable ASCII is never touched, and cleaning a text twice
+changes nothing more.
+
+This happens in the command line's writes (`relay memo`, `put`, `add`,
+`fact`, `card`, `wake --note` and the rest, with the lines on stderr), in
+a conversation's prompt blocks and embedded resources (the lines arrive as
+a short message at the start of the turn, marked `_meta` `relay/notice`),
+and in card edits from a client (the answer's `notes`). Code that adds
+another way in, such as the channels and replies of the messages and
+mailbox work, calls the same function, `relay.text/sanitize-input`,
+which takes a string or any data holding strings and returns the cleaned
+value with the lines to tell you.
+
 ### Labels and the house
 
 relay keeps the operator's things in the house. A role that is not

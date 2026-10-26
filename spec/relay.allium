@@ -3131,6 +3131,22 @@ invariant EntryPointsDecideProvenance {
         not has_contaminated(event.session_labels)
 }
 
+invariant PastesAreSanitized {
+    -- Text the operator types, pastes or attaches is cleaned where it
+    -- enters (relay.text/sanitize-input): the command line's writes, a
+    -- conversation's prompt blocks and embedded resources, a card edit
+    -- from a client; the mailbox's replies and the channels' replies call
+    -- the same function. Invisible, bidi-control, tag, control and
+    -- private-use characters are removed, line separators become line
+    -- breaks, the rest is NFC, and printable ASCII is never touched.
+    -- Cleaning twice gives the same text. Each change is told to the
+    -- operator in one plain line; mixed-alphabet words are flagged and
+    -- kept.
+    for text in OperatorText:
+        sanitize(sanitize(text)) = sanitize(text)
+        not has_hidden_characters(sanitize(text))
+}
+
 invariant NoWayOutOfTheHouse {
     -- No role that is not public is granted an egress tool, so nothing
     -- a house role reads can leave by one, and no memo goes from a house

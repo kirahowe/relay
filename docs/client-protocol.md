@@ -101,6 +101,8 @@ command line instead.
   as `iten` or `sen` fails instead of passing as success.
 - Answer: `{"card": Card, "changed": bool}`. `changed` is false when the
   op would change nothing, and then nothing is recorded.
+  `notes` (strings) is present when relay cleaned hidden characters out of
+  the text the op carried: one plain line per change, to show the operator.
 - Errors: -32602 for the params; -32000 for relay's refusal, such as a
   card or item that does not exist, a limit, or a stale edit: an op that
   changes text is refused when that text was written after `seen`, an
@@ -185,6 +187,13 @@ command line instead.
 | `_relay/cards/changed` | connection | `{"rev", "cards": [Card]}`, every card whose rev is not the one this connection was last sent, archived cards included so the client can drop them | updates the one board, open conversation or not; a changed card brings the board into view unless the operator is busy in the pane |
 | `_relay/messages/changed` | connection | `{"rev", "messages": [Message]}`, oldest first: every message made, or whose deliveries changed, since this connection was last sent messages | not used yet |
 | `_relay/replayed` | session | `{"sessionId", "truncated": bool}`, after the replay that follows `session/load` or an attaching `session/new`; `truncated` says the oldest updates were dropped | marks the conversation loaded, says so at the top when truncated, and stops calls the replay left open once the roster says the turn is idle |
+
+A prompt's text is cleaned before the agent sees it: the text of text
+blocks, embedded resources (`text` and `uri`) and resource links. Image and
+blob data are not touched. When something changed, relay sends the
+attached connections one `session/update` with `agent_message_chunk`
+and `_meta` `{"relay/notice": true}`, whose text is one plain line per
+change, when the turn starts. It is kept in the replay.
 
 relay sends `_relay/cards/changed` only to a connection that has called
 `_relay/cards`, `_relay/messages/changed` only to one that has called
