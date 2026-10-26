@@ -111,7 +111,9 @@
              ;; macOS firmlinks: the same files, under the data volume.
              "/System/Volumes/Data" "/System/Volumes/Data/Users" "/System/Volumes/Data/Users/someone"
              "/System/Volumes/Data/Users/someone/.ssh" "/System/Volumes/Data/Users/someone/.codex-work"
-             "/System/Volumes/Data/Users/someone/Sync/relay/log"]]
+             "/System/Volumes/Data/Users/someone/Sync/relay/log"
+             ;; They hold the data volume, and mounting them can wedge the container.
+             "/System" "/System/Volumes"]]
     (is (shell/mount-problem m where) m))
   (doseq [m ["/Users/someone/notes" "/Users/someone/Documents/grants" "/Users/someone/Sync/other"
              "/Users/someone/.config/nvim" "/Volumes/Archive/photos" "/Users/someone/code/codex-notes"]]

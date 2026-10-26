@@ -196,10 +196,14 @@
 (defn mount-problem
   "Why `mount` may not be mounted, or nil: it is, holds or sits inside the
   data directory, the home directory itself, or one of the secrets. A path
-  under /System/Volumes/Data is checked as the path it is the same file as."
+  under /System/Volumes/Data is checked as the path it is the same file as.
+  /System and /System/Volumes hold the data volume, and mounting them can
+  wedge the container so it can be neither stopped nor removed."
   [mount {:keys [home data-dir]}]
   (let [home (unfirm home) data-dir (unfirm data-dir)]
     (or (path-problem mount)
+        (when (and (not= mount firmlink-root) (under? firmlink-root mount))
+          "it holds the whole disk")
         (let [m (unfirm mount)]
           (or (when (= "/" m) "it is the whole disk")
               (when (and home (under? home m)) home-why)
