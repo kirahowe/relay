@@ -8,6 +8,7 @@
             [clojure.string :as str]
             [relay.connections :as connections]
             [relay.files :as files]
+            [relay.ingest :as ingest]
             [relay.messages :as messages]
             [relay.shell :as shell])
   (:import (java.time ZoneId)))
@@ -421,6 +422,8 @@
   (doseq [[k why] (sort-by key removed-keys) :when (contains? config k)] (problem! why))
   (check-required config)
   (check-messages (:messages config))
+  (when-let [why (ingest/settings-problem (:ingest config) #(true? (get-in config [:grants % :public])))]
+    (problem! why))
   (when-not (and (sequential? client) (seq client)
                  (every? #(and (string? %) (not (str/blank? %))) client))
     (problem! (str "relay.edn has :client " (pr-str client)

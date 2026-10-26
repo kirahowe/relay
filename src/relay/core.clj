@@ -16,6 +16,9 @@
             [relay.cards :as cards]
             [relay.config :as config]
             [relay.ics :as ics]
+            [relay.ics-feed :as ics-feed]
+            [relay.ingest :as ingest]
+            [relay.mailbox :as mailbox]
             [relay.messages :as messages]
             [relay.schedule :as schedule]
             [relay.search :as search]
@@ -36,6 +39,14 @@
   "Seen something an outsider could have written."
   "contaminated")
 (def label-names #{private-label contaminated-label})
+
+(defn known-label?
+  "Whether relay takes a label: private, contaminated, or one naming
+  where something came from (relay.ingest/source-label?, such as
+  mail:stranger@example.com), in agentloop's label charset. Any other
+  name could only be a mistake, so it is refused rather than dropped."
+  [l]
+  (boolean (or (label-names l) (ingest/source-label? l))))
 
 (def entry-points
   "Where something enters relay, and the labels it enters with (I5).
@@ -94,6 +105,9 @@
    ;; Calls to files_move, by the seq of their files/moving event: what
    ;; each moved, and what has been undone (relay.files).
    :moves {}
+   ;; Each ingest source's record: what it has brought in, by key and
+   ;; version, where it got to, and whether it is failing.
+   :ingest {}
    ;; Every label any event has carried, which bounds what a session that
    ;; could read anything in relay may have seen.
    :seen-labels []
@@ -984,7 +998,7 @@
 (defn- told
   "What relay remembers it told the operator, from a message's :origin,
   so it is told once."
-  [state {:keys [origin harness role week percent reason]} at]
+  [state {:keys [origin harness role week percent reason] :as about} at]
   (cond-> state
     (#{"harness-needs-attention" "harness-unreachable"} origin)
     (assoc-in [:harnesses harness :operator-told] true)
@@ -994,6 +1008,8 @@
     (assoc-in [:unwakeable-told role] reason)
     (= "public-role-can-run" origin)
     (update :unwakeable-told dissoc role)
+    (= "ingest-failing" origin)
+    (assoc-in [:ingest (:source about) :failing :told] true)
     ;; The highest share of the weekly budget told for each week.
     (= "budget-reached" origin)
     (update-in [:budget-told week] (fnil max 0) percent)))
@@ -1034,6 +1050,35 @@
 (defmethod evolve* "message/failed" [state {:keys [data] :as event}]
   (delivery state event #(assoc % :status :failed :error (:error data) :attempts (:attempt data)
                                 :retry-at (inst (:retry-at data)))))
+
+;; A reply the operator sent to a message, verified as theirs by the
+;; channel it came through (relay.ingest for mail). It joins the
+;; message's thread; the memo it became is :memo.
+(defmethod evolve* "message/replied" [state {:keys [seq at data]}]
+  (if (get-in state [:messages (:message data)])
+    (-> state
+        (update-in [:messages (:message data) :replies] (fnil conj [])
+                   {:id seq :at (inst at) :channel (:channel data) :text (:text data) :memo (:memo data)})
+        (assoc-in [:messages (:message data) :rev] seq))
+    state))
+
+;; What an ingest source has brought in. :seen is [[key version] ...],
+;; :gone the keys it no longer has; pairs, not a map, since the log's
+;; JSON would make the keys keywords.
+(defmethod evolve* "ingest/polled" [state {:keys [data]}]
+  (update-in state [:ingest (:source data)]
+             (fn [r]
+               (-> (or r {:seen {}})
+                   (update :seen #(apply dissoc (into (or % {}) (map vec (:seen data))) (:gone data)))
+                   (assoc :cursor (:cursor data))
+                   (dissoc :failing)))))
+
+(defmethod evolve* "ingest/failed" [state {:keys [at data]}]
+  (update-in state [:ingest (:source data)]
+             (fn [r]
+               (-> (or r {:seen {}})
+                   (update :failing (fn [f] {:since (or (:since f) (inst at)) :error (:error data)
+                                             :told (boolean (:told f))}))))))
 
 (defn- fact-version [{:keys [seq at actor labels public]} change {:keys [topic text valid-from valid-to]}]
   {:seq seq :recorded-at (inst at) :actor actor :change change :labels (union labels) :public (true? public)
@@ -1328,9 +1373,9 @@
     (reject! :forbidden (str "Unknown actor " (pr-str actor) ".")))
   ;; A label relay does not know could only be a mistake, and dropping it
   ;; would lose what it stands for, so the command is refused.
-  (when-not (and (or (nil? labels) (sequential? labels)) (every? label-names labels))
+  (when-not (and (or (nil? labels) (sequential? labels)) (every? known-label? labels))
     (reject! (str "Unknown labels " (pr-str labels) "; relay knows only "
-                  (str/join " and " (sort label-names)) ".")))
+                  (str/join " and " (sort label-names)) ", and labels naming where something came from.")))
   (let [public-role (and (active-role? state actor) (public-caller? state config actor (:session-wake command)))]
     ;; A public role's session never holds private (agentloop forbids it),
     ;; so a call claiming it is refused before it can write anything.
@@ -1877,7 +1922,7 @@
         ;; What the session said is its own text, with the labels it had
         ;; gathered by the end: as its harness reports them, or when it
         ;; does not, every label it could have gathered.
-        tx (assoc tx :said-labels (if (and (sequential? labels) (every? label-names labels))
+        tx (assoc tx :said-labels (if (and (sequential? labels) (every? known-label? labels))
                                     (union labels)
                                     (session-labels-bound state config (:role wake))))]
     (when-not (harness-outcomes outcome)
@@ -2183,6 +2228,127 @@
                      (catch clojure.lang.ExceptionInfo e (reject! (ex-message e))))]
       (tell tx "told" kind urgency (:subject draft) nil :sections (:sections draft) :in-reply-to in-reply-to
             :role actor))))
+
+;; ingest (relay.ingest): what came in from outside, as memos
+
+(defn ingest-record
+  "What an ingest source has brought in: {:seen {key version} :cursor
+  :failing}."
+  [state source]
+  (get-in state [:ingest source] {:seen {}}))
+
+(defn- reply-role
+  "Who hears the operator's reply to a message: the role that sent the
+  message when it is still active and not public, else the source's
+  role."
+  [state config {:keys [role]} fallback]
+  (if (and role (active-role? state role) (not (config/public? config role))) role fallback))
+
+(defn- email-channel-for
+  "The name of the email channel whose :to is `address`."
+  [config address]
+  (first (sort (for [[n ch] (get-in config [:messages :channels])
+                     :when (= :email (:kind ch))
+                     :when (= (str/lower-case (str (:to ch))) address)]
+                 n))))
+
+(defn- record-mail
+  "One mail that came in: a memo to the source's role, and when it is the
+  operator's verified reply to a message relay sent, a reply on that
+  message's thread too."
+  [{:keys [state config] :as tx} src {:keys [raw size partial]}]
+  (let [msg (mailbox/parse (str raw))
+        verdict (ingest/mail-verdict msg config src)
+        parent (some->> (ingest/thread-target msg (:messages state) (ingest/agent-domains config))
+                        (message state))
+        memo (ingest/mail-memo msg verdict parent {:partial partial :size size})
+        reply? (and (:trusted verdict) parent)
+        to (if reply? (reply-role state config parent (:to src)) (:to src))
+        tx (with-public tx false
+             #(send-memo % {:from (:from memo) :to to :subject (:subject memo) :body (:body memo)}
+                         (:labels memo)))]
+    (if reply?
+      (emit tx "message/replied" {:message (:id parent) :memo (last-id tx)
+                                  :channel (email-channel-for config (:from verdict))
+                                  :text (mailbox/without-quoted-tail (:text (mailbox/text-of msg)))})
+      tx)))
+
+(defn- record-github
+  "A memo for every items-per-memo of each repository's fresh items. None
+  is left for later: the cursor the poll stored is past all of them, so
+  an item not recorded now would never be fetched again."
+  [tx src fresh]
+  (reduce (fn [tx its]
+            (let [{:keys [subject body labels from]}
+                  (ingest/github-memo (:repo (ffirst its)) (map first (filter #(= :new (second %)) its))
+                                      (map first (filter #(= :changed (second %)) its)))]
+              (with-public tx false
+                #(send-memo % {:from from :to (:to src) :subject subject :body body} labels))))
+          tx (for [[_ its] (sort-by key (group-by (comp :repo first) fresh))
+                   batch (partition-all ingest/items-per-memo its)]
+               batch)))
+
+(defn- record-calendar [{:keys [config] :as tx} source-name src fresh removed]
+  (if (or (seq fresh) (seq removed))
+    (let [{:keys [subject body labels from]}
+          (ingest/calendar-memo source-name fresh removed (config/zone config))]
+      (with-public tx false
+        #(send-memo % {:from from :to (:to src) :subject subject :body body} labels)))
+    tx))
+
+(defmethod decide* :ingest/record [{:keys [state config] :as tx} {{:keys [source items keys cursor]} :args}]
+  ;; What an ingest source's poll found (relay.ingest-run fetched it).
+  ;; Only what was never seen, or seen at another version, becomes a
+  ;; memo, so two ticks that poll at once record it once.
+  (dispatcher-only! tx)
+  (let [src (get-in config [:ingest source])]
+    (when-not src (reject! :not-found (str "relay.edn has no ingest source " source ".")))
+    (active-role! state (:to src))
+    (let [{:keys [seen failing] old-cursor :cursor} (ingest-record state source)
+          kind (:kind src)
+          ;; Mail and calendar events not taken now come in the next
+          ;; poll, which fetches them again. GitHub items cannot wait:
+          ;; the cursor moves past every item the poll returned.
+          fresh (cond->> (ingest/fresh seen items)
+                  (= :pop3 kind) (take ingest/mails-per-poll)
+                  (= :ics kind) (take ingest/items-per-memo)
+                  true vec)
+          present (set keys)
+          listed (set (map :key items))
+          ;; A calendar event gone from the feed was removed; one still in
+          ;; it but no longer coming up is let go of quietly. At most a
+          ;; memo's worth of removals at a time, the rest next poll.
+          removed (when (= :ics kind)
+                    (vec (take ingest/items-per-memo (sort (filter #(not (present %)) (clojure.core/keys seen))))))
+          aged (when (= :ics kind) (vec (sort (filter #(and (present %) (not (listed %))) (clojure.core/keys seen)))))
+          tx (case kind
+               :pop3 (reduce #(record-mail %1 src (first %2)) tx fresh)
+               :github (record-github tx src fresh)
+               :ics (record-calendar tx source src fresh (mapv #(get seen %) removed)))
+          new-seen (vec (for [[it _] fresh] [(:key it) (:version it)]))
+          gone (vec (concat removed aged))]
+      (if (or (seq new-seen) (seq gone) (not= cursor old-cursor) failing)
+        (emit tx "ingest/polled" {:source source :seen new-seen :gone gone :cursor cursor})
+        tx))))
+
+(defmethod decide* :ingest/failed [{:keys [state config ^Instant now] :as tx} {{:keys [source error]} :args}]
+  ;; A poll that failed. Recorded when it starts failing or fails another
+  ;; way, not at every poll; the operator is told once it has failed for
+  ;; :outage-patience-minutes, and not again until it has worked.
+  (dispatcher-only! tx)
+  (when-not (get-in config [:ingest source]) (reject! :not-found (str "relay.edn has no ingest source " source ".")))
+  (let [error (ingest/one-line (str error) 300)
+        f (:failing (ingest-record state source))
+        tx (if (and f (= error (:error f))) tx (emit tx "ingest/failed" {:source source :error error}))
+        f (:failing (ingest-record (:state tx) source))
+        patience (Duration/ofMinutes (:outage-patience-minutes config))]
+    (if (and (not (:told f)) (not (.isBefore now (.plus ^Instant (:since f) patience))))
+      (tell tx "ingest-failing" "alert" "normal" (str "Could not check " source)
+            [(str "relay has not been able to check " source " since " (:since f)
+                  ". The last try said: " error)
+             "It keeps trying. When it works again, what came in meanwhile arrives then."]
+            :source source)
+      tx)))
 
 ;; the morning brief (relay.brief composes it)
 

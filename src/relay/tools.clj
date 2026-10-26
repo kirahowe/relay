@@ -1223,7 +1223,7 @@
       (not (map? env)) {:problem "The call is not a JSON object."}
       (not= #{"input" "labels" "call_id"} (set (keys env)))
       {:problem "The call must have exactly input, labels and call_id."}
-      (not (and (sequential? (get env "labels")) (every? core/label-names (get env "labels"))))
+      (not (and (sequential? (get env "labels")) (every? core/known-label? (get env "labels"))))
       {:problem (str "Unknown labels " (pr-str (get env "labels")) ".")}
       (not (and (string? (get env "call_id")) (not (str/blank? (get env "call_id")))))
       {:problem "The call has no call_id."}

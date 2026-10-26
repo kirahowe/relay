@@ -173,7 +173,7 @@
   "A message as a client is sent it (_relay/messages): string keys, and
   every text already safe to show, with outsider beside it when it came
   from outside. Nothing internal: no origin, no labels' names."
-  [{:keys [id kind urgency subject sections in-reply-to thread created-at rev deliveries labels] :as msg}]
+  [{:keys [id kind urgency subject sections in-reply-to thread created-at rev deliveries labels replies] :as msg}]
   {"id" id "kind" kind "urgency" urgency "at" (str created-at) "rev" rev
    "thread" thread "inReplyTo" in-reply-to
    "subject" (element labels (messages/squeeze-line subject))
@@ -184,4 +184,8 @@
                        heading (assoc "heading" (element labels heading))
                        list (assoc "list" true))))
    "deliveries" (vec (for [[ch {:keys [status]}] deliveries]
-                       {"channel" ch "status" (name status)}))})
+                       {"channel" ch "status" (name status)}))
+   ;; The operator's own replies, verified by the channel they came
+   ;; through, so never from outside.
+   "replies" (vec (for [{:keys [id at channel text]} replies]
+                    {"id" id "at" (str at) "channel" channel "text" (element [] text)}))})
