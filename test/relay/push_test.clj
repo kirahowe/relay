@@ -1,5 +1,6 @@
-(ns relay.notify-test
-  "Pushing to an ntfy server, here a stand-in on loopback."
+(ns relay.push-test
+  "The push channel: its renderer, and its edge pushing to an ntfy
+  server, here a stand-in on loopback, a command or a file."
   (:require [babashka.fs :as fs]
             [cheshire.core :as json]
             [clojure.string :as str]
@@ -8,9 +9,26 @@
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
             [org.httpkit.server :as http]
+            [relay.channels :as channels]
             [relay.config :as config]
-            [relay.notify :as notify]
-            [relay.text :as text]))
+            [relay.messages :as messages]
+            [relay.push :as push]
+            [relay.text :as text])
+  (:import (java.time Instant)))
+
+(defn- msg [subject body labels]
+  (assoc (messages/message {:kind "note" :subject subject :sections (messages/body-sections body nil)})
+         :id 3 :created-at (Instant/parse "2026-10-26T12:00:00Z") :labels labels))
+
+(defn- rendered [subject body & [labels]]
+  (channels/push {} [(msg subject body (vec labels))]))
+
+(defn- problem [channel]
+  (try (config/resolve-config {:timezone "UTC" :default-harness :a
+                               :harnesses {:a {:kind :agentloop :api-key-command ["true"]}}
+                               :messages {:channels {"p" channel} :routes [{:channels ["p"]}]}})
+       nil
+       (catch clojure.lang.ExceptionInfo e (ex-message e))))
 
 (defn- with-ntfy [f]
   (let [seen (atom [])
@@ -25,54 +43,66 @@
 (deftest ntfy-sends-a-bearer-token-from-a-command-or-a-file
   (with-ntfy
     (fn [url seen]
-      (let [dir (str (fs/create-temp-dir {:prefix "relay-notify"}))
+      (let [dir (str (fs/create-temp-dir {:prefix "relay-push"}))
             file (str dir "/token")]
         (spit file "tk_from_file\n")
-        (notify/push! {:kind :ntfy :url url :topic "t1"} {:title "a" :body "b"})
-        (notify/push! {:kind :ntfy :url url :topic "t1" :token-command ["printf" "tk_from_command"]}
-                      {:title "a" :body "b"})
-        (notify/push! {:kind :ntfy :url url :topic "t1" :token-file file} {:title "a" :body "b"})
+        (push/push! {:via :ntfy :url url :topic "t1"} {:title "a" :body "b"})
+        (push/push! {:via :ntfy :url url :topic "t1" :token-command ["printf" "tk_from_command"]}
+                    {:title "a" :body "b"})
+        (push/push! {:via :ntfy :url url :topic "t1" :token-file file} {:title "a" :body "b"})
         (is (= [nil "Bearer tk_from_command" "Bearer tk_from_file"]
                (map #(get-in % [:headers "authorization"]) @seen)))
         (is (= "t1" (get-in (first @seen) [:body :topic])))
         (testing "a token command that fails, or prints nothing, sends nothing"
-          (is (thrown? Exception (notify/push! {:kind :ntfy :url url :topic "t" :token-command ["false"]}
-                                               {:title "a" :body "b"})))
-          (is (thrown? Exception (notify/push! {:kind :ntfy :url url :topic "t" :token-command ["true"]}
-                                               {:title "a" :body "b"})))
+          (is (thrown? Exception (push/push! {:via :ntfy :url url :topic "t" :token-command ["false"]}
+                                             {:title "a" :body "b"})))
+          (is (thrown? Exception (push/push! {:via :ntfy :url url :topic "t" :token-command ["true"]}
+                                             {:title "a" :body "b"})))
           (is (= 3 (count @seen))))
         (fs/delete-tree dir)))))
 
 (deftest the-token-settings-are-checked
-  (let [base {:timezone "UTC" :default-harness :a
-              :harnesses {:a {:kind :agentloop :api-key-command ["true"]}}}
-        problem (fn [notify] (try (config/resolve-config (assoc base :notify notify)) nil
-                                  (catch clojure.lang.ExceptionInfo e (ex-message e))))
-        ntfy {:kind :ntfy :url "http://x" :topic "t"}]
+  (let [ntfy {:kind :push :via :ntfy :url "http://x" :topic "t"}]
+    (is (nil? (problem ntfy)))
     (is (nil? (problem (assoc ntfy :token-command ["cat" "/x"]))))
     (is (nil? (problem (assoc ntfy :token-file "/x"))))
     (is (str/includes? (problem (assoc ntfy :token-command "cat /x")) ":token-command"))
     (is (str/includes? (problem (assoc ntfy :token-file "")) ":token-file"))
-    (is (str/includes? (problem (assoc ntfy :token-file "/x" :token-command ["cat"])) "not both"))))
+    (is (str/includes? (problem (assoc ntfy :token-file "/x" :token-command ["cat"])) "not both"))
+    (is (str/includes? (problem (dissoc ntfy :topic)) ":topic"))
+    (is (str/includes? (problem (dissoc ntfy :via)) ":via"))
+    (is (str/includes? (problem (assoc ntfy :link "not a url")) ":link"))
+    (is (str/includes? (problem (assoc ntfy :to "x@y.z")) "does not take"))))
 
-(deftest a-contaminated-notification-is-marked-and-cannot-be-followed
+(deftest a-push-from-outside-is-marked-and-cannot-be-followed
   (with-ntfy
     (fn [url seen]
-      (notify/push! {:kind :ntfy :url url :topic "t"}
-                    {:title "Open https://evil.example" :body "Go to www.evil.example/x ‮now"
-                     :labels ["contaminated"]})
-      (notify/push! {:kind :ntfy :url url :topic "t"} {:title "Fine" :body "https://ok.example" :labels []})
+      (push/push! {:via :ntfy :url url :topic "t"}
+                  (rendered "Open https://evil.example" "Go to www.evil.example/x ‮now" ["contaminated"]))
+      (push/push! {:via :ntfy :url url :topic "t"} (rendered "Fine" "https://ok.example"))
       (let [[bad ok] (map :body @seen)]
         (is (= "[from outside] Open hxxps://evil[.]example" (:title bad)))
         (is (= "[from outside] Go to www[.]evil[.]example/x \\u{202e}now" (:message bad)))
-        (is (= "https://ok.example" (:message ok)))))))
+        (is (= "https://ok.example" (:message ok)))
+        (is (nil? (:click ok)) "no link unless the channel has one")))))
 
-(deftest the-file-notifier-appends-a-line-and-reaches-nobody
-  (let [dir (str (fs/create-temp-dir {:prefix "relay-notify-file"}))
+(deftest a-push-is-one-line-with-a-link-into-the-client
+  (let [p (channels/push {:link "https://relay.example/messages/{id}"}
+                         [(msg "Draft ready" "First line\nsecond line\n\nAnother paragraph" [])])]
+    (is (= "Draft ready" (:title p)))
+    (is (= "First line second line" (:body p)))
+    (is (= "https://relay.example/messages/3" (:click p))))
+  (testing "several that go together are one push"
+    (let [p (channels/push {} [(msg "One" "a" []) (assoc (msg "Two" "b" []) :id 4) (assoc (msg "Three" "c" []) :id 5)])]
+      (is (= "One (and 2 more)" (:title p)))
+      (is (= "Two · Three" (:body p))))))
+
+(deftest the-file-push-appends-a-line-and-reaches-nobody
+  (let [dir (str (fs/create-temp-dir {:prefix "relay-push-file"}))
         file (str dir "/sub/notifications.log")
-        settings {:kind :file :path file}]
-    (notify/push! settings {:title "First" :body "One"})
-    (notify/push! settings {:title "Second" :body "Two https://evil.example now" :labels ["contaminated"]})
+        settings {:via :file :path file}]
+    (push/push! settings (rendered "First" "One"))
+    (push/push! settings (rendered "Second" "Two https://evil.example now" ["contaminated"]))
     (let [lines (map #(json/parse-string % true) (str/split-lines (slurp file)))]
       (is (= [{:title "First" :body "One" :labels []}
               {:title "[from outside] Second" :body "[from outside] Two hxxps://evil[.]example now"
@@ -87,18 +117,14 @@
       (let [loose (str dir "/loose.log")]
         (spit loose "")
         (fs/set-posix-file-permissions loose "rw-r--r--")
-        (notify/push! {:kind :file :path loose} {:title "T" :body "B"})
+        (push/push! {:via :file :path loose} {:title "T" :body "B"})
         (is (= "rw-------" (fs/posix->str (fs/posix-file-permissions loose))))))
     (testing "relay.edn needs an absolute path for it"
-      (let [base {:timezone "UTC" :default-harness :a
-                  :harnesses {:a {:kind :agentloop :api-key-command ["true"]}}}
-            problem (fn [notify] (try (config/resolve-config (assoc base :notify notify)) nil
-                                      (catch clojure.lang.ExceptionInfo e (ex-message e))))]
-        (is (nil? (problem {:kind :file :path file})))
-        (is (str/includes? (problem {:kind :file}) ":path"))
-        (is (str/includes? (problem {:kind :file :path ""}) ":path"))
-        (is (str/includes? (problem {:kind :file :path "notifications.log"}) "absolute"))
-        (is (str/includes? (problem {:kind :file :path "~/notifications.log"}) "absolute"))))
+      (is (nil? (problem {:kind :push :via :file :path file})))
+      (is (str/includes? (problem {:kind :push :via :file}) ":path"))
+      (is (str/includes? (problem {:kind :push :via :file :path ""}) ":path"))
+      (is (str/includes? (problem {:kind :push :via :file :path "notifications.log"}) "absolute"))
+      (is (str/includes? (problem {:kind :push :via :file :path "~/notifications.log"}) "absolute")))
     (fs/delete-tree dir)))
 
 ;; --- cutting the body to ntfy's limit
@@ -122,7 +148,7 @@
   (prop/for-all [raw gen-text
                  n (gen/choose 0 80)]
     (let [shown (text/visible raw)
-          out (notify/clip shown n)
+          out (push/clip shown n)
           cut? (not= out shown)
           kept (if cut? (subs out 0 (dec (count out))) out)]
       (and (if cut? (and (> (count shown) n) (str/ends-with? out "…")) (<= (count shown) n))
@@ -138,6 +164,6 @@
            (or (not cut?) (> (count kept) (- n 10)))))))
 
 (deftest clip-keeps-an-escape-whole
-  (is (= "ab…" (notify/clip "ab\\u{200b}cd" 5)))
-  (is (= "ab\\u{200b}…" (notify/clip "ab\\u{200b}cd" 10)))
-  (is (= "a…" (notify/clip (str "a" (String. (Character/toChars 0x1F600)) "b") 2)) "not half an emoji"))
+  (is (= "ab…" (push/clip "ab\\u{200b}cd" 5)))
+  (is (= "ab\\u{200b}…" (push/clip "ab\\u{200b}cd" 10)))
+  (is (= "a…" (push/clip (str "a" (String. (Character/toChars 0x1F600)) "b") 2)) "not half an emoji"))
