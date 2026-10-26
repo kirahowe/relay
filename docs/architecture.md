@@ -391,9 +391,12 @@ never make an address fetchable. A wake that resumes an interrupted
 session reads the record of the wakes it resumes. relay.edn refuses an
 `egress` tool of an MCP server, since agentloop would call it without
 relay seeing the call, and an `egress` tool that is not an `:envelope`
-tool with its parameters listed: relay checks a `url` argument, and
-other free text only goes to a service named in the tool's `:queries`,
-such as the search provider. An address in a query must come at its end,
+tool with its parameters listed. An `egress` tool either fetches (a
+`url`, which relay checks, and otherwise only numbers and yes-or-no
+values) or searches (free text named in its `:queries`, which goes only
+to the search provider, and no `url`). A tool with both could send what
+the steward told a scout to an address the scout chose, so relay.edn
+refuses it. An address in a query must come at its end,
 exactly as shown, since webtool echoes the query back. webtool reports a
 redirect instead of following it, so its target is a new call under the
 same rule.

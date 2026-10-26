@@ -3349,9 +3349,13 @@ invariant NoWayOutOfTheHouse {
 invariant ScoutsFetchOnlyWhatTheyWereShown {
     -- I4. relay runs every egress call itself. The settings refuse an
     -- egress tool of an MCP server, which agentloop would call itself,
-    -- and any egress tool that is not an envelope tool whose parameters
-    -- are a url, numbers, yes-or-no values and the free text the
-    -- operator names in its queries. relay runs a call only when its url
+    -- and any egress tool that is not an envelope tool of one of two
+    -- shapes: a fetch tool, whose parameters are a url and otherwise
+    -- numbers and yes-or-no values, or a search tool, which takes no url
+    -- and whose free text is what the operator names in its queries and
+    -- goes only to its search provider. No egress tool sends free text to
+    -- an address, so a scout cannot publish what a house role wrote to
+    -- it. relay runs a call only when its url
     -- argument, and in every other string the text from its first
     -- scheme:// to its end, appears verbatim in an earlier result of an
     -- egress tool in the same session, the sessions a resumed wake

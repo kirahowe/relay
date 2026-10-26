@@ -431,7 +431,9 @@ so a role it adds starts every wake contaminated, and a routine it
 writes fires contaminated memos. Labels decide two things only. A public
 role's session may never hold `private` (agentloop's `forbid_labels`).
 And the operator is shown where a thing came from: text from outside is
-marked `[from outside]` and its links are broken.
+marked and its links are broken. A scout's memo in `relay inbox` is
+marked `[from the web]`; other text from outside is marked
+`[from outside]`.
 
 What the operator writes or pastes is hers, and relay trusts it: a memo
 on the command line, a line in a conversation, and a page she pastes or
@@ -612,12 +614,15 @@ way. relay keeps each `egress` result for this in
 call, an `egress` tool is an `:envelope` tool with its `:parameters`
 listed: relay.edn refuses one of an MCP server, one run as a command
 given the model's arguments, and one whose parameters it does not know.
-Each parameter is `url`, a number or a yes-or-no value, or free text
-named in the tool's `:queries`, such as `:queries ["query"]`. relay can
-hold a scout to what it was shown only in a `url` argument, so list a
-parameter in `:queries` only when its text goes to a provider you trust
-as you trust the model provider (a web search), never to one that
-publishes what it is given.
+An `egress` tool either fetches or searches. A fetch tool takes a string
+`url` and otherwise only numbers and yes-or-no values. A search tool
+takes no `url` and names its free text in `:queries`, such as
+`:queries ["query"]`; that text goes only to the search provider the
+tool is set up for, which you trust as you trust the model provider.
+relay.edn refuses any other `egress` tool, one with both a `url` and
+free text above all. A scout can hold what the steward wrote to it, and
+a tool that sends text to an address (a web form, a post) could publish
+it.
 
 relay refuses any tool result for a public role that carries `private`,
 and tells agentloop to refuse one too (`forbid_labels`), so a public
