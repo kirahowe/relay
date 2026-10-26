@@ -264,6 +264,59 @@
           :labels (vec (sort (distinct labels)))
           :sources (mapv (fn [x] {:title (get x "title") :ref (get x "ref")}) sources)})))
 
+;; --- prepared: what edit tools did for the operator
+
+(defn- strings [x] (filter string? (when (sequential? x) x)))
+
+(defn parse-calls
+  "The tool calls in a session's entries, one JSON line each, that were
+  allowed and ended without an error, in order: {:call :tool :input
+  :result :labels}. :labels are what the session held when the call ended,
+  folded over the entries in order: the starting labels, the labels each
+  earlier allowed decision and each earlier result added, and this call's
+  own. (A decision holds only the labels the policy adds for that call, not
+  what the session had seen.) Over-labelling is the safe direction. Lines
+  that are not entries are passed over."
+  [text]
+  (let [entries (vec (for [line (str/split-lines (str text))
+                           :when (or (str/includes? line "\"tool_call\"") (str/includes? line "\"decision\"")
+                                     (str/includes? line "\"tool_result\"") (str/includes? line "\"labels\""))
+                           :let [e (strict/object line)]
+                           :when (map? e)]
+                       e))
+        ;; call id -> the session's labels once that call's result was in
+        held (:at (reduce
+                   (fn [{:keys [labels] :as acc} e]
+                     (case (get e "type")
+                       "labels" (assoc acc :labels (into labels (strings (get-in e ["labels" "labels"]))))
+                       "decision" (let [d (get e "decision")]
+                                    (if (and (map? d) (= "allow" (get d "verdict")))
+                                      (assoc acc :labels (into labels (strings (get d "labels"))))
+                                      acc))
+                       "tool_result" (let [r (get e "tool_result")
+                                           labels (into labels (strings (when (map? r) (get r "labels"))))
+                                           id (when (map? r) (get-in r ["result" "call_id"]))]
+                                       (cond-> (assoc acc :labels labels)
+                                         (string? id) (assoc-in [:at id] labels)))
+                       acc))
+                   {:labels #{} :at {}} entries))
+        by-type (fn [t k] (into {} (for [e entries :when (= t (get e "type"))
+                                         :let [x (get e k)] :when (map? x)]
+                                     [(if (= "decision" t) (get x "call_id") (get-in x ["result" "call_id"])) x])))
+        decisions (by-type "decision" "decision")
+        results (by-type "tool_result" "tool_result")]
+    (vec (for [e entries
+               :when (and (= "message" (get e "type")) (= "assistant" (get-in e ["message" "message" "role"])))
+               part (get-in e ["message" "message" "parts"])
+               :when (and (map? part) (= "tool_call" (get part "type")))
+               :let [{:strs [id name input]} (get part "tool_call")
+                     d (get decisions id)
+                     r (get-in results [id "result"])]
+               :when (and (string? id) (string? name) (= "allow" (get d "verdict")) (map? r)
+                          (not (get r "is_error")) (string? (get r "content")))]
+           {:call id :tool name :input (if (map? input) input {}) :result (get r "content")
+            :labels (vec (sort (into (set (get held id)) (strings (get d "labels")))))}))))
+
 ;; --- running
 
 (def ^:private no-key

@@ -20,6 +20,7 @@
             [relay.json :as strict]
             [relay.log :as log]
             [relay.prompt :as prompt]
+            [relay.ready :as ready]
             [relay.refs :as refs]
             [relay.render :as render]
             [relay.shell :as shell]
@@ -240,6 +241,35 @@
              :when kept]
          {:call (:call d) :ref (:ref d) :path path})))
 
+(defn- held-labels
+  "The labels a prepared item is recorded with: all that the session held,
+  with any label relay does not keep read as contaminated (the safe way)."
+  [& label-seqs]
+  (vec (sort (distinct (for [l (apply concat label-seqs) :when (string? l)]
+                         (if (= core/private-label l) l "contaminated"))))))
+
+(defn store-prepared!
+  "Records what the role's edit tools prepared for the operator, from a
+  session's entries (`text`): one :prepared/record for each allowed,
+  successful call to a tool relay.edn gives class edit, written as the
+  role for its wake, with the labels the session held at the call. A
+  call already recorded changes nothing. `known` is labels relay already
+  knows the session held (the wake's, and what the harness reported at the
+  end): a transcript of a resumed session may lack the earliest entries, so
+  they are added to every call's. One relay cannot record is reported on
+  stderr and passed over: the wake goes on."
+  [sys role-id wake-id text known]
+  (let [edit? (set (for [[n t] (:tools (:config sys)) :when (= :edit (:class t))] (name n)))]
+    (when (seq edit?)
+      (doseq [c (agentloop/parse-calls text)
+              :when (edit? (:tool c))]
+        (try (inbound/submit! sys {:type :prepared/record :actor role-id :session-wake wake-id
+                                   :labels (held-labels known (:labels c))
+                                   :args (ready/prepared-args c)})
+             (catch Exception e
+               (binding [*out* *err*]
+                 (println (str "relay could not record what " (:tool c) " prepared: " (ex-message e))))))))))
+
 (defn- transcript-text [{:keys [transcript]}]
   (when (and transcript (fs/exists? transcript))
     (slurp (str transcript))))
@@ -274,6 +304,9 @@
             ;; Kept while the wake still runs, so they are written as the
             ;; role's session, and the end of the wake can mention them.
             shown (mapv :path (store-displays! sys role-id wake-id (transcript-text report)))
+            _ (store-prepared! sys role-id wake-id (transcript-text report)
+                               (concat (:labels report)
+                                       (core/wake-labels state (:config sys) (get-in state [:wakes wake-id]))))
             report (cond-> report (seq shown) (assoc :shown shown))]
         (inbound/submit! sys {:type :wake/end :actor core/dispatcher
                               :args (wake-end-args wake-id report)})
@@ -702,7 +735,11 @@
   (when (and (string? session) (re-matches session-id-pattern session))
     (let [file (fs/path session-dir (str session ".jsonl"))]
       (when (fs/exists? file)
-        (swap! conv workspace/shown session (store-displays! sys (:id role) wake-id (slurp (str file))))))))
+        (let [text (slurp (str file))]
+          (store-prepared! sys (:id role) wake-id text
+                           (let [state (inbound/current-state sys)]
+                             (core/wake-labels state (:config sys) (get-in state [:wakes wake-id]))))
+          (swap! conv workspace/shown session (store-displays! sys (:id role) wake-id text)))))))
 
 (defn- extension-handler
   "Answers the workspace pane's extension methods (relay.workspace) for
