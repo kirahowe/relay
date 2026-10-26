@@ -17,7 +17,6 @@ runs the behaviour evals against the real model, which costs a little.
   --agentloop-dir <dir>  agentloop checkout (default ../agentloop)
   --relay-tui-dir <dir>  relay-tui checkout (default ../relay-tui)
   --webtool-dir <dir>    webtool checkout (default ../webtool)
-  --cleanroom <path>     cleanroom binary for the mail pentests (they skip without it)
   --only <a,b>           run only these steps, by id
   --skip <a,b>           leave these steps out, by id
   --live                 also run bb eval --live
@@ -25,7 +24,7 @@ runs the behaviour evals against the real model, which costs a little.
   --list                 list the steps and exit")
 
 (def ^:private flags-with-values
-  #{"--agentloop-dir" "--relay-tui-dir" "--webtool-dir" "--cleanroom" "--only" "--skip" "--max-cost"})
+  #{"--agentloop-dir" "--relay-tui-dir" "--webtool-dir" "--only" "--skip" "--max-cost"})
 
 (defn parse-args
   "Options from the command line, or {:error msg}."
@@ -61,11 +60,10 @@ runs the behaviour evals against the real model, which costs a little.
                {:id "relay" :what "relay's tests and the mock scenarios against that agentloop" :dir root
                 :cmd ["bb" "test" "--agentloop" al-bin]}
                {:id "pentest" :what "the whole system attacked on artificial data" :dir root
-                :cmd (cond-> ["bb" "pentest" "--jobs" "4"
-                              "--agentloop" al-bin
-                              "--relay-tui" (str (fs/path tui "bin" "relay-tui"))
-                              "--webtool" (str (fs/path wt "bin" "webtool-fixture"))]
-                       (:cleanroom opts) (into ["--cleanroom" (:cleanroom opts)]))}
+                :cmd ["bb" "pentest" "--jobs" "4"
+                      "--agentloop" al-bin
+                      "--relay-tui" (str (fs/path tui "bin" "relay-tui"))
+                      "--webtool" (str (fs/path wt "bin" "webtool-fixture"))]}
                {:id "eval" :what "behaviour evals against the real model (costs money)" :dir root
                 :live true
                 :cmd ["bb" "eval" "--live" "--agentloop" al-bin

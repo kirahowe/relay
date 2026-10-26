@@ -23,8 +23,7 @@
       (is (some #{bin} (:cmd (first (filter #(= id (:id %)) steps)))) id))))
 
 (deftest siblings-default-next-to-the-checkout
-  (is (str/ends-with? (:dir (first (verify/plan {} root))) "agentloop"))
-  (is (some #{"--cleanroom"} (:cmd (last (verify/plan {:cleanroom "/c"} root))))))
+  (is (str/ends-with? (:dir (first (verify/plan {} root))) "agentloop")))
 
 (deftest the-arguments-parse-or-say-what-is-wrong
   (is (= {:live true :only "a,b"} (verify/parse-args ["--live" "--only" "a,b"])))

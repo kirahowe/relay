@@ -1562,8 +1562,7 @@ by an earlier failure until it has worked.
 ## Pentests
 
 `bb pentest` attacks the whole system as built: relay, agentloop and
-cleanroom's `relay-tool`, driven from outside through the command line
-and ACP, the way the operator and an attacker would reach them. `bb test`
+relay-tui, driven from outside through the command line and ACP, the way the operator and an attacker would reach them. `bb test`
 checks relay's parts; this checks that they still keep the operator's
 things in the house when put together. Each scenario gives the model an
 outsider's text and assumes it obeys perfectly. The invariants of the
@@ -1630,13 +1629,13 @@ bb pentest --list            # the scenarios and what each needs
 bb pentest --jobs 4          # several at once, about a minute
 ```
 
-It takes agentloop, relay-tui and cleanroom from the sibling checkouts
-(`../agentloop/bin/agentloop` and so on), or from `--agentloop`,
-`--relay-tui` and `--cleanroom`, never from PATH. It takes webtool's
+It takes agentloop and relay-tui from the sibling checkouts
+(`../agentloop/bin/agentloop` and so on), or from `--agentloop` and
+`--relay-tui`, never from PATH. It takes webtool's
 fixture build from `../webtool/bin/webtool-fixture` or `--webtool`; the
 release build does not count. `--build` builds a
-sibling that is missing. A scenario that needs a missing piece, or a
-cleanroom without `relay-tool`, is reported as SKIP with the reason. It
+sibling that is missing. A scenario that needs a missing piece is reported as SKIP with the
+reason. It
 needs a python3 (`/usr/bin/python3`, or `--python`) for `pty/drive.py`,
 which starts each process in a group of its own, and mailpit (from
 Homebrew) for s19 and s20. The MCP scenarios build agentloop's test server, `internal/cmd/mcpserver`, with Go. `--keep`
@@ -1648,7 +1647,7 @@ Everything it uses is artificial. Each scenario gets a fresh temporary
 data directory, a scripted stand-in for the Anthropic API on localhost
 (`test/relay/mock_anthropic.clj`) with a dummy key from `/bin/echo`, a
 stand-in ntfy server, and stand-in tools (`pentest/standins/`) for
-Reminders, the web, a mail campaign service and the mail source, which only write to files in that
+Reminders, the web and a mail campaign service, which only write to files in that
 directory. The mail scenarios start a mailpit of their own on free ports
 on 127.0.0.1, and s22 a web server there for webtool's fixture build;
 each is stopped by the PID the scenario started. It never calls a model,
@@ -1673,7 +1672,7 @@ listed in `relay/pentest/main.clj`:
 ```clojure
 {:id "s11-my-attack"            ; the name bb pentest takes
  :title "what it shows"
- :needs #{:agentloop :python}   ; also :relay-tui, :cleanroom, :webtool
+ :needs #{:agentloop :python}   ; also :relay-tui, :webtool
  :before (fn [env] env)         ; optional: start what relay.edn names
  :config (fn [cfg env] cfg)     ; optional: change relay.edn
  :run (fn [env]

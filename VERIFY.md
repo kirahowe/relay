@@ -12,8 +12,7 @@ bb verify --live          # add the live evals, which cost up to --max-cost doll
 ```
 
 `--agentloop-dir`, `--relay-tui-dir` and `--webtool-dir` name other
-checkouts, and `--cleanroom` names a cleanroom build for the mail pentests,
-which skip without it. Every relay step uses the agentloop build that the
+checkouts. Every relay step uses the agentloop build that the
 first step made, so the tests check the binaries that sit side by side,
 not whatever is on PATH.
 
