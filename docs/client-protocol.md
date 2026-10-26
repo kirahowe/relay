@@ -144,7 +144,9 @@ command line instead.
   the zone relay shows times in, relay.edn's `:timezone` as an IANA name
   (its normalized region id, such as `"America/Halifax"`; UTC in any
   spelling is `"UTC"`, and a whole-hour offset is its `Etc/GMT` zone), so
-  a client can show times as relay does. `_relay/ready/changed` does not
+  a client can show times as relay does. An offset with no `Etc` zone,
+  such as `+05:30`, is sent as the offset; a client that cannot read it
+  keeps its own zone. `_relay/ready/changed` does not
   repeat it. This is the client channel's view of
   everything prepared for the operator: what relay told her, drafts a
   role made with an edit tool that is not relay's own, entries on the

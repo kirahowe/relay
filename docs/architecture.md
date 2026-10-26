@@ -182,7 +182,7 @@ flowchart TB
 | `relay acp` | relay-tui or any ACP client | Copies bytes between the client and `relay serve`, or runs the same hub in its own process when no service runs. |
 | `relay tool` | agentloop, once per call | Runs one tool call as the role named on its command line, with the session's labels from the envelope (`relay.tools/call!`). |
 | agentloop | a wake or a conversation | Runs the model with exactly the tools in the request. It holds no call and asks nobody. A public role's request carries `forbid_labels ["private"]`, which agentloop enforces. |
-| relay-tui | Kira | The dashboard: roles, conversations, the board and the ready view. It always reopens in moving mode, so the first key acts on the dashboard, and a saved draft waits in the input. Ready counts new items above the selection as "↑ n new". It shows times in the zone relay names in its ready answer. relay does not name one yet, so times are in the Mac's zone. |
+| relay-tui | Kira | The dashboard: roles, conversations, the board and the ready view. It always reopens in moving mode, so the first key acts on the dashboard, and a saved draft waits in the input. Ready counts new items above the selection as "↑ n new". It shows times in the zone relay names in its ready answer, the operator's `:timezone`. |
 | webtool | `relay tool`, for a scout's `egress` call | Searches with Brave and fetches pages. It reports a redirect instead of following it. |
 | container VM | `relay house up`, the tick, the first `sh` call | The steward's shell. One per data directory. `bb deploy` builds its image. |
 | `bb deploy` | Kira, by hand | Tests `main` in fresh workspaces, then moves and builds the live checkouts and builds the steward's image (see Deploying). Agents never run it. |
