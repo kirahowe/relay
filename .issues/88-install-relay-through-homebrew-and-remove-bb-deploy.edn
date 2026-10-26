@@ -1,6 +1,6 @@
 {:id 88
  :title "Install relay through Homebrew and remove bb deploy"
- :status :in-progress
+ :status :review
  :type :feature
  :priority :p1
  :created "2026-10-26"
