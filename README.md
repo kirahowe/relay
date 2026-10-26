@@ -214,7 +214,7 @@ Row 2 RBC: all open
 
 `<data>/relay.edn` holds the operator's settings: harnesses, where
 messages go, limits, the dead letter handler, external tools, an optional weekly budget, an optional
-morning brief and what each role is granted.
+daily note and what each role is granted.
 `setup/relay.example.edn` shows each of them. No role can read this
 file. Every external tool has a class (`read`, `write`, `edit` or
 `egress`) and the labels its output carries (see below), and
@@ -787,7 +787,7 @@ every command.
 
 Everything relay tells you is a message: a note (a draft is ready, a
 question only you can answer), an alert (something is wrong), a digest
-(the morning brief) or a reply in a thread. A message has a subject, an
+(the daily note) or a reply in a thread. A message has a subject, an
 urgency (low, normal or high), and sections of items, each with the refs
 it drew on and where it came from. Text from outside is marked
 `[from outside]` and its links broken, in every channel.
@@ -1008,38 +1008,61 @@ result, and only a flag's value, never its note. So it can be loaded
 into any OTel viewer without your data going with it. It does name your
 roles and tools and the labels each session held.
 
-### Morning brief
+### The daily note
 
-With `:brief {:at "07:30"}` in relay.edn, relay sends you one digest
-message each morning at that time in its time zone. It has two
-sections: today's calendar and reminders due today or overdue. Each gives a count and up to eight
-short lines. relay composes it itself and wakes no role, so it costs no
-tokens and no calendar invite reaches a prompt.
+With `:daily-note {:at "07:30" :role "steward"}` in relay.edn, relay
+sends you one digest message a day at that time, in its time zone. It
+is short and has up to five parts:
 
-The calendar comes from the tool named `cal` in `:tools`, run as `cal
-events --from <today> --to <today>`. Reminders come from `rem-read`, run
-as `rem ... ls --today`. `:brief {:at "07:30" :calendar "my-cal"
-:reminders "my-rem"}` names other tools. The brief runs only `:read`
-tools that take their arguments on the command line. It gives each tool its `:timeout-seconds`, or a
-minute when the tool has none, since the tick waits on it.
+- Changes to check. Every change to how a role works (a skill, a
+  routine, a note it keeps, or another role, for a role that may add
+  roles) made since the last note by a session that had read something
+  from outside: a mail, a GitHub item, a calendar feed or the web. Each
+  says in one line what changed, where the outside text came from, and
+  how to undo it. relay works this part out in code from the labels, so
+  no model writes it or can leave one out. Changes shaped only by you
+  or the role's own work are quiet.
+- Coming up: what is due in the next two weeks, each with an offer of
+  help ("Interview with Maple Co, Thu 29 Oct 10:00. Want prep notes?").
+- Grants, from the scout's search, less what the board already has.
+- GitHub: new issues and pull requests worth a look.
+- What I learned: the quiet changes, in plain words.
 
-Titles and calendar and list names show on one line each, cut at 80
-characters, with every run of spaces or line breaks made one space. cal
-and rem print invisible characters as `\u{XXXX}`; the brief reads those
-back and the push escapes them once, so the phone shows `\u{200b}`, not
-`\\u{200b}`.
+The role named in `:role` writes the last four with its
+`daily_note_write` tool, usually from a routine that runs shortly
+before the note's time. `daily_note_draft` shows it what it has
+written, the suggestions you turned down and the changes since the last
+note. The note is whatever it has written by then, plus the changes
+relay found. `bb staging init` sets one up for the hub, with a routine
+and a skill.
 
-A section whose tool fails, times out or prints something the brief
-cannot read says it is unavailable. A section whose tool is not in
-relay.edn says it is not configured. When no section has anything to
-say, and none is unavailable, nothing is sent. The brief carries the
-labels of what it shows, so one with calendar text is marked
-contaminated and its links broken when it reaches your phone.
+Each change and each suggestion has a number. To undo a change, run
+`relay revert <change>` (the note gives the number), use the key in the
+client (`_relay/messages/act`), or reply "revert 1" to the note, by mail
+or from the client's ready view.
+Undoing puts back what was there before the change, or removes what it
+added. When you undo several changes to the same thing, in any order,
+you end up with the version from before all of them, never one that
+another of those changes wrote. A removed role cannot come back under its old name. To turn a
+suggestion down for good, run `relay dismiss <item>`, use the client, or
+reply "not 2". relay records it, drops it from every later note, and
+shows it to the note's writer so it is not suggested again. A reply
+takes the same path whichever channel brings it, and the note's writer
+reads it too. A mailed reply is acted on only when it is verified as
+yours (see "The mailbox and other sources"); one from the client is yours
+already. relay answers in the thread with what it did. `relay changes` lists the latest
+changes, with their numbers.
 
-It goes out at most once a day. If the Mac was asleep at the time, it
-goes out at the first tick after, the same day. A day the Mac sleeps
-through has no brief: the next morning's does not repeat it. The log
-records each day's brief, sent or empty, as a `brief/composed` event.
+The note goes out at most once a day. If the Mac was asleep at the time,
+it goes out at the first tick after, the same day. A day the Mac sleeps
+through has no note; the next one covers what changed since the last.
+The first note looks back one day. A note with nothing to say is not
+sent. The log records each day's note, sent or not, as a
+`digest/composed` event.
+
+A new issue or pull request a person opens on a repository in
+`:ingest` also gets a push of its own: all of those that arrive in one
+tick go as one message. A bot's items do not.
 
 ### The dashboard
 

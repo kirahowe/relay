@@ -85,12 +85,12 @@
  ;; It never stops anything. Leave it out for no budget.
  ;; :budget {:weekly-usd 15}
 
- ;; A morning brief at 07:30 in :timezone: today's calendar and reminders
- ;; due, in one digest message. relay composes it
- ;; itself, with the "cal" and "rem-read" tools defined below; :calendar and
- ;; :reminders name other :read tools. Nothing is sent on a day with
- ;; nothing to say. Leave it out for no brief.
- ;; :brief {:at "07:30"}
+ ;; The daily note at 07:30 in :timezone: changes to how roles work that
+ ;; outside text shaped, which relay finds itself, then what :role wrote
+ ;; for it (what is coming up, grants, GitHub, what it learned). Nothing
+ ;; is sent on a day with nothing to say. Your own calendar comes in as
+ ;; an :ics source in :ingest. Leave it out for no note.
+ ;; :daily-note {:at "07:30" :role "hub"}
 
  ;; Tools beyond relay's own, each an external command given the call's
  ;; arguments after its own, with no -- in between: such a tool must

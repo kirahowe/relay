@@ -18,7 +18,7 @@ flowchart LR
     T[tell_operator<br/>a house role]
     M[memo to operator]
     A[relay's own alerts<br/>outage, budget, dead letter ...]
-    B[morning brief]
+    B[daily note]
   end
 
   subgraph core[relay.core, pure]
@@ -99,7 +99,7 @@ classDiagram
 
 - `kind` says what the message is. A role's message is a `note`, or a
   `reply` when it answers one. relay's own problems are `alert`s. The
-  morning brief is a `digest`.
+  daily note is a `digest`.
 - `urgency` is the role's to choose (`normal` when it gives none).
   relay's own alerts set theirs in code.
 - An item's `labels` are its provenance. The operator never sees a
@@ -256,13 +256,15 @@ names. See `docs/client-protocol.md`.
 The client's view of what is ready (`relay.ready`, `_relay/ready`) is a
 fold over the same state: messages, with everything else prepared for the
 operator, each item saying where it came from in plain words. A message
-that a role told the operator can be answered from it. `_relay/reply`
+that a role told the operator can be answered from it, and so can the
+daily note, whose writer hears the answer. `_relay/reply`
 (and `relay reply` on the command line) cleans the text like a paste and
 takes the same path as a verified mail reply (`relay.core/record-reply`):
 a `message/replied` event on the message, with `channel: "client"`, and a
 memo from the operator to the role that quotes the reply and names the
 message. When the message was a memo to the operator, that memo is
-closed as answered. The role
+closed as answered. A reply to the daily note also does what it asks
+("revert 1", "not 2"), whichever channel brought it. The role
 answers with `tell_operator` and `in_reply_to`, which threads as before.
 `docs/client-protocol.md` has the wire forms.
 

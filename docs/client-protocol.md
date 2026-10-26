@@ -197,9 +197,13 @@ command line instead.
   operator to the role that wrote the message, quoting it and saying which
   message it answers. When the message was a memo to the operator, that
   memo is closed as answered. The role answers with `tell_operator` and
-  `in_reply_to`.
+  `in_reply_to`. A daily note is relay's own but can be answered too:
+  the memo goes to the role that writes it (`:daily-note :role`), and
+  "revert 1" or "not 2" in the reply is done as `_relay/messages/act`
+  would, with relay's answer in the thread.
 - Errors: -32000 with relay's reason: no such message, a message relay
-  wrote itself ("there is nobody to answer it"), or a role that is gone.
+  wrote itself other than the daily note ("there is nobody to answer
+  it"), or a role that is gone.
 - relay-tui: `a` or Enter on a message in the ready view, then Enter
   to send. One reply at a time is in flight, and a refusal gives the
   words back.
@@ -219,6 +223,23 @@ command line instead.
   undone, there is no such move, or relay stopped during the move (the
   reason then lists the moves to check by hand).
 - relay-tui: `u` on a move item in the ready view.
+
+### `_relay/messages/act`
+
+- Scope: connection.
+- Params: `{"message": int, "item": int}`: a daily note's id and the
+  number of one of its items. Anything else is refused (-32602).
+- Answer: `{}` once relay has done what the item offers: an item whose
+  `action.op` is `"revert"` has its change undone (what was there before
+  is put back), and one whose op is `"dismiss"` is dropped for good, from
+  this note and every later one.
+- Errors: -32602 for the params; -32000 for relay's refusal, such as an
+  item the note does not have, one done already, or a change to a role
+  that was removed.
+- The act is the operator's, with no labels. The message's `rev` moves
+  and `_relay/messages/changed` sends it again, with the item's
+  `action.done` set.
+- relay-tui: not used yet. A key on the selected item is meant to send it.
 
 ## Methods: a session
 
@@ -359,6 +380,11 @@ no role, no origin and no label names.
  "replies": [{"id": 2230, "at": "2026-10-26T15:10:00Z", "channel": "mail",
               "text": {"text": "The Old Hall, please.", "outsider": false}}]}
 ```
+
+An item a daily note numbers carries `"action": {"op": "revert" |
+"dismiss", "n": int, "done": null | "reverted" | "dismissed"}`: what the
+operator can do with it through `_relay/messages/act`, by `n`, and
+whether it was done.
 
 `kind` is `note`, `alert`, `digest` or `reply`; `urgency` is `low`,
 `normal` or `high`. A section may have a `heading`, in the same form as

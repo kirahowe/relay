@@ -252,8 +252,7 @@ contract Tools {
         -- that outlived the tool included, with SIGKILL for any that
         -- outlast SIGTERM. A plain
         -- tool's caller is told it timed out; an envelope tool's, only
-        -- that it failed. The morning brief runs its tools the same way,
-        -- with brief_tool_timeout when a tool has none.
+        -- that it failed.
 
     @invariant TheClockToolShowsNothingRelayKeeps
         -- clock is a read tool that answers from the time now, the
@@ -348,7 +347,8 @@ enum Urgency { low | normal | high }
 enum MessageOrigin {
     told | memo_for_operator | work_abandoned | runaway_guard_tripped
     | harness_needs_attention | harness_unreachable
-    | budget_reached | brief | tools_unavailable | tool_changed | shown
+    | budget_reached | brief | daily_note | daily_note_acted | github_news
+    | tools_unavailable | tool_changed | shown
     | session_forbidden | result_refused | public_role_cannot_run | public_role_can_run
     | turn_unrecorded | conversation_line_dropped | ingest_failing
 }
@@ -771,8 +771,11 @@ entity Message {
     -- the weekly budget it reached, 80 or 100.
     week: Date?
     percent: Integer?
-    -- For brief: the day it covers.
+    -- For brief and daily_note: the day it covers.
     date: Date?
+    -- For daily_note: what each number in it stands for, a change to
+    -- undo or a suggestion to drop, and which were done.
+    numbered: List<NoteItem>
     created_at: Timestamp
     -- One per configured channel its route names, with when it is due
     -- (route). The client channel is not among them: every message is
@@ -807,14 +810,55 @@ entity Delivery {
     }
 }
 
-entity Brief {
-    -- That relay composed a day's morning brief, whether or not it had
-    -- anything to say. At most one a day.
+entity DailyNote {
+    -- That relay made a day's note, whether or not it had anything to
+    -- say. At most one a day. A morning brief an older relay recorded
+    -- (brief/composed) folds into one.
     date: Date
     sent: Boolean
-    -- Each section's count, or unavailable, or not_configured.
-    sections: Map<String, String>
+    -- The changes it flagged, by the seq of the event that made each.
+    flagged: List<RecipeChange>
     created_at: Timestamp
+}
+
+entity NoteItem {
+    n: Integer
+    op: revert | dismiss
+    change: RecipeChange?        -- for revert
+    keys: List<String>           -- for dismiss: the suggestion's keys
+    done: reverted | dismissed | null
+}
+
+entity RecipeChange {
+    -- A change to how a role works, kept as relay folds the event that
+    -- made it: a skill (a doc under skills/<role>/), a routine, a note
+    -- a role keeps, or a role. The id is that event's seq.
+    what: skill | routine | note | role
+    change: added | changed | removed
+    owner: Role
+    name: String
+    actor: String
+    labels: Set<String>
+    -- What it replaced: the earlier version, or null when it made
+    -- something new.
+    before: String?
+    -- The change before it to the same thing, or null for the first.
+    prior: RecipeChange?
+    reverted: Boolean
+}
+
+entity NotePart {
+    -- What the note's role wrote for the next note, one per part, the
+    -- latest write replacing the one before.
+    part: ahead | grants | github | learned
+    items: List<String>
+    labels: Set<String>
+}
+
+entity Dismissed {
+    -- A suggestion the operator turned down, by key.
+    key: String
+    text: String
 }
 
 entity Fact {
@@ -1111,13 +1155,12 @@ config {
     -- only warns as spend nears it (WarnOfSpend).
     weekly_budget: Decimal? = null
 
-    -- When the morning brief goes out each day, in the time zone, from
-    -- :brief {:at "07:30"} in the settings. Null for no brief. The
-    -- calendar and reminders tools it reads are cal and rem-read unless
-    -- :brief names others; either must be a read tool.
-    brief_at: Time? = null
-    -- How long the brief waits for a tool with no timeout_seconds.
-    brief_tool_timeout: Duration = 1.minute
+    -- When the daily note is made each day, in the time zone, and the
+    -- role that writes its suggestions, from :daily-note {:at "07:30"
+    -- :role "steward"} in the settings. Null for no note. The role may
+    -- not be public. :brief is refused, with a pointer to :daily-note.
+    daily_note_at: Time? = null
+    daily_note_role: Role? = null
     -- How long an external tool may run when it has no timeout_seconds.
     external_tool_timeout: Duration = 10.minutes
 
@@ -1349,7 +1392,9 @@ rule ReplyToAMessage {
     -- that the reply is hers and cleans the text (sanitize) first.
     when: MessageReplied(message, channel, text)
 
-    requires: message.told_by != null   -- a role told her; relay's own messages have nobody to answer
+    requires: message.told_by != null or message.origin = daily_note
+        -- a role told her; relay's own messages have nobody to answer,
+        -- except the daily note, whose writer (config.daily_note_role) hears it
     requires: text.length > 0
 
     ensures: message.replies = message.replies + Reply(channel: channel, text: text, created_at: now)
@@ -1364,6 +1409,10 @@ rule ReplyToAMessage {
     )
     if message.memo != null and message.memo.to = operator and message.memo.status = unread:
         ensures: message.memo.status = read   -- answered; closed by the operator
+    if message.origin = daily_note:
+        ensures: what the reply asks for ("revert N", "not N") is done
+            (RevertChange, DismissSuggestion), and relay answers in the
+            thread with what it did
 
     @guidance
         -- The reply is the operator's own, so the memo is trusted (I5). It
@@ -2760,62 +2809,103 @@ rule FlagWake {
         -- refused.
 }
 
--- The morning brief
+-- The daily note
 
-rule SendMorningBrief {
+rule MakeDailyNote {
     when: DispatcherTicks(lost_wakes)
 
-    let today = local_date(now)                          -- black box: now's date in the time zone
-    let due_at = at_local(today, config.brief_at)        -- black box: a time a clock change skips moves forward by the gap
-    let last = Briefs.map(b => b.date).max
+    let today = local_date(now)                              -- black box: now's date in the time zone
+    let due_at = at_local(today, config.daily_note_at)       -- black box: a time a clock change skips moves forward by the gap
+    let last = DailyNotes.max_by(n => n.date)
+    let since = if last = null: now - 1.day else: last.created_at
+    let flagged = RecipeChanges.where(c =>
+        c.created_after(since) and c.actor not in {operator, dispatcher} and outside(c.labels))
+    let parts = NoteParts.where(p => p.written_after(since))
+        .map(p => p.without(Dismissed))
 
-    requires: config.brief_at != null
+    requires: config.daily_note_at != null
     requires: now >= due_at
-    requires: last = null or last < today
+    requires: last = null or last.date < today
 
-    -- black box: runs the calendar tool for today and the reminders
-    -- tool for what is due today or overdue, with their arguments on
-    -- the command line, then makes the sections, title and body
-    let brief = compose_brief(today)
-
-    ensures: Brief.created(date: today, sent: not brief.is_empty, sections: brief.sections, created_at: now)
+    ensures: DailyNote.created(date: today, sent: flagged.any or parts.any, flagged: flagged, created_at: now)
     ensures:
-        if not brief.is_empty:
+        if flagged.any or parts.any:
             Message.created(
-                origin: brief,
+                origin: daily_note,
                 kind: digest,
                 urgency: normal,
-                subject: brief.title,
-                sections: brief.parts,
+                subject: "Daily note for " + today,
+                sections: [flagged] + parts,
+                numbered: numbered(flagged, parts),
                 date: today,
                 created_at: now,
                 deliveries: route(this, now)
             )
 
     @guidance
-        -- relay composes the brief itself and wakes no role, so it costs
-        -- no tokens and keeps calendar text, which outsiders write, out
-        -- of every prompt. Two sections, in order: today's calendar and
-        -- reminders due today.
-        -- Each is a count and at most eight short lines. A tool that
-        -- fails, times out, prints what the brief cannot read, or is
-        -- not a read tool on the plain protocol makes its section say
-        -- it is unavailable; a tool relay.edn does not define makes it
-        -- say not configured. The brief is empty when no section has an
-        -- item or is unavailable, and an empty brief is recorded and
-        -- not sent. The message carries the labels of what it
-        -- shows, so a brief with calendar text is marked contaminated
-        -- and its URLs broken when it is sent. A title or a calendar
-        -- or list name has each run of whitespace made one space and is
-        -- cut at 80 code points. cal and rem's escapes are read back
-        -- before the push escapes the text once; an escape they never
-        -- print makes the section unreadable.
-        -- A day's brief is due from its time until the day ends. A
-        -- tick missed while the Mac slept sends it late the same day;
-        -- a day with no tick past its time has none, and a later day
-        -- never sends an earlier day's. The record is one append, so a
-        -- restart neither repeats a day nor skips one, and a tick that
-        -- fails before the append is followed by one that tries again.
+        -- outside(labels): contaminated, or a label naming a source
+        -- (mail:, github:, ics:). relay works out the flagged section
+        -- in code; no model writes it or can leave a change out of it
+        -- (decision 14). Each says what changed in one line, where the
+        -- outside text came from in plain words, and how to undo it
+        -- (relay revert <change>, or reply "revert N"). Past 40 it
+        -- counts the rest. The parts are what the note's role wrote
+        -- with daily_note_write: ahead, grants, github, learned.
+        -- Suggestions in ahead and grants are numbered so the operator
+        -- can drop one. No role, tool, label or class is named in the
+        -- text. A day's note is due from its time until the day ends;
+        -- a day with no tick past its time has none.
+}
+
+rule RecordRecipeChange {
+    when: an event writes a skill doc, a routine, a role's note or a role
+    ensures: RecipeChange.created(what, change, owner, name, actor, labels, before)
+
+    @guidance
+        -- Folded from the event and the state before it, so it can always
+        -- be rebuilt from the log.
+}
+
+rule WriteNotePart {
+    when: RoleCalls(role, daily_note_write, part, items)
+    requires: role = config.daily_note_role
+    ensures: NotePart.replaced(part, items.without(Dismissed), labels: session.labels)
+}
+
+rule RevertChange {
+    when: OperatorReverts(change)
+    -- relay revert <change>, _relay/messages/act on a revert item, or
+    -- a reply "revert N" to the note from any channel (ReplyToAMessage).
+    requires: not change.reverted
+    requires: change.what != role or change.change != removed
+    ensures: change.reverted = true
+    ensures: what change replaced is put back, with the labels of the
+        text it restores; what it made new is removed
+
+    @guidance
+        -- When change.prior was undone too, the undo goes back past it
+        -- to what that one replaced, and so on. Undoing several changes
+        -- to one thing, in any order, ends at the version before all of
+        -- them, never at text one of them wrote.
+}
+
+rule DismissSuggestion {
+    when: OperatorDismisses(note, n)
+    -- relay dismiss <n>, _relay/messages/act on a dismiss item, or a
+    -- reply "not N" from any channel (or "not this one" when the note
+    -- has one).
+    ensures: Dismissed.created(keys: note.numbered[n].keys)
+
+    @guidance
+        -- Later parts drop any suggestion with one of its keys, and the
+        -- writer is shown what was dropped (daily_note_draft).
+}
+
+rule AnnounceGitHubItems {
+    when: DispatcherTicks(lost_wakes)
+    let news = items an ingest poll this tick found new, opened by a person (user type User, not a bot)
+    requires: news.any
+    ensures: Message.created(origin: github_news, kind: note, urgency: normal, sections: [news])
 }
 
 -- Tools
@@ -3771,8 +3861,9 @@ surface Clock {
         -- minute. A tick ends wakes whose process is gone, fires due
         -- routines, trips the runaway guard, reports outages that
         -- outlasted the patience, delivers messages that are due,
-        -- and then starts a wake for each role with work waiting. Last,
-        -- it sends the morning brief when one is due.
+        -- polls the ingest sources and sends one message for the new
+        -- GitHub items from people, then starts a wake for each role
+        -- with work waiting. Last, it makes the daily note when one is due.
         -- The first four are one event append in this order; rules are
         -- not ordered here, but a later step sees an earlier step's
         -- events.
