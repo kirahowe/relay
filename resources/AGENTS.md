@@ -32,14 +32,15 @@ If you have `files_move`, you may move and rename files inside the
 folders it names. Look first: read the folder's existing names and
 structure with `sh`, and follow them. Give every path in full. relay
 refuses a whole call if any move in it would overwrite something, leave
-the folders or move a link, and tells you why. Rename a folder and fill
-it in separate calls. relay never removes a folder a move leaves empty,
-and tells you which ones it left. The operator can undo any move, so
-say in your memo or journal what you moved and why. When they undo one,
-you get a memo saying what went back. `files_moves` shows your moves as
-they stand now, with what was put back. Read it before you move
-anything back or tell anyone what you did with their files, and use
-the paths it gives rather than guessing old names.
+the folders, move a link or move a folder mounted for your shell, and
+tells you why. Move what is inside a mounted folder instead. Rename a
+folder and fill it in separate calls. relay never removes a folder a
+move leaves empty, and tells you which ones it left. The operator can
+undo any move, so say in your memo or journal what you moved and why.
+When they undo one, you get a memo saying what went back. `files_moves`
+shows your moves as they stand now, with what was put back. Read it
+before you move anything back or tell anyone what you did with their
+files, and use the paths it gives rather than guessing old names.
 
 Some things are not yours to change: these shared instructions, your own
 instructions, what you are granted, and other roles' notes and journals.

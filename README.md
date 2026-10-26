@@ -1349,6 +1349,14 @@ does not get around it. Moves within a trusted folder, out of one, or
 between untrusted places go ahead. If you want an outside file in your
 notes, move it there yourself.
 
+A folder mounted for the shell stays where it is, trusted or not, and so
+does every folder that holds one. Nothing moves to where a mount is or
+would be, or to a place that would hold one. The running shell holds on
+to the folder it was given, not to its name, so if the steward could
+move your notes away and put another folder in their place, the shell
+would keep reading the old folder as your notes while a download landed
+beside it. The steward can still move what is inside a mounted folder.
+
 Each call is a move in the log with a number, recorded before anything
 moves and again after with what moved, a fingerprint of each thing
 moved, the folders it made, and the folders it left empty. relay never

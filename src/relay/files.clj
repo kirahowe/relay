@@ -26,6 +26,13 @@
     deletes, and never copies: a move to another disk is refused rather
     than copied and removed.
   - A writable folder itself is never moved, nor a folder holding one.
+  - No folder mounted for the shell, trusted or not, is moved, nor a
+    folder holding one, and nothing moves to where a mount is or would
+    be, or to a place that would hold one (mounted-source-problem,
+    mounted-target-problem). The running container's bind follows the
+    folder, not its path, so a moved mount would leave its path, and its
+    trust, to whatever moved there next. Paths are compared as the disk
+    does, and a source also by file identity.
   - Nothing is moved into a shell mount marked trusted, or made to hold
     one, from outside every trusted mount (trust-problem), whatever the
     session's labels: the shell reads such a folder as the operator's
@@ -187,6 +194,48 @@
       (str "it would bring a file from outside into " (:path hit) ", which holds only the operator's own"
            " files. If they want it there, they can move it there themselves"))))
 
+(defn- holding
+  "The first of `mounts` that path `p` is or holds, compared as a
+  case-insensitive disk does, firmlinks aside, by any form of the mount."
+  [p mounts]
+  (first (filter (fn [{:keys [forms]}] (some #(under? (fold %) (fold p)) forms)) mounts)))
+
+(defn- mount-word [p {:keys [path forms]}]
+  (if (some #(= (fold p) (fold %)) forms)
+    "it is mounted for the shell"
+    (str "it holds " path ", which is mounted for the shell")))
+
+(defn mounted-source-problem
+  "Why the real path `from` may not move because it is a folder mounted
+  for the shell, or holds one, or nil. The running container's bind
+  follows the folder it was given, not its path, so a mounted folder
+  that moves leaves its path free for something else while the shell
+  still reads it under the old name with the old trust. Every mount
+  counts, trusted or not. `mounts` are mount-places; `same-file` maps
+  the :path of each mount the edge found to be `from` by file identity
+  to :is, or to :holds when `from` is the same file as a folder above
+  the mount."
+  [from same-file mounts]
+  (if-let [m (holding from mounts)]
+    (str (mount-word from m) ", so it cannot move")
+    (when-let [[path how] (first (sort same-file))]
+      (str (if (= :is how)
+             "it is mounted for the shell"
+             (str "it holds " path ", which is mounted for the shell"))
+           ", so it cannot move"))))
+
+(defn mounted-target-problem
+  "Why a move may not go to the real path `to` because it would be, or
+  hold, a folder mounted for the shell, or nil. Such a mount is missing
+  or has moved, and a folder put in its place would show to the shell,
+  whose trust follows the mount's path. Every mount counts."
+  [to mounts]
+  (when-let [m (holding to mounts)]
+    (str (if (some #(= (fold to) (fold %)) (:forms m))
+           "it is where a folder mounted for the shell belongs"
+           (str "it would hold " (:path m) ", which is mounted for the shell"))
+         ", so nothing can move there")))
+
 (defn batch-problems
   "Moves of one call that touch the same place: each as [i j], 0-based.
   `resolved` are {:from :to} real paths."
@@ -253,8 +302,11 @@
 
 ;; --- pure: what the steward and the operator are told
 
-(defn tool-description [roots & [trusted]]
+(defn tool-description [roots & [trusted mounted]]
   (str "Move or rename files and folders inside the folders you may organize: " (str/join ", " roots) ". "
+       (when (seq mounted)
+         (str "The folders mounted for your shell (" (str/join ", " mounted) ") and the folders that hold"
+              " them stay where they are; move what is inside them instead. "))
        (when (seq trusted)
          (str "The operator keeps only their own files in " (str/join ", " trusted) ": nothing from"
               " outside those folders may be moved into them. "))
@@ -439,16 +491,39 @@
          (catch FileAlreadyExistsException e
            (when-not (and (= "dir" (kind d)) (= d (real d))) (throw e))))))
 
-(defn trusted-places
-  "The trusted :mounts of relay.edn's :house, for trust-problem: each with
-  its real path when it exists, and every form of it."
+(defn- would-be-real
+  "`p` as its real path would be: the real path of the nearest folder
+  above it that exists, or of `p` itself, with the rest as written."
+  [p]
+  (some (fn [a] (when-let [r (real a)]
+                  (str (if (= "/" r) "" r) (subs p (if (= "/" a) 0 (count a))))))
+        (shell/ancestors-or-self p)))
+
+(defn mount-places
+  "Every :mount of relay.edn's :house, for the move checks: its :path,
+  whether it is :trusted, its real path when it exists (:inside), and
+  every form of it (:forms), including the real path it would have if
+  it does not exist yet."
   [house]
   (vec (for [m (:mounts house)
-             :when (shell/mount-trusted? m)
              :let [p (shell/mount-path m)
-                   r (real p)]]
-         {:path p :inside r
-          :forms (vec (distinct (remove nil? [p (shell/unfirm p) r (some-> r shell/unfirm)])))})))
+                   r (real p)
+                   w (would-be-real p)]]
+         {:path p :trusted (shell/mount-trusted? m) :inside r
+          :forms (vec (distinct (remove nil? [p (shell/unfirm p) r (some-> r shell/unfirm) w (some-> w shell/unfirm)])))})))
+
+(defn- same-file-as-source
+  "For the real source `from`: each mount whose real path is the same
+  file as `from` (:is), or has a folder above it that is (:holds), by
+  :path. Catches another name for a mounted folder."
+  [from mounts]
+  (if-not from
+    {}
+    (into {} (for [{:keys [path inside]} mounts
+                   :when inside
+                   :let [hit (first (filter #(shell/same-file? % from) (shell/ancestors-or-self inside)))]
+                   :when (and hit (not= "/" hit))]
+               [path (if (= hit inside) :is :holds)]))))
 
 (defn- same-file-mounts
   "The trusted mounts that the real folder `base`, or one above it, is the
@@ -462,10 +537,12 @@
 
 (defn plan
   "Each move's real paths and what a target needs, or throws a refusal
-  listing every move that may not be made. `trusted` (trusted-places):
-  none may bring something from outside into a trusted folder."
-  [moves roots & [trusted]]
-  (let [shape (for [[i {:keys [from to]}] (map-indexed vector moves)
+  listing every move that may not be made. `mounts` (mount-places): no
+  mounted folder, or folder holding one, moves, nothing takes a mount's
+  place, and nothing from outside a trusted folder moves into one."
+  [moves roots & [mounts]]
+  (let [trusted (filterv :trusted mounts)
+        shape (for [[i {:keys [from to]}] (map-indexed vector moves)
                     :let [why (or (some->> (path-problem from) (str "from: "))
                                   (some->> (path-problem to) (str "to: ")))]
                     :when why]
@@ -478,6 +555,10 @@
                           {:from (:real s) :to (:real t) :source s :target t
                            :problem (or (some->> (source-problem s roots) (str from ": "))
                                         (some->> (target-problem t (:real s) roots) (str to ": "))
+                                        (some->> (mounted-source-problem (:real s) (same-file-as-source (:real s) mounts)
+                                                                         mounts)
+                                                 (str from ": "))
+                                        (some->> (mounted-target-problem (:real t) mounts) (str to ": "))
                                         (some->> (trust-problem (:real s) (:real t)
                                                                 (same-file-mounts (:base t) trusted) trusted)
                                                  (str to ": ")))

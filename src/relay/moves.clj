@@ -41,7 +41,7 @@
     (fn []
       (let [roots (files/real-roots (:files (config/grants (:config sys) actor)) (:data-dir sys))
             _ (when (empty? roots) (core/reject! :forbidden "You have no folders to organize." [core/private-label]))
-            steps (files/plan moves roots (files/trusted-places (shell/settings (:config sys))))
+            steps (files/plan moves roots (files/mount-places (shell/settings (:config sys))))
             submit (fn [type args]
                      (inbound/submit! sys (cond-> {:type type :actor actor :args args :labels labels}
                                             session-wake (assoc :session-wake session-wake)

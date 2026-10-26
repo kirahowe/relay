@@ -3342,6 +3342,13 @@ rule MoveFiles {
         -- target is compared as the disk does (case, accents,
         -- firmlinks, links, file identity); a moved folder counts by
         -- where it came from.
+    requires: no_mount_moves(moves)
+        -- The running shell binds each mounted folder, not its path, so
+        -- a mounted folder that moved would leave its path, and its
+        -- trust, to whatever moved there next. For each move m, trusted
+        -- mount or not: real(m.from) neither is nor holds a mount, by
+        -- path as the disk compares it or by file identity, and
+        -- real(m.to) neither is nor would hold one.
     requires: no_overlapping_moves(moves)
         -- no two moves touch the same path or one inside another
 

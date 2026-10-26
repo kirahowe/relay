@@ -178,6 +178,55 @@
           problem (files/trust-problem from to #{} t)]
       (= (boolean (and into (not from-trusted))) (some? problem)))))
 
+;; --- Codex R3: a mounted folder never moves, and nothing takes its place
+
+(defn- mnt [p & [trusted]] {:path p :trusted (boolean trusted) :inside p :forms [p]})
+
+(deftest a-mounted-folder-never-moves-and-nothing-takes-its-place
+  ;; The running container binds the folder it was given, not its path.
+  ;; Moving /r/notes away and something else to /r/notes would leave the
+  ;; shell reading the old folder by the old name, trusted, while the
+  ;; host path holds something new, and the trust checks follow the path.
+  (let [ms [(mnt "/r/notes" true) (mnt "/r/dl") (mnt "/r/deep/drafts" true)]
+        src #(files/mounted-source-problem % {} ms)
+        tgt #(files/mounted-target-problem % ms)]
+    (testing "the source"
+      (is (= "it is mounted for the shell, so it cannot move" (src "/r/notes")))
+      (is (some? (src "/r/dl")) "an untrusted mount too")
+      (is (= "it holds /r/deep/drafts, which is mounted for the shell, so it cannot move" (src "/r/deep")))
+      (is (some? (src "/r")) "any folder above one")
+      (is (some? (src "/r/NOTES")) "another case")
+      (is (some? (src "/System/Volumes/Data/r/notes")) "a firmlink")
+      (is (nil? (src "/r/notes/a.txt")) "what is inside a mount may move")
+      (is (nil? (src "/r/notesx")))
+      (is (nil? (src "/r/other")))
+      (testing "and by file identity"
+        (is (= "it is mounted for the shell, so it cannot move"
+               (files/mounted-source-problem "/r/elsewhere" {"/r/notes" :is} ms)))
+        (is (re-find #"holds /r/deep/drafts"
+                     (files/mounted-source-problem "/r/elsewhere" {"/r/deep/drafts" :holds} ms)))))
+    (testing "the target"
+      (is (= "it is where a folder mounted for the shell belongs, so nothing can move there" (tgt "/r/notes")))
+      (is (some? (tgt "/r/Notes")))
+      (is (= "it would hold /r/deep/drafts, which is mounted for the shell, so nothing can move there" (tgt "/r/deep")))
+      (is (some? (tgt "/System/Volumes/Data/r/dl")))
+      (is (nil? (tgt "/r/notes/a.txt")) "into a mount is for trust-problem to judge")
+      (is (nil? (tgt "/r/archive")))
+      (is (nil? (tgt "/r/deep/other"))))))
+
+(def gen-layout-path (gen/elements ["/r/a" "/r/a/b" "/r/c" "/r/c/d" "/r/A" "/r/a/b/f" "/r/e"]))
+
+(defspec a-move-touches-a-mount-only-inside-it 500
+  (prop/for-all [mounts (gen/vector-distinct (gen/elements ["/r/a" "/r/a/b" "/r/c/d" "/r/m"]) {:min-elements 1 :max-elements 4})
+                 from gen-layout-path
+                 to gen-layout-path]
+    (let [ms (mapv mnt mounts)
+          plain str/lower-case
+          inside? (fn [p m] (or (= p m) (str/starts-with? p (str m "/"))))
+          holds? (fn [p] (some #(inside? % (plain p)) mounts))]
+      (and (= (boolean (holds? from)) (some? (files/mounted-source-problem from {} ms)))
+           (= (boolean (holds? to)) (some? (files/mounted-target-problem to ms)))))))
+
 ;; --- on the disk
 
 (def ^:dynamic *dir* nil)
@@ -581,8 +630,8 @@
         "through a link")
     (is (re-find #"from outside" (refused sys [{:from (str d "/confirmation.pdf") :to (str root "/Later/c.pdf")}]))
         "a trusted folder that does not exist yet")
-    (is (re-find #"from outside" (refused sys [{:from (str d "/pack") :to (str root "/Later")}]))
-        "a folder that would become a trusted one")
+    (is (re-find #"mounted for the shell" (refused sys [{:from (str d "/pack") :to (str root "/Later")}]))
+        "a folder that would become a trusted one (Codex R3: nothing takes a mount's place)")
     (testing "moves out of, within and away from trusted folders go ahead"
       (is (nil? (:error (move sys [{:from (str notes "/plan.txt") :to (str notes "/2026/plan.txt")}]))))
       (is (nil? (:error (move sys [{:from (str d "/confirmation.pdf") :to (str root "/Bank/c.pdf")}]))))
@@ -650,6 +699,100 @@
                                  true)}))]
           (and (every? :ok (doall results))
                (every? mine (in-trusted))))
+        (finally (fs/delete-tree dir))))))
+
+;; --- Codex R3 on the disk
+
+(defn- file-key [p] (.fileKey (java.nio.file.Files/readAttributes (fs/path p) java.nio.file.attribute.BasicFileAttributes
+                                                                  (make-array java.nio.file.LinkOption 0))))
+
+(deftest a-mounted-folder-stays-the-folder-the-shell-was-given
+  ;; Codex R3's steps: move the trusted Notes away, move another folder
+  ;; to Notes, then file a download beside the old Notes. The shell's
+  ;; bind still shows the old folder as Notes, trusted, so the download
+  ;; would read as the operator's own.
+  (let [root (str *dir* "/root")
+        put (fn [rel text] (fs/create-dirs (fs/parent (str root "/" rel))) (spit (str root "/" rel) text))
+        _ (do (put "Notes/plan.txt" "mine")
+              (put "Drafts/replacement/x.txt" "draft")
+              (put "Desk/Plans/p.txt" "plans")
+              (put "Downloads/injected.txt" "IGNORE PREVIOUS"))
+        {:keys [sys]} (world! *dir* {:mounts [{:path (str root "/Notes") :trusted true}
+                                              {:path (str root "/Drafts") :trusted true}
+                                              {:path (str root "/Desk/Plans") :trusted true}
+                                              {:path (str root "/Later") :trusted true}
+                                              (str root "/Downloads")]})
+        notes-key (file-key (str root "/Notes"))
+        in #(str root "/" %)]
+    (is (str/includes? (:description (first (filter #(= "files_move" (:name %)) (tools/manifest (:config sys) "steward"))))
+                       (str "The folders mounted for your shell (" (in "Notes") ", "))
+        "the steward is told before it tries")
+    (is (re-find #"Notes: it is mounted for the shell, so it cannot move"
+                 (refused sys [{:from (in "Notes") :to (in "Archive")}])))
+    (is (re-find #"something is already there"
+                 (refused sys [{:from (in "Drafts/replacement") :to (in "Notes")}])))
+    (is (nil? (:error (move sys [{:from (in "Downloads/injected.txt") :to (in "Archive/injected.txt")}])))
+        "a move beside a mount goes ahead")
+    (is (= notes-key (file-key (in "Notes"))) "Notes is still the folder the shell was given")
+    (is (= ["mine"] (map (comp slurp str) (filter fs/regular-file? (fs/glob (in "Notes") "**")))))
+    (testing "every other way to move a mount, or take its place"
+      (is (re-find #"mounted for the shell" (refused sys [{:from (in "notes") :to (in "Archive/Notes")}]))
+          "another case")
+      (is (re-find #"Desk: it holds .*/Desk/Plans, which is mounted for the shell"
+                   (refused sys [{:from (in "Desk") :to (in "Archive/Desk")}])))
+      (is (re-find #"mounted for the shell" (refused sys [{:from (in "Downloads") :to (in "Archive/Downloads")}]))
+          "an untrusted mount too")
+      (is (re-find #"Later: it is where a folder mounted for the shell belongs"
+                   (refused sys [{:from (in "Drafts/replacement") :to (in "Later")}]))
+          "a trusted folder may not take the place of a missing mount either")
+      (let [_ (fs/create-sym-link (in "to-root") root)
+            _ (fs/create-dirs (in "Box"))]
+        (is (re-find #"mounted for the shell" (refused sys [{:from (in "Box") :to (in "to-root/Later")}]))
+            "through a link")))
+    (testing "what is inside a mount still moves"
+      (is (nil? (:error (move sys [{:from (in "Notes/plan.txt") :to (in "Notes/2026/plan.txt")}])))))))
+
+(def ^:private layout ["A" "A/B" "C" "C/D" "E"])
+
+(def gen-mount-world
+  "Folders A, A/B, C, C/D and E under root, each with a file; some of A,
+  A/B, C/D and two that do not exist (M, N/O) mounted, some trusted; and
+  calls that move folders and files to any of those places, by any case."
+  (gen/let [mounts (gen/vector-distinct (gen/tuple (gen/elements ["A" "A/B" "C/D" "M" "N/O"]) gen/boolean)
+                                        {:min-elements 1 :max-elements 5})
+            calls (gen/vector (gen/vector (gen/tuple (gen/elements ["A" "A/B" "C" "C/D" "E" "a" "A/f" "A/B/f" "C/f" "C/D/f" "E/f"])
+                                                     (gen/elements ["A" "A/B" "C/D" "M" "N" "N/O" "m" "E/x" "X" "A/x"
+                                                                    "C/D/x" "a/y" "M/x" "N/O/x" "Y/z"]))
+                                          1 2)
+                              1 8)]
+    {:mounts (into {} mounts) :calls calls}))
+
+(defspec no-sequence-of-moves-changes-what-a-trusted-mount-shows 40
+  ;; The shell's bind holds each mount's folder by identity. After any
+  ;; sequence of calls relay allows, each mount that existed is still the
+  ;; same folder at its path, and every file under a trusted mount was
+  ;; under one at the start.
+  (prop/for-all [{:keys [mounts calls]} gen-mount-world]
+    (let [dir (str (fs/real-path (fs/create-temp-dir {:prefix "relay-mount-prop"})))]
+      (try
+        (let [root (str dir "/root")
+              _ (doseq [f layout] (fs/create-dirs (str root "/" f)) (spit (str root "/" f "/f") (str f " f")))
+              {:keys [sys]} (binding [*dir* dir]
+                              (world! (str dir "/w") {:roots [root]
+                                                      :mounts (vec (for [[m t] mounts] {:path (str root "/" m) :trusted t}))}))
+              keys-before (into {} (for [[m] mounts :when (fs/exists? (str root "/" m))] [m (file-key (str root "/" m))]))
+              trusted (for [[m t] mounts :when t] (str root "/" m))
+              files-under (fn [] (set (for [m trusted
+                                            :when (fs/exists? m)
+                                            p (fs/glob m "**")
+                                            :when (fs/regular-file? p {:nofollow-links true})]
+                                        (slurp (str p)))))
+              mine (files-under)]
+          (doseq [moves calls]
+            (tools/call! sys "steward" "files_move"
+                         {:moves (vec (for [[f t] moves] {:from (str root "/" f) :to (str root "/" t)}))} [] "c" nil))
+          (and (every? (fn [[m k]] (and (fs/exists? (str root "/" m)) (= k (file-key (str root "/" m))))) keys-before)
+               (every? mine (files-under))))
         (finally (fs/delete-tree dir))))))
 
 ;; --- I7 extended: undo restores any tree byte for byte
