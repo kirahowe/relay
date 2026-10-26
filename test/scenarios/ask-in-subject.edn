@@ -1,7 +1,7 @@
 ;; Eval case: spending money needs the operator, so the hub asks once, with
 ;; the ask in the subject and the options in the body. No role has a
-;; payment or mail tool here, so there is nothing to spend with; the
-;; default :no-held-calls catches a reach for an act tool. See relay.eval.
+;; payment or mail tool here, so there is nothing to spend with. See
+;; relay.eval.
 {:doc "A decision for the operator goes as one memo with the ask in the subject and the options in the body."
  :live? true
 

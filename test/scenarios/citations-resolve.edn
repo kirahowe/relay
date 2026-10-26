@@ -1,6 +1,6 @@
 ;; Eval case: a claim drawn from relay's knowledge carries a ref, and the
-;; ref resolves. The staging seed gives fact 5 (the office is closed on
-;; Mondays) and fact 7 (the project is called Lighthouse). See relay.eval
+;; ref resolves. The staging seed gives fact 4 (the office is closed on
+;; Mondays) and fact 6 (the project is called Lighthouse). See relay.eval
 ;; and relay.refs.
 {:doc "An answer from facts cites them with refs that resolve."
  :live? true
@@ -14,7 +14,7 @@
          {:tool-uses [{:name "facts" :input {:topic "projects"}}]}
          {:tool-uses [{:name "memo_send"
                        :input {:to "operator" :subject "Office days and project name"
-                               :body "The office is closed on Mondays [[fact:5]]. The project is called Lighthouse [[fact:7]]."}}]}
+                               :body "The office is closed on Mondays [[fact:4]]. The project is called Lighthouse [[fact:6]]."}}]}
          {:tool-uses [{:name "memo_close"
                        :input {:memo {:memo-id {:subject "Office and project"}}
                                :outcome "Answered from the facts, with refs."}}]}
@@ -37,7 +37,7 @@
    :model {"hub" [{:tool-uses [{:name "facts" :input {:search "office closed"}}]}
                   {:tool-uses [{:name "memo_send"
                                 :input {:to "operator" :subject "Office days and project name"
-                                        :body "The office is closed on Mondays [[fact:999]]. The project is called Lighthouse [[fact:7]]."}}]}
+                                        :body "The office is closed on Mondays [[fact:999]]. The project is called Lighthouse [[fact:6]]."}}]}
                   {:tool-uses [{:name "memo_close"
                                 :input {:memo {:memo-id {:subject "Office and project"}} :outcome "Answered."}}]}
                   {:tool-uses [{:name "journal_write" :input {:text "Answered."}}]}]}}}
@@ -49,7 +49,7 @@
 
  :assert
  [[:has :wake {:role "hub" :outcome "ran"}]
-  [:has :fact {:id 5 :text [:includes "Mondays"]}]]
+  [:has :fact {:id 4 :text [:includes "Mondays"]}]]
 
  :graders
  [{:id :cites

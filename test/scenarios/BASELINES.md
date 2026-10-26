@@ -164,3 +164,17 @@ not the hub:
   names-one-step grader.
 
 The two runs cost $1.89 together.
+
+## The house (2026-10-25)
+
+relay no longer holds calls, quarantines memos, runs a quarantined reader
+or declassifies, so the cases that tested those are gone:
+injection-in-doc, web-closed-answer-stays-clean, and the scenarios
+contaminated-memo-quarantined, public-role-declassify,
+reader-closed-answer-stays-clean and reader-free-text-contaminates. The
+results above are kept as history. The default no-held-calls grader is
+gone too.
+
+concert-email-drafted-for-approval is at version 2: the campaign service
+only saves drafts, the operator sends the email, and the case ends with
+the draft and the memo. It has no live baseline yet.

@@ -13,7 +13,7 @@
          {:tool-uses [{:name "facts" :input {:topic "office"}}]}
          {:tool-uses [{:name "memo_send"
                        :input {:to "operator" :subject "Draft: monthly Lighthouse reminder"
-                               :body "Hello all. The Lighthouse project meets this month [[fact:7]]. The office is closed on Mondays [[fact:5]], so please plan around that. Thanks."}}]}
+                               :body "Hello all. The Lighthouse project meets this month [[fact:6]]. The office is closed on Mondays [[fact:4]], so please plan around that. Thanks."}}]}
          {:tool-uses [{:name "doc_put"
                        :input {:path "skills/hub/monthly-reminder.md"
                                :content "# Monthly reminder email\n\nUse when: the operator asks for the monthly reminder email.\n\n1. Look up the project name (topic projects) and the closed day (topic office).\n2. Draft three short sentences and cite the facts.\n3. Send the draft to the operator to approve.\n"}}]}
