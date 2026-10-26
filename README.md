@@ -23,13 +23,8 @@ prompt. The prompt ends with the role's last 3 journal entries, each cut
 at 600 characters, and the fact topics with how many facts hold now in
 each, so a role does not spend its first model calls looking them up.
 They go through the same filters as the `journal` and `facts` tools: a
-public role sees only public items, and any other role has contaminated
-entries withheld and contaminated facts left out of the counts. They
-never raise the wake's labels. An entry or fact whose labels the rest of
-the prompt does not already carry is left out, with a line saying so, and
-the role can read it with the tool if it needs it. So a role woken by the
-operator's memo sees private entries and facts, while a role woken by a
-public routine stays clean and is not held on its egress calls.
+public role sees only public items, and a house role sees them all. The
+wake's labels are those of everything its prompt holds.
 
 A role has no files and no shell. It works only through tools, each one a
 `relay tool <name>` call made as that role:
@@ -123,10 +118,8 @@ notifications, `relay.refs/plain` writes a ref as short text.
 A skill is a doc at `skills/<role id>/<slug>.md`. Its first line is `#
 Title`, a later line starts `Use when:`, and the procedure follows. A
 role's system prompt lists its skills by title, path and use-when line,
-under the same filters as its journal and facts. A skill whose latest
-version a contaminated session wrote is left out, with a line saying that
-some skills are left out, until the operator trusts it. A public role is
-listed its public skills only. The shared instructions tell a role to look
+under the same filters as its journal and facts, and the wake carries
+their labels. A public role is listed its public skills only. The shared instructions tell a role to look
 for a matching skill before multi-step work, to write one after it first
 finishes work that will recur, and to update it when the operator corrects
 it or edits its draft.
@@ -184,15 +177,13 @@ Each piece of a card's text (the title, an item, a row or column, the
 note) keeps the labels of whoever last wrote it. Reading a card adds
 private and the labels of the text it shows now, so removing a
 contaminated item, or writing it again yourself, cleans the card. Ticks,
-cell states, archive and restore carry no text and add no labels. A role
-is shown a contaminated card only when it passes `accept_contamination`.
+cell states, archive and restore carry no text and add no labels.
 Whatever you write on a card carries no labels, whichever way you write
 it.
 
 A wake's prompt, and a conversation's, lists the active cards after the
-fact topics, one line each with the card's progress. A card whose
-title's labels the session does not hold is left out, with a line saying
-so.
+fact topics, one line each with the card's progress, and the wake
+carries their titles' labels.
 
 ```
 relay cards [--archived]
@@ -217,8 +208,8 @@ Row 2 RBC: all open
 notifications go, limits, the dead letter handler, external tools, an optional weekly budget, an optional
 morning brief and what each role is granted.
 `setup/relay.example.edn` shows each of them. No role can read this
-file. Every external tool has a class (`read`, `write`, `edit`,
-`egress` or `act`) and the labels its output carries (see below), and
+file. Every external tool has a class (`read`, `write`, `edit` or
+`egress`) and the labels its output carries (see below), and
 relay refuses a tool that lacks either. A role on a `:script` harness gets
 no tools at all, relay's own included: a script is any program, nothing
 polices its calls, and it could claim any labels. relay refuses to put a
@@ -287,28 +278,25 @@ tool's `:digest` when relay.edn gives one. agentloop refuses a server
 that offers another definition, and also refuses one that differs from
 what a session itself pinned. So a changed description or schema never
 reaches a model until the operator accepts it. What this does not cover:
-the first definition is taken on trust, and a conversation held before
+the first definition is taken on trust, and a conversation opened before
 any wake has used the tool gets whatever the server offers then.
 
 A run whose server will not start, or whose tool's definition changed,
 runs nothing and ends needing the operator. That is the role's trouble,
-so its harness is not paused and other roles go on. relay tells the
-operator once, with what agentloop said, and `relay status` shows it on
-the role. A server that would not start is tried again after the usual
-doubling wait, in the same session, or now with `relay wake <role>`. A
-changed definition waits for the operator: no tick, `relay wake` or
-conversation starts the role. `relay fresh <role>` accepts the
-definition agentloop saw when the wake was stopped, after showing it,
-any other roles stopped by the same change and any held calls it will
-drop, and asking for the code. If any of that has changed by the time
-the code is typed, it does nothing and asks you to look again. It
-records the new digest and ends the role's session, and the sessions of
-those other roles, since a session that pinned the old definition could
-not go on; each next wake starts a new session with the role's open
-memos. A tool seen to change before relay accepted any definition of it
-is held to the one it changed from, so a first use elsewhere cannot
-take the new one. When relay.edn's `:digest` is what refuses it, set
-the new digest there and then run `relay fresh`.
+so its harness is not paused and other roles go on. A server that would
+not start is tried again after the usual doubling wait, in the same
+session, or now with `relay wake <role>`; relay tells the operator once,
+with what agentloop said, and `relay status` shows it on the role. A
+changed definition is taken: relay records the new digest, tells the
+operator once that the tool changed, and the role's next wake starts a
+new session with it and the role's open memos, since a session that
+pinned the old definition could not go on. Every other role then gets
+the new definition too. If it changes again before the role has run
+since, as it does for a server whose description carries a timestamp,
+relay still takes it but waits the usual doubling time before trying
+the role again, and says nothing more. When relay.edn's `:digest` is what refuses it,
+relay never moves that pin: the role is tried again after the usual
+wait, and the notification says to set the new digest there.
 
 A server can also be remote: a service on the internet that speaks MCP
 over HTTP, such as MailerLite's at `https://mcp.mailerlite.com/mcp`. You
@@ -338,215 +326,86 @@ access token and renews it first when it has less than ten minutes left.
 agentloop runs it at the start of each wake, and again if the server
 refuses the token. Two runs never renew at once.
 
-relay proposes each tool's class from what the server says about it:
-`:read` when the server says the tool only reads, and `:act` otherwise,
-which asks you before every call. You can add `:consent` to an `:act`
-tool in the file, as in relay.edn, and `:preview`. relay does not
-propose `:always-hold`, since it would shut out `:consent`. Every tool's labels are
-`["contaminated" "private"]`: your data, which other people may have
-written. A tool whose name says it deletes something starts off. connect
-asks nothing about any of this: it shows you the tools and what each may
-do, and you type the code to accept them. To change a tool's class, labels
-or whether it is on, edit the file afterwards. relay pins each tool's
-definition as you saw it when you connect, so nothing is taken on trust.
-A changed definition waits for `relay fresh`, as for any MCP tool, and
-connecting again pins what you see then and keeps the choices in the file.
+relay proposes each tool from what the server says about it. A tool the
+server says only reads is `:read` and on. Any other tool is `:edit` and
+off: turn it on in the file once you have checked that it changes only
+your own things and that you can undo what it does, such as a draft. A
+tool whose name says it deletes something starts off too. Every tool's
+labels are `["contaminated" "private"]`: your data, which other people
+may have written. connect asks nothing about any of this: it shows you
+the tools and what each may do, then writes the file. To change a tool's
+class, labels or whether it is on, edit the file afterwards. relay pins
+each tool's definition as you saw it when you connect, so nothing is
+taken on trust. A changed definition is taken as for any MCP tool, and
+connecting again pins what you see then and keeps the choices in the
+file.
 
 Any MCP tool, in relay.edn or a connection file, can narrow what the
 model may send. `:fixed-args {"send_now" false}` sets arguments to the
 given values on every call, and `:hidden-args ["reply_to"]` names
 arguments the model may not give. The model does not see either in the
 tool's schema, and agentloop refuses a call that names one before the
-call can be held or sent. A fixed value is yours, so no role can change
-it. A call is decided and held with the fixed values in: a `:consent`
-rule can name one, a preview is given them, and `relay holds` lists them
-as set by your settings. Approval binds to the input with them. If you
-change a fixed value while a call waits, `relay approve` refuses it, and
-a call you approved before the change does not run. The role is told
-your settings changed.
+call is sent. A fixed value is yours, so no role can change it.
 
 A typed answer from cleanroom (a date, a number, a record) holds no text
 an outsider chose, which is why it can come back clean, but it is still
 a value an outsider can influence: the mail decides what date or number
-it is. Do not trust such a value for integrity. When it will feed an
-`act` tool, ask with `choice` among options you wrote, so the most an
-outsider can do is pick the wrong one of your options.
+it is. Do not rely on such a value for integrity.
 
 An optional `<data>/AGENTS.md` adds the operator's own instructions to
 every role's system prompt, except a public role's (see below).
 
-A role's grants are `:tools`, `:may-add`, `:public` and
-`:quarantine`, and relay refuses any other key, so a typo cannot change
-what a role may hold.
+A role's grants are `:tools`, `:may-add` and `:public`, and relay
+refuses any other key, so a typo cannot change what a role may hold.
 
-### Labels and holds
+### Labels and the house
 
-relay keeps a role from holding all three parts of the lethal trifecta at
-once: the operator's private data, text an outsider could have written,
-and a way to send data out. It does this with labels, not by asking the
-model to behave.
+relay keeps the operator's things in the house. A role that is not
+public, a house role, may read everything relay keeps, including text
+an outsider wrote, but it has no way to send anything out: relay grants
+it no `egress` tool, and refuses a memo from it to a public role. A
+public role, a scout, may reach the web, but it is never shown anything
+private. relay and agentloop enforce both rules. Neither depends on the
+model behaving.
 
 Each tool has a class, which says what a call to it can do:
 
-| class | what a call does | when it waits for the operator |
-|---|---|---|
-| `read` | returns content, changes nothing, sends nothing out | never |
-| `write` | changes relay's own data, which keeps its labels | never |
-| `edit` | changes the operator's own things outside relay: nobody else sees the change, and the earlier state survives (their own reminders, a draft in their mail) | when the session is contaminated |
-| `egress` | can put data the model chose where an outsider can see it: a search query, a URL to fetch | when the session is private and contaminated |
-| `act` | others see it, it spends money, or it cannot be undone: a campaign, a refund, a post, a payment | every call, unless the operator's standing consent covers it |
+| class | what a call does |
+|---|---|
+| `read` | returns content, changes nothing, sends nothing out |
+| `write` | changes relay's own data, which keeps every earlier version and its labels |
+| `edit` | changes the operator's own things outside relay, where nobody else sees the change and the earlier state survives: her own reminders, a draft in her mail |
+| `egress` | can put data the model chose where an outsider can see it, such as a search query or a URL to fetch. Only a public role may have one. |
 
-`:always-hold true` makes every call to a tool wait, whatever its class.
-A class agentloop does not know is held too.
+No class covers a tool that others see, that spends money or that
+cannot be undone. A role is not given such a tool: it drafts, and the
+operator sends. relay refuses a class it does not know, `act` included,
+and the tool keys `:always-hold`, `:consent` and `:preview`, which it no
+longer has. Nothing a role calls waits for the operator.
 
-`edit` is for a change the operator could undo. A tool that overwrites or
-deletes with no history kept is `act`. An edit call waits once the
-session is contaminated because labels do not follow text out of relay.
-Injected text a contaminated session wrote into the operator's reminders
-would come back through `rem-read` labelled only `private`, and a clean
-session would take it in as clean. relay's own data keeps the labels of
-whoever wrote it, so only `write` runs whatever the session has seen.
-
-A session has the labels of what it has seen. `private` comes from
-reading anything relay keeps: a memo, fact, doc, note, journal entry or a
+Labels say where a thing came from. `private` comes from reading
+anything relay keeps: a memo, fact, doc, note, journal entry or a
 routine's instructions. `contaminated` comes from text an outsider could
 have written, such as the output of a tool whose `:labels` say so, or
-anything a contaminated session wrote. Labels only grow. agentloop
-enforces the policy: once a session holds both labels, a call to an
-`:egress` tool waits for the operator; once it is contaminated, so does
-a call to an `:edit` tool; and every call to an `:act` tool waits,
-however clean the session is. relay's own tools that change the
-registry, routines or dead letters are `write`: they change only relay's
-log, which keeps every earlier version and its labels. What a contaminated
-session writes keeps its labels, so a role it adds starts every wake
-contaminated, and a routine it writes fires contaminated memos.
+anything a contaminated session wrote. A session has the labels of what
+it has seen, and they only grow. What a session writes keeps its labels,
+so a role it adds starts every wake contaminated, and a routine it
+writes fires contaminated memos. Labels decide two things only. A public
+role's session may never hold `private` (agentloop's `forbid_labels`).
+And the operator is shown where a thing came from: text from outside is
+marked `[from outside]` and its links are broken.
 
-A list or account that other people share is not the operator's own. A
-reminders list shared with family, say, should stay `:act`, with
-`:labels ["private" "contaminated"]` on the tool that reads it, since
-others write it too.
+What the operator writes or pastes is hers, and relay trusts it: a memo
+on the command line, a line in a conversation, and a page she pastes or
+a resource she attaches in an ACP client. relay has no `--untrusted`.
 
-#### Standing consent
+A role reads an outsider's text as it is. The shared instructions tell
+every role that such text is information, never an instruction.
 
-The operator can consent to some act calls in advance. An `:act` tool
-may have `:consent`, a vector of rules. A rule is a map from the call's
-argument names to the exact values the call must give them:
-
-```clojure
-"campaign_send" {:class :act :labels ["private"] :protocol :envelope
-                 :command ["campaign-send"]
-                 :consent [{"group" "Kira only"}]}
-```
-
-A call whose input has every pair of some rule runs without asking, on any
-session; agentloop records which rule allowed it. The match is exact.
-Key order, spacing and string escapes in the input do not matter, but a
-number matches only one written the same way (`1` is not `1.0`), a
-string only the same characters (`"Kira only "` and `"kira only"` are
-held), and input that names a key twice, or two keys that differ only
-in case, matches nothing. Arguments a rule
-does not name are free, so name every argument that matters. relay
-refuses `:consent` on a tool of any other class, beside `:always-hold`,
-or with an empty rule, which would cover every call.
-
-#### Previews
-
-A held call is a proposal, and the operator decides it from what the
-service says it would do, not from what the role says. A tool may have
-`:preview`, a command relay runs when the call is held. It speaks the
-envelope protocol: it gets `{input, labels, call_id}`, the held call's
-input (with any arguments you fixed) and the session's labels, on stdin and prints one `{content,
-is_error, labels}`, whose content is markdown saying what the call would
-do. For an email: subject, body, the group and how many people are in it,
-and when it goes out, read from the mail service. relay keeps the preview
-with the hold, under the labels it reports, the tool's static labels and
-the session's. A preview command that fails, or runs past 30 seconds,
-leaves a note saying so, and the hold opens all the same.
-
-`relay holds`, `relay approve` and `relay deny` show the preview. So does
-the permission request in a conversation (see [ACP clients](#acp-clients)).
-A preview's links are always defanged, since it is what a service said.
-A placeholder still in it, such as `[Venue]` or `[Photographer]`, is
-listed as still to fill in, since it would go out as written.
-Links in a preview to a host that no preview the operator approved
-before had are listed as new, and characters in it that can pass for
-others are named. Approval still binds to the call's input, by its
-digest. The preview is what the service said at hold time: the service
-can change before the call runs, and a preview cannot show that.
-
-Every event a role's tool call writes carries its session's labels, and
-anything that copies text carries the copied text's labels too. Each
-version of a fact, doc or note keeps the labels of whoever wrote it, and
-every read tool returns the labels of what it shows, so the session that
-reads it takes them on. A wake starts with the labels of everything in
-its prompts.
-
-Contaminated items are withheld by default. A read tool shows a
-placeholder in their place and includes them only when called with
-`accept_contamination`. A contaminated memo to a role granted an external
-tool of class `act` or `egress` is quarantined: the role is not shown it
-and is not woken for it until the operator runs `relay release <memo>`.
-A role with no such tool reads a contaminated memo like any other and
-becomes contaminated. Writing facts and docs is class `write`, so a contaminated session may
-retract, supersede, remove or overwrite them without asking. That never
-hides clean content: a read that does not accept contamination shows the
-latest version no contaminated session wrote, with a note that a newer
-change is withheld. `relay fact revert <fact> <version>` and `relay doc
-revert <path> <version>` put an earlier version back, and `relay fact
-add` and `relay fact correct` let the operator write facts directly.
-
-A log written before relay kept labels is marked the first time this
-relay opens it. Everything roles and the dispatcher wrote before the
-mark counts as private and contaminated, since nothing says what it had
-seen; the operator's own writing does not. Trust what you have read to
-clear it. No wake or conversation session from before the mark is
-carried on: the next wake starts afresh.
-
-`relay trust <kind> <ref>` clears `contaminated`
-from something the operator has read and vouches for. The kinds are
-`memo`, `fact`, `doc`, `note`, `routine`, `role`, `journal` and `card`.
-`relay trust card <id>` vouches for a whole card, the title and every
-item, row, column and note text as they stand now, at the rev you were
-shown; a card that changed since is not trusted. A later edit by a role
-that read outside text makes that element contaminated again. It never
-clears `private`. `--untrusted` on `relay memo`, `put`, `add`, `update` and
-`routine` marks what the operator writes as contaminated, for text pasted
-from somewhere untrusted.
-
-When agentloop holds a call, the wake ends and relay records a hold for
-it and notifies the operator (with the role, the tool and its class,
-never the input). That session keeps the memos it carried, without
-counting the wake against them, until every hold in it is decided. The
-role's other memos go on meanwhile, in fresh sessions, one wake at a
-time as ever. `relay holds` lists the held calls: why each was held, what
-the tool is, where its data would go, what the session has seen and
-where each label came from, any characters in the input that could pass
-for others (a Cyrillic `а` in `pаypal`), the tool's preview, and the
-whole input, its links defanged (`hxxps://`, `[.]` for a dot). `relay
-approve` and `relay deny` show the held call's review instead, the text
-relay writes for every consent (see the client protocol's Reviews): the
-role, the tool and its class, the preview, the whole input as JSON, the
-fixed arguments, the labels and the characters to check, every value from
-the role quoted or behind a gutter and its links broken by escapes when
-contaminated. relay's own notes follow it: which hold, why it was held,
-where its labels came from. The approval is still
-bound to the exact input. `relay approve
-<hold>` or `relay deny <hold> [why]` decides one. Once every call in a
-held session is decided, the next tick that finds the role free carries
-that session on, with its memos, and agentloop carries out the
-decisions.
-`relay deny <hold> --end` also ends that session, so the role's next
-wake starts afresh with its open memos; the third denied call in one
-session does the same, and tells the operator. In
-a conversation agentloop asks the ACP client instead, and `relay acp`
-passes the request through.
-
-`relay approve`, `deny`, `fresh`, `release`, `declassify` and `trust` print what
-they are about on the terminal (`/dev/tty`, never stdin) and ask for a
-four-character code to be typed back there, so no harness or pipe can
-answer for the operator. `relay trust` shows the subject's review text
-itself and signs the digest of exactly that text. Trusting from the workspace pane in the dashboard (`relay`)
-is the one other way to trust (see the dashboard).
+A list or account that other people share is not the operator's own.
+Put `:labels ["private" "contaminated"]` on the tool that reads it, since
+others write it too, and give no role a tool that changes it, since
+others would see the change.
 
 #### What you are shown
 
@@ -558,42 +417,37 @@ and the role is told only its ref, such as
 and its session's, so a display drawn from a web page is contaminated.
 Nobody writes under `shown/` any other way. A wake that showed you
 something tells you the paths in a notification, never the text. Read
-one with `relay doc <path>`, and once you have read it, `relay trust doc
-<path>` lets roles read it without becoming contaminated. An envelope
-tool gives a display as a `display` field beside `content`, with
-`title`, `body`, `labels` and optional `sources`, each a `title` and a
-`ref`.
+one with `relay doc <path>`. An envelope tool gives a display as a
+`display` field beside `content`, with `title`, `body`, `labels` and
+optional `sources`, each a `title` and a `ref`.
 
 #### Public roles
 
 A role that searches or browses the web on a schedule, for jobs or
-grants say, would stall under these rules: the first memo it read would
-make it private, the first page contaminated, and every search after
-that would wait for the operator. Granting it `:public true` in
-relay.edn makes it a public role instead. Its session never holds
-`private`, so its egress calls run without asking. It still becomes
-contaminated, and its `act` calls are held, as every role's are.
+grants say, needs a way out, and a house role has none. Granting it
+`:public true` in relay.edn makes it a public role instead. Its session
+never holds `private`, so it may be granted `egress` tools. It still
+becomes contaminated when it reads the web.
 
 A public role is shown only public items. An item is public when the
-operator wrote it with `--public`, a public role wrote it, or the
-operator declassified it. Everything else is invisible to it: not
-shown, not counted, with no placeholder, and a fact, doc or memo it
-cannot see does not exist for it. It is never given the operator's
-`<data>/AGENTS.md`, which may hold private details, and since any other
-role's session may have read that file, text a role wrote is never
-public: a public role sees, and can send memos to, only the roles
-whose id, title and instructions the operator wrote with `--public`,
-and its own must be written that way too. `relay add --public` does it
-for a new role; `relay update <id> --public --title <t> --instructions`
-does it for an existing one, id included. A public role whose own text
-is not public is not woken, and the operator is told once, with what to
-run; `relay status` says so too. What it writes is public only when it comes
-from a session that began while the role was public: relay names the
-wake in the tool command it gives the harness. A session that began
-public is read for as public even if relay.edn changes while it runs.
-It sees a doc only when its path was chosen in public. It may not write
-where a doc it cannot see sits, so it can tell that such a path is
-taken. The operator cannot put a public doc at a
+operator wrote it with `--public` or a public role wrote it. Everything
+else is invisible to it: not shown, not counted, with no placeholder,
+and a fact, doc or memo it cannot see does not exist for it. It is never
+given the operator's `<data>/AGENTS.md`, which may hold private details,
+and since any other role's session may have read that file, text a role
+wrote is never public: a public role sees, and can send memos to, only
+the roles whose id, title and instructions the operator wrote with
+`--public`, and its own must be written that way too. `relay add
+--public` does it for a new role; `relay update <id> --public --title
+<t> --instructions` does it for an existing one, id included. A public
+role whose own text is not public is not woken, and the operator is told
+once, with what to run; `relay status` says so too. What it writes is
+public only when it comes from a session that began while the role was
+public: relay names the wake in the tool command it gives the harness. A
+session that began public is read for as public even if relay.edn
+changes while it runs. It sees a doc only when its path was chosen in
+public. It may not write where a doc it cannot see sits, so it can tell
+that such a path is taken. The operator cannot put a public doc at a
 path first chosen without `--public` either, since no public role could
 see it there. Memos, facts, docs and other items are numbered by the
 log's one sequence, so the gaps in the numbers a public role sees tell
@@ -603,31 +457,16 @@ could see vanishes for it once a session that is not public changes it
 was superseded by one it cannot: both say that something changed, never
 what. A public role is told times in the operator's time zone, in its
 prompts, its tools and `clock`, like any role, and its routines follow
-that zone: the zone is not kept from it, so it may go out in a search. Its
-own contaminated notes and reads are not withheld from it, since it
-has nothing private to leak, and memos to it are never quarantined.
+that zone: the zone is not kept from it, so it may go out in a search.
 
 `--public` on `relay memo`, `routine`, `fact`, `put`, `add`, `update` and
 on `relay wake --note` marks what the operator writes as public: it may
 leave this machine in a web search. A memo, routine, note, journal entry
 or wake note for a public role is refused without it. A memo to a public
-role from anyone else waits, and the operator is told who sent it to
-whom. `relay declassify <memo>` shows the memo's review (its id, sender
-and recipient, subject, body behind the gutter, labels and the
-characters to check) and, with the code, makes it public, minus
-`private`; `contaminated` stays. relay declassifies it only if it still
-gives the review you were shown. The role gets
-exactly what you were shown, less the `[contaminated]` marker: the memo
-with its URLs broken if it is contaminated, its spacing made plain (runs
-of spaces, tabs and anything else that draws as an empty space become one
-space, blank lines are trimmed, and the subject is one line), and in
-Unicode NFC. So nothing can ride in whitespace, in accents written two
-ways, or in what breaking a URL folds together. Declassifying vouches for the visible text
-only: a secret spelled out in the choice of words is visible text, and
-only reading for it finds it, so declassified memos are best kept
-short. A reason given
-with `relay deny` to a public role's held call is public too, and the
-prompt says so.
+role from a house role is refused with a plain reason, since it could
+carry the operator's private things to the web. A memo of that kind from an older log, which
+relay used to hold for the operator, stays unseen by the public role
+until the operator closes it.
 
 relay refuses any tool result for a public role that carries `private`,
 and tells agentloop to refuse one too (`forbid_labels`), so a public
@@ -635,128 +474,11 @@ role is not granted a tool whose `:labels` include `private`, nor
 `:may-add`, nor the dead letter handler's job, nor a `:script` harness.
 Either refusal is reported to the operator. A session from before a
 role was made public may hold private text that no label records, so
-none is carried on once it is: an interrupted wake starts afresh, a held
-session is ended with its open calls denied, and conversations are kept
-in a directory of their own. A reason the operator gave before the role
-was public stays private. A conversation with a
-public role is under the same rules, but what the operator types in it
-goes to the role as it is, and the role may send it out to the web.
-
-#### The quarantined reader
-
-A role that needs one fact from a page or a mail, and not its text, can
-read it through agentloop's quarantined reader. The operator grants it
-in relay.edn, naming tools from the role's `:tools`:
-
-```clojure
-:grants {"hub" {:tools ["web_read"] :quarantine ["web_read"]}}
-```
-
-Each must be a `:read` or `:egress` tool the role holds, without
-`:always-hold`, or relay refuses the settings. Only the operator grants it; no role can. A public role may
-have it too. relay then puts a `quarantine` block in the role's
-agentloop request, and an entry for `read_quarantined` of class `read`
-in its policy:
-
-```json
-"quarantine": {"model": "claude-haiku-5-5", "effort": "low", "tools": ["web_read"]},
-"policy": {"tools": {"read_quarantined": {"class": "read"}, "web_read": {...}}}
-```
-
-agentloop adds the `read_quarantined` tool itself. A call names one of
-those tools, its input, a question and a JSON Schema. A second model
-with no tools reads the tool's output and answers; the role sees only
-the answer, checked against the schema. When the schema admits no free
-text (booleans, numbers, enums, dates, objects with
-`additionalProperties: false`, arrays of at most 100 items), the answer
-does not carry `contaminated`. Otherwise it does. `private` always
-passes through, and a public role's `forbid_labels` still refuses it.
-relay's label code does not change: the labels arrive with the result,
-as for any tool. The reader's model is the harness's `:reader`, by
-default `{:model "claude-haiku-5-5" :effort "low"}`, on the same
-provider and key. A closed answer can still be wrong, since an outsider
-can steer which value the reader picks, so a role treats it as a claim,
-not an instruction.
-
-An `:egress` tool through the reader is for the web. webtool's `ask`
-takes a query and a number of pages, at most 5, searches, and reads the
-top results through webtool's fetch guards. It takes no URL. The role
-writes the query, which goes out to the search engine, so agentloop
-decides the call as if the role made it directly: a session that has
-seen both private data and an outsider's text waits for the operator
-(`relay holds` shows it as a call to the inner tool, through the
-reader). The reader only reads the pages. The example config and
-`relay init` give the hub such a tool, `web`, under `:quarantine`, so
-the hub looks things up with closed answers and stays clean. A closed
-answer cites its pages by number. A tool named in `:quarantine` and not
-in `:tools` is reader-only: the model is never offered it, so the hub
-cannot read the pages itself even by mistake. Name a tool in both to let
-the role also call it directly.
-
-A call may also set `show_operator: true`. The reader then also writes a
-fuller answer in its own words, with links, that only you are shown (see
-What you are shown). The role still gets only the answer in its schema,
-and a note that you were shown more, so a closed answer leaves it clean.
-What you are shown keeps every label of what the reader read.
-
-#### The sandboxed workbench
-
-A role can be given a workbench: a separate assistant that searches and
-reads the Mac and computes, in a sandbox with no way to send anything
-out. It is for questions about files ("which invoice did I send in
-March?") and calculations over data on the disk. The operator grants it
-in relay.edn:
-
-```clojure
-:grants {"hub" {:tools [...] :workbench true}}
-;; or, to keep it away from more of the disk:
-:grants {"hub" {:tools [...] :workbench {:deny-read ["/Users/you/private"]}}}
-```
-
-A public role may not have it, since it reads private files, and nor may
-a role on a script harness. relay then puts a `workbench` block in the
-role's agentloop request, with the paths to deny, and an entry for
-`workbench` of class `read` in its policy.
-
-A call gives a task and a JSON Schema. agentloop runs a child session on
-the harness's `:reader` model whose only tool runs shell commands under
-macOS `sandbox-exec`, and the role sees only the child's answer, checked
-against the schema. The labels are the reader's rule: `private` always,
-and `contaminated` unless the schema admits no free text. The child is
-told the task and nothing else of the role's conversation, so what it
-reads cannot come back as instructions.
-
-The sandbox profile denies everything and then allows reading the disk,
-except a deny list, and writing one scratch directory that is removed
-afterwards. It has no network rule at all, so IP and unix sockets are
-both refused, and no `mach-lookup` rule, so no system service can be
-reached: `open`, `osascript`, `pbcopy`, DNS and Spotlight all fail.
-Going out is impossible, not forbidden. The deny list covers relay's own
-data directory, the keychain, `~/.ssh`, `~/.gnupg`, password, cloud and
-token files, browser profiles, `~/.codex*` and `~/.claude*`, and
-whatever the grant adds, with what each entry resolves to and what the
-symlinks inside it point at, since a dotfiles setup links such paths
-elsewhere. Reading sysctl is an
-allowlist too, since sysctl at large hands over every other process's
-command line. Each command has a timeout, a CPU limit, a process limit,
-an output cap and a file size limit; it is stopped if the scratch
-directory grows too large or the disk runs low; and everything it leaves
-running is killed.
-
-Found on macOS 26 (Darwin 25), with a deny-default profile and no
-`mach-lookup` allowlist at all: `sh`, the coreutils, `find`, `grep`,
-`rg`, `awk`, `sed`, `sort`, `python3`, `sqlite3`, `jq`, `pdftotext`,
-`file`, `stat`, `shasum`, `tar` and `zip` all work. `mdfind` starts but
-finds nothing, since Spotlight needs its service, so the workbench uses
-`find` and `grep` instead. `osascript` runs and can compute, but cannot
-reach any application. The shell needs `TMPDIR` inside the scratch
-directory, or a here-string and `mktemp` fail. `/dev/stdout` and
-`/dev/fd/N` need their own write rules; `>&2` does not. Every path in
-the profile must be the one the kernel sees, with symlinks resolved
-(`/tmp` is `/private/tmp`), and a `subpath` deny covers the path by any
-case, since the file system is case-insensitive. A sandbox cannot be
-loosened from inside: `sandbox-exec` run again within it is still bound
-by the first profile.
+none is carried on once it is: an interrupted wake starts afresh, and
+conversations are kept in a directory of their own. A conversation
+with a public role is under the same rules, but what the operator types
+in it goes to the role as it is, and the role may send it out to the
+web.
 
 ## Setup
 
@@ -778,12 +500,12 @@ is written in Go.
 
    `relay init` asks for the settings relay cannot run without: the time
    zone, the model and how to get its API key, and where notifications go.
-   It also asks where webtool is, so the hub can look things up on the
-   web, and for the command that prints the Brave Search API key, which
-   is used only to send searches to Brave. With webtool it writes
-   `webtool.json` beside `relay.edn` and gives the hub the `web` tool;
-   answer `none` to leave the web out. Either way the hub gets the
-   workbench, so it can search and read your Mac in a sandbox.
+   It also asks where webtool is, so a public role can look things up on
+   the web, and for the command that prints the Brave Search API key,
+   which is used only to send searches to Brave. With webtool it writes
+   `webtool.json` beside `relay.edn` and gives the `web` tool to the
+   scout, a public role that sees nothing of yours (add it with `relay
+   add scout --public`); answer `none` to leave the web out.
    Each question has a suggestion that Enter accepts, and nothing is
    written until you have seen the whole `relay.edn` and said yes. relay
    refuses to run with a `relay.edn` that lacks any of them. Run it in a
@@ -928,35 +650,31 @@ The budget never stops or slows anything.
 `--until` (dates in relay's time zone, the last day included). `--json`
 prints the same report as JSON. It writes nothing and wakes nothing.
 
-It starts with the interruptions: each time relay asked you for
-something. These are held calls, permission requests in a conversation,
-quarantined memos, memos waiting for `relay declassify`, MCP tools
-waiting for `relay fresh`, a harness
-that needs you, and work given up and sent to you. For each kind it
-says how many arose, how many you decided and how, how many still wait,
-and the median and longest wait. One decided after the window ends
+It starts with the interruptions: each time relay needed you. These are
+a harness that needs you and work given up and sent to you. For each
+kind it says how many arose, how many were dealt with, how many still
+wait, and the median and longest wait. One decided after the window ends
 counts as waiting. Then the notifications sent, per day and per kind,
 and the memos to you per role. Then each role's wakes and conversations:
 memos closed, blocked, left open and dead-lettered, wakes cut short,
-crashed, held or without their tools, and what they cost. A wake belongs
+crashed or without their tools, and what they cost. A wake belongs
 to the window it started in.
 
 Health checks list the wakes that look wrong: a wake that ran and wrote
-no journal entry, left a memo open with no call held, had a tool call
+no journal entry, left a memo open, had a tool call
 refused or failed (read from its transcript), was cut short or crashed,
 or sent you three memos or more.
 
 `relay flag <wake> good|bad [note]` marks a wake or a conversation so
 you can find it later. A conversation's id is a wake id; `relay status`
-lists the latest and `relay week` lists the ones it mentions. The flag
-grants nothing, so it asks for no code. Flags set in the window are at
+lists the latest and `relay week` lists the ones it mentions. Flags set in the window are at
 the end of `relay week`.
 
 `relay traces --out <dir>` writes the wakes and conversations in the
 window as OpenTelemetry traces to `<dir>/traces.otlp.jsonl`, with
 `--since` and `--until` as for `relay week`. Each line is one OTLP/JSON
 request. Per wake or conversation there is one `invoke_workflow` span
-with its role, id, outcome, labels, cost, held calls and memos, and its
+with its role, id, outcome, labels, cost and memos, and its
 health checks and flags as `gen_ai.evaluation.result` events. Each of
 its run files then goes through `agentloop otel`, with the runs hung
 under that span. It runs offline and makes no requests. agentloop comes
@@ -970,8 +688,8 @@ roles and tools and the labels each session held.
 ### Morning brief
 
 With `:brief {:at "07:30"}` in relay.edn, relay sends you one
-notification each morning at that time in its time zone. It has three
-sections: today's calendar, reminders due today or overdue and held calls. Each gives a count and up to eight
+notification each morning at that time in its time zone. It has two
+sections: today's calendar and reminders due today or overdue. Each gives a count and up to eight
 short lines. relay composes it itself and wakes no role, so it costs no
 tokens and no calendar invite reaches a prompt.
 
@@ -979,8 +697,7 @@ The calendar comes from the tool named `cal` in `:tools`, run as `cal
 events --from <today> --to <today>`. Reminders come from `rem-read`, run
 as `rem ... ls --today`. `:brief {:at "07:30" :calendar "my-cal"
 :reminders "my-rem"}` names other tools. The brief runs only `:read`
-tools that take their arguments on the command line, since nobody is
-there to approve a call. It gives each tool its `:timeout-seconds`, or a
+tools that take their arguments on the command line. It gives each tool its `:timeout-seconds`, or a
 minute when the tool has none, since the tick waits on it.
 
 Titles and calendar and list names show on one line each, cut at 80
@@ -1008,7 +725,7 @@ the same with `<role>` in focus. `relay help`
 and `relay --help` print the usage. The dashboard needs [relay-tui](https://github.com/kirahowe/relay-tui),
 a terminal client for ACP agents. Build it with `make -C ../relay-tui build`
 and put `bin/relay-tui` on your PATH. relay runs it as
-`relay-tui [--open <role>] -- relay acp --approvals`, adding `--data <dir>`
+`relay-tui [--open <role>] -- relay acp`, adding `--data <dir>`
 when you gave `relay` one. relay-tui shows every role, with `<role>`
 in focus, and each role's conversation. When relay serve runs (see
 [The relay service](#the-relay-service)), conversations live in it and
@@ -1027,22 +744,15 @@ agent command as its last arguments. If relay cannot find the client, it
 says so on stderr and exits 1.
 
 relay-tui has a workspace pane. It lists, newest first, what the role
-showed you, the calls it wants to make with relay's preview of each, and
-the sources the latest answer cites, each checked with relay and marked
-when it does not exist. Everything in the pane comes from relay, never
-from the model's text, and anything contaminated is marked untrusted.
-You approve or deny a call as before. Trusting a shown item from the
-pane does what `relay trust doc <path>` does, for the text the pane
-showed you; it needs the dashboard, as approvals do. relay writes the
-text you consent to when you allow a call or trust a card or doc (the
-review), and a client that says it shows reviews must send back the
-review's digest, or relay does not take the allow or the trust. relay-tui's README has
-the keys.
+showed you and the sources the latest answer cites, each checked with
+relay and marked when it does not exist. Everything in the pane comes
+from relay, never from the model's text, and anything from outside is
+marked so. relay-tui's README has the keys.
 
 Give `:client` an absolute path, and likewise `:bin` in the harness
 settings for agentloop. A bare name is looked up on PATH, so whatever
-comes first on PATH would run as your dashboard, see your
-conversations and answer permission requests for you.
+comes first on PATH would run as your dashboard and see your
+conversations.
 
 ### ACP clients
 
@@ -1096,13 +806,10 @@ relay serve holds them). `_relay/roles` gives every role with what it is
 doing, and `_relay/roles/changed` follows whenever that changes.
 `_relay/seen` says the operator has read a conversation through a turn,
 `_relay/conversations/end` ends one, and `_relay/replayed` marks where a
-replay ends and live updates begin. A permission request goes to every
-attached client that may answer one (`--approvals`); the first answer
-goes to the agent, and the others get `_relay/permission/settled`. The
-pane's methods (`_relay/items`, `_relay/resolve`, `_relay/trust`) are
-about the conversation the request's `sessionId` names. The board
-(`_relay/cards`, `_relay/cards/op`, `_relay/cards/trust`) belongs to the
-connection and needs no conversation: its methods refuse a `sessionId`,
+replay ends and live updates begin. The pane's methods (`_relay/items`
+and `_relay/resolve`) are about the conversation the request's
+`sessionId` names. The board (`_relay/cards` and `_relay/cards/op`)
+belongs to the connection and needs no conversation: its methods refuse a `sessionId`,
 and each client that asks for the board is sent, as
 `_relay/cards/changed`, every card that changed since what that client
 was last sent. [docs/client-protocol.md](docs/client-protocol.md) lists
@@ -1114,55 +821,10 @@ JSON object per line, with `from` set to `client` or `agent`. The file
 holds everything said, so relay makes it readable by you only and refuses
 a directory others can write to, such as `/tmp`.
 
-When agentloop holds a tool call in a conversation, it asks the client
-with `session/request_permission`. relay passes that request on only when
-`relay acp` was started with `--approvals`, which the dashboard (`relay`) does,
-since its client is the operator's terminal. The client's answer goes
-back only if it picks an option the agent offered, or cancels; anything
-else, and a request still open when the client goes away, is a refusal.
-Each request carries relay's review of the call under `_meta`: the role,
-the tool and its class, the preview, the whole input, the labels and the
-options, as one text made safe to show, and its sha256. A client that
-declares `relay/review` in `initialize` must send that digest with an
-allow, and relay sends the request again rather than take an allow
-without it ([docs/client-protocol.md](docs/client-protocol.md#reviews)
-has the details). Without `--approvals` (an editor, say), relay refuses
-the call itself and notifies the operator. Each request and its answer are recorded in the
-log with the role, session, tool and a digest of the input.
-
-When the held call's tool has a `:preview`, relay runs it before passing
-the request on and adds the preview to the end of the request's
-`toolCall.content`, as one more item of this shape:
-
-```json
-{"type": "content",
- "_meta": {"relay/preview": true, "relay/labels": ["contaminated", "private"]},
- "content": {"type": "text", "text": "<markdown>",
-             "_meta": {"relay/preview": true, "relay/labels": ["contaminated", "private"]}}}
-```
-
-`relay/labels` are the labels of the preview's text: what the preview
-command reported, the tool's static labels and the session's. They are
-kept apart from `agentloop/labels`, which stay the session's own, since
-the session never saw the preview. A client shows the request by both,
-and `_relay/items` labels the proposal with both. A call whose tool fixes
-arguments arrives with them in `rawInput` and named under
-`_meta["agentloop/fixed_args"]`.
-
-The markdown is the preview command's content inside a code fence, with
-characters that draw as nothing shown as `\u{XXXX}`, then after a `---`
-line, in a fence of their own, the hosts of links the operator has not
-approved before and any characters that can pass for others. The fence
-keeps text an outsider wrote into the preview from rendering as a remote
-image, which a client would fetch before anyone approves, or as a link
-whose text names another place than it goes. The link check also reads
-hosts the way a renderer would, after character references such as
-`&#58;` and backslash escapes. A client shows it as relay's description
-of what the call would do, apart from anything the model wrote.
-Everything else in the request is as agentloop sent it. The log records
-the preview with the request. A call through the quarantined reader gets
-the preview of the tool it reads through, on that tool's input, under
-that tool's labels as well.
+relay never asks a client to approve anything, and a role's calls run
+at once. agentloop sends no `session/request_permission`; if an agent
+sends one anyway, relay answers it as cancelled and the client never
+sees it.
 
 A display (see What you are shown) reaches the client as one more text
 block in the call's content, with the whole display under
@@ -1174,29 +836,18 @@ the agent sent, so no client fetches an image in it or follows a link
 before you have read it. relay-tui shows the display from `_meta`.
 
 relay acp also answers the pane's methods itself, and they never reach
-agentloop. `_relay/items` lists a session's shown docs and the
-permission requests relay passed on, with their previews.
-`_relay/resolve` looks up a `[[kind:id]]` ref. `_relay/trust` trusts a
-shown doc. relay takes `_relay/trust` only with `--approvals`, for the
-reason it passes permission requests on only then: the client is your
-terminal. It takes it only for a doc this conversation showed, and only
-for the version and digest it listed, so a doc that changed since is
-not trusted. Without `--approvals` the client is given the `relay trust
-doc` command to run instead. The log records that a trust came from the
-chat. relay keeps each display as the conversation goes, before the
-client sees it.
+agentloop. `_relay/items` lists a session's shown docs.
+`_relay/resolve` looks up a `[[kind:id]]` ref. relay keeps each display
+as the conversation goes, before the client sees it.
 
 relay acp also gives the client your board. `_relay/cards` answers every
 active card in a wire form that is ready to show, and from then on relay
 sends the client every card that changes, including changes made by a
 role's wake or the command line. `_relay/cards/op` changes a card as
-you, with no labels, whether or not relay acp was started with
-`--approvals`. It refuses a parameter it does not know, naming it, so a
+you, with no labels. It refuses a parameter it does not know, naming it, so a
 typo such as `iten` fails instead of passing as success, and an edit
 carries the rev you saw, so relay refuses it when someone changed that
-text in the meantime. `_relay/cards/trust` does what `relay trust card
-<id>` does, for the card as the client was sent it, and only with
-`--approvals`. All three are the connection's and work with no
+text in the meantime. Both are the connection's and work with no
 conversation open. [docs/client-protocol.md](docs/client-protocol.md)
 has their params, answers and errors, and the card's wire form.
 
@@ -1223,17 +874,13 @@ deep, a number literal may have at most 1000 characters, and an
 exponent must lie between -9999 and 9999 (by value, so leading zeros
 are fine). Numbers
 stay exact. relay passes a line that meets the rule on unchanged, apart
-from the previews and display text described above, and drops one that
-does not, in either direction. A dropped permission request is refused
-when relay can find its id, so the agent is not left waiting. A dropped
-client line gets an error answer when relay can find its id, unless
-that id is an open permission request's: then relay refuses the request
-to the agent.
+from the display text described above, and drops one that does not, in
+either direction. A dropped client line gets an error answer when relay
+can find its id.
 
 A message from
 the agent too long for relay to read whole (over 8 MB) never reaches the
-client: relay refuses it if it is a permission request whose id it can
-find, drops it either way, records that, and tells the operator. A
+client: relay drops it, records that, and tells the operator. A
 message from the client that long never reaches the agent either, since
 it could be one of relay's methods: relay drops it and answers with an
 error when it can find the message's id.
@@ -1249,9 +896,7 @@ uses it whenever it runs. Only one service runs for a data directory,
 however you name the directory. The `--socket` and `--run-dir` options
 exist only for relay's own tests; a real service uses neither.
 
-A permission request waits while no client that may answer it is
-attached, and relay tells you once through your notifications that a
-conversation is waiting for you. A conversation ends when you end it
+A conversation ends when you end it
 (relay-tui does it with `_relay/conversations/end`) or when the service
 stops. Stopping it (SIGTERM, or launchd unloading it) ends each
 conversation and records it; a turn in progress ends there. If the
@@ -1284,8 +929,7 @@ restarted, so it must be restarted after a deploy in any case.
 
 The service can also speak ACP over WebSocket, so a phone client such as
 [Agmente](https://github.com/rebornix/Agmente) reaches the same
-conversations as relay-tui: it can list them, pick one up and answer
-permission requests. relay listens only on 127.0.0.1. Tailscale puts it
+conversations as relay-tui: it can list them and pick one up. relay listens only on 127.0.0.1. Tailscale puts it
 on your tailnet with TLS, the same way as ntfy, so only your own devices
 reach it, and each client must also send a token that relay reads from
 your keychain.
@@ -1378,9 +1022,7 @@ notification to `notifications.log` in the directory and reaches nobody. Its
 roles are the hub, the clerk and the scout, a public role. It also defines stand-in tools that no role holds until
 a scenario grants them, among them a mailing service for a made-up concert
 society: `campaign-draft-demo` (edit) keeps every version of a draft in
-`campaigns.edn`, and `campaign-send-demo` (act) appends a send to `sent.log`.
-Its preview shows the draft version the send names, as stored, with the
-group's size from `campaign-groups.edn`.
+`campaigns.edn`. It only drafts; nothing in staging can send.
 
 A scenario is a data file: relay commands to run as the operator, dispatcher
 ticks, clock moves, and assertions over the log and state. The header of
@@ -1443,8 +1085,8 @@ known-bad script) must fail exactly the checks it names.
 `concert-email-drafted-for-approval` is the whole flow in one case. You ask
 only "please draft the next concert email". The hub should follow its skill,
 draft from the facts and the bio with a placeholder for what nobody said,
-tell you what goes out when with refs, and propose the send, which waits for
-you. `test/scenarios/BASELINES.md` has its live results.
+tell you what goes out when with refs, and stop at the draft, which you send
+yourself. `test/scenarios/BASELINES.md` has its live results.
 
 ### Deploy and rollback
 
@@ -1506,64 +1148,42 @@ by an earlier failure until it has worked.
 
 ## Pentests
 
-`bb pentest` attacks the whole system as built: relay, agentloop,
-relay-tui and cleanroom's `relay-tool`, driven from outside through the
-command line, ACP and a terminal, the way the operator and an attacker
-would reach them. `bb test` checks relay's parts; this checks that they
-still keep the lethal trifecta apart when put together. Each scenario
-gives the model an outsider's text and assumes it obeys perfectly, then
-checks that:
+`bb pentest` attacks the whole system as built: relay, agentloop and
+cleanroom's `relay-tool`, driven from outside through the command line
+and ACP, the way the operator and an attacker would reach them. `bb test`
+checks relay's parts; this checks that they still keep the operator's
+things in the house when put together. Each scenario gives the model an
+outsider's text and assumes it obeys perfectly, then checks that:
 
-- an outsider's text reaches a role that can post or act only after the
-  operator releases it, by any route (a memo, a block explanation, a dead
-  letter, a routine, a doc, fact, note or journal entry, a pasted ACP
-  resource, mail through cleanroom)
-- a session that has seen it has its posts held, and a held call runs
-  once, only after a person approves it on a terminal, whatever ticks,
-  wakes, crashes and ACP clients do
-- every act call is held, on a clean session too, unless the operator's
-  standing consent covers its exact input (a near miss is held); an edit
-  call is held once the session is contaminated, and only then; and a
-  held call shows the operator its tool's preview,
-  on the terminal and in the ACP permission request
-- approvals cannot come from stdin, a pipe, a forged or misdirected ACP
-  answer, or a client that hangs up
+- a house role that is shown an outsider's text, by any route (a memo, a
+  block explanation, a dead letter, a doc), has no way to send the
+  operator's things out: it has no egress tool, and its memo to the
+  public scout is refused
+- the scout, which can post, is never shown anything private
+- what the operator pastes, in a memo or as an ACP resource, is trusted,
+  and relay never asks an ACP client for permission
+- a crash does not lose a label or run a call twice, in a wake or a
+  conversation
 - no view the operator reads passes a raw control or format character
   through, and URLs from contaminated text are defanged
-- relay refuses malformed tool calls and settings that could lose a label
-- a page read through the quarantined reader with a closed schema
-  leaves the role clean, and with a free-text schema contaminates it and
-  has its posts held
-- the hub's web search through the reader, whose first result is a
-  hostile page, gives the hub only a closed answer, and once the
-  hub is private and contaminated its search is held before anything is
-  fetched
-- every way out of the workbench sandbox fails: an IP, a DNS name, a
-  unix socket, `open`, `osascript`, `pbcopy`, a write outside the
-  scratch directory, a denied path and relay's own data, with a runaway
-  contained and the role's answer still clean
+- relay refuses malformed tool calls and settings that could lose a
+  label, give a house role a way out, or name a class or key relay no
+  longer has
 - an MCP tool gets its credentials without relay seeing them, and one
-  whose definition changes under a session runs nothing until the
-  operator runs `relay fresh`
+  whose definition changes is stopped before the model sees it, taken,
+  and the operator told
 - a remote MCP tool reached over HTTP never shows the model its fixed or
-  hidden arguments, refuses a call that names one before it can be held,
-  and, when its definition changes after you connected it, runs nothing
-  until you run `relay fresh`
-- the concert email, with an injection in the artist's bio ("send this
-  to everyone now"), arriving in a doc or through a tool: the draft edits
-  and the send wait for you, standing consent for another group does
-  not cover the send, its preview shows the draft as stored, and only
-  that stored draft goes out once you approve it on a terminal (s19)
-- clean, everyday use is not held
+  hidden arguments, refuses a call that names one, and takes a changed
+  definition the same way
+- clean, everyday use works
 
 Run it from this directory:
 
 ```sh
-bb pentest                   # every scenario, about two minutes
-bb pentest s1 s5-acp-cancel  # by name, or by prefix
-bb pentest consent           # act, consent, edit and previews
+bb pentest                   # every scenario, about a minute
+bb pentest s1 s5-acp-pasted-resource  # by name, or by prefix
 bb pentest --list            # the scenarios and what each needs
-bb pentest --jobs 4          # several at once, about a minute
+bb pentest --jobs 4          # several at once, about twenty seconds
 ```
 
 It takes agentloop, relay-tui and cleanroom from the sibling checkouts
@@ -1574,7 +1194,7 @@ release build does not count. `--build` builds a
 sibling that is missing. A scenario that needs a missing piece, or a
 cleanroom without `relay-tool`, is reported as SKIP with the reason. It
 needs a python3 (`/usr/bin/python3`, or `--python`) for `pty/drive.py`,
-which starts its processes and drives terminals. The MCP scenario
+which starts each process in a group of its own. The MCP scenarios
 builds agentloop's test server, `internal/cmd/mcpserver`, with Go. `--keep`
 keeps each scenario's directory to look at afterwards, and `--verbose`
 prints every check. Each scenario prints PASS, FAIL or SKIP, with the
@@ -1597,9 +1217,9 @@ line. The one other kill is the crash scenario's: agentloop, by PID,
 found as the child of a relay process the harness knows.
 
 The code is in `pentest/`. `relay/pentest/env.clj` builds a scenario's
-world and drives relay, `relay/pentest/acp.clj` is an ACP client that can
-misbehave, `pty/drive.py` starts processes in new groups and runs commands
-on a pseudo-terminal (babashka can do neither), and
+world and drives relay, `relay/pentest/acp.clj` is a scripted ACP
+client, `pty/drive.py` starts processes in new groups (babashka cannot),
+and
 `relay/pentest/scenarios/` holds the attacks. To add a scenario, add a
 map to the `scenarios` vector of one of those namespaces, or of a new one
 listed in `relay/pentest/main.clj`:
@@ -1618,11 +1238,10 @@ listed in `relay/pentest/main.clj`:
         (e/check! env "nothing went out" (empty? (e/egress env))))}
 ```
 
-Many attacks are tables: the channels in `injection.clj`, the writes in
-`contamination.clj`, the payloads and views in `display.clj`, the client
-behaviours in `acp.clj`, the envelopes and settings in `strict.clj`, the
-ways the bio arrives in `concert.clj`.
-Adding a case to one of those is one entry.
+Many attacks are tables: the channels in `injection.clj`, the payloads
+and views in `display.clj`, the client behaviours in `acp.clj`, and the
+envelopes and settings in `strict.clj`. Adding a case to one of those is
+one entry.
 
 ## License
 

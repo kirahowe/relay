@@ -30,14 +30,12 @@
 -- operator works through over days, which roles and the operator change
 -- with ops.
 --
--- Every event carries labels, private and contaminated, saying what the
--- text in it has seen. A role's session gathers the labels of what it
--- reads and agentloop polices its calls by them, so that no session holds
--- the operator's private data, an outsider's text and a way out at once
--- without a person saying yes. A call that needs a person ends the wake
--- held, and the role waits until the operator decides. A public role's
--- session never holds private at all, so it may send data out unheld:
--- it is shown only public text.
+-- Every event carries labels, private and contaminated, saying where the
+-- text in it came from. A role's session gathers the labels of what it
+-- reads. A house role (any role that is not public) may read everything,
+-- but no tool it holds can send anything out of the house. A public
+-- role, a scout, may reach the web, and its session never holds private
+-- at all: it is shown only public text. No call waits for a person.
 --
 -- This file says what relay does and when. It does not say how the log is
 -- stored. The code that decides is the pure function `decide` in core.clj,
@@ -113,50 +111,23 @@ contract Tools {
         -- Every tool has a name and one class: read (returns content
         -- and sends nothing out), write (changes relay data only),
         -- edit (changes the operator's own things outside relay: nobody
-        -- else sees the change and the earlier state survives), egress
+        -- else sees the change and the earlier state survives) or egress
         -- (can send what the model chooses where an outsider can see
-        -- it) or act (others see it, it spends money, or it cannot be
-        -- undone, as when a tool overwrites or deletes with no history).
-        -- relay's own tools that change the registry, routines or dead
+        -- it). There is no class for a tool others see, that spends
+        -- money or that cannot be undone: no role is given one, and the
+        -- settings refuse any other class. relay's own tools that change the registry, routines or dead
         -- letters are write. An external tool also names the
         -- labels its output always carries; the settings refuse a tool
         -- without them, or with a label relay does not know.
 
-    @invariant ThePolicyFollowsTheClass
-        -- agentloop decides each call from the session's labels and the
-        -- tool's class: an egress call waits for a person once the
-        -- session holds private and contaminated, an edit call once it
-        -- holds contaminated, every act call unless a standing consent
-        -- rule matches it, and a tool marked always_hold always does.
-        -- Only read and write calls run whatever the labels: relay's
-        -- own data keeps the labels of whoever wrote it, and text an
-        -- edit call writes outside relay would come back without them.
-        -- A class agentloop does not know waits.
-        -- The tool's static labels join the session when the call is
-        -- decided, and its result's labels when the result arrives.
-
-    @invariant StandingConsentIsExact
-        -- Only an act tool may have consent: rules, each a map from
-        -- argument names to the exact JSON values a call must give
-        -- them. A call whose input has every pair of some rule runs
-        -- unheld, and agentloop records the rule's index. Values match
-        -- after JSON normalisation and no further: a number as written,
-        -- a string character for character. Input naming a key twice
-        -- matches nothing, and an empty rule is refused.
-
-    @invariant PreviewsComeFromTheService
-        -- A tool may have a preview command. relay runs it on a held
-        -- call's input when the call is held, and the operator is shown
-        -- what it says (relay holds, approve, deny, and the ACP
-        -- permission request), never the model's account of the call.
-        -- The preview is what the service said at hold time; approval
-        -- still binds to the input digest. A preview's text is shown
-        -- defanged whatever its labels, and a client is given its labels
-        -- (the command's, the tool's and the session's) apart from the
-        -- session's own, which it does not change. A call through the
-        -- quarantined reader gets its inner tool's preview. The operator's
-        -- screens defang every link in a held call's input; the approval
-        -- binds to the exact input.
+    @invariant NoCallWaitsForAPerson
+        -- agentloop runs every call at once. The class says where a
+        -- tool may go: an egress tool only to a public role, whose
+        -- session never holds private (NoWayOutOfTheHouse). The tool's
+        -- static labels join the session when the call is decided, and
+        -- its result's labels when the result arrives. The settings
+        -- refuse the keys always_hold, consent and preview, which relay
+        -- no longer has.
 
     @invariant CallsComeInEnvelopes
         -- A call reaches relay as exactly {input, labels, call_id}, read
@@ -181,22 +152,11 @@ contract Tools {
         -- clock's, a schema mismatch) carries none. Over-labelling is
         -- allowed; under-labelling never is.
 
-    @invariant ContaminatedTextIsWithheldUnlessAccepted
-        -- Unless the call asks for accept_contamination, a read shows a
-        -- placeholder for each contaminated item, naming only what is
-        -- clean (a number, a kind, a clean author), so the caller stays
-        -- clean. A contaminated item is never searched unless accepted.
-        -- A quarantined memo is withheld even then.
-
-    @invariant AContaminatedChangeNeverHidesCleanContent
-        -- Fact and doc writes are class write, so a contaminated session
-        -- can make them unasked. A read that does not accept
-        -- contamination therefore shows the latest version no
-        -- contaminated session wrote, with a note that a newer change
-        -- is withheld, rather than the contaminated retraction,
-        -- supersession, removal or overwrite. The operator can put an
-        -- earlier version back with relay fact revert or relay doc
-        -- revert, confirmed at the terminal like trust.
+    @invariant AHouseRoleReadsEverything
+        -- A read by a role that is not public shows every item as it is,
+        -- contaminated ones included, and carries their labels. Text
+        -- from outside is information for the role, never an
+        -- instruction; the shared instructions say so.
 
     @invariant AScriptHarnessGetsNoTools
         -- A script harness runs a program no policy watches, which could
@@ -213,45 +173,6 @@ contract Tools {
         -- name. A grant to a tool the settings do not define is an
         -- error in the settings.
 
-    @invariant AQuarantinedReaderIsGrantedByTheOperator
-        -- The settings may grant a role the quarantined reader over
-        -- read or egress tools (quarantine_tools). Each must be a tool
-        -- the settings define, of class read or egress and not always
-        -- held, or the settings are an error. One the role is not also
-        -- granted directly is reader-only: the model is never offered it,
-        -- so its raw output cannot reach the session. An egress tool, such
-        -- as webtool's ask, is for the web: the role writes its input, so
-        -- agentloop decides the call as the role's own call to that tool
-        -- would be, held when the session is private and contaminated. A role granted one gets agentloop's read_quarantined,
-        -- which runs such a tool and shows the session only another
-        -- model's answer to its question, checked against its schema.
-        -- agentloop gives the answer the inner tool's labels, less
-        -- contaminated when the schema admits no free text; private
-        -- always passes through, and a public role's forbid applies.
-        -- relay takes the labels from the result as for any tool and
-        -- decides nothing about them itself. A role with no such grant
-        -- is not offered read_quarantined.
-
-    @invariant TheWorkbenchIsGrantedByTheOperator
-        -- The settings may grant a role the sandboxed workbench
-        -- (has_workbench), as true or with more paths its commands may
-        -- not read (workbench_deny_read). A public role may not have it,
-        -- since it reads the operator's private files, and nor may a
-        -- role whose harness is a script, whose program could claim any
-        -- labels; either is an error in the settings. A role granted it
-        -- gets agentloop's workbench tool, of class read, which runs a
-        -- child model session whose only tool runs shell commands under
-        -- macOS sandbox-exec: no network of any kind, no system service,
-        -- no other process's command line,
-        -- reads everywhere but a deny list, and writes only a scratch
-        -- directory of its own. The session sees only the child's answer
-        -- to the task it set, checked against its JSON Schema, with
-        -- private always and contaminated unless the schema admits no
-        -- free text, as for the reader. relay denies its own data
-        -- directory to the commands and takes the labels from the result
-        -- as for any tool. A role with no such grant is not offered the
-        -- workbench.
-
     @invariant MCPToolsRunInAgentloop
         -- The settings may name MCP servers, and tools taken from them
         -- by the server's name for each, under a name of the operator's.
@@ -265,8 +186,7 @@ contract Tools {
         -- refuses settings agentloop would refuse: an unknown server, a
         -- server no tool uses, one server tool under two names, and a
         -- credentials command and {credentials_file} placeholder that do
-        -- not come together, and any tool named read_quarantined or
-        -- workbench. Every
+        -- not come together. Every
         -- call, an MCP one included, is bounded by the harness's tool
         -- timeout, which relay always sends. Each request names, for each
         -- MCP tool, the settings' digest for it, else the one relay
@@ -291,11 +211,7 @@ contract Tools {
         -- of the schema the model is shown. A call that names one is
         -- refused before the policy decides and before the server sees
         -- anything; every other call reaches the server with the fixed
-        -- values as the operator wrote them. The policy, standing consent,
-        -- the preview and the approval all see the input with the fixed
-        -- values in, and the approval digest is of that input. A hold
-        -- whose fixed values changed since it opened cannot be allowed,
-        -- and an allow given before such a change does not run.
+        -- values as the operator wrote them.
 
     @invariant AnUnofferedToolIsRefused
         -- A call to a tool the role was not offered is refused,
@@ -415,14 +331,10 @@ enum DeadLetterReason { never_closed | blocked | recipient_removed }
 enum NotificationKind {
     memo_for_operator | work_abandoned | runaway_guard_tripped
     | harness_needs_attention | harness_unreachable
-    | hold_opened | memo_quarantined | permission_refused | permission_waiting | session_ended
-    | budget_reached | brief | tools_unavailable | shown
+    | budget_reached | brief | tools_unavailable | tool_changed | shown
 }
-enum ToolClass { read | write | edit | egress | act }
+enum ToolClass { read | write | edit | egress }
 enum Label { private | contaminated }
-enum HoldStatus { open | allowed | denied }
-enum HoldVerdict { allow | deny }
-enum TrustKind { memo_text | fact_text | doc_text | note_text | routine_text | role_text | journal_text | card_text }
 enum FactChange { added | superseded | corrected | retracted }
 enum CardKind { checklist | tracker | note }
 enum CardStatus { active | archived }
@@ -439,22 +351,19 @@ entity Event {
     -- When it was recorded.
     at: Timestamp
     actor: Caller
-    -- What the text in the event has seen: for a role's call, the
+    -- Where the text in the event came from: for a role's call, the
     -- calling session's labels; for an event that copies or quotes text
-    -- from elsewhere, the labels of that text as well. The operator
-    -- writes with none unless they mark the text untrusted.
+    -- from elsewhere, the labels of that text as well. What the operator
+    -- writes or pastes carries none (EntryPointsDecideProvenance).
     labels: Set<Label>
     -- The labels of the session whose call wrote it, for a role.
     session_labels: Set<Label>
     -- The labels of whatever text it copies or quotes.
     copied_labels: Set<Label>
-    -- Written before the log's labels/enabled marker.
-    before_labels: Boolean
     -- Set by decide on an event that writes an item (a memo, routine,
     -- version of a fact or doc, note or journal entry) whose writer was
     -- public: the operator with --public, or a public role's session.
-    -- Never taken from a role's input. An event from before the labels
-    -- marker is never public.
+    -- Never taken from a role's input.
     public: Boolean
 }
 
@@ -475,7 +384,8 @@ entity Tool {
     class: ToolClass
     -- For a tool from an MCP server: the SHA-256 of its definition that
     -- relay accepted, first on trust from the first wake that used it,
-    -- then with relay fresh. Null before its first use.
+    -- then each time agentloop finds it changed (TakeAChangedTool). Null
+    -- before its first use.
     accepted_tool_digest: String?
     -- The grant needed to be offered it, if any: relay's own tools that
     -- change the registry or requeue dead letters, and every external tool.
@@ -519,36 +429,23 @@ entity Role {
     -- anything a role can write.
     may_add: Boolean
     -- Granted :public in the settings. Its sessions never hold private,
-    -- so it is shown only public items, its egress runs unheld, and it
-    -- may not have may_add, a tool whose output is private, the dead
-    -- letter handler's job or a script harness.
+    -- so it is shown only public items. It is the only kind of role that
+    -- may have an egress tool, and it may not have may_add, a tool whose
+    -- output is private, the dead letter handler's job or a script
+    -- harness.
     is_public: Boolean
-    -- Granted :quarantine [...] in the settings: read or egress tools it
-    -- may read through the quarantined reader. Those not in its :tools
-    -- are reader_only_tools, which the model is never offered.
-    quarantine_tools: Set<Tool>
-    reader_only_tools: Set<Tool>
-    -- Granted :workbench in the settings: it may hand a task and a
-    -- schema to the sandboxed workbench. The paths are the ones the
-    -- grant adds to the ones the workbench always denies.
-    has_workbench: Boolean
-    workbench_deny_read: Set<String>
-    -- Whether the settings grant it an external tool of class edit, act
-    -- or egress. relay's own tools are write and do not count. A role that does not
-    -- quarantine reads a contaminated memo like any other and becomes
-    -- contaminated.
-    quarantines: Boolean
     -- The wake to carry on from, when the last one was cut short.
     interrupted_wake: Wake?
     -- Set when a wake's MCP tools could not be set up, until a wake of
-    -- the role runs or its session is ended. tools_need_fresh says a
-    -- tool's definition changed under the session, which only the
-    -- operator may accept; otherwise the role is tried again at
-    -- tools_retry_at.
+    -- the role runs. The role is tried again at tools_retry_at. A
+    -- changed definition sets none of this: relay takes it, unless it
+    -- changes again before the role has run (ChangedToolAgain).
     tools_unavailable_session: String?
-    tools_need_fresh: Boolean
     tools_retry_at: Timestamp?
     tools_failed_tries: Integer
+    -- The tool whose changed definition relay last took for this role,
+    -- until a wake of the role runs.
+    changed_tool: Tool?
     -- When the operator was last told this role tripped the guard.
     guard_reported_at: Timestamp?
 
@@ -557,16 +454,8 @@ entity Role {
     wakes: Wake with role = this
 
     open_memos: inbox where status = unread
-    deliverable_memos: inbox where status = unread and not is_quarantined and not is_awaiting_declassification
-        and not is_kept
+    deliverable_memos: inbox where status = unread and not is_hidden
     waiting_memos: inbox where is_waiting
-    holds: Hold with role = this
-    open_holds: holds where status = open
-    -- Decided, and not yet carried back to the held session.
-    decided_holds: holds where status != open and delivered_in = null
-    -- black box: the oldest held session of the role's whose holds are
-    -- all decided, ready to be carried on with the decisions, or null.
-    ready_session: resumable_held_session(this)
     running_wakes: wakes where status = running
     -- Wakes the role got to work in, within the runaway window. A
     -- conversation counts for nothing, and neither does a wake the harness
@@ -589,9 +478,9 @@ entity Role {
     is_busy: working_wakes.count > 0 or (open_conversations where turn = running).count > 0
     -- Any wake of the role runs, an idle conversation included.
     is_open: running_wakes.count > 0
-    has_work: waiting_memos.count > 0 or ready_session != null
+    has_work: waiting_memos.count > 0
     is_waiting_on_tools: tools_unavailable_session != null
-        and (tools_need_fresh or tools_retry_at = null or tools_retry_at > now)
+        and (tools_retry_at = null or tools_retry_at > now)
     is_paused: harness.is_paused or is_waiting_on_tools
     is_running_away: recent_wakes.count >= config.runaway_wakes
 
@@ -626,11 +515,8 @@ entity Memo {
     superseded_by: Memo?
     -- The labels of the event that sent it.
     labels: Set<Label>
-    -- Set when the operator delivered it despite its being contaminated.
-    released: Boolean
-    -- Its sending event was public, or the operator declassified it.
+    -- Its sending event was public.
     public: Boolean
-    declassified: Boolean
 
     transitions status {
         unread -> read
@@ -645,19 +531,13 @@ entity Memo {
     is_backing_off: retry_at != null and retry_at > now
     -- black box: whether a set of labels holds contaminated.
     is_contaminated: has_contaminated(labels)
-    -- A contaminated memo to a role that holds an external tool able
-    -- to act or send data out waits for the operator. A public role holds
-    -- nothing private for it to send out, so none to one is quarantined.
-    is_quarantined: not is_for_operator and is_contaminated and not released and recipient.quarantines
-        and not recipient.is_public
-    -- A memo to a public role that is not public waits, unseen by the
-    -- role, for the operator to declassify it.
-    is_awaiting_declassification: not is_for_operator and not public and recipient.is_public
-    -- black box: carried by a wake whose session waits on a hold, which
-    -- keeps it until the session is carried on.
-    is_kept: kept_by_held_session(this)
-    is_waiting: status = unread and not is_backing_off and not is_quarantined
-        and not is_awaiting_declassification and not is_kept
+    -- A memo to a public role that is not public, or carries private,
+    -- is never shown to it. relay refuses to send one now
+    -- (RefuseAHouseMemoToAPublicRole), so only an older log holds one,
+    -- and it waits, unseen, until the operator closes it.
+    is_hidden: not is_for_operator and recipient.is_public
+        and (not public or has_private(labels))
+    is_waiting: status = unread and not is_backing_off and not is_hidden
 }
 
 entity Routine {
@@ -740,10 +620,6 @@ entity Wake {
     sessions: List<String>
     -- The earlier wake this one carries on from, if any.
     resumes: Wake?
-    -- The decided holds it carries back to the session it resumes.
-    resolves: Set<Hold>
-    -- The calls its session left waiting for a person, by call id.
-    held: List<String>
     -- The labels its session started with: those of everything in its
     -- prompts.
     seed_labels: Set<Label>
@@ -779,15 +655,6 @@ value WakeFlag {
     at: Timestamp
 }
 
-value Preview {
-    -- What a tool's preview command said a held call would do, as
-    -- markdown, and whether the command failed.
-    content: String
-    is_error: Boolean
-    -- What it reported, the tool's static labels and the session's.
-    labels: Set<Label>
-}
-
 value ToolsError {
     message: String
     server: String?
@@ -812,35 +679,6 @@ value WeekSpend {
     -- The wakes that ran in the week with no cost_usd, by role. Their
     -- cost is unknown, so it is counted beside the sum, never in it.
     unpriced: Map<Role, Integer>
-}
-
-entity Hold {
-    -- A tool call agentloop held for a person. The id is the seq of the
-    -- event that opened it.
-    role: Role
-    wake: Wake
-    session: String
-    call_id: String
-    tool: String
-    input: String
-    -- sha256 of the call's input as agentloop held it, handed back with
-    -- the decision so it cannot be applied to a different call.
-    input_sha256: String
-    -- The session's labels when it held the call.
-    labels: Set<Label>
-    -- The tool's preview of the call, run when it was held.
-    preview: Preview?
-    status: HoldStatus
-    reason: String?
-    resolved_by: Caller?
-    -- The wake that carried the decision back to the session.
-    delivered_in: Wake?
-
-    transitions status {
-        open -> allowed
-        open -> denied
-        terminal: allowed, denied
-    }
 }
 
 entity DeadLetter {
@@ -1035,9 +873,8 @@ value Cell {
 -- who is not a role, for any path outside skills/, and for a role whose
 -- id is the second segment of a path under skills/.
 -- The system prompt lists each of a role's skills by title and use-when
--- line, leaving out those whose latest version is contaminated (and
--- saying that some are left out) until the operator trusts them. A
--- public role is listed its public skills only.
+-- line, and the wake carries their labels. A public role is listed its
+-- public skills only.
 
 -- Refs. A ref is [[kind:id]]: a kind from the list below and an id the
 -- kind defines (fact number, doc path with an optional @version, a note
@@ -1121,9 +958,6 @@ config {
 
     -- How many times a notification is pushed before relay gives up.
     notification_attempts: Integer = 8
-
-    -- How many denied calls end a session.
-    denials_per_session: Integer = 3
 
     -- What the roles may spend in a week, all together, in US dollars,
     -- from :budget {:weekly-usd n} in the settings. Null for none. relay
@@ -1260,6 +1094,24 @@ rule SendMemo {
         -- are trimmed and must not be blank.
 }
 
+rule RefuseAHouseMemoToAPublicRole {
+    when: MemoSendRequested(caller, recipient, subject, body)
+
+    requires: not caller.is_operator
+    requires: recipient.is_public
+    requires: not session_is_public(caller)   -- black box: the calling session began public
+
+    ensures: Rejected(MemoSendRequested)
+
+    @guidance
+        -- A house role's session may hold the operator's private
+        -- things, and a public role works on the open web, so the memo
+        -- could carry them out. relay refuses it and says so plainly:
+        -- "<to> works on the open web, and a memo from <role> could
+        -- carry your private things to it, so it was not sent." The
+        -- operator writes to a public role herself, with --public.
+}
+
 rule SendMemoToOperator {
     when: MemoToOperatorSendRequested(caller, subject, body)
 
@@ -1301,84 +1153,6 @@ rule NotifyOperatorOfMemo {
         -- A memo to the operator is the only way anything reaches them
         -- from a role, and it always notifies, once. The notification
         -- carries the subject as its title and the body as its text.
-}
-
-rule NotifyOperatorOfQuarantine {
-    when: memo: Memo.created
-
-    requires: memo.is_quarantined
-
-    ensures: Notification.created(
-        kind: memo_quarantined,
-        title: quarantine_title(memo),   -- black box: which memo, to whom
-        body: quarantine_note(memo),     -- black box: none of the memo's text
-        about: memo.recipient,
-        memo: memo,
-        created_at: now,
-        delivery: pending
-    )
-
-    @guidance
-        -- A contaminated memo to a role granted an external act or
-        -- egress tool waits for the operator: it is not shown to the
-        -- role, carried in a wake or counted as waiting. The
-        -- notification quotes nothing of it.
-}
-
-rule ReleaseMemo {
-    when: MemoReleaseRequested(caller, memo)
-
-    requires: caller.is_operator
-    requires: memo.status = unread
-    requires: memo.is_quarantined
-
-    ensures: memo.released = true
-
-    @guidance
-        -- relay release shows the memo in full, with its labels, on the
-        -- operator's terminal and asks for a fresh code typed back
-        -- there. The role then reads it like any other memo and takes
-        -- on its labels.
-}
-
-rule NotifyOperatorOfDeclassification {
-    when: memo: Memo.created
-
-    requires: memo.is_awaiting_declassification
-
-    ensures: Notification.created(
-        kind: memo_awaiting_declassification,
-        title: declassification_title(memo),   -- black box: which memo, from whom, to whom
-        body: declassification_note(memo),     -- black box: none of the memo's text
-        about: memo.recipient,
-        memo: memo,
-        created_at: now,
-        delivery: pending
-    )
-}
-
-rule DeclassifyMemo {
-    when: MemoDeclassifyRequested(caller, memo)
-
-    requires: caller.is_operator
-    requires: memo.status = unread
-    requires: memo.is_awaiting_declassification
-
-    ensures: memo.public = true
-    ensures: memo.declassified = true
-    ensures: memo.labels = without_private(memo.labels)   -- black box: contaminated stays
-    ensures: memo.body = declassified_text(memo)   -- black box: NFC(plain_spacing(defanged if contaminated))
-    ensures: memo.subject = declassified_subject(memo)   -- black box: the same, on one line
-
-    @guidance
-        -- relay declassify shows the memo in full, sender included, and
-        -- the role gets exactly what the operator was shown, less the
-        -- [contaminated] marker: defanged if contaminated, its spacing
-        -- made plain, in Unicode NFC, so nothing rides in whitespace, in
-        -- accents written two ways or in what defanging folds together.
-        -- It asks for a fresh code typed back on the terminal. The operator says it holds nothing private: it may
-        -- leave this machine in a web search. Its sender's id is shown
-        -- to the role without private from then on.
 }
 
 rule PublicItem {
@@ -1432,8 +1206,8 @@ rule RefuseWhatAPublicRoleMayNotHold {
         -- other role's session may carry the operator's unlabelled
         -- AGENTS.md; a wake of it whose own text the operator did not
         -- write, or whose prompts would hold private; a doc it would
-        -- write over that it cannot see. A memo to it from anyone
-        -- else is not refused but waits (is_awaiting_declassification).
+        -- write over that it cannot see; and a memo to it from a house
+        -- role (RefuseAHouseMemoToAPublicRole).
         -- Its reads show only public items, the roles whose text the
         -- operator wrote, and docs whose path was chosen in public, and
         -- leave out everything else without a trace: a fact, doc or memo it cannot see does
@@ -1441,16 +1215,13 @@ rule RefuseWhatAPublicRoleMayNotHold {
         -- tool command replaces any result for it that carries private
         -- with a refusal, and the request tells agentloop to forbid
         -- private as well, so agentloop refuses such a result, refuses a
-        -- session that holds private, and reports both. A reason the
-        -- operator gives when denying its held call is public: the deny
-        -- prompt says so. One given before the role was public is not.
-        -- The operator's time zone is not private: a public role is told
+        -- session that holds private, and reports both. The operator's time zone is not private: a public role is told
         -- times in it, in its prompts and by the clock tool, and its
         -- routines follow it, as for any role.
         -- No session from before a role was public is carried on once it
         -- is, since such a session may hold private text no label
-        -- records: its held sessions are ended, an interrupted wake
-        -- starts afresh, and its conversations are kept apart.
+        -- records: an interrupted wake starts afresh, and its
+        -- conversations are kept apart.
 }
 
 rule RevertFact {
@@ -1524,48 +1295,6 @@ rule KeepADisplay {
         -- what the operator was shown. A wake that kept displays tells
         -- the operator their paths, never their text; a conversation's
         -- operator saw them as they came.
-}
-
-rule TrustFromThePane {
-    when: PaneTrustRequested(conversation, path, version, sha256)
-
-    requires: conversation.approvals
-    requires: path in conversation.shown_paths   -- black box: displays this conversation kept
-
-    ensures: TrustRequested(caller: operator, kind: doc_text, ref: path)
-
-    @guidance
-        -- The workspace pane in the dashboard (relay) trusts a shown doc through
-        -- relay acp's _relay/trust, with the version and the digest of
-        -- the review it listed, so a doc changed since is not trusted. It is
-        -- taken only when relay acp was started with --approvals, as
-        -- the dashboard (bare relay) starts it for the operator's terminal: the same
-        -- presence an answer to a permission request needs. Without it
-        -- the pane shows the relay trust doc command instead. The log
-        -- records that the trust came from the chat.
-}
-
-rule TrustText {
-    when: TrustRequested(caller, kind, ref)
-
-    requires: caller.is_operator
-    requires: has_contaminated(trusted_labels(kind, ref))   -- black box: the labels of what it says now
-
-    ensures: TextTrusted(kind: kind, ref: ref)
-
-    @guidance
-        -- The operator has read the text and vouches for it: a memo, a
-        -- fact's current version, a doc's latest version and its path,
-        -- a note, a routine, a role's id, title and instructions, or a
-        -- journal entry, or a whole card (every text element, at the rev
-        -- the operator saw: a card changed since is refused, and a chat
-        -- client does it with _relay/cards/trust, only with approvals,
-        -- which moves the card's rev). relay trust shows it on the terminal and asks
-        -- for a fresh code typed back there. Every trust names the
-        -- digest of the subject's review text (relay.review), so what
-        -- is trusted is the text as relay showed it, made safe. It clears contaminated
-        -- from what that text says now and never clears private.
-        -- Copies already made keep their labels.
 }
 
 rule CloseMemo {
@@ -1868,11 +1597,9 @@ rule WakeOnTick {
     @guidance
         -- The tick then starts each wake in its own process, so a slow
         -- role holds up neither the others nor the next tick. A memo
-        -- waiting out a retry delay is left out, and so is a
-        -- quarantined one. Nobody is woken while their harness is
-        -- paused or a call of theirs waits for the operator. A role
-        -- whose holds the operator has decided is woken to carry the
-        -- decisions back.
+        -- waiting out a retry delay is left out, and so is one hidden
+        -- from a public role. Nobody is woken while their harness is
+        -- paused.
 }
 
 rule StartDispatchedWake {
@@ -1880,12 +1607,10 @@ rule StartDispatchedWake {
 
     -- The state is looked at again when the spawned process gets
     -- there, so anything that changed since the tick refuses the wake.
-    requires: not role.tools_need_fresh
     requires: role.status = active
     requires: not role.is_busy
     requires: not role.is_paused
     requires: not role.is_running_away
-    requires: role.ready_session = null
     requires: role.waiting_memos.count > 0
 
     ensures: Wake.created(
@@ -1903,56 +1628,16 @@ rule StartDispatchedWake {
 
     @guidance
         -- A dispatched wake carries only the memos that are not
-        -- backing off and that no held session keeps. It carries on the
-        -- interrupted wake unless that wake is waiting on a hold, in
-        -- which case it starts afresh: a call held for the operator
-        -- holds up only the memos its own session carried. If nothing
-        -- is waiting any more, nothing is recorded.
-}
-
-rule ResumeHeldSession {
-    when: DispatchedWakeSpawned(role, pid, pid_start)
-
-    requires: not role.tools_need_fresh
-    requires: role.status = active
-    requires: not role.is_busy
-    requires: not role.is_paused
-    requires: not role.is_running_away
-    requires: role.ready_session != null
-
-    let held = role.ready_session
-
-    ensures:
-        let wake = Wake.created(
-            role: role,
-            memos: held.memos where status = unread,
-            resumes: held,
-            resolves: role.decided_holds where session = held.session,
-            harness_name: role.harness.name,
-            pid: pid,
-            pid_start: pid_start,
-            chat: false,
-            started_at: now,
-            status: running
-        )
-        role.interrupted_wake = null
-        for hold in role.decided_holds where session = held.session:
-            hold.delivered_in = wake
-
-    @guidance
-        -- A held session whose calls are all decided is carried on at
-        -- the first chance the role is free, with the decisions and the
-        -- memos it kept. A wake asked for by hand does the same.
+        -- backing off. It carries on the interrupted wake, if there is
+        -- one. If nothing is waiting any more, nothing is recorded.
 }
 
 rule StartRequestedWake {
     when: WakeRequested(caller, role, note?, pid, pid_start)
 
-    requires: not role.tools_need_fresh
     requires: caller.is_operator or caller.is_dispatcher
     requires: role.status = active
     requires: not role.is_busy
-    requires: role.ready_session = null
     requires: role.deliverable_memos.count > 0 or (note != null and note != "")
 
     ensures: Wake.created(
@@ -1974,14 +1659,13 @@ rule StartRequestedWake {
         -- those backing off, and ignores the runaway guard and a paused
         -- harness, so it doubles as a way to try a harness early. In
         -- every other way it is an ordinary wake. With no open memos and
-        -- no note it records nothing. It never carries a quarantined
-        -- memo, or one a held session keeps.
+        -- no note it records nothing. It never carries a memo hidden
+        -- from a public role.
 }
 
 rule OpenConversation {
     when: ConversationRequested(caller, role, note?, pid, pid_start)
 
-    requires: not role.tools_need_fresh
     requires: caller.is_operator
     requires: role.status = active
     requires: role.open_conversations.count = 0
@@ -2092,9 +1776,8 @@ rule SeeConversation {
         -- conversation has a reply the operator has not seen when a turn
         -- ended after the last one seen (turns_ended > seen). relay's
         -- roster (relay.roster) gives every client each active role with
-        -- its title and labels, whether a wake of it works, its holds,
-        -- and its open conversation's turn, turns, unread reply and
-        -- unanswered permission requests. It is read from the state
+        -- its title and labels, whether a wake of it works, and its open
+        -- conversation's turn, turns and unread reply. It is read from the state
         -- alone, and relay roles shows it.
 }
 
@@ -2111,22 +1794,16 @@ rule RunWake {
         -- characters) and the topics of the facts that hold now with a
         -- count each. These are what the journal and facts tools would
         -- show the role with no arguments: only public items to a public
-        -- role, and to any other a placeholder for a contaminated entry
-        -- and no contaminated fact in the counts. They never raise the
-        -- wake's labels: an entry whose labels are not all among the
-        -- rest of the prompt's is a placeholder, and such a fact is not
-        -- counted, its topic not shown, with a line saying some facts
-        -- were left out. A
-        -- wake that resumes another continues that wake's session where
+        -- role, and every item to any other. The wake's labels are those
+        -- of everything in its prompts (AWakeStartsWithTheLabelsOfItsPrompts).
+        -- A wake that resumes another continues that wake's session where
         -- the harness can and is told it was cut short. A conversation
         -- has no prompt and does not run headless: it runs over ACP, and
-        -- the client sends each turn (StartTurn). A wake carrying decided holds says
-        -- what the operator decided and hands the decisions to the
-        -- harness with the session to resume.
+        -- the client sends each turn (StartTurn).
 }
 
 rule EndWake {
-    when: WakeReported(wake, outcome, exit?, crashed, cut_short, session?, sessions?, said?, transcript?, resets_at?, held?, labels?, usage?, cost_usd?, tools_error?, pins?)
+    when: WakeReported(wake, outcome, exit?, crashed, cut_short, session?, sessions?, said?, transcript?, resets_at?, labels?, usage?, cost_usd?, tools_error?, pins?)
 
     requires: wake.status = running
     requires: sessions = null or wake.chat
@@ -2140,7 +1817,6 @@ rule EndWake {
         wake.said = said
         wake.resets_at = resets_at
         wake.sessions = sessions ?? []
-        wake.held = usable_held_calls(wake, outcome, session, held)   -- black box: see guidance
         wake.labels = labels ?? session_labels_bound(wake.role)       -- black box: see guidance
         wake.usage = usage
         wake.cost_usd = cost_usd
@@ -2157,10 +1833,7 @@ rule EndWake {
         -- to stop it. A wake reports
         -- the one session a later wake can resume. A conversation
         -- reports every session it used instead, so the log says which
-        -- sessions a conversation held. Only a wake that ran and has a
-        -- session to resume can leave calls held; anything else in the
-        -- list is dropped rather than refused, so a wake always ends.
-        -- With no labels reported, what the wake said carries every
+        -- sessions a conversation used. With no labels reported, what the wake said carries every
         -- label anything in relay has, private, and the static labels
         -- of every tool the role is granted.
         -- A wake's usage and cost come from agentloop's outcome line. A
@@ -2173,7 +1846,7 @@ rule EndWake {
 rule InterruptedWakeIsKept {
     when: wake: Wake.status transitions_to ended
 
-    requires: wake.outcome != ran or wake.cut_short or wake.held.count > 0
+    requires: wake.outcome != ran or wake.cut_short
     requires: not wake.chat
 
     ensures: wake.role.interrupted_wake = wake
@@ -2186,202 +1859,12 @@ rule InterruptedWakeIsKept {
         -- the wake was cut short, when, and the ids and subjects of its
         -- memos. It carries those memos' labels, and is public only when
         -- the wake was a public session and every memo it quotes is.
-        -- A conversation cut short is not resumed. A wake that left
-        -- calls held is resumed once the operator has decided them.
+        -- A conversation cut short is not resumed. Nor is a wake whose
+        -- tool definition changed (TakeAChangedTool): its session pinned
+        -- the old one.
 }
 
--- Holds
-
-rule OpenHold {
-    when: WakeReported(wake, outcome, exit?, crashed, cut_short, session?, sessions?, said?, transcript?, resets_at?, held?, labels?)
-
-    requires: wake.status = running
-    requires: outcome = ran
-    requires: not wake.chat
-    requires: session != null
-
-    for call in usable_held_calls(wake, outcome, session, held):
-        requires: not exists Hold{session: session, call_id: call.id}
-        ensures: Hold.created(
-            role: wake.role,
-            wake: wake,
-            session: session,
-            call_id: call.id,
-            tool: call.name,
-            input: call.input,
-            input_sha256: call.input_sha256,
-            labels: labels ?? session_labels_bound(wake.role),
-            preview: call.preview,
-            status: open
-        )
-
-    @guidance
-        -- A call agentloop held in a wake's session. The role is not
-        -- woken again until every hold of its is decided. A held call
-        -- without the digest of its input is not recorded, since no
-        -- decision could be bound to it.
-}
-
-rule HeldAgainIsCarriedBackAgain {
-    when: WakeReported(wake, outcome, exit?, crashed, cut_short, session?, sessions?, said?, transcript?, resets_at?, held?, labels?)
-
-    requires: wake.status = running
-    requires: outcome = ran
-    requires: session != null
-
-    for call in usable_held_calls(wake, outcome, session, held):
-        let hold = Hold{session: session, call_id: call.id}
-        requires: exists hold
-        requires: hold.status != open
-        requires: hold.delivered_in != null
-        requires: hold.input_sha256 = call.input_sha256
-        ensures: hold.delivered_in = null
-
-    @guidance
-        -- A decision that was carried back, with the session holding
-        -- the same call again, never reached it: the harness failed
-        -- before it could apply it. It is carried back again, rather
-        -- than asked about twice.
-}
-
-rule NotifyOperatorOfHold {
-    when: hold: Hold.created
-
-    ensures: Notification.created(
-        kind: hold_opened,
-        title: hold_title(hold),   -- black box: who wants to use what
-        body: hold_note(hold),     -- black box: the hold, role, tool and its class, never the input;
-                                   -- for the quarantined reader, the inner tool its input names
-        about: hold.role,
-        created_at: now,
-        delivery: pending
-    )
-}
-
-rule EndSessionOnDenial {
-    when: HoldResolveRequested(caller, hold, verdict, reason?, end?)
-
-    requires: caller.is_operator
-    requires: hold.status = open
-    requires: verdict = deny
-    requires: end = true or (Holds where session = hold.session and status = denied).count + 1 >= config.denials_per_session
-
-    ensures:
-        for other in Holds where session = hold.session and status = open and this != hold:   -- every other open call in it
-            other.status = denied
-            other.reason = "The session was ended."
-    ensures: SessionEnded(role: hold.role, session: hold.session)
-
-    @guidance
-        -- relay deny --end, or the third denied call in one session,
-        -- ends it: every call still open in it is denied, no decision is
-        -- carried back to it, it is never carried on again, and the
-        -- memos it kept go on in a fresh session.
-        -- The operator is told when it was the count that ended it.
-}
-
-rule ResolveHold {
-    when: HoldResolveRequested(caller, hold, verdict, reason?, end?)
-
-    -- A person decides, never a model or a tool.
-    requires: caller.is_operator
-    requires: hold.status = open
-
-    ensures:
-        hold.status = if verdict = allow: allowed else: denied
-        hold.reason = reason
-        hold.resolved_by = caller
-
-    @guidance
-        -- relay approve and relay deny show the call in full on the
-        -- operator's terminal and ask for a fresh code to be typed back
-        -- there, never on stdin, so no harness or pipe can decide.
-}
-
-rule AskTheClient {
-    when: PermissionRequested(wake, call, tool, input_sha256, approvals)
-
-    requires: wake.chat
-    requires: approvals
-
-    ensures: PermissionRecorded(wake: wake, call: call, tool: tool, input_sha256: input_sha256)
-
-    @guidance
-        -- In a conversation agentloop asks its ACP client about a held
-        -- call. Its client is relay's hub (ConversationService), which
-        -- sends the request to every attached client started with
-        -- --approvals, as the dashboard starts it for the operator's
-        -- terminal, each under an id of its own. The first answer goes
-        -- to the agent, and only if it picks an option the agent offered,
-        -- or cancels; anything else, and a request still open when the
-        -- conversation ends, is a refusal. Every other client it went to
-        -- is told it is settled, and an answer from one of them later is
-        -- dropped. A client that attaches while the request is open gets
-        -- it then. The request and the answer are both recorded.
-        -- Each request carries relay's review of it (relay.review): the
-        -- text the operator consents to and its digest. A client that
-        -- declared relay/review in initialize must send that digest with
-        -- an allow. Without it, or with another, nothing is settled: relay
-        -- sends that client the request again with its reason, at most
-        -- three times, and the request stays open for every client.
-        -- A reject or a cancel needs no digest, and a client that did not
-        -- declare relay/review is not checked.
-}
-
-rule TellTheOperatorAPermissionWaits {
-    when: PermissionUnattended(wake, call)
-
-    requires: wake.chat
-    requires: wake.status = running
-    requires: exists Permission{wake: wake, call: call, outcome: null}   -- black box: asked and not answered
-
-    ensures: Notification.created(
-        kind: permission_waiting,
-        title: wake.role.id + " is waiting for you in a conversation",
-        body: waiting_note(wake.role),   -- black box: open the dashboard to answer it
-        about: wake.role,
-        created_at: now,
-        delivery: pending
-    )
-
-    @guidance
-        -- relay serve holds a conversation's permission request while no
-        -- client that may answer it is attached, and asks for this once
-        -- per request. The notification names the role only: the
-        -- request's text is the agent's.
-}
-
-rule RefuseForAClientWithoutApprovals {
-    when: PermissionRequested(wake, call, tool, input_sha256, approvals)
-
-    requires: wake.chat
-    requires: not approvals
-
-    ensures: PermissionRecorded(wake: wake, call: call, tool: tool, input_sha256: input_sha256)
-    ensures: PermissionAnswered(wake: wake, call: call, outcome: "reject_once", by: "relay")
-    ensures: Notification.created(
-        kind: permission_refused,
-        title: permission_title(wake, tool),   -- black box: who was refused what
-        body: permission_note(wake),           -- black box: how to decide such calls
-        about: wake.role,
-        created_at: now,
-        delivery: pending
-    )
-
-    @guidance
-        -- A client such as an editor was not started to show the
-        -- operator a held call, so relay refuses it without passing it
-        -- on, and tells the operator.
-}
-
-rule DenyHoldsOfRemovedRole {
-    when: role: Role.status transitions_to removed
-
-    for hold in role.open_holds:
-        ensures:
-            hold.status = denied
-            hold.reason = "The role was removed."
-}
+-- The harness
 
 rule HarnessRecovers {
     when: wake: Wake.status transitions_to ended
@@ -2508,61 +1991,112 @@ rule ToolsUnavailable {
     when: wake: Wake.status transitions_to ended
 
     let role = wake.role
-    let changed = wake.tools_error.pinned != null and wake.tools_error.got != null
-    let fresh = changed and wake.tools_error.pinned != configured_digest(wake.tools_error.tool)   -- black box: the tool's :digest in the settings
     let tries = role.tools_failed_tries + 1
 
     requires: wake.tools_error != null
+    requires: not takes_changed_tool(wake)   -- black box: as TakeAChangedTool decides it
 
     ensures:
         role.tools_unavailable_session = wake.session
-        role.tools_need_fresh = fresh
         role.tools_failed_tries = tries
-        role.tools_retry_at = if fresh: null else: now + retry_delay(tries)
+        role.tools_retry_at = now + retry_delay(tries)
 
     @guidance
         -- agentloop ran nothing: a server did not start, or a tool's
-        -- definition is not the one the session or the settings'
-        -- digest pinned. No model was called, so the harness is not
-        -- paused and other roles go on. The wake is kept to be resumed
-        -- (InterruptedWakeIsKept) and its memos count no attempt. A
-        -- server that did not start is tried again after a doubling
-        -- wait, in the same session. A definition that changed under
-        -- the session is never taken without the operator: the role is
-        -- not woken by the dispatcher, and nothing starts a fresh
-        -- session for it, until StartAfresh. A definition the settings'
-        -- digest refuses is tried again, since the operator fixes that
-        -- in the settings. A tool seen to change before relay accepted
-        -- any definition of it gets the one it changed from
-        -- (tools_error.pinned) as its accepted digest, so no first use
-        -- can adopt the changed one. While tools_need_fresh, StartDispatchedWake,
-        -- StartRequestedWake and OpenConversation all refuse the role
-        -- (AChangedToolIsTakenOnlyByTheOperator).
+        -- definition is not the one the settings' digest pins. No model
+        -- was called, so the harness is not paused and other roles go
+        -- on. The wake is kept to be resumed (InterruptedWakeIsKept)
+        -- and its memos count no attempt. The role is tried again after
+        -- a doubling wait, in the same session. relay never moves the
+        -- settings' digest, since it is the operator's own pin: she
+        -- fixes that in the settings.
 }
 
-rule TellOperatorToolsUnavailable {
+rule TakeAChangedTool {
     when: wake: Wake.status transitions_to ended
 
-    requires: wake.tools_error != null
-    requires: wake.role.tools_unavailable_session = null or wake.role.tools_need_fresh != fresh_needed(wake)   -- black box: as ToolsUnavailable decides it
+    let tool = Tool{name: wake.tools_error.tool}
 
+    requires: wake.tools_error.pinned != null and wake.tools_error.got != null
+    requires: tool.is_mcp                                -- black box
+    requires: configured_digest(tool) = null             -- black box: the tool's :digest in the settings
+    requires: tool.accepted_tool_digest != wake.tools_error.got
+    requires: wake.role.changed_tool != tool
+
+    ensures: tool.accepted_tool_digest = wake.tools_error.got
+    ensures: wake.role.changed_tool = tool
     ensures: Notification.created(
-        kind: tools_unavailable,
-        title: tools_unavailable_title(wake),   -- black box: the role, and whether its session can go on
-        body: tools_unavailable_text(wake),     -- black box: what agentloop said, and relay fresh or relay wake
+        kind: tool_changed,
+        title: tool.name + " changed",
+        body: tool_changed_text(wake),   -- black box: relay uses the new version, and the role starts afresh with it
         role: wake.role,
         created_at: now,
         delivery: pending
     )
 
     @guidance
-        -- Once, and again only if the trouble changes from a server
-        -- that did not start to a changed definition or back. The
-        -- notification carries the session's labels.
+        -- The server now describes the tool differently from the
+        -- definition the session pinned. agentloop refused it before
+        -- any model saw it. relay takes the new definition and tells
+        -- the operator once: a second session stopped by the same change
+        -- finds the new digest already accepted and records nothing.
+        -- The role is not kept to be resumed, since its session pinned
+        -- the old definition, and its next wake starts a new session
+        -- with its open memos. Every other role's next request names the
+        -- new digest too.
+}
+
+rule ChangedToolAgain {
+    when: wake: Wake.status transitions_to ended
+
+    let tool = Tool{name: wake.tools_error.tool}
+    let role = wake.role
+    let tries = role.tools_failed_tries + 1
+
+    requires: wake.tools_error.pinned != null and wake.tools_error.got != null
+    requires: tool.is_mcp                                -- black box
+    requires: configured_digest(tool) = null             -- black box
+    requires: tool.accepted_tool_digest != wake.tools_error.got
+    requires: role.changed_tool = tool
+
+    ensures:
+        tool.accepted_tool_digest = wake.tools_error.got
+        role.tools_unavailable_session = wake.session
+        role.tools_failed_tries = tries
+        role.tools_retry_at = now + retry_delay(tries)
+
+    @guidance
+        -- A server whose description carries a timestamp, a counter or
+        -- a random id differs on every connect. relay still takes each
+        -- new definition, so a server that settles works at the next
+        -- try, but waits a doubling time first and tells the operator
+        -- nothing more: one notification per streak, and no session
+        -- started on every tick.
+}
+
+rule TellOperatorToolsUnavailable {
+    when: wake: Wake.status transitions_to ended
+
+    requires: wake.tools_error != null
+    requires: not takes_changed_tool(wake)
+    requires: wake.role.tools_unavailable_session = null
+
+    ensures: Notification.created(
+        kind: tools_unavailable,
+        title: wake.role.id + "'s tools could not be set up",
+        body: tools_unavailable_text(wake),     -- black box: what agentloop said, and relay wake or the settings' digest
+        role: wake.role,
+        created_at: now,
+        delivery: pending
+    )
+
+    @guidance
+        -- Once per outage. The notification carries the session's
+        -- labels.
 }
 
 rule RememberToolDefinitions {
-    when: WakeReported(wake, outcome, exit?, crashed, cut_short, session?, sessions?, said?, transcript?, resets_at?, held?, labels?, usage?, cost_usd?, tools_error?, pins?)
+    when: WakeReported(wake, outcome, exit?, crashed, cut_short, session?, sessions?, said?, transcript?, resets_at?, labels?, usage?, cost_usd?, tools_error?, pins?)
 
     requires: not wake.chat
 
@@ -2581,83 +2115,39 @@ rule ToolsAvailableAgain {
     requires: wake.outcome = ran
     requires: not wake.chat
     requires: wake.role.tools_unavailable_session != null
-    requires: not wake.role.tools_need_fresh or wake.resumes.session = wake.role.tools_unavailable_session
 
     ensures:
         wake.role.tools_unavailable_session = null
-        wake.role.tools_need_fresh = false
         wake.role.tools_retry_at = null
         wake.role.tools_failed_tries = 0
 }
 
-rule StartAfresh {
-    when: StartAfreshRequested(caller, role, expected)
+rule ChangedToolStreakEnds {
+    when: wake: Wake.status transitions_to ended
 
-    let session = session_to_carry_on(role)   -- black box: the blocked session when tools_need_fresh, else the interrupted wake's, unless ended
+    requires: wake.outcome = ran
+    requires: not wake.chat
 
-    requires: caller.is_operator
-    requires: role.status = active
-    requires: not role.is_open
-    requires: session != null
-    -- What the operator was shown: the session, and the tool and digest
-    -- it accepts. Anything changed since refuses the command.
-    requires: expected = fresh_expectation(role)   -- black box: {session, tool, got}
-
-    ensures:
-        for hold in Holds where session = session and status = open:
-            hold.status = denied
-            hold.reason = "The operator started the role afresh, so this session was ended."
-    ensures: SessionEnded(role: role, session: session)
-    ensures:
-        if role.tools_need_fresh:
-            changed_tool(role).accepted_tool_digest = changed_tool_offered(role)   -- black box: the tool and digest agentloop reported
-            for other in Roles where tools_need_fresh and changed_tool(other) = changed_tool(role) and changed_tool_offered(other) = changed_tool_offered(role):
-                -- its blocked session ends as the role's does
-                SessionEnded(role: other, session: other.tools_unavailable_session)
-                other.tools_unavailable_session = null
-                other.tools_need_fresh = false
-    ensures:
-        role.interrupted_wake = null
-        role.tools_unavailable_session = null
-        role.tools_need_fresh = false
-        role.tools_retry_at = null
-        role.tools_failed_tries = 0
-
-    @guidance
-        -- relay fresh <role>, after the operator types the code shown
-        -- on the terminal. It is how the operator accepts an MCP tool
-        -- whose definition changed: relay records the new digest, the
-        -- session ends and is never carried on, and the next wake starts
-        -- a new one with the role's open memos. Another role stopped by
-        -- the same change is let go the same way: its blocked session
-        -- ends, since one that pinned the old definition could not go
-        -- on. Recording a digest never lifts a block by itself. The confirmation lists the held
-        -- calls the ended session drops: those open, which are denied,
-        -- and those approved that never ran.
+    ensures: wake.role.changed_tool = null
 }
 
 rule ConnectRemoteServer {
     when: ConnectRequested(caller, name, chosen)
 
     requires: caller.is_operator
-    -- The operator signed in at the server's own sign-in page, saw what
-    -- each tool may do, and typed the code shown on the terminal.
-    requires: code_typed_back(caller)   -- black box: relay's typed code
+    -- The operator signed in at the server's own sign-in page.
 
     for tool in chosen where on:
         ensures: tool.accepted_tool_digest = tool.digest_listed
 
     @guidance
-        -- relay connect <name> <url>. Each tool is proposed read when the
-        -- server says it only reads, act (always asking) otherwise, with
-        -- labels private and contaminated, and off when its name says it
-        -- deletes. The operator may change any of it before the code.
-        -- The operator is shown every word of each definition, schema
-        -- text included. A definition a pure check finds odd (orders to
-        -- the model, role words, other tools' names, hidden or lookalike
-        -- characters, links or email addresses, overlong text) starts
-        -- off, shown whole and defanged with the reasons; the code trusts
-        -- what was shown.
+        -- relay connect <name> <url>. Each tool is proposed read and on
+        -- when the server says it only reads, and edit and off otherwise,
+        -- with labels private and contaminated; one whose name says it
+        -- deletes starts off too. The operator turns a tool on, as edit,
+        -- in the connection file once she has checked it changes only
+        -- her own things. relay shows her the tools and what each may
+        -- do, then writes the file.
         -- The sign-in talks to one authorization server, which must name
         -- itself in every answer if it says it does (RFC 9207), and
         -- otherwise keep its endpoints on its own origin; each sign-in
@@ -2667,14 +2157,6 @@ rule ConnectRemoteServer {
         -- is off is not pinned and no role can have it.
 }
 
-invariant AChangedToolIsTakenOnlyByTheOperator {
-    -- While a role waits for relay fresh, no wake of it starts, by the
-    -- dispatcher or by hand, and no conversation: only relay fresh, by
-    -- the operator, lets it go.
-    for wake in Wakes where tools_need_fresh_at(wake.role, wake.started_at):   -- black box: the role's state just before the wake
-        false
-}
-
 rule TellOperatorOfLongOutage {
     when: DispatcherTicks(lost_wakes)
 
@@ -2682,7 +2164,7 @@ rule TellOperatorOfLongOutage {
         ensures: Notification.created(
             kind: harness_unreachable,
             title: harness.name + " has been unreachable since " + harness.down_since,
-            body: "Every role on it is on hold and nothing has been dropped.",
+            body: "Every role on it waits, and nothing has been dropped. Work carries on by itself once it is back.",
             harness: harness,
             created_at: now,
             delivery: pending
@@ -2701,7 +2183,6 @@ rule RetryMemoLater {
     when: wake: Wake.status transitions_to ended
 
     requires: wake.outcome = ran   -- the harness's failures fail no memo
-    requires: wake.held.count = 0  -- nor does waiting for the operator
 
     for memo in wake.memos:
         let attempt = memo.attempts + 1
@@ -2726,7 +2207,6 @@ rule AbandonMemo {
     when: wake: Wake.status transitions_to ended
 
     requires: wake.outcome = ran
-    requires: wake.held.count = 0
 
     for memo in wake.memos:
         let attempt = memo.attempts + 1
@@ -2894,11 +2374,9 @@ rule WarnOfSpend {
 
 -- Reviewing a week
 
--- relay week reports a window of the log: each interruption (a held
--- call, a permission request in a conversation, a quarantined memo, a
--- memo waiting to be declassified, a tool waiting for relay fresh, a
--- harness that needs the operator, work given up to the operator) from the event that asked to the event that
--- answered, the notifications sent, each role's wakes and what they
+-- relay week reports a window of the log: each interruption (a harness
+-- that needs the operator, work given up to the operator) from the event
+-- that asked to the event that answered, the notifications sent, each role's wakes and what they
 -- cost, health checks on each wake, and the operator's flags. relay
 -- traces exports the same wakes as OpenTelemetry spans, holding no
 -- content. Both are worked out from the log and the run files when
@@ -2914,8 +2392,7 @@ rule FlagWake {
 
     @guidance
         -- relay flag <wake> good|bad [note] marks a wake or a
-        -- conversation to find it later. It grants nothing and no role
-        -- sees it, so it asks for no code. An id that names no wake is
+        -- conversation to find it later. No role sees it. An id that names no wake is
         -- refused.
 }
 
@@ -2935,7 +2412,7 @@ rule SendMorningBrief {
     -- black box: runs the calendar tool for today and the reminders
     -- tool for what is due today or overdue, with their arguments on
     -- the command line, then makes the sections, title and body
-    let brief = compose_brief(today, Holds where status = open)
+    let brief = compose_brief(today)
 
     ensures: Brief.created(date: today, sent: not brief.is_empty, sections: brief.sections, created_at: now)
     ensures:
@@ -2952,8 +2429,8 @@ rule SendMorningBrief {
     @guidance
         -- relay composes the brief itself and wakes no role, so it costs
         -- no tokens and keeps calendar text, which outsiders write, out
-        -- of every prompt. Three sections, in order: today's calendar,
-        -- reminders due today, held calls.
+        -- of every prompt. Two sections, in order: today's calendar and
+        -- reminders due today.
         -- Each is a count and at most eight short lines. A tool that
         -- fails, times out, prints what the brief cannot read, or is
         -- not a read tool on the plain protocol makes its section say
@@ -3388,13 +2865,11 @@ rule ReadCard {
     ensures: caller.session_labels = caller.session_labels + card.labels
 
     @guidance
-        -- A role is shown a contaminated card only when it passes
-        -- accept_contamination; otherwise a placeholder that names only
-        -- the card's number. Removing a contaminated item, or the
-        -- operator writing it again, takes contaminated off the card.
-        -- A wake's or conversation's prompt lists the active cards whose
-        -- title's labels, with private, the session already holds, one
-        -- line each with its progress, and says when some were left out.
+        -- A house role is shown every card as it is. Removing a
+        -- contaminated item, or the operator writing it again, takes
+        -- contaminated off the card. A wake's or conversation's prompt
+        -- lists the active cards, one line each with its progress, and
+        -- the wake carries their titles' labels.
         -- A client is sent each card's wire form: every text field made
         -- visible, and defanged and marked outsider when contaminated.
 }
@@ -3415,14 +2890,37 @@ invariant TimeNeverDecreases {
             b.seq = a.seq + 1 implies b.at >= a.at
 }
 
-invariant WhatCameBeforeLabelsSawEverything {
-    -- relay writes a labels/enabled marker into every log it opens: first
-    -- thing in a new log, after the old events in one from before relay
-    -- kept labels. Anything written before the marker by anyone but the
-    -- operator is read as private and contaminated, since nothing says
-    -- what it had seen, and no session from before it is carried on.
-    for event in Events where before_labels and not actor.is_operator:
-        includes_all(event.labels, all_labels())   -- black box: private and contaminated
+invariant EntryPointsDecideProvenance {
+    -- Where text came in decides its labels. What the operator writes
+    -- or pastes is hers and carries none: the command line, a line in a
+    -- conversation, a pasted page or an attached resource in an ACP
+    -- client. An ingestor's or a scout's text, and a tool's result,
+    -- carry the labels relay.edn gives them.
+    for event in Events where actor.is_operator:
+        not has_contaminated(event.session_labels)
+}
+
+invariant NoWayOutOfTheHouse {
+    -- No role that is not public is granted an egress tool, so nothing
+    -- a house role reads can leave by one, and no memo goes from a house
+    -- role's session to a public role.
+    for role in Roles where not is_public:
+        role.offered_tools.all(t => t.class != egress)
+    for memo in Memos where recipient != null and recipient.is_public and sender.kind = role:
+        memo.public
+}
+
+invariant OldLogsStillFold {
+    -- A log written by an older relay folds into the same state, its
+    -- holds, permission requests, quarantine releases and trusts read
+    -- as nothing. Kinds relay no longer writes are ignored, never
+    -- refused. Two still keep old items as they were: anything a role
+    -- or the dispatcher wrote before the log's first labels marker
+    -- carries contaminated and private and is not public, since relay
+    -- did not record what its writer had seen; and a declassified memo
+    -- keeps the text the operator vetted, though not its publicity.
+    for event in Events:
+        folds(event)   -- black box: core/removed-event-kinds are skipped
 }
 
 invariant ARoleCallCarriesItsSessionsLabels {
@@ -3443,16 +2941,10 @@ invariant NoEventDropsWhatItCopies {
 invariant AWakeStartsWithTheLabelsOfItsPrompts {
     -- The role's id, title and instructions, the notes shown, the memos
     -- carried and the ids of their senders, the routines they are runs
-    -- of, and private for any relay content among them. The journal
-    -- entries and fact topics the prompt shows add nothing: it shows
-    -- only those whose labels these already include.
+    -- of, the journal entries, fact topics, skills and cards shown, and
+    -- private for any relay content among them.
     for wake in Wakes:
         includes_all(wake.seed_labels, prompt_labels(wake))   -- black box: see guidance on RunWake
-}
-
-invariant AQuarantinedMemoIsNeverCarried {
-    for wake in Wakes:
-        wake.memos.all(m => not m.is_quarantined)
 }
 
 invariant NoSessionOfAPublicRoleHoldsPrivate {
@@ -3460,7 +2952,7 @@ invariant NoSessionOfAPublicRoleHoldsPrivate {
     -- reads carries private.
     for wake in Wakes where wake.role.is_public:
         not has_private(wake.seed_labels)   -- black box: whether a set of labels holds private
-            and wake.memos.all(m => not m.is_awaiting_declassification)
+            and wake.memos.all(m => not m.is_hidden)
 }
 
 invariant APublicItemNeverCarriesPrivate {
@@ -3468,34 +2960,9 @@ invariant APublicItemNeverCarriesPrivate {
         not has_private(event.labels)
 }
 
-invariant OnlyTheOperatorDeclassifies {
-    for memo in Memos where declassified:
-        declassified_by(memo).is_operator   -- black box: who wrote its memo/declassified event
-}
-
 invariant AnEndedSessionIsNeverCarriedOn {
     for wake in Wakes where resumes != null:
-        not session_was_ended_before(wake.resumes.session, wake.started_at)   -- black box: by deny --end, the denial cap or relay fresh
-}
-
-invariant AHeldSessionWaitsForItsDecisions {
-    -- No wake carries on a session with a call still waiting for the
-    -- operator, and none but the one that carries it on takes a memo
-    -- such a session keeps. The role's other work goes on in fresh
-    -- sessions, one wake at a time as ever.
-    for wake in Wakes where status = running:
-        (wake.resumes = null or (Holds where wake = wake.resumes and status = open).count = 0)
-            and wake.memos.all(m => not m.is_kept or wake.resumes = held_wake_of(m))   -- black box: the held wake that keeps it
-}
-
-invariant OnlyTheOperatorAllowsAHeldCall {
-    for hold in Holds where status = allowed:
-        hold.resolved_by.is_operator
-}
-
-invariant ADecisionGoesBackToItsOwnRole {
-    for wake in Wakes:
-        wake.resolves.all(h => h.role = wake.role and h.status != open)
+        not session_was_ended_before(wake.resumes.session, wake.started_at)   -- black box: by a changed tool definition, or the role being made public
 }
 
 invariant OneWakeAtATime {
@@ -3671,12 +3138,6 @@ surface Inbound {
             when caller.kind = role
         ToolCallRequested(caller, tool, arguments)
             when caller.kind = role
-        HoldResolveRequested(caller, hold, verdict: HoldVerdict, reason?, end?)
-            when caller.is_operator
-        MemoReleaseRequested(caller, memo)
-            when caller.is_operator
-        TrustRequested(caller, kind: TrustKind, ref)
-            when caller.is_operator
         FactRevertRequested(caller, fact, version)
             when caller.is_operator
         DocRevertRequested(caller, doc, version)
@@ -3712,12 +3173,6 @@ surface Inbound {
         -- anyone else acts as the operator. The caller must be the
         -- operator, the dispatcher or an active role.
 
-    @guarantee APersonDecides
-        -- Approving or denying a held call, releasing a quarantined memo
-        -- and trusting contaminated text are the operator's alone, and
-        -- each is confirmed on the operator's terminal with a fresh
-        -- code typed back there, never on stdin.
-
     @guarantee ReplayNeedsOnlyTheLog
         -- The state can always be rebuilt from the log. A log with an
         -- event type this version does not know is refused rather
@@ -3742,7 +3197,7 @@ surface Clock {
 
 surface HarnessBoundary {
     provides:
-        WakeReported(wake, outcome, exit?, crashed, cut_short, session?, said?, transcript?, resets_at?, held?, labels?)
+        WakeReported(wake, outcome, exit?, crashed, cut_short, session?, said?, transcript?, resets_at?, labels?)
         DispatchedWakeSpawned(role, pid, pid_start)
 
     contracts:
@@ -3751,10 +3206,7 @@ surface HarnessBoundary {
 
 surface ConversationBoundary {
     provides:
-        PermissionRequested(wake, call, tool, input_sha256, approvals)
-        PaneTrustRequested(conversation, path, version, sha256)
         TurnReported(wake, stop_reason)
-        PermissionUnattended(wake, call)
 
     @guidance
         -- Each session/prompt from a client asks for a turn
@@ -3765,10 +3217,9 @@ surface ConversationBoundary {
         -- further. The agent's answer to a prompt that started a turn
         -- reports the turn's end with its stopReason, or error for an
         -- error, before any client sees the answer.
-        -- relay acp sees the agent's session/request_permission go by.
-        -- When the call's tool has a preview command, relay runs it and
-        -- adds its markdown to the request's toolCall.content, marked
-        -- _meta relay/preview, before the client sees the request.
+        -- relay never asks a client for permission: an agent's
+        -- session/request_permission (agentloop sends none) is answered
+        -- cancelled and no client sees it.
         -- A display block's own text reaches the client inert (hidden
         -- characters escaped, links defanged, fenced), made from the
         -- display under _meta, which a capable client shows apart.
@@ -3778,9 +3229,8 @@ surface ConversationBoundary {
         -- no unpaired surrogate, nesting at most 128, number literals at
         -- most 1000 characters, exponents within -9999..9999 by value,
         -- names matched exactly, numbers exact.
-        -- A line that breaks it is passed on in neither direction; a
-        -- permission request among such lines is refused when its id
-        -- can be found. An agent message whose method starts with
+        -- A line that breaks it is passed on in neither direction. An
+        -- agent message whose method starts with
         -- _relay/ never reaches the client, and neither does a response
         -- from the agent unless it answers a request of the client's that
         -- relay passed on and that the agent has not answered yet. Every
@@ -3800,14 +3250,12 @@ surface ConversationService {
         -- read at startup (compared in constant time) and with no Origin
         -- header unless the operator allowed that origin; a refusal is a
         -- bare status that says nothing about relay. Each WebSocket is a
-        -- connection that may answer permission requests and has no
-        -- role; its session/new without a role goes to the configured
+        -- connection with no role; its session/new without a role goes to the configured
         -- default role. One text message is one line; a binary message
         -- or one over 8 MB closes it. Every transport shares one cap on
         -- connections and one bound on what waits for a client. A
         -- connection through relay acp says first, in a _relay/connect
-        -- line relay acp writes itself, whether it may answer permission
-        -- requests and which role it is for; relay takes that line only
+        -- line relay acp writes itself, which role it is for; relay takes that line only
         -- as a socket connection's first, never later and never on stdio.
         -- A role has at most one live conversation (OpenConversation).
         -- session/new for a role opens it, or attaches the connection to
@@ -3826,8 +3274,7 @@ surface ConversationService {
         -- gone. The service keeps a conversation until the operator ends
         -- it (_relay/conversations/end) or the service stops; relay acp in
         -- its own process ends its conversations when its connection
-        -- ends, and refuses a permission request nobody can answer, as
-        -- before. Stopping the service ends every conversation, a turn in
+        -- ends. Stopping the service ends every conversation, a turn in
         -- progress with it (EndTurn, ended), and records it; one a dead
         -- service left is ended as lost (EndLostWakes) by the next.
         -- Every request relay has taken and not yet answered is one
