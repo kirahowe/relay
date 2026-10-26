@@ -484,6 +484,23 @@
           :else (recur words nil (conj out line)))
         (if line (conj out line) out)))))
 
+(defn note-lines
+  "Lines of the daily note, or of what relay note says about it, wrapped
+  to ready-width at spaces. A numbered item (\"3. \"), a list item
+  (\"- \") or an indented line keeps its later lines under its text. A
+  blank line stays."
+  [lines]
+  (vec (mapcat (fn [l]
+                 (let [l (str l)
+                       lead (or (re-find #"^\s*(?:\d+\.|-)\s+" l) (re-find #"^\s+" l) "")
+                       hang (apply str (repeat (count lead) " "))
+                       room (max 20 (- ready-width (count hang)))]
+                   (if (str/blank? l)
+                     [""]
+                     (let [[first-line & more] (wrap (subs l (count lead)) room)]
+                       (cons (str lead first-line) (map #(str hang %) more))))))
+               lines)))
+
 (defn- ready-lines-each
   "How many lines of an item's body relay ready shows: more for a move,
   whose full paths are what it is about."

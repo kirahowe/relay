@@ -562,8 +562,11 @@ routine at 07:10 and the skill `skills/steward/daily-note.md`, from
 `setup/daily-note/`. `bb staging init` does the same in staging.
 
 To see a note before its time, `relay routine run daily-note` has the
-steward write its parts now, `relay note` shows the note as it would go
-out, and `relay note now` makes today's note and sends it. A note sent
+note's writer write its parts now, `relay note` shows the note as it
+would go out, wrapped to fit a phone, and `relay note now` makes today's
+note and sends it. Once today's note has gone out, `relay note` says
+when, and that `relay ready <n>` shows it, before the next one as it
+stands. A note sent
 that way is the day's note, so the next one comes tomorrow. A note with
 nothing to say is not sent and does not use up the day: run `relay note
 now` again once the steward has written its parts. A note made before

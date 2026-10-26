@@ -255,6 +255,48 @@
     (is (str/includes? (first (:out (relay! data "note" "now"))) "made already") "a sent note is the day's")
     (is (= 1 (pushed)))))
 
+(deftest relay-note-names-the-note-s-writer
+  (let [data (data-dir!)
+        _ (spit (str data "/relay.edn") (pr-str (assoc (read-string (slurp (str data "/relay.edn")))
+                                                       :dead-letter-handler "hub" :daily-note {:at "07:30" :role "hub"})))
+        sys (inbound/system data {:clock (constantly t0)})]
+    (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "hub" :title "Hub" :instructions "r"}})
+    (doseq [args [["note"] ["note" "now"]]]
+      (let [out (str/join "\n" (:out (apply relay! data args)))]
+        (is (str/includes? out "Hub writes its parts from its routine:") (pr-str args))
+        (is (str/includes? out "relay routine run hub daily-note") (pr-str args))
+        (is (not (str/includes? (str/lower-case out) "steward")) (pr-str args))))
+    (testing "without :daily-note, the setting to add names the main role"
+      (spit (str data "/relay.edn") (pr-str (dissoc (read-string (slurp (str data "/relay.edn"))) :daily-note)))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":daily-note \{:at \"07:30\" :role \"hub\"\}"
+                            (relay! data "note"))))))
+
+(deftest relay-note-fits-a-phone-and-says-where-today-s-went
+  (let [data (data-dir!)
+        sys (inbound/system data {:clock (constantly t0)})
+        long-item (str "Interview with the Tidewater Community Foundation about the spring grant, Thursday"
+                       " at 10:00 in the Old Hall")]
+    (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "steward" :title "Steward" :instructions "r"}})
+    (inbound/submit! sys {:type :digest/write-part :actor "steward" :labels []
+                          :args {:part "ahead" :items [{:text long-item :offer "Prep notes?"}]}})
+    (let [{:keys [out]} (relay! data "note")]
+      (is (every? #(<= (count %) 60) out) (pr-str out))
+      (is (str/includes? (str/join " " (map str/trim out)) long-item) "wrapped, not cut")
+      (is (some #(re-find #"^ {3}\S" %) out) "an item's later lines sit under its text"))
+    (relay! data "note" "now")
+    (let [id (:id (core/latest-note (inbound/current-state sys)))
+          {:keys [exit out]} (relay! data "note")
+          text (str/join " " (map str/trim out))]
+      (is (= 0 exit))
+      (is (every? #(<= (count %) 60) out) (pr-str out))
+      (is (str/starts-with? (first out) "Today's note went out at "))
+      (is (str/includes? text (str "relay ready " id " shows it")))
+      (testing "and the next one has nothing yet"
+        (is (str/includes? text "tomorrow at 07:30"))
+        (is (not (str/includes? text "relay routine run")) "the routine has run today already")))
+    (is (str/includes? (str/join " " (:out (relay! data "note" "now")))
+                       (str "relay ready " (:id (core/latest-note (inbound/current-state sys))) " shows it")))))
+
 ;; --- the first GitHub poll
 
 (deftest the-first-poll-of-a-repository-says-it-has-started-watching
@@ -582,7 +624,7 @@
           (pr-str {:timezone "UTC" :default-harness :x :harnesses {:x {:kind :agentloop :api-key-command ["true"]}}
                    :budget {:weekly-usd 20}}))
     (let [{:keys [exit out]} (relay! check "status")
-          text (str/join "\n" out)]
+          text (str/join " " (map str/trim out))]
       (is (= 0 exit))
       (is (str/includes? text "relay.edn is valid. This directory has no log"))
       (is (not (str/includes? text "relay init")))

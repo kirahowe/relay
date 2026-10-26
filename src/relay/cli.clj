@@ -569,40 +569,57 @@ id public too.")
        :out (cons (str "Sent " role " its " rname " routine now (memo " (get-in fired [:data :memo]) ").")
                   (render/wake-result role woke))})))
 
+(defn- note-sent-line
+  "Where today's note went, when it went out today: when, and how to read
+  it again. Nil otherwise."
+  [state zone today]
+  (when-let [m (core/latest-note state)]
+    (let [at (.atZone ^java.time.Instant (:created-at m) ^java.time.ZoneId zone)]
+      (when (and (= today (.toLocalDate at)) (= today (core/daily-date state)))
+        (str "Today's note went out at " (format "%02d:%02d" (.getHour at) (.getMinute at))
+             ". relay ready " (:id m) " shows it.")))))
+
 (defn- note!
   "relay note shows the daily note as it would go out now; relay note now
   makes today's and sends it, as the tick does at :daily-note :at. It is
-  made from what the steward wrote for it, so relay routine run
-  daily-note first has the steward write its parts."
+  made from what the note's writer wrote for it, so relay routine run
+  daily-note first has the writer write its parts. Every line fits a
+  phone (render/note-lines)."
   [sys [sub]]
   (let [config (:config sys)
         zone (config/zone config)
         now ((:clock sys))
         today (.toLocalDate (.atZone ^java.time.Instant now zone))
-        state (inbound/current-state sys)]
+        state (inbound/current-state sys)
+        writer (or (digest/role-of config) (config/main-role config))
+        routine-lines [(str (str/capitalize writer) " writes its parts from its routine:")
+                       (str "  relay routine run " writer " daily-note")]
+        sent (note-sent-line state zone today)
+        tomorrow (str "The next one is tomorrow at " (get-in config [:daily-note :at]) ".")
+        out (fn [& ls] (apply result 0 (render/note-lines ls)))]
     (when-not (:daily-note config)
-      (fail! "relay.edn has no :daily-note, so there is no daily note. Set :daily-note {:at \"07:30\" :role \"steward\"}."))
+      (fail! (str "relay.edn has no :daily-note, so there is no daily note. Set :daily-note {:at \"07:30\" :role "
+                  (pr-str (config/main-role config)) "}.")))
     (case sub
-      nil (let [{:keys [subject sections numbered]} (core/compose-note state config today now)]
-            (if-not sections
-              (result 0 "The daily note has nothing to say yet, so none would go out now."
-                      (str "The steward writes its parts from its routine: relay routine run "
-                           (digest/role-of config) " daily-note."))
-              (apply result 0 subject ""
-                     (str/split-lines (channels/body-text (digest/with-hints {:subject subject :sections sections :labels []
-                                                                             :numbered numbered}
-                                                                            :cli))))))
+      nil (let [{:keys [subject sections numbered]} (core/compose-note state config today now)
+                body (when sections
+                       (str/split-lines (channels/body-text (digest/with-hints {:subject subject :sections sections :labels []
+                                                                                :numbered numbered}
+                                                                               :cli))))]
+            (cond
+              (and sent (not sections)) (out sent (str "Nothing new for the next one yet. " tomorrow))
+              sent (apply out sent "" "The next one, as it would go out now:" "" subject "" body)
+              (not sections) (apply out "The daily note has nothing to say yet, so none would go out now." routine-lines)
+              :else (apply out subject "" body)))
       "now" (cond
               (and (= today (core/daily-date state)) (not (false? (get-in state [:daily :sent])))
                    (not (core/note-redoable? state today)))
-              (result 0 (str "Today's note was made already. The next one is tomorrow at "
-                             (get-in config [:daily-note :at]) "."))
+              (apply out (remove nil? [(str "Today's note was made already. " tomorrow) sent]))
               ;; Nothing to say yet: nothing is recorded, so the day's note
-              ;; can still go out once the steward has written its parts.
+              ;; can still go out once its writer has written its parts.
               (nil? (:sections (core/compose-note state config today now)))
-              (result 0 "Today's note has nothing to say yet, so nothing was sent, and it can still go out today."
-                      (str "The steward writes its parts from its routine: relay routine run "
-                           (digest/role-of config) " daily-note."))
+              (apply out "Today's note has nothing to say yet, so nothing was sent, and it can still go out today."
+                     routine-lines)
               :else
               (let [events (inbound/submit! sys {:type :digest/compose :actor core/dispatcher
                                                  :args {:date (str today)}})
@@ -610,9 +627,10 @@ id public too.")
                     st (inbound/current-state sys)]
                 (doseq [{:keys [channel messages]} (core/messages-due st now (.minusSeconds ^java.time.Instant now 120))]
                   (inbound/deliver! sys channel messages))
-                (result 0 (if sent?
-                            "Sent today's daily note. It counts as today's, so the next one is tomorrow."
-                            "Today's note had nothing to say, so nothing was sent."))))
+                (if sent?
+                  (out "Sent today's daily note. It counts as today's, so the next one is tomorrow."
+                       (str "relay ready " (:id (core/latest-note st)) " shows it."))
+                  (out "Today's note had nothing to say, so nothing was sent."))))
       (fail! "usage: relay note [now]"))))
 
 (defn- tailnet-name
