@@ -11,7 +11,8 @@
                own, such as a draft in her account, and where it went
     :event     an entry on the agent's calendar that has not ended
     :finding   an active card a role put on her board
-    :move      (B9) a file move, with its undo
+    :move      a files_move call: what moved where, by which role, and
+               its undo
 
   An item is {:id \"message:7\" :kind :at :seq :title :lines [text] :from
   \"from a mail by x@y\" or nil :labels [..]} and what its kind adds. A
@@ -103,9 +104,39 @@
      :labels (vec (cards/text-labels c))
      :card (:id c)}))
 
+(defn- file-name [path] (last (str/split (str path) #"/")))
+
+(defn- move-item
+  "A files_move call: what moved where, which role moved it, and whether
+  the operator can still undo it (relay undo, _relay/undo). A call relay
+  never finished can still be asked to undo: undo then lists its moves to
+  check by hand."
+  [c]
+  (let [undone (set (:undone c))
+        moving? (= :moving (:status c))
+        shown (if moving?
+                (map-indexed (fn [i m] [i m]) (:moves c))
+                (for [{:keys [index]} (:done c)] [index ((:moves c) index)]))
+        left (core/move-steps-left c)
+        all-undone? (and (not moving?) (seq (:done c)) (empty? left))]
+    {:id (str "move:" (:id c)) :kind :move :at (or (:finished-at c) (:at c)) :seq (:id c)
+     :title (cond
+              moving? "relay stopped while it moved these; check them by hand"
+              (empty? (:done c)) "Nothing was moved"
+              (= 1 (count shown)) (str (file-name (:from (second (first shown)))) (when all-undone? " (undone)"))
+              :else (str (count shown) " things" (when all-undone? " (undone)")))
+     :lines (vec (concat
+                  [(str "By " (:actor c) ".")]
+                  (for [[i {:keys [from to]}] shown]
+                    (str from " → " to (when (undone i) " (undone)")))
+                  (when (:stopped c) [(str "It stopped: " (:stopped c))])))
+     :labels (vec (:labels c))
+     :move (:id c) :role (:actor c)
+     :undo (when (or moving? (seq left)) (:id c))
+     :undone (boolean all-undone?)}))
+
 (def sources
-  "Where items come from: functions of the state giving items. B9's file
-  moves add one here."
+  "Where items come from: functions of the state giving items."
   [(fn [state] (map #(message-item state %) (vals (:messages state))))
    (fn [state] (map draft-item (vals (:prepared state))))
    (fn [state]
@@ -113,7 +144,8 @@
    (fn [state]
      (for [c (core/board state false)
            :when (not= core/operator (:owner c))]
-       (finding-item c)))])
+       (finding-item c)))
+   (fn [state] (map move-item (core/move-calls state)))])
 
 (def default-limit 60)
 
@@ -185,7 +217,8 @@
                            "replies" (mapv (fn [r] {"at" (str (:at r)) "text" (safe [] (:text r))})
                                            (:replies it)))
       (:start it) (assoc "start" (str (:start it)) "end" (str (:end it)))
-      (:card it) (assoc "card" (:card it)))))
+      (:card it) (assoc "card" (:card it))
+      (:move it) (assoc "move" (:move it) "role" (:role it) "undo" (:undo it) "undone" (:undone it)))))
 
 (defn wire
   "An item as a client is sent it: string keys, every text safe to show,

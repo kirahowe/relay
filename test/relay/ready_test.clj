@@ -126,6 +126,28 @@
     (is (= [c b a] (sort ready/newer-first [a b c])))
     (is (= [c b a] (sort ready/newer-first [b c a])))))
 
+(def gen-move-call
+  (gen/let [n (gen/choose 1 4)
+            status (gen/elements [:moving :moved])
+            done (gen/fmap #(vec (sort (distinct %))) (gen/vector (gen/choose 0 (dec n)) 0 n))
+            undone (gen/fmap #(vec (sort (distinct %))) (gen/vector (gen/choose 0 (dec n)) 0 n))
+            stopped (gen/elements [nil "it could not read it"])]
+    (let [done (if (= :moving status) [] done)]
+      {:id 7 :actor "steward" :at (Instant/parse "2026-10-26T12:00:00Z") :labels ["private"] :status status
+       :moves (vec (for [i (range n)] {:from (str "/f/a" i) :to (str "/f/b" i)}))
+       :done (mapv (fn [i] {:index i}) done)
+       :undone (vec (filter (set done) undone)) :stopped (when (= :moved status) stopped)})))
+
+(defspec a-move-offers-undo-exactly-while-there-is-something-to-undo 200
+  (prop/for-all [c gen-move-call]
+    (let [it (first (filter #(= :move (:kind %)) (ready/ready (assoc-in core/empty-state [:moves 7] c))))
+          left (core/move-steps-left c)
+          moving? (= :moving (:status c))]
+      (and (= (boolean (:undo it)) (boolean (or moving? (seq left))))
+           (= (:undone it) (boolean (and (not moving?) (seq (:done c)) (empty? left))))
+           (nil? (ready/provenance (:labels it)))
+           (every? #(str/includes? (str/join "\n" (:lines it)) (:from ((:moves c) (:index %)))) (:done c))))))
+
 ;; --- where a thing came from
 
 (deftest a-label-reads-as-where-it-came-from

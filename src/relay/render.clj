@@ -367,7 +367,9 @@
                             (for [r (take-last 1 replies)]
                               (str indent "You replied: " (let [t (get r "text")] (if (> (count t) 30) (str (subs t 0 29) "…") t))))
                             (when (and (get it "replyTo") (empty? replies))
-                              [(str indent "Reply: relay reply " (get it "replyTo") " -m \"...\"")])))
+                              [(str indent "Reply: relay reply " (get it "replyTo") " -m \"...\"")])
+                            (when-let [u (get it "undo")]
+                              [(str indent "Undo: relay undo " u)])))
                   items))))))
 
 ;; --- eval runs (bb eval)

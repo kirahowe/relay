@@ -15,9 +15,13 @@
             [relay.config :as config]
             [relay.core :as core]
             [relay.files :as files]
+            [relay.hub :as hub]
+            [relay.hub-test :as ht]
             [relay.inbound :as inbound]
             [relay.log :as log]
             [relay.moves :as moves]
+            [relay.ready :as ready]
+            [relay.serve :as serve]
             [relay.tools :as tools]))
 
 (def base
@@ -480,3 +484,78 @@
            (every? :ok undos)
            (= original (snapshot dir))))
         (finally (fs/delete-tree dir))))))
+
+;; --- moves in the ready view, and undo from the client
+
+(defn- client-undo
+  "Asks the hub, as a client on connection 1, to undo `call`, carrying
+  out its effects as relay's shell does (relay.serve/undo-result). The
+  answer the client was written."
+  [sys call]
+  (let [written (atom [])
+        h (-> (ht/live) (assoc :state (inbound/current-state sys)))]
+    (hub/drive h {:event :connection-line :conn 1 :line (ht/req 9 "_relay/undo" {:move call})}
+               (fn [{:keys [effect] :as f}]
+                 (case effect
+                   :write (do (when (= 1 (:conn f)) (swap! written conj (ht/parse (:line f)))) nil)
+                   :undo (merge {:event :submit-result} (serve/undo-result sys (:move f)))
+                   nil)))
+    (first (filter #(= 9 (get % "id")) @written))))
+
+(defn- move-item [sys call]
+  (first (filter #(= (str "move:" call) (:id %)) (ready/ready (inbound/current-state sys)))))
+
+(deftest a-move-is-ready-with-its-undo-and-the-client-can-undo-it
+  (let [{:keys [sys root]} (world! *dir*)
+        before (snapshot *dir*)
+        from (str root "/Downloads/statement-oct.pdf")
+        to (str root "/Bank/statement.pdf")
+        _ (move sys [{:from from :to to}] ["contaminated" "mail:eve@example.net"])
+        call (:seq (first (events sys "files/moving")))
+        it (move-item sys call)
+        wire (ready/wire it)]
+    (testing "the item says what moved where, who moved it, and where the reason came from"
+      (is (= [:move "statement-oct.pdf" call call] ((juxt :kind :title :undo :move) it)))
+      (is (= ["By steward." (str from " → " to)] (:lines it)))
+      (is (= "from a mail by eve@example.net" (get wire "from")))
+      (is (= {"move" call "role" "steward" "undo" call "undone" false "seq" call}
+             (select-keys wire ["move" "role" "undo" "undone" "seq"]))))
+    (testing "relay ready names the command that undoes it"
+      (let [out (:out (cli/execute ["--data" (:data-dir sys) "ready"]))]
+        (is (some #{"Moved: statement-oct[.]pdf"} out) "from outside, so what reads as a link is broken")
+        (is (some #{(str "  Undo: relay undo " call)} out))))
+    (testing "undo is refused cleanly, with B9's reason, when the file changed"
+      (spit to "edited by Kira")
+      (let [answer (client-undo sys call)]
+        (is (= -32000 (get-in answer ["error" "code"])))
+        (is (re-find #"was not undone, and nothing changed: .*changed since it was moved" (get-in answer ["error" "message"]))))
+      (is (= call (:undo (move-item sys call))) "it can still be undone")
+      (spit to "bank october"))
+    (testing "the client's undo is relay undo"
+      (let [answer (client-undo sys call)]
+        (is (re-find #"Undid move .*put back 1 of 1" (first (get-in answer ["result" "lines"]))) (pr-str answer)))
+      (is (= before (snapshot *dir*)))
+      (let [it (move-item sys call)]
+        (is (nil? (:undo it)))
+        (is (:undone it))
+        (is (= "statement-oct.pdf (undone)" (:title it)))))
+    (testing "once undone, a second undo is refused with the reason"
+      (is (re-find #"already undone" (get-in (client-undo sys call) ["error" "message"]))))
+    (testing "a move that does not exist"
+      (is (re-find #"There is no move 9999" (get-in (client-undo sys 9999) ["error" "message"]))))))
+
+(deftest a-move-relay-never-finished-is-ready-to-check
+  (let [{:keys [sys root]} (world! *dir*)
+        call (:seq (first (inbound/submit! sys {:type :files/start :actor "steward" :labels []
+                                                 :args {:moves [{:from (str root "/a") :to (str root "/b")}]}})))
+        it (move-item sys call)]
+    (is (= call (:undo it)) "undo is offered, and lists the moves to check")
+    (is (re-find #"check them by hand" (:title it)))
+    (is (re-find #"Check them by hand" (get-in (client-undo sys call) ["error" "message"])))))
+
+(deftest undo-params-are-checked
+  (doseq [params [{} {:move "1"} {:move 0} {:move 1 :call 2}]]
+    (let [[_ fx] (ht/say (ht/live) 1 (ht/req 9 "_relay/undo" params))]
+      (is (= -32602 (get-in (first (ht/writes fx 1)) ["error" "code"])) (pr-str params))
+      (is (empty? (filter #(= :undo (:effect %)) fx))))))
+

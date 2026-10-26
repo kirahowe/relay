@@ -29,6 +29,7 @@
             [relay.hub :as hub]
             [relay.ics :as ics]
             [relay.inbound :as inbound]
+            [relay.moves :as moves]
             [relay.roster :as roster]
             [relay.websocket :as ws]
             [relay.workspace :as workspace]
@@ -193,6 +194,16 @@
        (catch Exception e
          {:rejection :error :message (or (ex-message e) (str (class e)))})))
 
+(defn undo-result
+  "Carries out a client's undo of a file move with relay undo's code
+  (relay.moves/undo!): the result as the hub takes it, :lines when it was
+  undone, else B9's reason as the refusal."
+  [sys id]
+  (let [{:keys [ok refused]} (moves/undo-outcome sys id)]
+    (if ok
+      {:ok true :lines ok}
+      {:rejection :refused :message (str/join " " (map str/trim refused))})))
+
 (declare start-conversation!)
 
 (defn- carry-out!
@@ -202,6 +213,7 @@
     :write (do (when-let [c (get @(:conns eng) (:conn f))] ((:send! c) (:line f))) nil)
     :send (do (when-let [c (get @(:convs eng) (:role f))] ((:send! c) (:line f))) nil)
     :submit (merge {:event :submit-result} (submit-result (:sys eng) (:command f) (:with-state f)))
+    :undo (merge {:event :submit-result} (undo-result (:sys eng) (:move f)))
     :warn (do (binding [*out* *err*] (println (:text f))) nil)
     :start (do (start-conversation! eng (:role f) nil) nil)
     :stop (do (when-let [c (get @(:convs eng) (:role f))] ((:stop! c))) nil)))
@@ -219,7 +231,7 @@
                   (catch Exception ex
                     (binding [*out* *err*] (println "relay could not carry out" (:effect f) ":" (ex-message ex)))
                     ;; The hub waits for a submit's result, so it gets one.
-                    (when (= :submit (:effect f))
+                    (when (#{:submit :undo} (:effect f))
                       {:event :submit-result :rejection :error :message (or (ex-message ex) (str (class ex)))})))))))
 
 (defn- run-loop!

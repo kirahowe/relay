@@ -530,7 +530,9 @@ can see where a call came from. `relay moves` lists them. `relay undo
 are empty. If anything has changed since (you edited a moved file, moved
 it again, or put something new where it was), undo says what changed and
 touches nothing. A folder it made that now holds something of yours is
-kept.
+kept. Each call is also in `relay ready`, with what moved where and
+the `relay undo` that puts it back; the client's ready view undoes it
+with a key.
 
 #### What you are shown
 
@@ -800,8 +802,9 @@ messages too.
 
 `relay ready` lists, newest first, everything relay has prepared or told
 you: what roles told you, drafts they made in your own accounts with an
-edit tool, entries on the agent's calendar that have not ended, and
-findings they put on the board. Each says where it came from, in words
+edit tool, entries on the agent's calendar that have not ended,
+findings they put on the board, and files they moved, each move with the
+`relay undo` that puts it back. Each says where it came from, in words
 ("from a mail by x@y.org", "from the web"), and never names a label. It
 is short and fits 60 columns. The client shows the same list as its
 ready view (`_relay/ready` in `docs/client-protocol.md`), and a change

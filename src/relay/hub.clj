@@ -64,6 +64,9 @@
                                    a command for relay.inbound; its result
                                    is the next :submit-result, with the
                                    state after it when :with-state
+    :undo    {:move}               undo a file move (relay.moves/undo!);
+                                   its result is the next :submit-result,
+                                   with :lines when it was undone
     :start   {:role}               open the role's conversation
     :stop    {:role}               end it
     :warn    {:text}               tell the operator on stderr
@@ -305,6 +308,16 @@
       ;; and the answer says what changed.
       (let [{:keys [value notes]} (text/sanitize-input (:args command))]
         (submit h (assoc command :args value) {:kind :reply :rid rid :notes notes})))))
+
+(defn- undo-request
+  "_relay/undo: the operator undoes a file move. relay's shell runs the
+  same undo as relay undo (relay.moves/undo!, the :undo effect), and its
+  result comes back as the next :submit-result."
+  [h rid msg]
+  (if-let [why (workspace/undo-params-error (params-of msg))]
+    (refuse h rid -32602 why)
+    (-> h (update :awaiting conj {:kind :undo :rid rid})
+        (fx {:effect :undo :move (get (params-of msg) "move")}))))
 
 (defn- cards-request [h rid msg]
   (let [cid (:conn (record h rid))
@@ -806,6 +819,7 @@
       "_relay/messages" (messages-request h rid msg)
       "_relay/ready" (ready-request h rid msg)
       "_relay/reply" (reply-request h rid msg)
+      "_relay/undo" (undo-request h rid msg)
       (cond
         (workspace/methods method) (forward h rid msg)
         (str/starts-with? method "_relay/") (refuse h rid -32601 (str "relay has no method " method "."))
@@ -980,6 +994,10 @@
       (cond
         ok (answer h rid (cond-> {} (seq (:notes continuation)) (assoc "notes" (vec (:notes continuation)))))
         :else (refuse h rid -32000 (or message "relay refused it.")))
+      :undo
+      (if ok
+        (answer h rid {"lines" (vec (:lines result))})
+        (refuse h rid -32000 (or message "relay could not undo it.")))
       :card-op (card-op-result h continuation result)
       :ignore h)))
 

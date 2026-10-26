@@ -143,15 +143,15 @@ command line instead.
   of the log's last event. This is the client channel's view of
   everything prepared for the operator: what relay told her, drafts a
   role made with an edit tool that is not relay's own, entries on the
-  agent's calendar that have not ended, and findings a role put on the
-  board.
+  agent's calendar that have not ended, findings a role put on the
+  board, and file moves with their undo.
 - An Item is `{"id", "kind", "at", "seq", "title", "lines": [string],
   "from": string or null, "outsider": bool}` and what its kind adds.
   `seq` is the log's number of the event that made the item; items with
   the same `at` are newest first by it, then by `id`. `id` is
   stable and names the kind and its number (`"message:7"`,
-  `"prepared:12"`, `"event:3"`, `"card:9"`). `kind` is `"message"`,
-  `"draft"`, `"event"` or `"finding"`; a client shows any other kind by
+  `"prepared:12"`, `"event:3"`, `"card:9"`, `"move:4"`). `kind` is
+  `"message"`, `"draft"`, `"event"`, `"finding"` or `"move"`; a client shows any other kind by
   its title and lines. `at` is when it was made, as an instant. `title`
   and every line are already safe to show: hidden characters are visible,
   and links are broken when the text came from outside, with no mark of
@@ -168,8 +168,12 @@ command line instead.
     start of its text.
   - `event` adds `"start"` and `"end"`, instants.
   - `finding` adds `"card"`, the card's number.
-  - A file move (B9) is one more kind, `"move"`, with its undo; a client
-    that does not know a kind shows its title and lines.
+  - `move` is a files_move call. Its `lines` say which role moved what
+    where, one line per move, and `from` says where what the role read
+    before it came from. It adds `"move"` (the call's number), `"role"`,
+    `"undo"` (the number to give `_relay/undo`, or null when nothing is
+    left to undo) and `"undone"` (true once all of it is put back).
+  - A client that does not know a kind shows its title and lines.
 - Errors: -32000 "relay has not read what is ready yet. Try again." just
   after start.
 - After it: the first call subscribes the connection to
@@ -199,6 +203,22 @@ command line instead.
 - relay-tui: `a` or Enter on a message in the ready view, then Enter
   to send. One reply at a time is in flight, and a refusal gives the
   words back.
+
+### `_relay/undo`
+
+- Scope: connection.
+- Params: `{"move": int}`: a move item's `undo`. Anything else is refused
+  (-32602).
+- Answer: `{"lines": [string]}` once relay has put the move back, the
+  same lines `relay undo` prints. It runs the same code as `relay undo`:
+  every moved thing goes back exactly, and the folders the move made are
+  removed once empty. The item then comes changed, with `undone`.
+- Errors: -32000 with B9's reason when undo is impossible, touching
+  nothing: a moved file was changed or moved again, something new is
+  where it was, a folder is not the folder it was, the move was already
+  undone, there is no such move, or relay stopped during the move (the
+  reason then lists the moves to check by hand).
+- relay-tui: `u` on a move item in the ready view.
 
 ## Methods: a session
 

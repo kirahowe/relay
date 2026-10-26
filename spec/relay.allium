@@ -2965,6 +2965,10 @@ rule UndoMove {
     @guidance
         -- When a requirement fails, undo says what changed and touches
         -- nothing. A folder it made that holds something new is kept.
+        -- The operator asks for it with relay undo or, from the ready
+        -- view, _relay/undo; both run the same code. Each call is a move
+        -- item in the ready view, offering undo while a step is left to
+        -- undo or relay never finished the call.
 }
 
 -- Knowledge: facts

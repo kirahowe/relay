@@ -101,3 +101,12 @@
                                (when (seq removed) (str " Removed " (count removed) " empty folder(s) it had made.")))]
                    (seq kept) (conj (str "Kept " (str/join ", " kept) ": something new is in it."))
                    stopped (conj (str "Stopped at " stopped ". relay undo " id " tries the rest again.")))}))))))
+
+(defn undo-outcome
+  "undo! for a client (_relay/undo): {:ok lines}, or {:refused lines}
+  with B9's reason when undo is impossible, including no such move or
+  nothing left to undo."
+  [sys id]
+  (try (undo! sys id)
+       (catch clojure.lang.ExceptionInfo e
+         (if (:relay/usage (ex-data e)) {:refused [(ex-message e)]} (throw e)))))

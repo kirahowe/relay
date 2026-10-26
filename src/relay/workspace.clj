@@ -15,6 +15,7 @@
                      first call subscribes the client to
                      _relay/ready/changed notifications
     _relay/reply     answer a message, as the operator
+    _relay/undo      undo a file move, as the operator (relay undo)
 
   relay answers them itself, and agentloop never sees them: the board's in
   relay.hub, which knows what each client was sent, the rest in each
@@ -372,3 +373,13 @@
       (not (string? text)) {:error "_relay/reply needs text."}
       :else {:command {:type :message/reply :actor core/operator :labels [] :public false
                        :args {:in-reply-to inReplyTo :text text}}})))
+
+(defn undo-params-error
+  "Why relay refuses a _relay/undo request's params, or nil. It takes
+  move, the number of a files_move call (a move item's undo)."
+  [params]
+  (let [unknown (sort (remove #{"move"} (keys params)))]
+    (cond
+      (seq unknown) (str "_relay/undo has no parameter " (str/join ", " unknown) ". It takes move.")
+      (not (and (integer? (get params "move")) (pos? (get params "move"))))
+      "_relay/undo needs move, the number of the move to undo.")))
