@@ -53,31 +53,41 @@
 
 ;; --- the sources
 
+(def ^:private done-marks
+  "How a daily note's item done since reads, after its text."
+  {"reverted" " (undone)" "dismissed" " (dropped)" "declined" " (offer declined)"})
+
 (defn- message-item [state m]
-  {:id (str "message:" (:id m)) :kind :message :at (:created-at m) :seq (:id m)
-   :message (:id m) :message-kind (:kind m) :urgency (:urgency m) :thread (:thread m)
-   :title (:subject m)
-   ;; A daily note's item the operator acted on says so where it stands.
-   :lines (vec (for [sec (:sections m) {:keys [text action]} (:items sec)
-                     :let [done (get (:acted m) (:n action))]]
-                 (cond-> text
-                   (= "reverted" done) (str " (undone)")
-                   (= "dismissed" done) (str " (dropped)"))))
-   ;; Links relay built itself, by line, kept followable.
-   :links (into {} (keep-indexed (fn [i it] (when (:link it) [i (:link it)]))
-                                 (for [sec (:sections m) it (:items sec)] it)))
-   :labels (vec (:labels m))
-   ;; Only a role's message says where it came from; relay's own say
-   ;; what they are.
-   :sources (if (messages/role-origins (:origin m)) (vec (:sources m)) [])
-   :replies (vec (:replies m))
-   :acts (vec (for [[i it] (map-indexed vector (for [sec (:sections m) it (:items sec)] it))
-                    :let [{:keys [op n]} (when (map? it) (:action it))]
-                    :when (and op (integer? n))]
-                {:n n :op op :line i :done (get-in m [:acted n])}))
-   ;; The daily note is relay's own, but its writer hears the answer
-   ;; ("revert 1", "not 2"), so it can be answered too.
-   :reply-to (when (or (core/message-author state m) (= "daily-note" (:origin m))) (:id m))})
+  (let [;; What was done with each numbered item, from this note or any
+        ;; other, or the command line.
+        acted (core/note-acted state m)
+        line (fn [{:keys [text action]}] (str text (get done-marks (get acted (:n action)))))
+        numbered (into {} (map (juxt :n identity)) (:numbered m))]
+    {:id (str "message:" (:id m)) :kind :message :at (:created-at m) :seq (:id m)
+     :message (:id m) :message-kind (:kind m) :urgency (:urgency m) :thread (:thread m)
+     :title (:subject m)
+     :lines (vec (for [sec (:sections m) it (:items sec)] (line it)))
+     ;; The same lines under their sections' headings, for a message read
+     ;; whole; :lines stays flat, and an act's :line indexes it.
+     :sections (vec (for [sec (:sections m)]
+                      {:heading (:heading sec) :lines (mapv line (:items sec))}))
+     ;; Links relay built itself, by line, kept followable.
+     :links (into {} (keep-indexed (fn [i it] (when (:link it) [i (:link it)]))
+                                   (for [sec (:sections m) it (:items sec)] it)))
+     :labels (vec (:labels m))
+     ;; Only a role's message says where it came from; relay's own say
+     ;; what they are.
+     :sources (if (messages/role-origins (:origin m)) (vec (:sources m)) [])
+     :replies (vec (:replies m))
+     :acts (vec (for [[i it] (map-indexed vector (for [sec (:sections m) it (:items sec)] it))
+                      :let [{:keys [op n]} (when (map? it) (:action it))]
+                      :when (and op (integer? n))]
+                  (cond-> {:n n :op op :line i :done (get acted n)}
+                    ;; An item whose offer can be turned down, keeping it.
+                    (:offer (numbered n)) (assoc :offer true))))
+     ;; The daily note is relay's own, but its writer hears the answer
+     ;; ("revert 1", "not 2"), so it can be answered too.
+     :reply-to (when (or (core/message-author state m) (= "daily-note" (:origin m))) (:id m))}))
 
 (defn- draft-item [p]
   {:id (str "prepared:" (:id p)) :kind :draft :at (:at p) :seq (:id p)
@@ -120,7 +130,7 @@
                      (for [{:keys [index]} (:done c)] [index ((:moves c) index)])))
         left (core/move-steps-left c)
         all-undone? (and (not moving?) (seq (:done c)) (empty? left))
-        {:keys [title lines]} (when (seq shown) (move-view/view (:roots c) shown undone))]
+        {:keys [title lines]} (when (seq shown) (move-view/view (:roots c) shown undone (:emptied c)))]
     {:id (str "move:" (:id c)) :kind :move :at (or (:finished-at c) (:at c)) :seq (:id c)
      :title (cond
               moving? "relay stopped while it moved these; check them by hand"
@@ -222,7 +232,15 @@
                            "replyTo" (:reply-to it)
                            "replies" (mapv (fn [r] {"at" (str (:at r)) "text" (safe [] (:text r))})
                                            (:replies it)))
-      (seq (:acts it)) (assoc "acts" (mapv (fn [a] {"n" (:n a) "op" (:op a) "line" (:line a) "done" (:done a)}) (:acts it)))
+      (seq (:acts it)) (assoc "acts" (mapv (fn [a] (cond-> {"n" (:n a) "op" (:op a) "line" (:line a) "done" (:done a)}
+                                                     (:offer a) (assoc "offer" true)))
+                                           (:acts it)))
+      ;; Headed sections, so a message read whole keeps its headings.
+      (some :heading (:sections it))
+      (assoc "sections" (mapv (fn [{:keys [heading lines]}]
+                                {"heading" (when heading (safe-line labels heading))
+                                 "lines" (mapv #(safe labels %) lines)})
+                              (:sections it)))
       (:start it) (assoc "start" (str (:start it)) "end" (str (:end it)))
       (:start-date it) (assoc "allDay" true "startDate" (str (:start-date it))
                               "lastDate" (str (.minusDays ^java.time.LocalDate (:end-date it) 1)))

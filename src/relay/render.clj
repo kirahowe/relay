@@ -540,7 +540,14 @@
                     (str " to " (ready-day (get it "lastDate"))))
                   ", all day")]
             start [(str indent (ready-when start zone))])
-          (mapcat (fn [l] (mapcat #(para %) (remove str/blank? (str/split-lines (str l))))) lines)
+          (let [text (fn [ls] (mapcat (fn [l] (mapcat #(para %) (remove str/blank? (str/split-lines (str l))))) ls))]
+            (if-let [secs (seq (get it "sections"))]
+              ;; A message read whole keeps its sections' headings, each
+              ;; after a blank line.
+              (mapcat (fn [{:strs [heading lines]}]
+                        (concat (when heading (cons "" (para (str heading ":")))) (text lines)))
+                      secs)
+              (text lines)))
           (when from (para from))
           (mapcat (fn [r] (para (str "You replied: " (get r "text")))) replies)
           (when (and (get it "replyTo") (empty? replies))

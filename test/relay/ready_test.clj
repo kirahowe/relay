@@ -219,7 +219,21 @@
             {"n" 4 "op" "dismiss" "line" 3 "done" nil}]
            (get (ready/wire it) "acts")))
     (is (every? #(str/starts-with? (nth (:lines it) (:line %)) (str (:n %) ". ")) (:acts it))
-        "a line's own number is the one the act uses")))
+        "a line's own number is the one the act uses")
+    (testing "the sections keep their headings, and the same lines as the flat list"
+      (is (= [{"heading" "Changes to check" "lines" ["1. A change" "And 2 more changes"]}
+              {"heading" "Ahead" "lines" ["3. Dentist (dropped)" "4. Taxes"]}]
+             (get (ready/wire it) "sections")))
+      (is (= (:lines it) (vec (mapcat #(get % "lines") (get (ready/wire it) "sections"))))))
+    (testing "relay ready <n> shows the headings and what was done"
+      (let [out (render/ready-one (ready/wire it) (ZoneId/of "UTC") (Instant/parse "2026-10-26T12:00:00Z"))]
+        (is (= ["Message 5: Daily note (just now)" "" "  Changes to check:" "  1. A change" "  And 2 more changes"
+                "" "  Ahead:" "  3. Dentist (dropped)" "  4. Taxes" "  Reply: relay reply 5 -m \"...\""]
+               out))))
+    (testing "a message with no headings sends no sections"
+      (let [plain (assoc m :sections [{:items [{:text "Hello"}]}] :origin nil :acted nil)
+            it (first (filter #(= :message (:kind %)) (ready/ready (assoc-in core/empty-state [:messages 5] plain))))]
+        (is (nil? (get (ready/wire it) "sections")))))))
 
 ;; --- where a thing came from
 
