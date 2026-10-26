@@ -15,6 +15,7 @@
   (:require [clojure.string :as str]
             [relay.cards :as cards]
             [relay.config :as config]
+            [relay.digest :as digest]
             [relay.ics :as ics]
             [relay.ics-feed :as ics-feed]
             [relay.ingest :as ingest]
@@ -117,6 +118,17 @@
    ;; What roles prepared with edit tools for the operator (relay.ready),
    ;; and the calls they came from, so a transcript read twice records once.
    :prepared {} :prepared-calls {}
+   ;; Every change to how a role works (a skill, a routine, a note, a
+   ;; role), oldest first, with what it replaced, so the daily note can
+   ;; flag one and the operator can undo it (relay.digest).
+   :recipe-changes []
+   ;; The seq of the latest change to each thing, by recipe-key, so each
+   ;; change records the one before it.
+   :recipe-last {}
+   ;; The last daily note, {:date :seq}; the parts a role wrote for the
+   ;; next one, by part; the suggestions the operator turned down, by
+   ;; key; and new GitHub items from people, for the tick's push.
+   :daily {} :daily-parts {} :dismissed {} :github-news []
    ;; Every label any event has carried, which bounds what a session that
    ;; could read anything in relay may have seen.
    :seen-labels []
@@ -768,6 +780,104 @@
   #{"memo/sent" "routine/written" "fact/added" "fact/superseded" "fact/corrected"
     "note/written" "journal/written" "doc/put" "doc/removed" "role/added" "role/updated"})
 
+;; changes to how a role works
+;;
+;; A role improves itself without asking (decision 14): its skills (docs
+;; under skills/<role>/), its routines, the notes it keeps, and, for a
+;; role that may add roles, other roles. Each such change is recorded
+;; with what it replaced, as relay folds it, so the daily note can say
+;; what changed and the operator can put back what was there.
+
+(defn- skill-name [path]
+  (let [[_ _ rest*] (str/split (str path) #"/" 3)]
+    (str/replace (str rest*) #"\.md$" "")))
+
+(defn- role-snapshot [r]
+  (when r
+    (assoc (select-keys r [:title :instructions :reports-to :harness :model])
+           :labels (union (:title-labels r) (:instructions-labels r))
+           :public (every? #(contains? (:public-text r) %) [:title :instructions]))))
+
+(defn recipe-change
+  "The change to how a role works that `event` made, folded from
+  `before` (the state before it) to `after`, or nil: {:what skill |
+  routine | note | role, :change added | changed | removed, :owner
+  :name, :before what it replaced (nil when it was new), :delta lines
+  added and removed}. :seq, :at, :actor and :labels are the event's."
+  [before after {:keys [seq at actor labels type data]}]
+  (let [base {:seq seq :at at :actor actor :labels (union labels)}
+        ch (fn [m] (merge base m))]
+    (case type
+      ("doc/put" "doc/removed")
+      (when-let [owner (skills/owner (:path data))]
+        (let [prev (doc-version before (:path data) {})
+              prev (when-not (:removed prev) prev)]
+          (when (or prev (= "doc/put" type))
+            (ch {:what "skill" :owner owner :name (skill-name (:path data)) :path (:path data)
+                 :change (cond (= "doc/removed" type) "removed" prev "changed" :else "added")
+                 :before (when prev {:version (:seq prev)})
+                 :delta (digest/line-delta (:content prev) (:content data))}))))
+
+      ("routine/written" "routine/removed")
+      (let [{:keys [owner name]} data
+            prev (routine before owner name)
+            prev (when (= :active (:status prev)) prev)
+            now (routine after owner name)]
+        (when (or prev (= "routine/written" type))
+          (ch {:what "routine" :owner owner :name name
+               :change (cond (= "routine/removed" type) "removed" prev "changed" :else "added")
+               :before (when prev (select-keys prev [:schedule :instructions :labels :public]))
+               :delta (digest/line-delta (:instructions prev) (:instructions data))
+               :schedule (when (and (= "routine/written" type) (not= (:schedule prev) (:schedule now)))
+                           (:schedule now))})))
+
+      ("note/written" "note/removed")
+      (let [{:keys [owner name]} data
+            prev (get-in before [:notes owner name])]
+        (when (or prev (= "note/written" type))
+          (ch {:what "note" :owner owner :name name
+               :change (cond (= "note/removed" type) "removed" prev "changed" :else "added")
+               :before (when prev (select-keys prev [:text :labels :public]))
+               :delta (digest/line-delta (:text prev) (:text data))})))
+
+      ("role/added" "role/updated" "role/removed")
+      (let [id (:id data)
+            prev (role before id)]
+        (when (or (= "role/added" type) prev)
+          (ch {:what "role" :owner id :name id
+               :change (case type "role/added" "added" "role/updated" "changed" "role/removed" "removed")
+               :before (when (= "role/updated" type) (role-snapshot prev))
+               :delta (when-not (= "role/removed" type)
+                        (digest/line-delta (when (= "role/updated" type) (:instructions prev))
+                                           (:instructions (role after id))))})))
+      nil)))
+
+(defn recipe-changes [state] (:recipe-changes state))
+
+(defn recipe-change-by-seq
+  "The recorded change the event `seq` made, or nil."
+  [state seq]
+  (first (filter #(= seq (:seq %)) (:recipe-changes state))))
+
+(defn- recipe-key
+  "The thing a change is to: a skill by its path, anything else by what
+  it is, its owner and its name."
+  [{:keys [what path owner name]}]
+  (pr-str (if (= "skill" what) [what path] [what owner name])))
+
+(defn- note-recipe-change
+  "Records the change `event` made, if any, with :prior, the seq of the
+  change before it to the same thing (nil for the first), so an undo can
+  tell which change made the version it puts back."
+  [after before event]
+  (if-let [c (recipe-change before after event)]
+    (let [k (recipe-key c)
+          c (assoc c :prior (get-in before [:recipe-last k]))]
+      (-> after
+          (update :recipe-changes (fnil conj []) c)
+          (assoc-in [:recipe-last k] (:seq c))))
+    after))
+
 (defn evolve [state {:keys [seq at] :as event}]
   (when-not (= seq (:next-seq state))
     (throw (ex-info (str "Event " seq " is out of order; expected " (:next-seq state) ".")
@@ -781,6 +891,7 @@
                            " may read. relay refuses to read it.")
                       {:event event})))
     (-> (evolve* state event)
+        (note-recipe-change state event)
         (update :seen-labels union labels)
         (assoc :next-seq (inc seq) :last-at (inst at)))))
 
@@ -1075,12 +1186,17 @@
 ;; :gone the keys it no longer has; pairs, not a map, since the log's
 ;; JSON would make the keys keywords.
 (defmethod evolve* "ingest/polled" [state {:keys [data]}]
-  (update-in state [:ingest (:source data)]
-             (fn [r]
-               (-> (or r {:seen {}})
-                   (update :seen #(apply dissoc (into (or % {}) (map vec (:seen data))) (:gone data)))
-                   (assoc :cursor (:cursor data))
-                   (dissoc :failing)))))
+  (cond-> (update-in state [:ingest (:source data)]
+                     (fn [r]
+                       (-> (or r {:seen {}})
+                           (update :seen #(apply dissoc (into (or % {}) (map vec (:seen data))) (:gone data)))
+                           (assoc :cursor (:cursor data))
+                           (dissoc :failing))))
+    ;; New GitHub items from people, for the tick's one push.
+    (seq (:people data)) (update :github-news (fnil into []) (:people data))))
+
+(defmethod evolve* "github/announced" [state _]
+  (assoc state :github-news []))
 
 (defmethod evolve* "ingest/failed" [state {:keys [at data]}]
   (update-in state [:ingest (:source data)]
@@ -2274,6 +2390,8 @@
                    (every? #(and (sequential? (:items %)) (every? (fn [i] (or (string? i) (map? i))) (:items %))) sections))
       (reject! "A message is sections of items."))
     (let [kind (if parent "reply" "note")
+          ;; Only relay numbers what the operator can act on (the daily note).
+          sections (mapv (fn [sec] (update sec :items (fn [its] (mapv #(if (map? %) (dissoc % :action) %) its)))) sections)
           draft (try (messages/message {:kind kind :urgency urgency :subject subject :sections sections
                                         :in-reply-to in-reply-to})
                      (catch clojure.lang.ExceptionInfo e (reject! (ex-message e))))]
@@ -2318,19 +2436,26 @@
           (assoc :actor actor))
       tx)))
 
+(declare act-on-reply)
+
 (defn- record-reply
   "The operator's answer to message `parent`, verified as hers by the
   channel it came through: a memo from her to `to`, the role that hears
   it, and a message/replied event on the message's thread. The memo
   quotes the message's subject, so it carries the message's labels. The
-  memo she was told the message from, if any, is closed."
+  memo she was told the message from, if any, is closed. A reply to a
+  daily note that says \"revert 1\" or \"not 2\" is done in code here,
+  whichever channel brought it; the role still reads the reply."
   [tx parent to memo channel text]
   (let [tx (with-public tx false
              #(send-memo % {:from operator :to to :subject (:subject memo) :body (:body memo)}
                          (union (:labels memo) (:labels parent))))]
     (-> tx
         (emit "message/replied" {:message (:id parent) :memo (last-id tx) :channel channel :text text})
-        (answered-memo parent text))))
+        (answered-memo parent text)
+        (cond-> (= "daily-note" (:origin parent))
+          (-> (act-on-reply parent text)
+              (merge (select-keys tx [:actor :labels :public])))))))
 
 (defn- record-mail
   "One mail that came in: a memo to the source's role, and when it is the
@@ -2403,9 +2528,15 @@
                :github (record-github tx src fresh)
                :ics (record-calendar tx source src fresh (mapv #(get seen %) removed)))
           new-seen (vec (for [[it _] fresh] [(:key it) (:version it)]))
-          gone (vec (concat removed aged))]
+          gone (vec (concat removed aged))
+          ;; A new issue or pull request a person opened gets a push, all
+          ;; of a tick's in one (:github/announce).
+          people (when (= :github kind)
+                   (vec (for [[it st] fresh :when (= :new st) :when (ingest/person? it)]
+                          (select-keys it [:repo :number :kind :title :user :url]))))]
       (if (or (seq new-seen) (seq gone) (not= cursor old-cursor) failing)
-        (emit tx "ingest/polled" {:source source :seen new-seen :gone gone :cursor cursor})
+        (emit tx "ingest/polled" (cond-> {:source source :seen new-seen :gone gone :cursor cursor}
+                                   (seq people) (assoc :people people)))
         tx))))
 
 (defmethod decide* :ingest/failed [{:keys [state config ^Instant now] :as tx} {{:keys [source error]} :args}]
@@ -2437,11 +2568,17 @@
   (when-not (= operator actor)
     (reject! :forbidden "Only the operator answers a message."))
   (let [m (or (message state in-reply-to) (reject! :not-found (str "There is no message " in-reply-to ".")))
-        role (message-author state m)
+        ;; relay tells the daily note itself; the role that writes its
+        ;; suggestions hears the answer, and record-reply does what it
+        ;; asks ("revert 1", "not 2").
+        note? (= "daily-note" (:origin m))
+        role (if note? (digest/role-of config) (message-author state m))
         text (require-text text "A reply")]
     (when-not role
       (reject! :invalid "That message came from relay itself, so there is nobody to answer it."))
-    (when-not (= role (reply-role state config m nil))
+    (when-not (if note?
+                (and (active-role? state role) (not (config/public? config role)))
+                (= role (reply-role state config m nil)))
       (reject! :not-found (str "The one who told you that is no longer here.")))
     (when (> (count text) reply-limit)
       (reject! :invalid (str "A reply is at most " reply-limit " characters.")))
@@ -2464,27 +2601,280 @@
             (cond-> {:call call :tool tool :title title :where (line where 400)}
               (not (blank? preview)) (assoc :preview (let [p (str/trim (str preview))] (subs p 0 (min 600 (count p))))))))))
 
-;; the morning brief (relay.brief composes it)
+;; the daily note (relay.digest composes it)
 
-(defn brief-date
-  "The date of the last morning brief relay composed, sent or not, or nil."
+(defn daily-date
+  "The date of the last daily note relay made, sent or not, or nil. A
+  morning brief an older relay made counts as one."
   ^LocalDate [state]
-  (some-> (:brief-date state) LocalDate/parse))
+  (some-> (get-in state [:daily :date]) LocalDate/parse))
 
-(defmethod evolve* "brief/composed" [state {:keys [data]}]
-  (assoc state :brief-date (:date data)))
+(defn- acted [state message n what]
+  (if (and message (get-in state [:messages message]))
+    (-> state
+        (update-in [:messages message :acted] (fnil assoc {}) n what)
+        (assoc-in [:messages message :rev] (:next-seq state)))
+    state))
 
-(defmethod decide* :brief/send [{:keys [state] :as tx} {{:keys [date title parts labels sections]} :args}]
+(defmethod evolve* "brief/composed" [state {:keys [seq data]}]
+  (assoc state :daily {:date (:date data) :seq seq}))
+
+(defmethod evolve* "digest/composed" [state {:keys [seq data]}]
+  (assoc state :daily {:date (:date data) :seq seq}))
+
+(defmethod evolve* "digest/part-written" [state {:keys [seq at data labels]}]
+  (assoc-in state [:daily-parts (:part data)] {:seq seq :at (inst at) :items (vec (:items data)) :labels (union labels)}))
+
+(defmethod evolve* "suggestion/dismissed" [state {:keys [seq at data labels]}]
+  (-> (reduce (fn [st k] (assoc-in st [:dismissed k] {:text (:text data) :seq seq :at (inst at) :labels (union labels)}))
+              state (:keys data))
+      (acted (:message data) (:n data) "dismissed")))
+
+(defmethod evolve* "change/reverted" [state {:keys [data]}]
+  (-> state
+      (update :reverted (fnil conj #{}) (:change data))
+      (acted (:message data) (:n data) "reverted")))
+
+(defn written-parts
+  "The parts written for the next note: those written since the last
+  one, {part {:items :labels}}."
+  [state]
+  (let [since (or (get-in state [:daily :seq]) 0)]
+    (into {} (for [[part p] (:daily-parts state) :when (> (:seq p) since)] [part p]))))
+
+(def ^:private first-note-look-back
+  "How far back the first daily note looks for changes to flag. Every
+  later one looks back to the note before."
+  (Duration/ofDays 1))
+
+(defn note-changes
+  "The recorded changes a note made at `now` looks at, and the event it
+  looks back to."
+  [state ^Instant now]
+  (let [since (get-in state [:daily :seq])
+        floor (.minus now first-note-look-back)]
+    {:since (or since 0)
+     :changes (cond->> (recipe-changes state)
+                (nil? since) (filterv #(not (.isBefore ^Instant (inst (:at %)) floor))))}))
+
+(defn compose-note
+  "The note for `date` as relay.digest composes it from the state."
+  [state date ^Instant now]
+  (let [{:keys [since changes]} (note-changes state now)]
+    (digest/compose {:date date :changes changes :since since :written (written-parts state)
+                     :dismissed (set (keys (:dismissed state)))})))
+
+(defmethod decide* :digest/compose [{:keys [state now] :as tx} {{:keys [date]} :args}]
   ;; Recorded once a day under the log's lock, so two ticks cannot both
-  ;; send one, and a restart sends none twice. A brief with nothing to say
-  ;; is recorded with no title, and nothing is pushed.
+  ;; make one, and a restart makes none twice. A note with nothing to say
+  ;; is recorded and not sent.
   (dispatcher-only! tx)
   (let [d (or (try (LocalDate/parse (str date)) (catch Exception _ nil))
-              (reject! (str "A brief needs its date, not " (pr-str date) ".")))]
-    (when (some-> (brief-date state) (.isBefore d) not)
-      (reject! :invalid (str "The brief for " d " was already composed.")))
-    (cond-> (emit tx "brief/composed" {:date (str d) :sent (some? title) :sections sections})
-      title (tell "brief" "digest" "normal" title nil :sections parts :date (str d) :labels labels))))
+              (reject! (str "A daily note needs its date, not " (pr-str date) ".")))]
+    (when (some-> (daily-date state) (.isBefore d) not)
+      (reject! :invalid (str "The daily note for " d " was already made.")))
+    (let [{:keys [subject sections numbered flagged]} (compose-note state d now)]
+      (cond-> (emit tx "digest/composed" {:date (str d) :sent (some? sections) :flagged flagged})
+        sections (tell "daily-note" "digest" "normal" subject nil :sections sections
+                       :date (str d) :numbered numbered)))))
+
+(defmethod decide* :digest/write-part [{:keys [state config actor] :as tx} {{:keys [part items]} :args}]
+  ;; The role relay.edn names for the note writes its suggestions. What
+  ;; the operator turned down is dropped here, so it never comes back.
+  (caller-role! tx)
+  (when-not (= actor (digest/role-of config))
+    (reject! :forbidden (str actor " does not write the daily note.")))
+  (when-let [why (digest/part-problem part items)] (reject! why))
+  (let [items (digest/clean-items items)
+        kept (if (digest/dismissable part)
+               (vec (remove #(digest/dismissed? (:dismissed state) part %) items))
+               items)]
+    (emit tx "digest/part-written" {:part part :items kept})))
+
+(defn- note-message! [state id]
+  (let [m (message state id)]
+    (when-not (and m (= "daily-note" (:origin m)))
+      (reject! :not-found (str "There is no daily note " id ".")))
+    m))
+
+(defn latest-note
+  "The newest daily note that was sent, or nil."
+  [state]
+  (last (sort-by :id (filter #(= "daily-note" (:origin %)) (vals (:messages state))))))
+
+(defn- numbered! [m n]
+  (or (first (filter #(= n (:n %)) (:numbered m)))
+      (reject! :not-found (str "The daily note has no item " n "."))))
+
+(defn- restore-doc [{:keys [state] :as tx} path version]
+  (let [prev (when version (doc-version state path {:version version}))
+        cur (doc-version state path {})]
+    (cond
+      (and prev (not (:removed prev)))
+      (if (and (not (:removed cur))
+               (= ((juxt :content :labels #(true? (:public %))) prev) ((juxt :content :labels #(true? (:public %))) cur)))
+        tx
+        (emit (assoc tx :public (true? (:public prev))) "doc/put" {:path path :content (:content prev)} (:labels prev)))
+      (and cur (not (:removed cur))) (emit tx "doc/removed" {:path path})
+      :else tx)))
+
+(defn- undo-target
+  "The change whose :before an undo of `c` puts back. That is `c`
+  itself, unless the version `c` replaced was made by a change the
+  operator has undone too; then it is that change's, and so on back. So
+  undoing several changes to one thing ends at the version before all
+  of them, whatever order they are undone in, and never at text one of
+  them wrote."
+  [state c]
+  (loop [c c seen #{}]
+    (let [p (some->> (:prior c) (recipe-change-by-seq state))]
+      (if (and p (contains? (:reverted state) (:seq p)) (not (seen (:seq p))))
+        (recur p (conj seen (:seq p)))
+        c))))
+
+(defn- revert-change
+  "Puts back what change `c` replaced, as the operator: the version
+  before it, or nothing when it made something new (undo-target says
+  which earlier change's version, when that one was undone too). What is
+  put back carries the labels of the text it restores."
+  [{:keys [state] :as tx} c]
+  (let [c (undo-target state c)
+        {:keys [what owner name before change]} c
+        live! #(when-not (active-role? state owner)
+                 (reject! :not-found (str "The helper " owner " is gone, so there is nothing to put back.")))]
+    (case what
+      "skill" (restore-doc tx (:path c) (:version before))
+      "routine" (do (live!)
+                    (let [cur (routine state owner name)]
+                      (cond
+                        before (emit (assoc tx :public (true? (:public before))) "routine/written"
+                                     {:owner owner :name name :schedule (:schedule before)
+                                      :instructions (:instructions before)}
+                                     (:labels before))
+                        (= :active (:status cur)) (emit tx "routine/removed" {:owner owner :name name})
+                        :else tx)))
+      "note" (do (live!)
+                 (let [cur (get-in state [:notes owner name])]
+                   (cond
+                     before (emit (assoc tx :public (true? (:public before))) "note/written"
+                                  {:owner owner :name name :text (:text before)} (:labels before))
+                     cur (emit tx "note/removed" {:owner owner :name name})
+                     :else tx)))
+      "role" (case change
+               "added" (if (active-role? state owner)
+                         (decide* tx {:type :role/remove :args {:id owner}})
+                         tx)
+               "changed" (do (live!)
+                             (emit (assoc tx :public (true? (:public before))) "role/updated"
+                                   (assoc (select-keys before [:title :instructions :reports-to :harness :model]) :id owner)
+                                   (:labels before)))
+               "removed" (reject! :invalid (str "The helper " owner " was removed, and a removed helper cannot"
+                                                " come back under its old name. Add it again under a new one."))))))
+
+(defn- revert!
+  [{:keys [state] :as tx} change-seq {:keys [message n]}]
+  (let [c (or (recipe-change-by-seq state change-seq)
+              (reject! :not-found (str "There is no change " change-seq " to undo.")))]
+    (when (contains? (:reverted state) change-seq)
+      (reject! :invalid (str "Change " change-seq " was undone already.")))
+    (-> tx
+        (assoc :actor operator :labels [] :public false)
+        (emit "change/reverted" (cond-> {:change change-seq} message (assoc :message message :n n)))
+        (revert-change c)
+        (assoc :actor (:actor tx) :labels (:labels tx) :public (:public tx)))))
+
+(defn- dismiss! [tx m {:keys [n keys text labels]}]
+  (-> tx
+      (assoc :actor operator :labels [] :public false)
+      ;; It keeps the suggestion's text, and so its labels.
+      (emit "suggestion/dismissed" {:keys (vec keys) :text text :message (:id m) :n n} labels)
+      (assoc :actor (:actor tx) :labels (:labels tx) :public (:public tx))))
+
+(defn- act-on-note
+  "Does what item `n` of daily note `m` offers: undoes its change or
+  drops its suggestion. `op`, when given, is what the operator asked
+  for, which must be what the item offers."
+  [tx m n op]
+  (let [{item-op :op :as item} (numbered! m n)]
+    (when (and op (not= op item-op))
+      (reject! :invalid (if (= "revert" item-op)
+                          (str "Item " n " is a change. Reply \"revert " n "\" to undo it.")
+                          (str "Item " n " is a suggestion. Reply \"not " n "\" to drop it."))))
+    (when-let [done (get-in m [:acted n])]
+      (reject! :invalid (str "Item " n " was " done " already.")))
+    (case item-op
+      "revert" (revert! tx (:change item) {:message (:id m) :n n})
+      "dismiss" (dismiss! tx m item))))
+
+(defn- operator-act! [{:keys [actor]}]
+  (when-not (= operator actor)
+    (reject! :forbidden "Only the operator undoes a change or drops a suggestion.")))
+
+(defmethod decide* :change/revert [{:keys [state] :as tx} {{:keys [change]} :args}]
+  (operator-act! tx)
+  (when-not (integer? change) (reject! "Name the change to undo by its number."))
+  ;; Undone from the note it was flagged in, when it was, so the note
+  ;; shows it done.
+  (let [m (latest-note state)
+        item (first (filter #(and (= "revert" (:op %)) (= change (:change %))) (:numbered m)))]
+    (revert! tx change (when item {:message (:id m) :n (:n item)}))))
+
+(defmethod decide* :digest/act [{:keys [state] :as tx} {{:keys [message n op]} :args}]
+  ;; The operator acts on a numbered item of a daily note: from the
+  ;; client, the command line, or a reply.
+  (operator-act! tx)
+  (when-not (integer? n) (reject! "Name the item by its number in the note."))
+  (when-not (or (nil? op) (#{"revert" "dismiss"} op)) (reject! "op is revert or dismiss."))
+  (let [m (if (some? message)
+            (note-message! state message)
+            (or (latest-note state) (reject! :not-found "There is no daily note yet.")))]
+    (act-on-note tx m n op)))
+
+(defn- act-text [m {:keys [op n]} outcome]
+  (let [item (first (filter #(= n (:n %)) (:numbered m)))]
+    (cond
+      (string? outcome) (str n ": " outcome)
+      (= "revert" op) (str n ": undone. " (:text item) " is back as it was.")
+      :else (str n ": dropped. It will not come back."))))
+
+(defn- act-on-reply
+  "Acts on what the operator's reply to a daily note asks for (relay.
+  digest/reply-acts), each on its own: one that cannot be done says why
+  and stops no other. Then tells the operator, in the thread, what was
+  done."
+  [tx m text]
+  (let [acts (digest/reply-acts text (:numbered m))]
+    (if (empty? acts)
+      tx
+      (let [[tx lines] (reduce (fn [[tx lines] {:keys [op n] :as a}]
+                                 (try [(act-on-note (assoc tx :actor operator :labels [] :public false) m n op)
+                                       (conj lines (act-text m a nil))]
+                                      (catch clojure.lang.ExceptionInfo e
+                                        (if (rejection e)
+                                          [tx (conj lines (act-text m a (ex-message e)))]
+                                          (throw e)))))
+                               [tx []] acts)]
+        (tell (assoc tx :actor dispatcher :labels [] :public false)
+              "daily-note-acted" "reply" "normal" (str "Re: " (:subject m)) lines :in-reply-to (:id m))))))
+
+;; GitHub items from people, one push a tick
+
+(defmethod decide* :github/announce [{:keys [state] :as tx} _]
+  (dispatcher-only! tx)
+  (let [news (:github-news state)]
+    (if (empty? news)
+      tx
+      (let [one (when-not (next news) (first news))
+            items (for [{:keys [repo number kind title user url]} news]
+                    {:text (str (str/capitalize (str kind)) " #" number " in " repo " by " user ": "
+                                (ingest/one-line title 200) " " url)
+                     :refs []
+                     :labels ["contaminated" (ingest/github-label repo)]})]
+        (-> tx
+            (tell "github-news" "note" "normal"
+                  (if one (str "New " (:kind one) " in " (:repo one)) (str (count news) " new on GitHub"))
+                  nil :sections [{:list (boolean (next news)) :items (vec items)}])
+            (emit "github/announced" {:count (count news)}))))))
 
 ;; knowledge
 

@@ -31,6 +31,7 @@
             [relay.clock :as clock]
             [relay.config :as config]
             [relay.core :as core]
+            [relay.digest :as digest]
             [relay.harness :as harness]
             [relay.inbound :as inbound]
             [relay.files :as files]
@@ -583,6 +584,75 @@
                                   (some? in_reply_to) (assoc :in-reply-to in_reply_to)))]
              (str "Told the operator (message " (:seq (first (filter #(= "message/created" (:type %)) events))) ").")))}
 
+   "daily_note_draft"
+   {:class :read
+    :grant :daily-note
+    :description (str "What you have written so far for the next daily note, by part; the suggestions the"
+                      " operator turned down, which you must not suggest again; and the changes to how"
+                      " roles work (skills, routines, notes, roles) since the last note. The quiet ones"
+                      " are yours to describe under learned. relay lists the ones shaped by outside text"
+                      " itself, at the top of the note.")
+    :parameters (obj {})
+    :read (fn [{:keys [state config now]} _ _]
+            (let [written (core/written-parts state)
+                  {:keys [since changes]} (core/note-changes state now)
+                  flagged (set (map :seq (digest/flagged changes since)))
+                  shown (filter #(or (flagged (:seq %)) (not (#{"operator" "dispatcher"} (:actor %))))
+                                (filter #(> (:seq %) since) changes))
+                  dismissed (take-last 50 (sort-by :seq (vals (:dismissed state))))]
+              (show (concat
+                     [(item "For the next daily note:" [])]
+                     (for [part digest/parts
+                           :let [{:keys [items labels at]} (get written part)]]
+                       (item (if (seq items)
+                               (str "  " part ", written " (local-time config at)
+                                    ":\n" (str/join "\n" (for [{:keys [text offer key]} items]
+                                                            (str "    - " text (when offer (str " " offer))
+                                                                 (when key (str " [key " key "]"))))))
+                               (str "  " part ": nothing yet."))
+                             (if (seq items) (core/content-labels labels) [])))
+                     [(item (if (seq dismissed)
+                              (str "The operator turned these down. Do not suggest them again:\n"
+                                   (str/join "\n" (map #(str "  - " (:text %)) dismissed)))
+                              "The operator has turned nothing down.")
+                            (apply core/content-labels (map :labels dismissed)))
+                      (item (if (seq shown)
+                              (str "Changes to how roles work since the last note:\n"
+                                   (str/join "\n" (for [c shown]
+                                                    (str "  - " (digest/change-line c) " (change " (:seq c) ")"
+                                                         (when (flagged (:seq c)) ", shaped by outside text: relay lists it itself")))))
+                              "No role changed how it works since the last note.")
+                            (apply core/union (map :labels shown)))])
+                    "\n")))}
+
+   "daily_note_write"
+   {:class :edit
+    :grant :daily-note
+    :description (str "Write one part of the operator's next daily note, replacing what you wrote for that part"
+                      " before. Parts: ahead (what is coming up in the next two weeks, each with an offer of"
+                      " help, such as \"Interview with Maple Co, Thu 29 Oct 10:00\" offering \"Want prep"
+                      " notes?\"), grants (open grants the board does not have yet), github (new issues and"
+                      " pull requests worth a look), learned (what you changed in how you work, in plain"
+                      " words). Each item is one line of text, an optional offer, and for ahead and grants an"
+                      " optional key that names the thing, the same every day. Plain words only: no"
+                      " role, tool or label names. An empty items list clears the part.")
+    :parameters (obj {:part {:type "string" :enum digest/parts}
+                      :items {:type "array"
+                              :items {:type "object"
+                                      :properties {:text text
+                                                   :offer {:type "string" :description "An offer of help, one short line."}
+                                                   :key {:type "string" :description "A short name for the thing, such as maple-interview."}}
+                                      :required ["text"]
+                                      :additionalProperties false}}}
+                     "part" "items")
+    :run (fn [sys actor labels {:keys [part items]}]
+           (let [e (first (submit sys actor labels :digest/write-part {:part part :items items}))
+                 kept (count (get-in e [:data :items]))
+                 dropped (- (count items) kept)]
+             (str "Saved " kept " item" (when-not (= 1 kept) "s") " for " part "."
+                  (when (pos? dropped)
+                    (str " Left out " dropped " the operator turned down before.")))))}
+
    "cards"
    {:class :read
     :grant :private
@@ -984,7 +1054,10 @@
                    :dead-letter-handler (or (= role-id (:dead-letter-handler config))
                                             (config/may-add? config role-id))
                    ;; Cards are private only.
-                   :private (not (config/public? config role-id))))]
+                   :private (not (config/public? config role-id))
+                   ;; The daily note's writer, as relay.edn names it.
+                   :daily-note (and (= role-id (get-in config [:daily-note :role]))
+                                    (not (config/public? config role-id)))))]
     (merge (into {} (filter #(holds? (:grant (val %))) builtin))
            (when (and (:shell (config/grants config role-id)) (:house config)
                       (not (config/public? config role-id)))

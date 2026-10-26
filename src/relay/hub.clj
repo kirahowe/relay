@@ -328,6 +328,12 @@
       :else (-> h (assoc-in [:conns cid :board] (workspace/subscribed {} state))
                 (answer rid (workspace/cards-answer state (params-of msg)))))))
 
+(defn- messages-act [h rid msg]
+  (let [{:keys [command error]} (workspace/messages-act-command (params-of msg))]
+    (if error
+      (refuse h rid -32602 error)
+      (submit h command {:kind :reply :rid rid}))))
+
 (defn- card-op [h rid msg]
   (let [{:keys [command error]} (workspace/card-op-command (params-of msg))]
     (if error
@@ -820,6 +826,7 @@
       "_relay/ready" (ready-request h rid msg)
       "_relay/reply" (reply-request h rid msg)
       "_relay/undo" (undo-request h rid msg)
+      "_relay/messages/act" (messages-act h rid msg)
       (cond
         (workspace/methods method) (forward h rid msg)
         (str/starts-with? method "_relay/") (refuse h rid -32601 (str "relay has no method " method "."))

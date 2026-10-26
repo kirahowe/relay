@@ -173,14 +173,19 @@
   "A message as a client is sent it (_relay/messages): string keys, and
   every text already safe to show, with outsider beside it when it came
   from outside. Nothing internal: no origin, no labels' names."
-  [{:keys [id kind urgency subject sections in-reply-to thread created-at rev deliveries labels replies] :as msg}]
+  [{:keys [id kind urgency subject sections in-reply-to thread created-at rev deliveries labels replies acted] :as msg}]
   {"id" id "kind" kind "urgency" urgency "at" (str created-at) "rev" rev
    "thread" thread "inReplyTo" in-reply-to
    "subject" (element labels (messages/squeeze-line subject))
    "sections" (vec (for [{:keys [heading list items]} sections]
-                     (cond-> {"items" (vec (for [it items]
-                                             (assoc (element (messages/item-labels msg it) (:text it))
-                                                    "refs" (vec (:refs it)))))}
+                     (cond-> {"items" (vec (for [{:keys [action] :as it} items]
+                                             (cond-> (assoc (element (messages/item-labels msg it) (:text it))
+                                                            "refs" (vec (:refs it)))
+                                               ;; What the operator can do with it
+                                               ;; (_relay/messages/act), and whether
+                                               ;; it was done.
+                                               action (assoc "action" {"op" (:op action) "n" (:n action)
+                                                                       "done" (get acted (:n action))}))))}
                        heading (assoc "heading" (element labels heading))
                        list (assoc "list" true))))
    "deliveries" (vec (for [[ch {:keys [status]}] deliveries]

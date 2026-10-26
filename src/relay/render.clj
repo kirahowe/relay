@@ -443,46 +443,6 @@
            " wakes, " (:requests summary) " requests; " (money (:cost-per-wake summary)) " per wake")])))
 
 
-;; --- the morning brief (relay.brief)
-;;
-;; One digest message: a subject of counts and a section for each tool.
-;; The text from the calendar and reminders is one field of one line of
-;; what the tool printed, so it holds no line break; each channel's
-;; renderer (relay.channels) makes every character visible and, when the
-;; brief's labels say it came from outside, marks it and breaks its URLs.
-
-(def ^:private brief-names
-  {:calendar ["Calendar" "event" "events"]
-   :reminders ["Reminders due" "reminder" "reminders"]})
-
-(defn- counted [n one many] (str n " " (if (= 1 n) one many)))
-
-(defn- brief-count
-  "A section in the title: its count, or that it is unavailable. Nil for
-  a tool that is not configured."
-  [{:keys [key status count]}]
-  (let [[_ one many] (brief-names key)]
-    (case status
-      :ok (counted count one many)
-      :unavailable (str (name key) " unavailable")
-      :missing nil)))
-
-(defn- brief-section [{:keys [key status count lines tool why]}]
-  (let [[heading] (brief-names key)]
-    (case status
-      :ok (if (zero? count)
-            {:items [(str heading ": none")]}
-            {:heading (str heading ": " count) :list true :items (vec lines)})
-      :unavailable {:items [(str heading ": unavailable, the tool " tool " " why ".")]}
-      :missing {:items [(str heading ": not configured, relay.edn has no tool " tool ".")]})))
-
-(defn brief
-  "A composed brief (relay.brief/compose) as the message that carries it:
-  {:title :parts}, its subject and its sections."
-  [{:keys [date sections]}]
-  {:title (str "Morning brief for " date ": " (str/join ", " (keep brief-count sections)))
-   :parts (mapv brief-section sections)})
-
 ;; --- relay week
 
 (defn duration

@@ -9,6 +9,7 @@
             [relay.connect :as connect]
             [relay.core :as core]
             [cheshire.core :as json]
+            [relay.digest :as digest]
             [relay.dispatch :as dispatch]
             [relay.export :as export]
             [relay.harness.agentloop :as agentloop]
@@ -137,6 +138,13 @@ Every command needs the data directory, from --data <dir> or from the file
                                       build its image (this needs the network),
                                       start it, remove it, or say how it is (the
                                       tick starts it when it is missing)
+  relay changes [-n <count>]          the latest changes helpers made to how they
+                                      work (skills, routines, notes, helpers),
+                                      each with its number
+  relay revert <change>               put back what a change replaced, such as one
+                                      the daily note flags
+  relay dismiss <item> [<note>]       drop a suggestion of the latest daily note
+                                      (or of note <note>) for good
   relay poll [<source>]               check relay.edn's :ingest sources now (the
                                       mailbox, GitHub, calendars), due or not, and
                                       say what came in
@@ -574,7 +582,26 @@ id public too.")
                (when-not id (fail! "usage: relay undo <move>, a number from relay moves"))
                (let [{:keys [ok refused]} (moves/undo! sys id)]
                  (if ok (lines ok) (apply result 1 refused))))
-      "poll" (apply result 0 (ingest-run/poll-now! sys (first more)))
+      "poll" (let [said (ingest-run/poll-now! sys (first more))]
+               (dispatch/announce-github! sys)
+               (apply result 0 said))
+      "changes" (let [st (state)]
+                  (lines (digest/changes-lines (core/recipe-changes st) (or (:reverted st) #{}) zone
+                                               (or (:tail opts) 30))))
+      "revert" (let [id (digest/parse-change-ref (first more))]
+                 (when-not id (fail! "usage: relay revert <change>, a number from the daily note or relay changes"))
+                 (submit! sys :change/revert {:change id})
+                 (result 0 (str "Undid change " id ": " (digest/change-line (core/recipe-change-by-seq (state) id))
+                                ". What was there before is back.")))
+      "dismiss" (let [[n note] more
+                      k (some-> n parse-long)
+                      m (some-> note parse-long)]
+                  (when-not k (fail! "usage: relay dismiss <item> [<note>], an item's number in the daily note"))
+                  (submit! sys :digest/act (cond-> {:n k :op "dismiss"} m (assoc :message m)))
+                  (let [st (state)
+                        msg (if m (core/message st m) (core/latest-note st))
+                        item (first (filter #(= k (:n %)) (:numbered msg)))]
+                    (result 0 (str "Dropped \"" (text/visible-line (str (:text item))) "\". It will not be suggested again."))))
       "connect" (let [[n url] more
                       config (:config sys)]
                   (when-not (and n url)

@@ -334,8 +334,8 @@
 
 (deftest github-answers-are-read
   (is (= [{:key "11" :version "2026-10-26T10:00:00Z" :repo "a/b" :number 3 :kind "pull request" :title "Fix"
-           :state "open" :user "eve" :body "" :url "https://github.com/a/b/pull/3" :comments 1}]
-         (ingest/github-items "a/b" "[{\"id\":11,\"number\":3,\"title\":\"Fix\",\"state\":\"open\",\"user\":{\"login\":\"eve\"},\"body\":null,\"html_url\":\"https://github.com/a/b/pull/3\",\"comments\":1,\"updated_at\":\"2026-10-26T10:00:00Z\",\"pull_request\":{}},{\"nope\":1}]")))
+           :state "open" :user "eve" :user-type "User" :body "" :url "https://github.com/a/b/pull/3" :comments 1}]
+         (ingest/github-items "a/b" "[{\"id\":11,\"number\":3,\"title\":\"Fix\",\"state\":\"open\",\"user\":{\"login\":\"eve\",\"type\":\"User\"},\"body\":null,\"html_url\":\"https://github.com/a/b/pull/3\",\"comments\":1,\"updated_at\":\"2026-10-26T10:00:00Z\",\"pull_request\":{}},{\"nope\":1}]")))
   (is (thrown? Exception (ingest/github-items "a/b" "{\"message\":\"Not Found\"}")))
   (is (= "https://api.github.com/repos/a/b/issues?state=all&sort=updated&direction=asc&per_page=100&since=2026-10-26T00:00:00Z"
          (ingest/github-url {} "a/b" "2026-10-26T00:00:00Z"))))
@@ -499,3 +499,9 @@
     (is (:problem (env ["contaminated" "mail:Eve@x"])))
     (is (:problem (env ["contaminated" "mail:eve\u200b@example.net"])) "a zero-width character")))
 
+
+(deftest a-person-is-a-user-account-that-is-not-a-bot
+  (is (ingest/person? {:user "alice" :user-type "User"}))
+  (is (not (ingest/person? {:user "dependabot[bot]" :user-type "Bot"})))
+  (is (not (ingest/person? {:user "renovate[bot]" :user-type "User"})))
+  (is (not (ingest/person? {:user "alice" :user-type ""})) "a type GitHub did not give is not taken for a person"))

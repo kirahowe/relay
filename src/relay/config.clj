@@ -7,6 +7,7 @@
             [clojure.edn :as edn]
             [clojure.string :as str]
             [relay.connections :as connections]
+            [relay.digest :as digest]
             [relay.files :as files]
             [relay.ingest :as ingest]
             [relay.messages :as messages]
@@ -78,7 +79,10 @@
 
 (def removed-keys
   "Settings relay no longer has, and what took their place."
-  {:notify "relay.edn has :notify, which relay no longer has. Say where messages go with :messages; setup/relay.example.edn shows how."})
+  {:notify "relay.edn has :notify, which relay no longer has. Say where messages go with :messages; setup/relay.example.edn shows how."
+   :brief (str "relay.edn has :brief, which relay no longer has. The daily note replaces the morning brief:"
+               " set :daily-note {:at \"07:30\" :role \"steward\"}, and read your own calendar with an :ics"
+               " source in :ingest. setup/relay.example.edn shows how.")})
 
 (def efforts #{"low" "medium" "high" "xhigh" "max"})
 
@@ -259,25 +263,13 @@
           (get-in config [:serve :websocket])
           (update-in [:serve :websocket] #(merge websocket-defaults %))))))
 
-(defn- check-brief
-  "The optional :brief: {:at \"07:30\"}, the time each day, and the tools
-  it reads, :calendar and :reminders, when they are not cal and rem-read.
-  A tool named here must be a :read tool in :tools: the brief runs it by
-  itself, and must change nothing."
-  [{:keys [brief tools] :as config}]
-  (when (contains? config :brief)
-    (let [{:keys [at]} brief
-          hhmm (when (string? at) (re-matches #"(\d{2}):(\d{2})" at))]
-      (when-not (and (map? brief) (every? #{:at :calendar :reminders} (keys brief))
-                     hhmm (<= 0 (parse-long (nth hhmm 1)) 23) (<= 0 (parse-long (nth hhmm 2)) 59))
-        (problem! (str "relay.edn's :brief is {:at \"07:30\"}, a time of day as HH:MM, and may name"
-                       " its :calendar and :reminders tools"
-                       (when (some? brief) (str ", not " (pr-str brief))) ".")))
-      (doseq [k [:calendar :reminders] :when (contains? brief k)
-              :let [n (get brief k)]]
-        (when-not (= :read (get-in tools [n :class]))
-          (problem! (str "relay.edn's :brief names " (pr-str n) " as its " (name k) " tool, which"
-                         " must be a :read tool in :tools.")))))))
+(defn- check-daily-note
+  "The optional :daily-note: {:at \"07:30\" :role \"steward\"}, the time
+  each day and the role that writes the note's suggestions
+  (relay.digest)."
+  [{:keys [daily-note grants]}]
+  (when-let [why (digest/settings-problem daily-note #(true? (get-in grants [% :public])))]
+    (problem! why)))
 
 ;; --- MCP servers and their tools
 
@@ -533,7 +525,7 @@
   (check-mcp config)
   (check-grants config)
   (check-budget config)
-  (check-brief config)
+  (check-daily-note config)
   (doseq [[role {granted :tools}] grants
           t granted]
     (when-not (contains? tools t)

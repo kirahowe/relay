@@ -97,12 +97,6 @@
     (is (nil? (problem #(assoc-in % [:mcp-servers "files" :command] ["files-mcp" "--token-file={credentials_file}"])))))
   (testing "nor may it hold its calls"
     (is (str/includes? (str (problem #(assoc-in % [:tools "search" :always-hold] true))) "no longer has")))
-  (testing "the brief does not run an MCP tool"
-    (is (= {:unusable "file_read" :why "comes from an MCP server, which only agentloop runs"}
-           ((requiring-resolve 'relay.brief/source)
-            (config/resolve-config (-> settings
-                                       (assoc :brief {:at "07:30" :calendar "file_read"})))
-            :calendar))))
   (testing "no MCP servers at all is the default"
     (is (= {} (:mcp-servers (config/resolve-config (-> settings (dissoc :mcp-servers)
                                                        (update :tools select-keys ["fetch"])

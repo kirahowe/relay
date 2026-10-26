@@ -470,3 +470,19 @@
         (relay.dispatch/tick! (sys) {:spawn! (fn [& _])})
         (is (= 2 (count (lines))) "and nothing twice")))
     (babashka.fs/delete-tree dir)))
+
+(deftest the-hub-acts-on-a-daily-note-s-item-for-the-client
+  (let [h (-> (ht/live) (ht/opened 1))
+        [h fx] (ht/say h 1 (ht/req 9 "_relay/messages/act" {:message 12 :item 2}))
+        [sub] (ht/submits fx)]
+    (is (= {:type :digest/act :actor "operator" :labels [] :public false :args {:message 12 :n 2}} (:command sub)))
+    (is (= [{"jsonrpc" "2.0" "id" 9 "result" {}}]
+           (ht/writes (second (ht/run h {:event :submit-result :tag (:tag sub) :ok true})) 1)))
+    (testing "a refusal is relay's reason"
+      (let [[h fx] (ht/say (-> (ht/live) (ht/opened 1)) 1 (ht/req 9 "_relay/messages/act" {:message 12 :item 9}))
+            [sub] (ht/submits fx)
+            [_ fx] (ht/run h {:event :submit-result :tag (:tag sub) :rejection :not-found :message "The daily note has no item 9."})]
+        (is (= "The daily note has no item 9." (get-in (first (ht/writes fx 1)) ["error" "message"])))))
+    (testing "the params are checked"
+      (let [[_ fx] (ht/say (-> (ht/live) (ht/opened 1)) 1 (ht/req 10 "_relay/messages/act" {:message 12}))]
+        (is (= -32602 (get-in (first (ht/writes fx 1)) ["error" "code"])))))))

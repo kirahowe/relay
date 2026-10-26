@@ -114,11 +114,16 @@
               "\n\nTo answer back, use tell_operator with in_reply_to " (:id parent) ".")})
 
 (defn item
-  "An item from text, or from {:text :refs :labels}."
+  "An item from text, or from {:text :refs :labels :action}. An action
+  is what the operator can do to the item, which only relay sets: {:op
+  \"revert\" | \"dismiss\" :n number}, from the daily note
+  (relay.digest)."
   [x]
-  (let [{:keys [text refs labels]} (if (map? x) x {:text x})]
+  (let [{:keys [text refs labels action]} (if (map? x) x {:text x})]
     (cond-> {:text (str text) :refs (vec (distinct (filter string? refs)))}
-      (seq labels) (assoc :labels (vec (sort (distinct labels)))))))
+      (seq labels) (assoc :labels (vec (sort (distinct labels))))
+      (and (map? action) (#{"revert" "dismiss"} (:op action)) (pos-int? (:n action)))
+      (assoc :action (select-keys action [:op :n])))))
 
 (defn section
   "A section from {:heading :list :items} or from a list of items."

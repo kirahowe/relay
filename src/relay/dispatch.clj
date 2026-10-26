@@ -10,7 +10,7 @@
             [cheshire.core :as json]
             [clojure.string :as str]
             [relay.acp :as acp]
-            [relay.brief :as brief]
+            [relay.digest :as digest]
             [relay.config :as config]
             [relay.core :as core]
             [relay.harness :as harness]
@@ -828,26 +828,24 @@
         #(:exit (apply p/shell {:continue true}
                        (client-argv (cons found args) (relay-bin) role-id data)))))))
 
-;; --- the morning brief (relay.brief)
+;; --- the daily note (relay.digest)
 
-(defn send-brief!
-  "Composes the morning brief when one is due at `t` and records it, which
-  sends it as a digest message when it has something to say. Returns the events appended, or
-  nil when no brief is due."
+(defn send-daily-note!
+  "Makes the daily note when one is due at `t` and records it, which
+  sends it as a digest message when it has something to say. relay
+  composes it in code from the log: the flagged changes and whatever the
+  note's role wrote for it. Returns the events appended, or nil when no
+  note is due."
   [{:keys [config] :as sys} state ^Instant t]
-  (when-let [date (brief/due config state t)]
-    (let [section (fn [k]
-                    (let [src (brief/source config k)]
-                      (brief/tool-section k src (when (:tool src)
-                                                  (tools/run-external! (:tool src) (:spec src)
-                                                                       ((brief/tool-args k) date)
-                                                                       brief/default-timeout-seconds)))))
-          composed (brief/compose state date (section :calendar) (section :reminders))]
-      (inbound/submit! sys {:type :brief/send :actor core/dispatcher
-                            :args (merge {:date (str date) :labels (brief/labels composed)
-                                          :sections (brief/summary composed)}
-                                         (when-not (brief/empty-brief? composed)
-                                           (render/brief composed)))}))))
+  (when-let [date (digest/due-date (digest/at-time config) (config/zone config) t (core/daily-date state))]
+    (inbound/submit! sys {:type :digest/compose :actor core/dispatcher :args {:date (str date)}})))
+
+(defn announce-github!
+  "Sends one message for the new GitHub items from people that came in
+  since the last, when there are any. Returns the events appended."
+  [sys]
+  (when (seq (:github-news (inbound/current-state sys)))
+    (inbound/submit! sys {:type :github/announce :actor core/dispatcher :args {}})))
 
 ;; --- the tick
 
@@ -864,8 +862,8 @@
   routines, report what needs reporting, deliver messages that are due
   (held for quiet hours or the digest, left stranded, or failed and due
   again), poll the ingest sources that are due, then start a wake for
-  every role with work waiting, and send the morning brief when it is
-  due. Returns the roles woken."
+  every role with work waiting, and make the daily note when it is due.
+  Returns the roles woken."
   ([sys] (tick! sys {}))
   ([{:keys [config] :as sys} {:keys [spawn!] :or {spawn! spawn-wake!}}]
    (let [state (inbound/current-state sys)]
@@ -885,15 +883,19 @@
      ;; What came in from outside becomes memos before anyone is woken,
      ;; so the role that reads them is woken by this tick.
      (when (seq (:ingest config))
-       (ingest-run/poll-due! sys t))
+       (ingest-run/poll-due! sys t)
+       ;; What people opened on GitHub this tick, in one push.
+       (try (announce-github! sys)
+            (catch Exception e
+              (when-not (core/rejection e)
+                (binding [*out* *err*] (println "relay tick: could not announce GitHub items:" (ex-message e)))))))
      (let [state (if (seq (:ingest config)) (inbound/current-state sys) state)
            roles (core/roles-to-wake state config t)]
        (doseq [r roles] (spawn! sys r))
-       ;; Last, since it waits on cal and rem. A failure leaves the day's
-       ;; brief unrecorded, so the next tick tries again; a rejection is
-       ;; another tick that recorded it first.
-       (try (send-brief! sys (inbound/current-state sys) t)
+       ;; A failure leaves the day's note unrecorded, so the next tick
+       ;; tries again; a rejection is another tick that recorded it first.
+       (try (send-daily-note! sys (inbound/current-state sys) t)
             (catch Exception e
               (when-not (core/rejection e)
-                (binding [*out* *err*] (println "relay tick: the morning brief failed:" (ex-message e))))))
+                (binding [*out* *err*] (println "relay tick: the daily note failed:" (ex-message e))))))
        roles))))

@@ -322,7 +322,8 @@
 
 (defn github-items
   "The items in an issues response body, as {:key id :version updated_at
-  :repo :number :kind :title :state :user :body :url :comments}. Anything
+  :repo :number :kind :title :state :user :user-type :body :url
+  :comments}. Anything
   that is not an issue or pull request is left out."
   [repo body]
   (let [v (try (json/parse-string body) (catch Exception _ ::bad))]
@@ -335,8 +336,15 @@
            {:key (str id) :version updated :repo repo :number number
             :kind (if (get it "pull_request") "pull request" "issue")
             :title (str (get it "title")) :state (str (get it "state"))
-            :user (str (get-in it ["user" "login"])) :body (str (get it "body"))
+            :user (str (get-in it ["user" "login"])) :user-type (str (get-in it ["user" "type"]))
+            :body (str (get it "body"))
             :url (str (get it "html_url")) :comments (get it "comments")}))))
+
+(defn person?
+  "Whether a GitHub item was opened by a person: an account of type User
+  whose login is not a bot's."
+  [{:keys [user user-type]}]
+  (boolean (and (= "User" user-type) (not (str/blank? user)) (not (str/ends-with? (str user) "[bot]")))))
 
 (defn github-memo
   "The memo for what is new in one repository: {:subject :body :labels}.

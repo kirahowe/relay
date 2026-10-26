@@ -80,7 +80,9 @@
    :lines (vec (for [sec (:sections m) it (:items sec)] (:text it)))
    :labels (vec (:labels m))
    :replies (vec (:replies m))
-   :reply-to (when (core/message-author state m) (:id m))})
+   ;; The daily note is relay's own, but its writer hears the answer
+   ;; ("revert 1", "not 2"), so it can be answered too.
+   :reply-to (when (or (core/message-author state m) (= "daily-note" (:origin m))) (:id m))})
 
 (defn- draft-item [p]
   {:id (str "prepared:" (:id p)) :kind :draft :at (:at p) :seq (:id p)
