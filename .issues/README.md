@@ -37,6 +37,12 @@
 | [83](83-speed-up-the-slowest-remaining-test-namespaces.md) | Speed up the slowest remaining test namespaces | chore | P3 |
 | [86](86-fix-agentloop-s-flaky-testgroupleaderisasentinel.md) | Fix agentloop's flaky TestGroupLeaderIsASentinel | bug | P3 |
 
+### In progress
+
+| ID | Title | Type | Priority |
+| --- | --- | --- | --- |
+| [88](88-install-relay-through-homebrew-and-remove-bb-deploy.md) | Install relay through Homebrew and remove bb deploy | feature | P1 |
+
 ### Review
 
 | ID | Title | Type | Priority |

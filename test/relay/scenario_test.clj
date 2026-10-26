@@ -176,9 +176,9 @@
                   ["memo" "hub" "--data" ""]
                   ["--data" "/live" "memo" "hub"]
                   ["memo" "hub" "-data" "/live"]
-                  ["status" "--pause-file" "/outside/secret"]
-                  ["status" "--pause-file=/outside/secret"]
-                  ["status" "--pause-file=/inside\n/../../secret"]
+                  ["status" "--trace" "/outside/secret"]
+                  ["status" "--trace=/outside/secret"]
+                  ["status" "--trace=/inside\n/../../secret"]
                   ["status" "--data=/live\n"]]]
       (is (some #(str/includes? % "names a data directory") (scenario/problems (with-run args))) (pr-str args)))
     (is (empty? (scenario/problems (with-run ["memo" "hub" "-s" "database" "-m" "the data is fine"]))))))
@@ -196,12 +196,12 @@
 (deftest no-spelling-of-a-path-option-gets-past-the-runner
   (let [staging (str (fs/create-temp-dir {:prefix "relay-scenario-own"}))
         outside (str (fs/create-temp-dir {:prefix "relay-scenario-secret"}))
-        secret (str outside "/paused")]
+        secret (str outside "/secret")]
     (try
       (spit secret "the secret reason")
       (let [run #(#'runner/run-command! {:dir staging :clock (constantly (java.time.Instant/now))} % nil)
             shown (fn [r] (str/join "\n" (concat (:out r) (:err r))))]
-        (doseq [opt ["pause-file" "data" "trace"]
+        (doseq [opt ["data" "trace"]
                 [prefix joiner] [["--" " "] ["-" " "] [":" " "] ["--" "="] ["-" "="] [":" "="] ["--no-" " "]]
                 :let [args (if (= joiner "=")
                              ["status" (str prefix opt "=" secret)]
@@ -212,7 +212,7 @@
             (is (str/includes? (shown r) "Refused") (pr-str args))))
         (testing "reading a scenario refuses them too, whatever the spelling"
           (let [file (str staging "/s.edn")]
-            (spit file (pr-str {:steps [{:run ["status" ":pause-file" secret]}] :assert [[:has :memo {}]]}))
+            (spit file (pr-str {:steps [{:run ["status" ":trace" secret]}] :assert [[:has :memo {}]]}))
             (is (thrown-with-msg? clojure.lang.ExceptionInfo #"path option" (runner/read-scenario file))))))
       (finally (fs/delete-tree staging) (fs/delete-tree outside)))))
 
@@ -220,14 +220,14 @@
   (let [staging (str (fs/create-temp-dir {:prefix "relay-scenario-own"}))
         outside (str (fs/create-temp-dir {:prefix "relay-scenario-secret"}))]
     (try
-      (spit (str outside "/paused") "the secret reason")
+      (spit (str outside "/secret") "the secret reason")
       ;; With the pattern that screens argument text switched off, relay's own
       ;; reading of the options still refuses every spelling.
       (with-redefs [scenario/path-option? (constantly false)]
         (let [run #(#'runner/run-command! {:dir staging :clock (constantly (java.time.Instant/now))} % nil)]
-          (doseq [args [["status" "--pause-file" (str outside "/paused")]
-                        ["status" ":pause-file" (str outside "/paused")]
-                        ["status" "--pause-file=x"]
+          (doseq [args [["status" "--trace" (str outside "/secret")]
+                        ["status" ":trace" (str outside "/secret")]
+                        ["status" "--trace=x"]
                         ["memo" "hub" "--data" outside]
                         ["status" ":trace" "x"]
                         ["status" "--no-data"]]]
@@ -241,8 +241,8 @@
   ;; The guard reads the step's arguments alone; the command is run with
   ;; --data <staging> in front. For any mix of tokens that looks like
   ;; options, if the guard passes the arguments, the combined line sets no
-  ;; pause file or trace, and its data directory is the staging one.
-  (let [toks ["memo" "hub" "--data" "--data=x" ":data" "x" "-s" "--subject" "--" "--pause-file" ":pause-file"
+  ;; trace file, and its data directory is the staging one.
+  (let [toks ["memo" "hub" "--data" "--data=x" ":data" "x" "-s" "--subject" "--"
               "--trace" "-m" "--no-data" "--tail" "3" "-n" "--json" "status" "-d" "--d" "--da" "-:data"
               "--:data" "-data" ":trace" "--trace=" "-p" "-" ":" "=" "--=" "--data=" ":data=" "\n"]
         rnd (java.util.Random. 42)
@@ -255,26 +255,9 @@
             guarded? (or (some scenario/path-option? args) (seq (runner/path-options args)))
             opts (try (relay/parsed-options line) (catch Exception _ ::unparsable))]
         (when (and (not guarded?) (map? opts)
-                   (or (contains? opts :pause-file) (contains? opts :trace) (not= dir (:data opts))))
+                   (or (contains? opts :trace) (not= dir (:data opts))))
           (swap! bad conj [args opts]))))
     (is (empty? @bad) (pr-str (take 5 @bad)))))
-
-(deftest a-status-in-a-scenario-reads-no-file-outside-staging
-  (let [staging (str (fs/create-temp-dir {:prefix "relay-scenario-own"}))
-        outside (str (fs/create-temp-dir {:prefix "relay-scenario-secret"}))
-        secret (str outside "/paused")]
-    (try
-      (spit secret "the secret reason")
-      (staging/init! {:dir (str staging "/data") :check? false})
-      (let [run #(#'runner/run-command! {:dir (str staging "/data") :clock (constantly (java.time.Instant/now))} % nil)
-            shown (fn [r] (str/join "\n" (concat (:out r) (:err r))))]
-        (testing "a step that names the file is refused before it reads it"
-          (is (not (str/includes? (shown (run ["status" "--pause-file" secret])) "secret reason"))))
-        (testing "an ordinary status looks only in staging, whatever the operator's own default is"
-          (let [r (run ["status"])]
-            (is (= 0 (:exit r)))
-            (is (not (str/includes? (shown r) "paused"))))))
-      (finally (fs/delete-tree staging) (fs/delete-tree outside)))))
 
 (deftest the-runner-refuses-any-command-that-would-reach-another-data-directory
   (let [staging (str (fs/create-temp-dir {:prefix "relay-scenario-own"}))

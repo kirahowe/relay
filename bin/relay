@@ -11,7 +11,11 @@
       config (str (fs/path root "bb.edn"))
       cli (str (fs/path root "src" "relay" "cli.clj"))
       found #(some-> (io/resource "relay/cli.clj") io/file fs/real-path str)]
-  (System/setProperty "relay.bin" (str script))
+  ;; The path relay was run by, not the file it leads to: a Homebrew
+  ;; install runs /opt/homebrew/bin/relay, a link into a keg whose path
+  ;; changes with every upgrade, and relay writes this path into settings
+  ;; (relay connect's token command) and into every wake's tool command.
+  (System/setProperty "relay.bin" (str (fs/absolutize *file*)))
   (cp/add-classpath (str (fs/path root "src") ":" (fs/path root "resources")))
   ;; bb puts the :paths of the bb.edn in the current directory ahead of
   ;; what this adds, so inside another checkout relay would run that
@@ -21,7 +25,7 @@
       (binding [*out* *err*]
         (println (str "relay cannot load its own code from " root "."))
         (System/exit 1)))
-    (apply p/exec "bb" "--config" config (str script) *command-line-args*)))
+    (apply p/exec "bb" "--config" config (str (fs/absolutize *file*)) *command-line-args*)))
 
 (require '[relay.cli :as cli])
 

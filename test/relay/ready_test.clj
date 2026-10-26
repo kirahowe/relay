@@ -547,7 +547,7 @@
       (is (empty? (core/unread-memos (:state w) core/operator)))
       (let [closed (core/memo (:state w) (:memo m))]
         (is (= [:read "Answered: Thanks." "operator"] ((juxt :status :outcome :closed-by) closed))))
-      (is (some #{"Your inbox: 0 open"} (render/status (:state w) (ZoneId/of "UTC") (:now w) ct/cfg []))
+      (is (some #{"Your inbox: 0 open"} (render/status (:state w) (ZoneId/of "UTC") (:now w) ct/cfg))
           "relay status says nothing is open for her"))
     (testing "a second answer is still threaded, and closes nothing again"
       (let [w (ct/run w "operator" :message/reply {:in-reply-to (:id m) :text "One more thing."})]

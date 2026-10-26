@@ -22,8 +22,7 @@
 
 (def protected
   [["/Users/op/Sync" "never"] ["/Users/op/.config/relay" "config"]
-   ["/Users/op/Library/Application Support/relay" "deploy control"]
-   ["/Users/op/code/projects/relay" "a live checkout"] ["/data/live" "the operator's data"]])
+   ["/Users/op/code/projects/relay" "a relay checkout"] ["/data/live" "the operator's data"]])
 
 (defn- problem [m] (staging/target-problem (merge {:protected protected} m)))
 
@@ -168,7 +167,6 @@
       ;; ~/Sync is itself a link, as it can be with a sync tool.
       (fs/create-sym-link (str home "/Sync") (str elsewhere "/real-sync"))
       (fs/create-dirs (str home "/.config/relay"))
-      (fs/create-dirs (str home "/Library/Application Support/relay"))
       (fs/create-dirs (str home "/code/projects/relay"))
       (fs/create-dirs (str home "/live"))
       (spit (str home "/config.edn") (pr-str {:data "~/live"}))
@@ -181,9 +179,8 @@
         (is (refused? (str elsewhere "/real-sync/new")) "the link's target is protected too")
         (is (refused? (str home "/shortcut/new")) "a link into Sync is seen for what it is")
         (is (refused? (str home "/.config/relay/staging")))
-        (is (refused? (str home "/Library/Application Support/relay/paused")) "a directory where the pause file goes")
         (is (refused? (str home "/code/projects/relay/staging")))
-        (is (refused? (str home "/code/projects")) "a parent of a live checkout")
+        (is (refused? (str home "/code/projects")) "a parent of a relay checkout")
         (is (refused? (str home "/live")) "the directory the operator's config names")
         (is (refused? "~/live"))
         (is (not (fs/exists? (str elsewhere "/real-sync/new"))))

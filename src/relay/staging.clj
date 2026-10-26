@@ -22,10 +22,10 @@
   saves drafts, an :edit. Nothing in staging can send.
 
   Some places are refused whatever the flags say: in or around ~/Sync,
-  ~/.config/relay, ~/Library/Application Support/relay, the live checkouts under ~/code/projects, and the data
-  directory the operator's own config file names. A directory that already has files is refused unless
-  --force is given, and --force only empties a directory that an earlier
-  `staging init` marked with .relay-staging."
+  ~/.config/relay, the relay checkouts under ~/code/projects, and the data
+  directory the operator's own config file names. A directory that already
+  has files is refused unless --force is given, and --force only empties a
+  directory that an earlier `staging init` marked with .relay-staging."
   (:require [babashka.cli :as cli]
             [babashka.fs :as fs]
             [cheshire.core :as json]
@@ -289,15 +289,14 @@
 
 (defn protected-roots
   "What staging data may never be in or around, canonical: ~/Sync, relay's
-  own config and deploy-control directories, the live checkouts, and the
-  data directory each of `operator-configs` names."
+  own config directory, the relay checkouts, and the data directory each
+  of `operator-configs` names."
   [home operator-configs]
   (let [c #(canonical % home)]
     (vec (concat [[(c (str home "/Sync")) "which is never staging data"]
-                  [(c (str home "/.config/relay")) "relay's own config directory"]
-                  [(c (str home "/Library/Application Support/relay")) "where deploys keep their records and the pause file"]]
+                  [(c (str home "/.config/relay")) "relay's own config directory"]]
                  (for [r ["relay" "agentloop" "relay-tui"]]
-                   [(c (str home "/code/projects/" r)) "a live checkout"])
+                   [(c (str home "/code/projects/" r)) "a relay checkout"])
                  (for [config operator-configs
                        :let [d (operator-data-dir config home)]
                        :when d]

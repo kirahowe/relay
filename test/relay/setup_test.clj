@@ -216,7 +216,12 @@
     (is (str/includes? text "/d/relay.edn")))
   (let [text (str/join "\n" (setup/next-steps {:key-ok? true :web? false :data-dir "/d"}))]
     (is (str/includes? text "key command works"))
-    (is (not (str/includes? text "Brave")))))
+    (is (not (str/includes? text "Brave"))))
+  (testing "the relay service finds the data directory in config.edn, so init says to name it there"
+    (let [text #(str/join "\n" (setup/next-steps {:key-ok? true :data-dir "/d" :named? %}))]
+      (is (str/includes? (text false) "{:data \"/d\"}"))
+      (is (not (str/includes? (text true) "{:data")))
+      (is (every? #(str/includes? (text %) "brew services start relay") [true false])))))
 
 (deftest a-key-command-is-checked-without-showing-the-key
   (is (setup/command-works? ["echo" "secret"]))

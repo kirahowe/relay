@@ -1,0 +1,11 @@
+{:id 88
+ :title "Install relay through Homebrew and remove bb deploy"
+ :status :in-progress
+ :type :feature
+ :priority :p1
+ :created "2026-10-26"
+ :updated "2026-10-26"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "88-install-relay-through-homebrew-and-remove-bb-deploy.md"}

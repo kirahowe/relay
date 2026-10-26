@@ -218,22 +218,21 @@
 (defn setup-notices
   "What relay status says about how relay is set up, apart from relay.edn
   itself: a tick that has never run or seems stopped (`last-tick`, the
-  instant the tick last recorded, or nil; nothing while `paused?`, when
-  a paused tick records nothing and the pause says why, or with
-  `no-log?`), and a mailbox whose replies can never count as the
-  operator's for want of :authserv-id. Each a paragraph, a command on its
-  own indented line. Pure."
-  [config {:keys [last-tick ^Instant now paused? no-log?]}]
+  instant the tick last recorded, or nil; nothing with `no-log?`), and a
+  mailbox whose replies can never count as the operator's for want of
+  :authserv-id. Each a paragraph, a command on its own indented line.
+  Pure."
+  [config {:keys [last-tick ^Instant now no-log?]}]
   (concat
-   (when-not (or paused? no-log?)
+   (when-not no-log?
      (cond
        (nil? last-tick)
-       [(str "The tick has never run, so no role is woken. Install its launchd job"
-             " (README: Setup, step 4).")]
+       [(str "The tick has never run, so no role is woken. Start the relay service:\n"
+             "  brew services start relay")]
        (.isBefore ^Instant last-tick (.minusSeconds now (* 60 tick-overdue-minutes)))
        [(str "The last tick was " (quot (.toMinutes (java.time.Duration/between ^Instant last-tick now)) 1)
-             " minutes ago, so no role is woken. Check that its launchd job is loaded:\n"
-             "  launchctl print gui/$(id -u)/relay.tick")]))
+             " minutes ago, so no role is woken. Check that the relay service runs:\n"
+             "  brew services info relay")]))
    (for [[n {:keys [kind authserv-id]}] (sort-by (comp str key) (:ingest config))
          :when (and (= :pop3 kind) (str/blank? authserv-id))]
      (str "Your replies by mail will not count as yours: the mailbox " n " has no :authserv-id."
@@ -244,14 +243,10 @@
 (defn status
   "Roles with their routines and open work, harnesses, the operator's
   inbox, what the roles spent this week and the weeks before, and the
-  latest wakes, as of `now`. `paused` is the lines to show
-  when relay is paused (relay.pause/recovery-lines), or nil, and
-  `notices` lines about the house from its edges, such as a shell with no
-  image."
-  [state zone ^Instant now & [config paused notices {:keys [no-log?]}]]
+  latest wakes, as of `now`. `notices` is lines about the house from its
+  edges, such as a shell with no image."
+  [state zone ^Instant now & [config notices {:keys [no-log?]}]]
   (concat
-   (when paused
-     (concat paused [""]))
    ["Roles"]
    (cond
      ;; A directory with only relay.edn, such as the one an upgrade

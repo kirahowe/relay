@@ -213,8 +213,9 @@
       (let [printed (with-out-str
                       (is (= {:exit 0 :out ["Nothing waiting."]} (cli/execute ["--data" data "inbox"])))
                       (is (= ["Roles" "  No roles yet. relay init adds your steward."
-                              "" "The tick has never run, so no role is woken. Install its"
-                              "launchd job (README: Setup, step 4)."
+                              "" "The tick has never run, so no role is woken. Start the relay"
+                              "service:"
+                              "  brew services start relay"
                               "" "Your inbox: 0 open"]
                              (:out (cli/execute ["--data" data "status"]))))
                       (testing "an unknown command says so, shows the short usage and fails"
@@ -300,8 +301,7 @@
       (is (str/starts-with? (first (notices {} {:last-tick nil})) "The tick has never run"))
       (is (empty? (notices {} {:last-tick (.minusSeconds now 300)})))
       (is (str/starts-with? (first (notices {} {:last-tick (.minusSeconds now 3600)})) "The last tick was 60 minutes ago"))
-      (is (empty? (notices {} {:last-tick nil :paused? true})) "a pause says it itself")
-      (is (empty? (notices {} {:last-tick nil :no-log? true})) "nor in a directory that only checks relay.edn"))
+      (is (empty? (notices {} {:last-tick nil :no-log? true})) "not in a directory that only checks relay.edn"))
     (testing "a mailbox with no :authserv-id"
       (let [[n] (notices {:ingest {"mailbox" {:kind :pop3 :to "steward"}}} {:last-tick now})]
         (is (str/includes? n "the mailbox mailbox has no :authserv-id"))
@@ -309,11 +309,11 @@
       (is (empty? (notices {:ingest {"mailbox" {:kind :pop3 :authserv-id "mx.example.org"}}} {:last-tick now}))))
     (testing "every status line fits 60 columns, commands on their own line"
       (let [state (assoc core/empty-state :tools-broken {"web" "search-key"})
-            lines (render/status state utc now {:ingest {"mailbox" {:kind :pop3 :to "steward"}}} nil
+            lines (render/status state utc now {:ingest {"mailbox" {:kind :pop3 :to "steward"}}}
                                  (notices {:ingest {"mailbox" {:kind :pop3 :to "steward"}}} {:last-tick nil}))]
         (is (every? #(<= (count %) 60) lines) (pr-str (remove #(<= (count %) 60) lines)))
         (is (some #{"  security add-generic-password -a \"$USER\" -s relay-brave -w"} lines))))
     (testing "a directory with only relay.edn is not told to run init"
-      (let [lines (render/status core/empty-state utc now {} nil nil {:no-log? true})]
+      (let [lines (render/status core/empty-state utc now {} nil {:no-log? true})]
         (is (not-any? #(str/includes? % "relay init") lines))
         (is (some #(str/includes? % "relay.edn is valid") lines))))))

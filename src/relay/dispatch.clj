@@ -1,9 +1,9 @@
 (ns relay.dispatch
-  "The dispatcher. Nothing runs between ticks: something outside relay
-  (launchd, once a minute) runs `relay tick`, which brings the log up to date
-  with the clock and starts a wake for each role with work waiting. Each wake
-  runs in its own process, so a slow role holds up neither the others nor
-  the next tick."
+  "The dispatcher. Nothing runs between ticks: the relay service
+  (`relay run`, once a minute) runs `relay tick`, which brings the log up
+  to date with the clock and starts a wake for each role with work
+  waiting. Each wake runs in its own process, so a slow role holds up
+  neither the others nor the next tick."
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [clojure.java.io :as io]
@@ -866,11 +866,36 @@
 
 (def ^:private stale-after (Duration/ofMinutes 2))
 
+(defn wake-argv
+  "The command that runs a dispatched wake."
+  [relay-bin role-id data-dir]
+  [relay-bin "wake" role-id "--dispatched" "--data" data-dir])
+
+(defn detached
+  "`argv` run in a process group of its own, by a shell that exits at once.
+  launchd ends the relay service by killing its process group, and a wake
+  killed that way would count as a crash against its memos, so a wake must
+  outlive a restart of the service that started it. The shell's job
+  control (set -m) gives the background job its own group. The shell exits
+  127 when the command cannot be found, so that much is still told."
+  [argv]
+  (into ["/bin/sh" "-c" "command -v \"$1\" >/dev/null || exit 127; set -m; \"$@\" </dev/null >/dev/null 2>&1 &" "sh"]
+        argv))
+
 (defn spawn-wake!
-  "Starts a dispatched wake in its own process and does not wait for it."
-  [{:keys [data-dir]} role-id]
-  (p/process [(relay-bin) "wake" role-id "--dispatched" "--data" (str (fs/absolutize data-dir))]
-             {:in "" :out :discard :err :discard}))
+  "Starts a dispatched wake in its own process and does not wait for it,
+  detached from the caller's process group. With :attached? (for tests
+  that wait for the wake) it is the caller's child, and the process is
+  returned."
+  ([sys role-id] (spawn-wake! sys role-id {}))
+  ([{:keys [data-dir]} role-id {:keys [attached?]}]
+   (let [argv (wake-argv (relay-bin) role-id (str (fs/absolutize data-dir)))]
+     (if attached?
+       (p/process argv {:in "" :out :discard :err :discard})
+       (let [{:keys [exit]} @(p/process (detached argv) {:in "" :out :discard :err :discard})]
+         (when-not (zero? exit)
+           (throw (ex-info (str "relay could not start a wake for " role-id ": " (relay-bin) " cannot be run.")
+                           {:role role-id}))))))))
 
 (defn tick!
   "One pass: end wakes whose process has gone, fire due

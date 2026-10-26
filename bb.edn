@@ -27,15 +27,6 @@
         :extra-paths ["test"]
         :requires ([relay.eval-runner :as eval-runner])
         :task (apply eval-runner/eval-main *command-line-args*)}
-  deploy {:doc "For the operator: move the live checkouts to main, build, check. See README."
-          :requires ([relay.deploy-run :as deploy-run])
-          :task (apply deploy-run/deploy-main *command-line-args*)}
-  service {:doc "For the operator: stop, start or restart the relay serve launchd job, or show its status: bb service stop|start|restart|status. Stopping ends every live conversation."
-           :requires ([relay.service :as service])
-           :task (apply service/-main *command-line-args*)}
-  rollback {:doc "For the operator: put the live checkouts back where the last deploy found them."
-            :requires ([relay.deploy-run :as deploy-run])
-            :task (apply deploy-run/rollback-main *command-line-args*)}
   verify {:doc "Run every check in one go, with one summary: bb verify --help. See VERIFY.md."
          :extra-paths ["test"]
          :requires ([relay.verify :as verify])

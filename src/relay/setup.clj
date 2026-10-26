@@ -327,8 +327,10 @@
 (defn next-steps
   "What relay init says after it has written the files: three steps, the
   first saying whether the key commands work now. Pure. `checks` is
-  {:key-ok? :web? :brave-ok? :provider :data-dir}."
-  [{:keys [key-ok? web? brave-ok? provider data-dir]}]
+  {:key-ok? :web? :brave-ok? :provider :data-dir :named?}, :named? when
+  ~/.config/relay/config.edn named the data directory, which is where the
+  relay service looks for it."
+  [{:keys [key-ok? web? brave-ok? provider data-dir named?]}]
   (let [store (fn [service] (str "security add-generic-password -a \"$USER\" -s " service " -w"))]
     (concat
      ["" "Next:"]
@@ -344,8 +346,14 @@
      [(str "  2. Turn on what you want in " (fs/path data-dir "relay.edn") ": mail to you, the folders")
       "     the steward may read, your calendar. Each is a commented section there,"
       "     and relay status checks the file."
-      "  3. Have launchd run relay tick every minute (README: Setup), then run relay"
-      "     to talk to your steward."])))
+      (if named?
+        "  3. Start the relay service, which runs relay tick every minute:"
+        "  3. Name this directory in ~/.config/relay/config.edn for the relay service:")]
+     (when-not named?
+       [(str "       {:data " (pr-str (str data-dir)) "}")
+        "     Then start the service, which runs relay tick every minute:"])
+     ["       brew services start relay"
+      "     Then run relay to talk to your steward."])))
 
 (defn create!
   "Interviews the operator, shows the file and writes it to `file` only on

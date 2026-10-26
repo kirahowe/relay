@@ -21,10 +21,10 @@
             [relay.log :as log]
             [relay.messages :as messages]
             [relay.moves :as moves]
-            [relay.pause :as pause]
             [relay.ready :as ready]
             [relay.render :as render]
             [relay.roster :as roster]
+            [relay.run :as run]
             [relay.serve :as serve]
             [relay.setup :as setup]
             [relay.shell :as shell]
@@ -114,17 +114,19 @@ Every command needs the data directory, from --data <dir> or from the file
                                       process; <role> is the role a session is
                                       for when the client does not say; --trace
                                       appends the traffic to <file> as JSON lines
-  relay serve                         run the service that keeps conversations
-                                      going while no client is attached (launchd
-                                      runs this; see setup/); its lock and
-                                      socket are in ~/.relay/run. With :serve
-                                      :websocket in relay.edn it also listens
-                                      for phone clients on 127.0.0.1. --socket and
-                                      --run-dir, here and for relay acp, are
-                                      for relay's own tests only
-  relay tick [--pause-file <f>]       one dispatcher pass (launchd runs this); does
-                                      nothing while the pause file exists, which
-                                      bb deploy makes
+  relay run                           the relay service: relay serve, and relay
+                                      tick once a minute (brew services start
+                                      relay runs this)
+  relay serve                         keep conversations going while no client
+                                      is attached (relay run runs this); its
+                                      lock and socket are in ~/.relay/run. With
+                                      :serve :websocket in relay.edn it also
+                                      listens for phone clients on 127.0.0.1.
+                                      --socket and --run-dir, here and for
+                                      relay run and relay acp, are for relay's
+                                      own tests only
+  relay tick                          one dispatcher pass (relay run runs this
+                                      once a minute)
   relay facts [<topic>] [--search <s>] [--as-of <t>] [--known-at <t>] [--all]
                                       what relay knows; times as for facts
   relay fact <id>                     every version of a fact
@@ -226,17 +228,6 @@ id public too.")
   "The per-user config file. Bound in tests."
   nil)
 
-(def ^:dynamic *pause-file*
-  "The pause file (relay.pause) in place of the default. Bound in tests."
-  nil)
-
-(defn pause-file
-  "The pause file: --pause-file, else the default under the user's home."
-  [opts]
-  (or (when-not (str/blank? (:pause-file opts)) (:pause-file opts))
-      *pause-file*
-      (pause/default-file (System/getProperty "user.home"))))
-
 (defn config-file []
   (or *config-file* (str (fs/path (System/getProperty "user.home") ".config" "relay" "config.edn"))))
 
@@ -331,7 +322,8 @@ id public too.")
                                :provider (get-in settings [:harnesses :agentloop :provider])
                                :web? (some? web)
                                :brave-ok? (and web (setup/command-works? (:key-command web)))
-                               :data-dir (str (fs/absolutize dir))})))))
+                               :data-dir (str (fs/absolutize dir))
+                               :named? (not explicit?)})))))
         (result 1)))))
 
 (def ^:dynamic *stdin*
@@ -519,7 +511,7 @@ id public too.")
             :tail :long :data :string :search :string :as-of :string :known-at :string
             :version :long :wake :long :role :string :trace :string :public :boolean
             :topic :string :from :string :to :string :why :string :text :string
-            :pause-file :string :socket :string :run-dir :string :since :string :until :string :out :string :agentloop :string
+            :socket :string :run-dir :string :since :string :until :string :out :string :agentloop :string
             :client-id :string :url :string :open :string :host :string
             :item [:string] :row [:string] :column [:string] :state :string :seen :long :archived :boolean}})
 
@@ -674,8 +666,8 @@ id public too.")
   [port local remote]
   (cond
     (= :refused local)
-    [(str "relay serve is not running, so the calendar cannot be read yet. Start it with bb service start"
-          " (README: The relay service).")]
+    [(str "relay serve is not running, so the calendar cannot be read yet. Start it with brew services start"
+          " relay (README: The relay service).")]
     (= :other local)
     [(str "Something answers on port " port ", but not with the calendar. Is another program using"
           " the port? Choose another :port in :serve :websocket.")]
@@ -750,12 +742,10 @@ id public too.")
         state #(inbound/current-state sys)
         lines (fn [ls] {:exit 0 :out ls})]
     (case cmd
-      "status" (let [no-log? (not (log/has-log? dir))
-                     paused (pause/recovery-lines (pause-file opts))]
-                 (lines (render/status (state) zone ((:clock sys)) (:config sys) paused
+      "status" (let [no-log? (not (log/has-log? dir))]
+                 (lines (render/status (state) zone ((:clock sys)) (:config sys)
                                        (concat (render/setup-notices (:config sys)
-                                                                     {:last-tick (last-tick dir) :now ((:clock sys))
-                                                                      :paused? (boolean (seq paused)) :no-log? no-log?})
+                                                                     {:last-tick (last-tick dir) :now ((:clock sys)) :no-log? no-log?})
                                                (shell-notices sys))
                                        {:no-log? no-log?})))
       "inbox" (lines (let [st (state)] (render/inbox st zone (core/unread-memos st core/operator))))
@@ -835,8 +825,8 @@ id public too.")
       "acp" (let [[r] more]
               (result (serve/acp! sys r {:trace (:trace opts) :socket (:socket opts) :run-dir (:run-dir opts)})))
       "serve" (result (serve/serve! sys {:socket (:socket opts) :run-dir (:run-dir opts)}))
-      ;; Said only when it woke someone, so launchd's log of a quiet
-      ;; minute stays empty; by hand in a terminal it always says.
+      ;; Said only when it woke someone, so the service's log of a
+      ;; quiet minute stays empty; by hand in a terminal it always says.
       "tick" (let [woken (seq (dispatch/tick! sys))]
                (cond
                  woken (result 0 (str "Woke " (str/join ", " woken) "; "
@@ -923,7 +913,7 @@ id public too.")
                    id (some-> n parse-long)
                    usage "usage: relay undo <move> [<file>...], a number from relay moves, and the files of it to put back"]
                (when-not id (fail! usage))
-               (when-let [flag (or (some->> (keys (dissoc opts :data :pause-file)) sort first name (str "--"))
+               (when-let [flag (or (some->> (keys (dissoc opts :data)) sort first name (str "--"))
                                    (first (filter #(str/starts-with? % "-") names)))]
                  (fail! (str "relay undo has no option " flag ". " usage)))
                (let [only (when (seq names)
@@ -1016,7 +1006,7 @@ id public too.")
 
 (defn- report-broken-settings!
   "When the tick cannot load relay.edn, nothing else runs, so it says so:
-  on stderr, which launchd keeps, and once per distinct problem as an
+  on stderr, which the service's log keeps, and once per distinct problem as an
   alert through the channels :messages routes one to: relay.edn's own
   when that section alone is sound, else those of the last relay.edn
   that loaded, so a file relay cannot read at all is told too. The log
@@ -1188,14 +1178,11 @@ id public too.")
         (if (seq lines)
           (apply result 0 lines)
           (apply result 1 (str "relay has no command " cmd ".") "" (str/split-lines short-usage))))
-      ;; A tick marks itself as running before it looks for the pause file,
-      ;; and a paused tick touches nothing else (see relay.pause).
-      (= "tick" cmd)
-      (pause/while-ticking
-       (pause-file opts)
-       #(if-let [why (pause/reason (pause-file opts))]
-          (result 0 (text/visible-line (str "relay tick: paused (" (pause-file opts) "): " why)))
-          (run-command cmd more opts)))
+      ;; Before relay.edn is read: a file that will not load stops serve,
+      ;; but the tick still runs and says what is wrong.
+      (= "run" cmd)
+      (result (run/run! (dispatch/relay-bin) (str (fs/absolutize (data-dir opts)))
+                        (select-keys opts [:socket :run-dir])))
       :else
       (run-command cmd more opts))))
 

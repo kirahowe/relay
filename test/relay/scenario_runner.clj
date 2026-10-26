@@ -145,9 +145,7 @@
       :else
       (binding [relay/*stdin* stdin
                 relay/*clock* clock
-                relay/*config-file* no-config
-                ;; status reads the pause file; not the operator's real one.
-                relay/*pause-file* (str (fs/path dir "no-pause-file"))]
+                relay/*config-file* no-config]
         (try (relay/execute line)
              (catch clojure.lang.ExceptionInfo e
                {:exit 1 :out [] :err [(ex-message e)]}))))))
@@ -168,13 +166,14 @@
 
 (defn- tick-with-processes!
   "One dispatcher pass exactly as relay tick does it: each wake is a `relay
-  wake` subprocess, started with the real spawn and the real bin/relay. Waits for them. A process
-  that cannot start, or exits badly, is a failure."
+  wake` subprocess of the real bin/relay, started by the real spawn but
+  attached, so the runner can wait for it (run_test checks the
+  detaching). A process that cannot start, or exits badly, is a failure."
   [{:keys [dir clock]}]
   (let [sys (inbound/system dir {:clock clock})
         started (atom [])
         spawn (fn [sys role]
-                (let [process (dispatch/spawn-wake! sys role)]
+                (let [process (dispatch/spawn-wake! sys role {:attached? true})]
                   (swap! started conj [(str "relay wake " role) process])
                   process))
         roles (dispatch/tick! sys {:spawn! spawn})

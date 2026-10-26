@@ -24,9 +24,8 @@
   "relay-tui built in the sibling checkout (make -C ../relay-tui build), when it
   can open a role's conversation (--open, relay#65), which the dashboard asks
   of it; nil otherwise, which skips the tests that need it. Never the
-  relay-tui on PATH: that is the live install, which bb deploy moves only
-  after the tests pass, so it can be older than the commit under test. bb
-  deploy builds the sibling from the commit it deploys."
+  relay-tui on PATH: that is the installed copy, which can be older than
+  the commit under test."
   (let [f (fs/absolutize "../relay-tui/bin/relay-tui")]
     (when (and (fs/executable? f)
                (let [r (p/shell {:out :string :err :string :continue true} (str f) "--help")]
@@ -51,7 +50,7 @@
 
 (defn isolate!
   "Points relay away from anything real for the rest of the run: the
-  per-user config file and the pause file at paths that do not exist, and the relay command
+  per-user config file at a path that does not exist, and the relay command
   harnesses run at this checkout's bin/relay."
   []
   (alter-var-root #'cli/*config-file*
@@ -60,8 +59,6 @@
   ;; Nor the service's sockets in the user's home.
   (alter-var-root #'serve/*run-dir*
                   (constantly (str (fs/create-temp-dir {:dir "/tmp" :prefix "relay-run"}))))
-  (alter-var-root #'cli/*pause-file*
-                  (constantly (str (fs/path (fs/create-temp-dir {:prefix "relay-test-pause"}) "paused"))))
   ;; No test may touch the login keychain or open a browser: one that
   ;; needs them binds connect/*edges* with its own.
   (alter-var-root #'connect/*edges*

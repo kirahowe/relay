@@ -30,10 +30,10 @@
                                ; POP3 ingestor would record it (needs :settings
                                ; :mailbox); line ends become CRLF
 
-  A :run step may not name a data directory, pause file or trace file
-  (--data, --pause-file, --trace in any form), and may
-  only use the commands in `allowed-commands`: every command is run against
-  the scenario's own staging directory, and none that writes to a path it is
+  A :run step may not name a data directory or a trace file
+  (--data, --trace in any form), and may only use the commands in
+  `allowed-commands`: every command is run against the scenario's own
+  staging directory, and none that writes to a path it is
   given (export, acp --trace) or starts a process of its own (init, chat) is
   among them.
 
@@ -410,17 +410,17 @@
     "decline"})
 
 (defn path-option?
-  "Whether a command-line argument picks a path: the data directory, the
-  pause file or a trace file. A scenario may not, since each of them would
-  point a command at something outside its staging directory."
+  "Whether a command-line argument picks a path: the data directory or a
+  trace file. A scenario may not, since either would point a command at
+  something outside its staging directory."
   [arg]
   ;; The name alone, whatever follows "=": a value may hold a newline. This
   ;; is a first screen; relay.scenario-runner also asks relay which options
   ;; the arguments really set, since babashka.cli reads more spellings
   ;; (":name value") than any pattern here.
-  (boolean (re-find #"^[-:]{1,2}(no-)?(data|pause-file|trace)(=|$)" (str arg))))
+  (boolean (re-find #"^[-:]{1,2}(no-)?(data|trace)(=|$)" (str arg))))
 
-(def path-option-keys #{:data :pause-file :trace})
+(def path-option-keys #{:data :trace})
 
 ;; --- :clock and :settings
 
