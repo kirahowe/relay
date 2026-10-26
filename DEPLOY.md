@@ -1,8 +1,11 @@
-# Deploying the house
+# Moving to the house and to Homebrew
 
-Notes for moving your live relay to the house. They are written from the
-code on `main` and README's Upgrading section; nothing here was run
-against your live data.
+Notes for moving your live relay to the house, and from launchd jobs that
+run `~/code/projects/relay` to a Homebrew install that runs as one
+service. They are written from the code on `main` and README's Setup and
+Upgrading sections; nothing here was run against your live data. The
+formulas were installed from a local head and `relay run` was tried on
+staging data, then uninstalled.
 
 ## What changed
 
@@ -18,7 +21,14 @@ mailbox and other ingest sources, the steward's shell, file moves you can
 undo, the agent's own calendar, the ready view and replies.
 `docs/architecture.md` draws the whole system.
 
-## Before `bb deploy`
+relay also installs from your tap now. `brew install --HEAD
+kirahowe/tap/relay` brings agentloop, relay-tui and webtool with it, and
+`brew services start relay` runs `relay run`, which runs `relay serve`
+and `relay tick` every minute. `bb deploy`, `bb rollback`, `bb service`,
+the pause file and the relay.tick and relay.serve plists are gone. The
+checkouts under `~/code/projects` become where you develop, on `main`.
+
+## Before the switch
 
 1. See what the new relay refuses in your live settings. From a checkout
    of the new `main` (a fresh jj workspace outside `~/Sync` is fine), run
@@ -44,7 +54,7 @@ undo, the agent's own calendar, the ready view and replies.
    ```
 
    Repeat until it prints the status. With no log there it cannot check
-   role names, and it says so; that check comes after the deploy (step 4
+   role names, and it says so; that check comes after the switch (step 6
    below). Do not run `relay init` there.
 
 2. Make these changes in the copy. Each removed setting and its
@@ -143,103 +153,147 @@ undo, the agent's own calendar, the ready view and replies.
    Leave the `:pop3` mailbox and `:github` sources out until you want
    them; README's "The mailbox and other sources" has their shape.
 
-3. Run these before the deploy:
+
+## The switch
+
+From step 3 on, `relay` is the installed one (`/opt/homebrew/bin/relay`,
+which comes before `~/.local/bin` on your PATH), and every command names
+your live data directory with `--data <live data>`. The old checkouts
+stay where they are until step 9, so the way back is open until then.
+
+3. Push `main` in relay, agentloop, relay-tui and webtool, and the tap's
+   `main` (`~/code/projects/homebrew-tap`). The formulas build from
+   GitHub.
+
+4. Stop the old jobs. Stopping relay.serve ends every live conversation.
+   Keep the plists for now, in case you roll back:
 
    ```sh
-   bb service stop              # a live conversation is a wake the deploy would wait for
-   container system start       # bb test runs a live test against the running container
+   launchctl bootout gui/$(id -u)/relay.tick
+   launchctl bootout gui/$(id -u)/relay.serve
    ```
 
-   `bb deploy` now moves and builds webtool too, so its live checkout
-   (`~/code/projects/webtool`) needs an empty working copy on a single
-   commit, as relay's, agentloop's and relay-tui's do.
+   Wait for running wakes to finish: `~/code/projects/relay/bin/relay
+   --data <live data> status` lists them under Recent wakes. Then save the
+   log as it is. If you roll back, it holds hub's old title and
+   instructions:
 
-## The deploy
+   ```sh
+   ~/code/projects/relay/bin/relay --data <live data> log --json > ~/relay-log-before-house.jsonl
+   ```
 
-From here on, `bin/relay` means the live checkout's
-(`~/code/projects/relay/bin/relay`), and every command names your live
-data directory with `--data <live data>`, so neither another relay on
-PATH nor `~/.config/relay/config.edn` decides which relay runs on which
-data.
+5. Install:
 
-`bb deploy` as usual. Its last step is `relay status` against your live
-data, and the live `relay.edn` is still the old one, so that step
-fails. The deploy says that only `relay status` failed, gives the `rm`
-command that lifts the pause, and leaves relay paused. That is the
-window for the rest:
+   ```sh
+   brew trust kirahowe/tap
+   brew install --HEAD kirahowe/tap/relay
+   container system start       # for relay house build below
+   ```
 
-4. Put the new file in place and check it against your live data:
+   If your live relay.edn's harness `:bin` or `:client` names a binary
+   in `~/code/projects`, point it at `/opt/homebrew/bin/agentloop` and
+   `/opt/homebrew/bin/relay-tui` in the copy, and the `"web"` tool's
+   `:command` at `/opt/homebrew/bin/webtool`. Those paths stay put across
+   upgrades. tools/rem and tools/cal are not in the formula: macOS ties
+   their Reminders and Calendar permissions to the built binary, so keep
+   pointing at the copies you built in `~/code/projects/relay/tools`.
+
+6. Put the new file in place and check it against your live data:
 
    ```sh
    cp ~/relay-edn-check/relay.edn <live data>/relay.edn
-   bin/relay --data <live data> status
+   relay --data <live data> status
    ```
 
    This time it can check role names. If it still says the steward is
    missing, `:dead-letter-handler` or `:default-role` does not name
    `hub`.
 
-5. One-time steps, still paused:
+7. One-time steps, before the service runs:
 
    ```sh
-   bin/relay --data <live data> house build   # the steward's shell image; needs the network
+   relay --data <live data> house build   # the steward's shell image; needs the network
    security add-generic-password -a "$USER" -s relay-brave -w   # the Brave Search key, if not there yet
    ```
 
-   `bb deploy` builds the image itself when the live `relay.edn` has
-   `:house`, but this first time the live file is still the old one, so
-   build it by hand now. Later deploys do it for you. webtool was moved
-   to its `main` and built by the deploy; the fetch rule relies on that
-   build reporting a redirect instead of following it. Its `webtool.json`
+   The fetch rule relies on webtool reporting a redirect instead of
+   following it, which the installed webtool does. Its `webtool.json`
    names the key command:
    `"search": {"backend": "brave", "api_key_command": ["security", "find-generic-password", "-s", "relay-brave", "-w"]}`.
-   agentloop, relay-tui and webtool were built by the deploy.
-
-   Before you change hub, save the log as it is. If you roll back later,
-   it holds hub's old title and instructions:
-
-   ```sh
-   bin/relay --data <live data> log --json > ~/relay-log-before-house.jsonl
-   ```
 
    Give hub the new text. It stays private: hub may write to the scout
-   all the same, and the scout learns only hub's id, so it can answer:
+   all the same, and the scout learns only hub's id, so it can answer.
+   The setup texts are in the installed copy:
 
    ```sh
-   bin/relay --data <live data> update hub --title "<hub's title>" --instructions < setup/steward.md
+   cd "$(brew --prefix relay)/libexec"
+   relay --data <live data> update hub --title "<hub's title>" --instructions < setup/steward.md
    ```
 
    Add a scout, and the daily note's skill and routine for hub. The
    routine text names the skill's path, so point it at hub's:
 
    ```sh
-   bin/relay --data <live data> add scout --public --title Scout --reports-to hub < setup/scout.md
-   bin/relay --data <live data> put skills/hub/daily-note.md < setup/daily-note/skill.md
+   relay --data <live data> add scout --public --title Scout --reports-to hub < setup/scout.md
+   relay --data <live data> put skills/hub/daily-note.md < setup/daily-note/skill.md
    sed 's|skills/steward/|skills/hub/|' setup/daily-note/routine.md \
-     | bin/relay --data <live data> routine hub daily-note --schedule "daily 07:10"
+     | relay --data <live data> routine hub daily-note --schedule "daily 07:10"
    ```
 
    If an older role did research with reports, it has nothing to do now;
    remove it or leave it idle.
 
-6. Lift the pause with the `rm` command the deploy printed, then start
-   the service again:
+8. Start the service. It finds the data directory in
+   `~/.config/relay/config.edn`, as the old jobs did not, so check that
+   the file names `<live data>`:
 
    ```sh
-   bb service start
+   brew services start relay
+   relay status
+   tail -f "$(brew --prefix)/var/log/relay.log"   # serve's startup, and the tick when it wakes someone
    ```
 
-7. Subscribe to the agent's calendar: `bin/relay --data <live data> calendar url` prints the
-   address, with a token that opens the calendar and nothing else. Add it
-   in your calendar app as a subscription.
-
-8. To see the first note without waiting:
+   Subscribe to the agent's calendar: `relay calendar url` prints the
+   address, with a token that opens the calendar and nothing else. Add
+   it in your calendar app as a subscription. To see the first note
+   without waiting:
 
    ```sh
-   bin/relay --data <live data> routine run hub daily-note
-   bin/relay --data <live data> note
-   bin/relay --data <live data> note now
+   relay routine run hub daily-note
+   relay note
+   relay note now
    ```
+
+9. Once you are happy with it, clear the old setup away:
+
+   ```sh
+   rm ~/Library/LaunchAgents/relay.tick.plist ~/Library/LaunchAgents/relay.serve.plist
+   rm ~/.local/bin/relay ~/.local/bin/agentloop ~/.local/bin/relay-tui
+   rm -f "$HOME/Library/Application Support/relay/paused" \
+         "$HOME/Library/Application Support/relay/deploys.edn" \
+         "$HOME/Library/Application Support/relay/deploy.lock"   # whichever are there; ntfy's config stays
+   ```
+
+   Then the checkouts become single development checkouts on `main`.
+   Each of `~/code/projects/{relay,agentloop,relay-tui,webtool}`:
+   `jj new main`. Forget the workspaces under `~/code/projects/.next`
+   (`jj workspace forget <name>` from the repo, then move the directory
+   to the Trash), and remove the `relay -> house` link there.
+
+## Upgrading from now on
+
+```sh
+# push main in each repo that changed, then:
+brew upgrade --fetch-HEAD relay agentloop relay-tui webtool
+brew services restart relay
+relay house build     # when the steward's image changed
+relay status
+```
+
+The restart ends every live conversation. Running wakes carry on, on
+the code they started with: they run in a process group of their own,
+so the restart does not touch them. Nothing is paused and nothing is
+tested first: run `bb verify` in the checkout before you push.
 
 ## Later, as ops
 
@@ -249,30 +303,25 @@ window for the rest:
   are verified as yours.
 - A domain for that address.
 
-Neither blocks the deploy: until then messages reach you by push and in
+Neither blocks the switch: until then messages reach you by push and in
 relay-tui, and you reply from the ready view or with `relay reply`.
-
-## What `bb deploy` does and does not do
-
-`bb deploy` moves relay, agentloop, relay-tui and webtool, builds
-agentloop, relay-tui and webtool with `make build`, and runs `bb test`
-before and `relay status` after. When the live `relay.edn` has `:house`
-it also builds the steward's image with `relay house build`. It checks
-`container system status` first, and if Apple's container system is
-not running it says so and how to start it, without starting it. It
-does not restart `relay serve`. Steps 3, 5 and 6 cover the rest by
-hand.
 
 ## Rolling back
 
-`bb rollback` moves relay, agentloop, relay-tui and webtool back and
-rebuilds them. It does not rebuild the steward's image. Put `~/relay.edn.old` back in place first. The old
-relay requires `:notify` and does not know `:messages`, and the
-rollback ends with `relay status`, which fails on the new file and
-leaves relay paused.
+Until step 9 the old checkouts and plists are untouched, so the way back
+is to stop the service and load the old jobs again:
 
-webtool goes back with the rest, to where the deploy found it, so the
-old `:verifier` gets the webtool it ran with.
+1. `brew services stop relay`.
+2. Put `~/relay.edn.old` back as `<live data>/relay.edn`.
+3. Load the old jobs:
+
+   ```sh
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/relay.tick.plist
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/relay.serve.plist
+   ```
+
+4. `brew uninstall relay agentloop relay-tui webtool`, so the old
+   checkouts' builds are first on PATH again (`~/.local/bin`).
 
 A rollback only works before the new relay has written to the log. The
 old relay stops on any event kind it does not know ("This version of
@@ -291,15 +340,15 @@ seen:
 
 Nearly every tick writes one of them: any message to you is a
 `message/created`, and so are hub's memos to you. In practice, once the
-new relay has run with the pause lifted, the old relay cannot read your
-log, and the log is append-only. The way back from then on is forward: a
-fix on the new relay.
+service has run, the old relay cannot read your log, and the log is
+append-only. The way back from then on is forward: a fix on the new
+relay.
 
-Steps 4 and 5 run while relay is still paused. The commands they use
+Steps 6 and 7 run before the service starts. The commands they use
 write only `role/added`, `role/updated`, `doc/put` and
 `routine/written` events. The old relay can read all of these, so you
-can still roll back from inside that window. But the events stay in
-the log, and the old relay acts on them:
+can still roll back from there. But the events stay in the log, and the
+old relay acts on them:
 
 - It runs hub's `daily-note` routine every day at 07:10.
 - It wakes hub on the instructions from `setup/steward.md`, which name
@@ -307,42 +356,28 @@ the log, and the old relay acts on them:
   `files_move`, the calendar tools).
 - It keeps the public `scout` role.
 
-Each of those wakes is spent on tools that do not exist. To roll back
-from inside the window:
+So after the rollback above, with the old relay
+(`~/code/projects/relay/bin/relay`), undo step 7:
 
-1. Put `~/relay.edn.old` back as `<live data>/relay.edn`.
-2. Run `bb rollback`. It rebuilds the old relay, runs `relay status`
-   and lifts the pause.
-3. Straight away, with the old relay (`bin/relay` in the live
-   checkout, now rolled back), undo step 5:
+```sh
+~/code/projects/relay/bin/relay --data <live data> unroutine hub daily-note
+~/code/projects/relay/bin/relay --data <live data> remove scout
+```
 
-   ```sh
-   bin/relay --data <live data> unroutine hub daily-note
-   bin/relay --data <live data> remove scout
-   ```
+and give hub its old title and instructions back, from the log you saved
+in step 4:
 
-4. Give hub its old title and instructions back. They are in the last
-   `role/added` or `role/updated` event for hub in the log you saved
-   before step 5:
+```sh
+jq -rs '[.[] | select((.type == "role/added" or .type == "role/updated")
+                      and .data.id == "hub" and .data.instructions != null)]
+        | last | .data.instructions' ~/relay-log-before-house.jsonl > ~/hub-old.md
+jq -rs '[.[] | select((.type == "role/added" or .type == "role/updated")
+                      and .data.id == "hub" and .data.title != null)]
+        | last | .data.title' ~/relay-log-before-house.jsonl
+~/code/projects/relay/bin/relay --data <live data> update hub --title "<the title it printed>" --instructions < ~/hub-old.md
+```
 
-   ```sh
-   jq -rs '[.[] | select((.type == "role/added" or .type == "role/updated")
-                         and .data.id == "hub" and .data.instructions != null)]
-           | last | .data.instructions' ~/relay-log-before-house.jsonl > ~/hub-old.md
-   jq -rs '[.[] | select((.type == "role/added" or .type == "role/updated")
-                         and .data.id == "hub" and .data.title != null)]
-           | last | .data.title' ~/relay-log-before-house.jsonl
-   bin/relay --data <live data> update hub --title "<the title it printed>" --instructions < ~/hub-old.md
-   ```
-
-   Read `~/hub-old.md` before you run the update. Add `--public` only
-   if hub's text was public before the deploy. Without it, hub's text
-   goes back to private.
-5. Start the service again, which step 3 stopped:
-
-   ```sh
-   bb service start
-   ```
-
-The doc `skills/hub/daily-note.md` stays. Nothing reads it once the
-routine is gone.
+Read `~/hub-old.md` before you run the update. Add `--public` only if
+hub's text was public before. Without it, hub's text goes back to
+private. The doc `skills/hub/daily-note.md` stays; nothing reads it
+once the routine is gone.

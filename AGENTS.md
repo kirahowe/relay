@@ -4,9 +4,9 @@ This file is for agents working on the relay repo. The role instructions that re
 
 ## Where to work
 
-Work in a jj workspace under `~/code/projects/.next/`, or another directory outside the live checkout. Never work in `~/code/projects/relay` itself: launchd's `relay.tick` runs that checkout every minute against Kira's live data.
+relay runs from its Homebrew install (`brew services start relay`) against Kira's live data, never from a checkout. Develop in the checkout at `~/code/projects/relay`, and use a jj workspace only where parallel streams need one. One exception while the old setup lasts: if `launchctl print gui/$(id -u)/relay.tick` still finds the job, launchd runs `~/code/projects/relay` every minute against Kira's live data, so work in a workspace under `~/code/projects/.next/` and never in that checkout.
 
-Never read or write `~/Sync/relay` or `~/.config/relay`. Test with artificial data and pass an explicit `--data <dir>` to every relay command. Commit in your workspace's own chain of changes and land verified, reviewed work on `main`. Do not push.
+Never read or write `~/Sync/relay` or `~/.config/relay`. Test with artificial data and pass an explicit `--data <dir>` to every relay command, `relay help` included: without it relay reads `~/.config/relay/config.edn` to find the data directory, and `relay help` reads that directory's relay.edn for the main role's name. Commit in your workspace's own chain of changes and land verified, reviewed work on `main`. Do not push.
 
 ## What to work on
 
@@ -69,8 +69,8 @@ Ask; do not decide, on these:
 
 - Changes to what a label means, or to when a call is held.
 - Any new paid service or account.
-- Anything that touches `~/Sync/relay`, the live checkout, launchd jobs or the live ntfy server.
-- Deploying. Kira runs `bb deploy` and `bb rollback`; agents never do.
+- Anything that touches `~/Sync/relay`, the installed relay, the relay brew service, launchd jobs or the live ntfy server.
+- Upgrading. Kira runs `brew upgrade --fetch-HEAD` and `brew services restart relay`; agents never do.
 - Pushing to GitHub.
 - Anything that cannot be undone.
 

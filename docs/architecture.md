@@ -125,12 +125,12 @@ stranger's file in it, or put another folder in its place. The section on
 ```mermaid
 flowchart TB
     subgraph relayrepo["relay, Clojure on babashka"]
-        tick["relay tick<br/>launchd, every minute"]
-        serve["relay serve<br/>launchd, always on"]
+        svc["relay run<br/>brew services, always on"]
+        tick["relay tick<br/>every minute"]
+        serve["relay serve<br/>always on"]
         acp["relay acp<br/>bridge to relay serve"]
         tool["relay tool NAME<br/>one call, as one role"]
         cli["relay CLI<br/>status, memo, ready, reply, undo, note"]
-        deploy["bb deploy, bb rollback<br/>run by Kira"]
     end
 
     subgraph agentloopRepo["agentloop, Go"]
@@ -153,6 +153,8 @@ flowchart TB
     phone["Phone ACP client<br/>over the tailnet"]
     calapp["Calendar app"]
 
+    svc -->|"once a minute"| tick
+    svc -->|"keeps running"| serve
     tick -->|"spawns a wake"| al
     serve -->|"one conversation per role"| al
     al -->|"HTTPS"| provider
@@ -168,31 +170,27 @@ flowchart TB
     tick -->|"curl"| smtp
     tick -->|"push"| ntfy
     cli --> tool
-    deploy -->|"moves and builds"| agentloopRepo
-    deploy -->|"moves and builds"| tuiRepo
-    deploy -->|"moves and builds"| webtoolRepo
-    deploy -->|"relay house build"| container
 ```
 
 | Process | Started by | What it does |
 |---|---|---|
-| `relay tick` | launchd (`setup/launchd/relay.tick.plist`), every minute | Ends lost wakes, fires routines, delivers messages that are due, starts the shell, polls the ingest sources, wakes every role with open memos, and sends the daily note (`relay.dispatch/tick!`). It writes `<data>/.last-tick` at most every five minutes, so `relay status` can say when the tick has stopped. |
-| a wake | the tick, as `relay wake <role> --dispatched` | Writes `request.json` and runs `agentloop run` for one role (`relay.dispatch/wake!`). |
-| `relay serve` | launchd (`setup/launchd/relay.serve.plist`) | Holds live conversations and the clients attached to them, on a Unix socket under `~/.relay/run/` and, when configured, a WebSocket listener on 127.0.0.1 that also serves `/calendar.ics` (`relay.serve`). |
+| `relay run` | `brew services start relay` (the formula's service block), always on | Runs `relay serve`, and `relay tick` once a minute, each as a child process (`relay.run`). Ticks never overlap; serve is started again when it exits, at most once a minute. On SIGTERM it stops ticking and waits for serve to end its conversations. |
+| `relay tick` | `relay run`, every minute | Ends lost wakes, fires routines, delivers messages that are due, starts the shell, polls the ingest sources, wakes every role with open memos, and sends the daily note (`relay.dispatch/tick!`). It writes `<data>/.last-tick` at most every five minutes, so `relay status` can say when the tick has stopped. |
+| a wake | the tick, as `relay wake <role> --dispatched`, in a process group of its own | Writes `request.json` and runs `agentloop run` for one role (`relay.dispatch/wake!`). Its own process group lets it outlive a restart of the service, which launchd ends by killing the service's group (`relay.dispatch/detached`). |
+| `relay serve` | `relay run` | Holds live conversations and the clients attached to them, on a Unix socket under `~/.relay/run/` and, when configured, a WebSocket listener on 127.0.0.1 that also serves `/calendar.ics` (`relay.serve`). |
 | `relay acp` | relay-tui or any ACP client | Copies bytes between the client and `relay serve`, or runs the same hub in its own process when no service runs. |
 | `relay tool` | agentloop, once per call | Runs one tool call as the role named on its command line, with the session's labels from the envelope (`relay.tools/call!`). |
 | agentloop | a wake or a conversation | Runs the model with exactly the tools in the request. It holds no call and asks nobody. A public role's request carries `forbid_labels ["private"]`, which agentloop enforces. |
 | relay-tui | Kira | The dashboard: roles, conversations, the board and the ready view. It always reopens in moving mode, so the first key acts on the dashboard, and a saved draft waits in the input. Ready counts new items above the selection as "↑ n new". It shows times in the zone relay names in its ready answer, the operator's `:timezone`. |
 | webtool | `relay tool`, for a scout's `egress` call | Searches with Brave and fetches pages. It reports a redirect instead of following it. |
-| container VM | `relay house up`, the tick, the first `sh` call | The steward's shell. One per data directory. `bb deploy` builds its image. |
-| `bb deploy` | Kira, by hand | Tests `main` in fresh workspaces, then moves and builds the live checkouts and builds the steward's image (see Deploying). Agents never run it. |
+| container VM | `relay house up`, the tick, the first `sh` call | The steward's shell. One per data directory. `relay house build` builds its image. |
 | ntfy, mail provider | Kira's setup | Carry pushes and mail. Tests use a stand-in ntfy and a mailpit they start on free ports. |
 
 relay is a functional core with a thin shell. `relay.core` decides every
 command and folds every event, and it is pure. `relay.inbound`,
 `relay.log`, `relay.dispatch`, `relay.serve` and the tool edges do the IO.
-`bb deploy` has the same split: `relay.deploy` and `relay.deploy-flow`
-decide, and `relay.deploy-run` runs the commands.
+`relay run` has the same split: `relay.run/due` and `started` decide
+when each child starts, and `run!` starts them.
 
 relay.edn is checked in one pass (`relay.config/validate`). `relay
 status` and the tick's alert list every problem at once, numbered, each
@@ -666,42 +664,32 @@ description, so a stranger's link is never live in Kira's calendar app.
 says when `relay serve` is not running, when something else holds the
 port, or when the tailnet address is not published.
 
-## Deploying
+## Installing and upgrading
 
-Kira runs `bb deploy`. It moves the live checkouts to `main` only after
-`main` has built and passed its tests, and it never starts the container
-system itself. `relay.deploy-flow` is a pure state machine, and each step
-asks `relay.deploy-run` for one effect.
+relay, agentloop, relay-tui and webtool are formulas in Kira's tap
+(github.com/kirahowe/homebrew-tap). They build from `main` for now, with
+no releases. relay's formula installs `bin`, `src`, `resources` and
+`setup` under its keg's `libexec`, with a bb.edn of its own that names
+only the paths, and depends on the other three, so installing relay
+installs them. Its service block runs `relay run`, with the data
+directory from `~/.config/relay/config.edn`.
 
 ```mermaid
-flowchart TB
-    start["bb deploy"] --> obs["observe the live checkouts:<br/>agentloop, relay-tui, webtool, relay"]
-    obs --> plan{"relay.deploy/plan-deploy<br/>any working copy with changes?"}
-    plan -->|"yes"| refused["refused, nothing changed"]
-    plan -->|"no"| ws["a fresh jj workspace per repo<br/>at the planned commits"]
-    ws --> checks["make build for agentloop, relay-tui, webtool,<br/>bb test on relay"]
-    checks -->|"a check fails"| refused
-    checks --> confirm["Kira confirms on the terminal"]
-    confirm --> pause["pause relay, wait for wakes to end"]
-    pause --> same{"checkouts as tested?"}
-    same -->|"no"| refused
-    same -->|"yes"| each["for each checkout in order:<br/>jj new main, then make build"]
-    each --> house{"relay.edn has :house?"}
-    house -->|"no"| status
-    house -->|"yes"| sys{"Apple container:<br/>container system status"}
-    sys -->|"not running"| tell["say: container system start,<br/>then relay house build"]
-    sys -->|"running, or another runner"| build["relay house build<br/>a failure says how to retry"]
-    tell --> status["relay status"]
-    build --> status
-    status --> lift["lift the pause, write the record"]
+flowchart LR
+    push["Kira pushes main<br/>in each repo"] --> upgrade["brew upgrade --fetch-HEAD<br/>relay agentloop relay-tui webtool"]
+    upgrade --> restart["brew services restart relay"]
+    restart --> term["relay run gets SIGTERM:<br/>no new tick, serve ends its conversations"]
+    term --> fresh["the new relay run:<br/>serve and the tick on the new code"]
+    upgrade -.->|"running wakes carry on<br/>on the code they started with"| fresh
+    fresh --> build["relay house build<br/>when the image changed"]
 ```
 
-Each checkout's state is written to the deploy record before it moves or
-builds, so a failed run says what is left. A failure after a checkout
-was touched leaves relay paused. A failed image build does not fail the
-deploy: the code is in place, and `relay status` says the image is
-missing. `bb rollback` moves the checkouts back to the commits in the
-record, webtool included, and never builds the image.
+There is no pause and no rollback: an upgrade only swaps the keg, and
+the log is forward-only (decision 22 in `docs/plans/house.md`). A wake
+that starts during the upgrade runs whichever keg `/opt/homebrew/opt/relay`
+points to when it starts. relay records the path it was run by
+(`/opt/homebrew/bin/relay`), not the keg's, wherever it writes one down,
+so nothing it saved names a keg an upgrade removes.
 
 ## Where each invariant is enforced
 
@@ -723,7 +711,7 @@ The invariants come from `docs/plans/house.md`. Tests are in
 ## Reading list
 
 - `README.md`: setup, settings and daily use.
-- `DEPLOY.md`: moving the live relay to the house, and `bb deploy`.
+- `DEPLOY.md`: moving Kira's live relay to the house and to the Homebrew install.
 - `resources/AGENTS.md`: what relay tells its own roles.
 - `spec/relay.allium`: the rules as a specification.
 - `docs/messages.md`: messages, routing and channels in detail.

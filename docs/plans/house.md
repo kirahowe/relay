@@ -119,6 +119,10 @@ she sends it, it is hers.
     releases (Kira pushes) or head-only installs; and whether Kira stops
     the launchd jobs before the checkouts move to `main` (until then the
     live tick runs the dev checkout).
+    Answered 2026-10-26: head-only for now, tagged releases later for
+    self-hosters; ntfy stays on its own plist (Homebrew's ntfy has no
+    service). Built in relay#88; DEPLOY.md has Kira's switch-over steps,
+    which stop the launchd jobs before the install.
 
 ### Orchestrator decisions (2026-10-25, Kira may overrule)
 

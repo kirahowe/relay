@@ -40,38 +40,39 @@ data is wherever `--data` or the config file points.
 
 ## Setup
 
-relay needs [babashka](https://babashka.org) on macOS, and agentloop,
-which is written in Go. The steward's shell needs Apple's `container`
-(Docker or Podman on Linux).
+relay runs on macOS. It installs with [Homebrew](https://brew.sh), which
+brings [babashka](https://babashka.org) and relay's three companions:
+[agentloop](https://github.com/kirahowe/agentloop), which runs the model,
+[relay-tui](https://github.com/kirahowe/relay-tui), the dashboard, and
+[webtool](https://github.com/kirahowe/webtool), the scout's web search.
+The steward's shell needs Apple's `container` (Docker or Podman on
+Linux).
 
-1. Clone [agentloop](https://github.com/kirahowe/agentloop),
-   [relay-tui](https://github.com/kirahowe/relay-tui) (the dashboard) and
-   [webtool](https://github.com/kirahowe/webtool) (the scout's web
-   search) next to this repository, and build them:
+1. Install relay from the tap. There are no releases yet, so it builds
+   from `main`:
 
    ```sh
-   make -C ../agentloop build
-   make -C ../relay-tui build
-   make -C ../webtool build
+   brew tap kirahowe/tap
+   brew trust kirahowe/tap
+   brew install --HEAD kirahowe/tap/relay
    ```
 
-   relay runs the harness's `:bin` when it is set, else
-   `../agentloop/bin/agentloop`, else the first `agentloop` on your PATH,
-   and `relay init` writes the one it found into relay.edn as an
-   absolute `:bin`. It does the same for the dashboard: it writes the
-   relay-tui built next to it (else the first on your PATH) as an
-   absolute `:client`, so an older relay-tui on your PATH never opens in
-   its place. To keep either elsewhere, set `:bin` in the harness
+   relay runs the harness's `:bin` when it is set, else the first
+   `agentloop` on your PATH, and `relay init` writes the one it found
+   into relay.edn as an absolute `:bin`. It does the same for the
+   dashboard, writing the relay-tui it found as an absolute `:client`.
+   Homebrew's paths, such as `/opt/homebrew/bin/agentloop`, stay the same
+   across upgrades. To keep either elsewhere, set `:bin` in the harness
    settings or `:client` at the top of relay.edn. When agentloop will
    not start, the alert and `relay status` name the binary that ran, and
-   an agentloop older than relay is named as such: rebuild it.
+   an agentloop older than relay is named as such: upgrade it.
 2. Choose a data directory and initialize it:
 
    ```sh
    data=/path/to/data
    mkdir -p ~/.config/relay
    echo "{:data \"$data\"}" > ~/.config/relay/config.edn
-   bin/relay init
+   relay init
    ```
 
    `relay init` asks for what relay cannot run without: the time zone,
@@ -106,11 +107,15 @@ which is written in Go. The steward's shell needs Apple's `container`
    is marked public so that the scout, which sees only public text, can
    answer it; `setup/steward.md` is public anyway.
 
+   The files are in the relay repository, and in the installed copy
+   under `$(brew --prefix relay)/libexec/setup`:
+
    ```sh
-   bin/relay add steward --public --title Steward < setup/steward.md
-   bin/relay put skills/steward/daily-note.md < setup/daily-note/skill.md
-   bin/relay routine steward daily-note --schedule "daily 07:10" < setup/daily-note/routine.md
-   bin/relay add scout --public --title Scout --reports-to steward < setup/scout.md
+   cd "$(brew --prefix relay)/libexec"
+   relay add steward --public --title Steward < setup/steward.md
+   relay put skills/steward/daily-note.md < setup/daily-note/skill.md
+   relay routine steward daily-note --schedule "daily 07:10" < setup/daily-note/routine.md
+   relay add scout --public --title Scout --reports-to steward < setup/scout.md
    ```
 
    Every command takes the data directory from `--data <dir>`, or else
@@ -129,27 +134,21 @@ which is written in Go. The steward's shell needs Apple's `container`
    security add-generic-password -a "$USER" -s relay-anthropic -w
    security add-generic-password -a "$USER" -s relay-brave -w
    ```
-4. Install the dispatcher's launchd job, which runs `relay tick` every
-   minute. Fill in the template's paths and load it:
+4. Start the relay service. It runs `relay serve`, which keeps
+   conversations going while the dashboard is closed and serves the
+   agent's calendar, and `relay tick` every minute, which wakes the
+   roles (see The relay service):
 
    ```sh
-   mkdir -p ~/Library/Logs/relay
-   sed -e "s|@BB@|$(command -v bb)|" -e "s|@RELAY@|$PWD|" \
-       -e "s|@DATA@|$data|" -e "s|@HOME@|$HOME|" \
-       -e "s|@LOGS@|$HOME/Library/Logs/relay|" \
-       setup/launchd/relay.tick.plist > ~/Library/LaunchAgents/relay.tick.plist
-   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/relay.tick.plist
+   brew services start relay
    ```
 
-   `relay status` says when the tick has never run, or has not run for
-   20 minutes, so a job that failed to load does not go unnoticed.
+   It finds the data directory in `~/.config/relay/config.edn` and logs
+   to `$(brew --prefix)/var/log/relay.log`. `relay status` says when the
+   tick has never run, or has not run for 20 minutes, so a service that
+   failed to start does not go unnoticed.
 
-   Install the relay service the same way, from
-   `setup/launchd/relay.serve.plist`: it keeps conversations going while
-   the dashboard is closed, and serves the agent's calendar (see The
-   relay service).
-
-   Then run `bin/relay` to open the dashboard and talk to your steward.
+   Then run `relay` to open the dashboard and talk to your steward.
 5. Turn on what you want in `relay.edn`. Each is a section that starts
    with `;;`: remove the `;;` and fill in the placeholders. `relay status`
    checks the file and lists every problem it finds, numbered, each with
@@ -165,18 +164,28 @@ which is written in Go. The steward's shell needs Apple's `container`
      once, which needs the network (see The steward's shell).
    - Folders the steward may tidy: `:files` on the steward (see
      Organizing files).
-6. For pushes to a phone, run an [ntfy](https://ntfy.sh) server.
-   Its config names your machine, so keep it outside this repository:
+6. For pushes to a phone, run an [ntfy](https://ntfy.sh) server
+   (`brew install ntfy`). Its config names your machine, so keep it
+   outside this repository:
 
    ```sh
    conf="$HOME/Library/Application Support/relay/ntfy"
    mkdir -p "$conf" && cp setup/ntfy/server.yml "$conf/"
    ```
 
-   Edit its `base-url` and `cache-file`, install
-   `setup/launchd/relay.ntfy.plist` the same way as the tick (it uses
-   `@NTFY@`, `@NTFYCONFIG@` and `@LOGS@`), and subscribe to the topic from
-   the ntfy app. Then give `:messages` in `relay.edn` a push channel,
+   Edit its `base-url` and `cache-file`. Homebrew's ntfy has no service,
+   so `setup/ntfy/relay.ntfy.plist` is a launchd job for it. Fill in its
+   paths and load it:
+
+   ```sh
+   mkdir -p ~/Library/Logs/relay
+   sed -e "s|@NTFY@|$(command -v ntfy)|" -e "s|@NTFYCONFIG@|$conf/server.yml|" \
+       -e "s|@LOGS@|$HOME/Library/Logs/relay|" \
+       setup/ntfy/relay.ntfy.plist > ~/Library/LaunchAgents/relay.ntfy.plist
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/relay.ntfy.plist
+   ```
+
+   Then subscribe to the topic from the ntfy app. Then give `:messages` in `relay.edn` a push channel,
    `{:kind :push :via :ntfy :url "http://127.0.0.1:2586" :topic "relay"}`,
    and a route to it, or choose ntfy when `relay init` asks.
 
@@ -206,7 +215,7 @@ which is written in Go. The steward's shell needs Apple's `container`
    terminal:
 
    ```sh
-   bin/relay connect mailerlite https://mcp.mailerlite.com/mcp
+   relay connect mailerlite https://mcp.mailerlite.com/mcp
    ```
 
    Your browser opens on the service's own sign-in page. Sign in there
@@ -250,9 +259,9 @@ To see the first daily note without waiting for the morning, have the
 steward write its parts, then look at it, then send it:
 
 ```sh
-bin/relay routine run daily-note
-bin/relay note
-bin/relay note now
+relay routine run daily-note
+relay note
+relay note now
 ```
 
 Open the dashboard with `relay` in this terminal (`relay --open <role>`
@@ -309,14 +318,21 @@ The commands for research reports (`relay review`, `relay verify`,
 and `--untrusted` are gone too: nothing waits for you, and what you
 write is yours.
 
-To update relay itself, pull this repository, agentloop, relay-tui and
-webtool, rebuild agentloop with `make -C ../agentloop build` (or the copy
-your `:bin` names, which relay runs first), relay-tui and webtool with
-`make build` in each, and run `relay house build` if you use the shell,
-since its image may have changed. Restart the service if it runs (`bb
-service restart`). The tick picks
-up the new code at its next run. (Deploy and rollback, under
-Development, is how relay's author runs it on her own machine.)
+To update relay itself, upgrade all four from `main`, restart the
+service, which runs the code it started with, and run `relay house
+build` if you use the shell, since its image may have changed:
+
+```sh
+brew upgrade --fetch-HEAD relay agentloop relay-tui webtool
+brew services restart relay
+relay house build
+relay status
+```
+
+The restart ends every live conversation; the roles remember what their
+notes, facts and journals hold, as after any conversation. Wakes that
+are running carry on, on the code they started with. A harness `:bin`
+you set yourself is yours to upgrade.
 
 ## Daily use
 
@@ -639,8 +655,8 @@ do.
 `relay` opens the dashboard in this terminal, and `relay --open <role>` does
 the same with `<role>` in focus. `relay help`
 and `relay --help` print the usage. The dashboard needs [relay-tui](https://github.com/kirahowe/relay-tui),
-a terminal client for ACP agents. Build it with `make -C ../relay-tui build`
-and put `bin/relay-tui` on your PATH. relay runs it as
+a terminal client for ACP agents, which Homebrew installs with relay.
+relay runs it as
 `relay-tui [--open <role>] -- relay acp`, adding `--data <dir>`
 when you gave `relay` one. relay-tui shows every role, with `<role>`
 in focus, and each role's conversation. When relay serve runs (see
@@ -700,8 +716,8 @@ your keychain.
    Mac would send. A native app sends none. If yours turns out to send
    one, add that exact origin to the list.
 
-3. Restart the service (`launchctl bootout gui/$(id -u)/relay.serve`,
-   then `launchctl bootstrap` as above). It reads the token once, when it
+3. Restart the service (`brew services restart relay`). It reads the
+   token once, when it
    starts, after the Unix socket is up. If the command fails, prints
    nothing, prints more than 4 KB or takes more than 10 seconds, the
    service says so in its log and runs without the listener, and the Unix
@@ -718,7 +734,7 @@ your keychain.
    the token from step 1 (to see it again, run the `security` command from
    step 2).
 
-6. To have the agent's calendar in your calendar app, run `bin/relay
+6. To have the agent's calendar in your calendar app, run `relay
    calendar url`. It prints the feed's address, with a token that opens
    the calendar and nothing else. Add that address in the app as a
    calendar subscription (see The calendar).
@@ -851,7 +867,7 @@ processes, how a request becomes a draft and a message, and where each
 rule is enforced.
 
 A role is an id, a title and its own standing instructions. Between
-wakes nothing runs. `relay tick`, run by launchd once a minute, fires any
+wakes nothing runs. `relay tick`, run by the relay service once a minute, fires any
 routine that has come due, then wakes every role with an open memo, each in
 its own process. A wake runs the role's harness ([agentloop](https://github.com/kirahowe/agentloop) on the Anthropic API)
 with the shared instructions in `resources/AGENTS.md`, the role's own
@@ -1716,34 +1732,29 @@ exist only for relay's own tests; a real service uses neither.
 
 A conversation ends when you end it
 (relay-tui does it with `_relay/conversations/end`) or when the service
-stops. Stopping it (SIGTERM, or launchd unloading it) ends each
-conversation and records it; a turn in progress ends there. If the
-service dies without that, the next one ends the conversations it left,
-as lost, when it starts.
+stops. Stopping it (SIGTERM) ends each conversation and records it; a
+turn in progress ends there. If the service dies without that, the next
+one ends the conversations it left, as lost, when it starts.
 
-Install it as a launchd job, the same way as the tick:
-
-```sh
-sed -e "s|@BB@|$(command -v bb)|" -e "s|@RELAY@|$PWD|" \
-    -e "s|@DATA@|$data|" -e "s|@HOME@|$HOME|" \
-    -e "s|@LOGS@|$HOME/Library/Logs/relay|" \
-    setup/launchd/relay.serve.plist > ~/Library/LaunchAgents/relay.serve.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/relay.serve.plist
-```
-
-`bb service stop`, `bb service start`, `bb service restart` and `bb
-service status` do the same with less typing. Each does nothing where
-there is nothing to do: stopping a stopped service, or starting a
-running one.
-
-A deploy waits for every running wake, and a conversation the service
-holds is one, so stop the service before `bb deploy` (`bb service
-stop`) and start it again after (`bb service start`). That ends every live conversation; the
-roles remember what their notes, facts and journals hold, as after any
-conversation. The service runs the code it started with until it is
-restarted, so it must be restarted after a deploy in any case.
+`brew services start relay` runs `relay run`, which runs `relay serve`
+and, once a minute, `relay tick`, each as a process of its own. Ticks
+never overlap, and serve is started again when it exits, at most once a
+minute. A `relay.edn` that will not load stops serve but not the tick,
+and the tick is what sends you the alert about it. `brew services stop
+relay`, `restart` and `info` do what they say. Stopping lets serve end
+its conversations first. The wakes a tick started are not part of the
+service, so stopping or restarting it leaves them running; each records
+its own end.
 
 ## Development
+
+Develop in a checkout of this repository, with agentloop, relay-tui and
+webtool checked out next to it and built with `make build` in each. The
+checkout's `bin/relay` runs that checkout's code and prefers the sibling
+builds of agentloop and relay-tui to those on your PATH; give it a
+staging directory with `--data`. The installed relay is what runs
+against your own data, and changes reach it when you push `main` and
+upgrade.
 
 ```sh
 bb verify        # every check in every repo, one summary (VERIFY.md)
@@ -1754,7 +1765,7 @@ bb tck           # the ACP conformance kit against relay acp (needs Go, uv and .
 
 `bb test` runs [volley](https://clojars.org/com.kirahowe/volley), which reads
 `tests.edn` and Kaocha's flags. A bare namespace name runs only that namespace
-(`bb test relay.deploy-test`), `--skip` and `--workers N` work as in volley,
+(`bb test relay.run-test`), `--skip` and `--workers N` work as in volley,
 and `--agentloop <path>` runs the tests against that agentloop build. Each
 volley worker is its own process, so `tests.edn` lists
 `relay.test-support/isolate!` as worker setup; that keeps every worker away
@@ -1798,7 +1809,7 @@ A scenario is a data file: relay commands to run as the operator, dispatcher
 ticks, clock moves, and assertions over the log and state. The header of
 `test/relay/scenario.clj` describes the format. Each run makes its own staging
 directory and passes `--data` to every command. The ticks run in the runner,
-not under launchd. Without `--live`, the model is the mock server answering
+not in the relay service. Without `--live`, the model is the mock server answering
 from a script in the scenario. With `--live` it is the real model, using the
 keychain key, so it costs a little. `bb test` runs the mock scenarios too.
 
@@ -1900,72 +1911,6 @@ with `tell_operator` (or a memo to you, which arrives the same way), and
 their graders read those messages.
 
 `test/scenarios/BASELINES.md` has the live results.
-
-### Deploy and rollback
-
-These are for you to run, not an agent. Run `bb deploy` from a relay working
-copy that has no changes:
-
-```sh
-bb deploy [--relay <dir>] [--agentloop <dir>] [--relay-tui <dir>] [--webtool <dir>] [--bookmark main] [--record <file>] [--data <dir>] [--paused-externally]
-bb rollback                        # same flags
-```
-
-The paths default to the live checkouts under `~/code/projects` and must be
-four different directories. `--data` defaults to the data directory in
-`~/.config/relay/config.edn` and must be a relay data directory (it needs
-`relay.edn` and a `log` directory), since it is how the deploy sees running
-wakes. A deploy names the
-commit `main` points to in each repository and uses only those commits from
-then on. It builds them in fresh jj workspaces in a temporary directory and
-runs `bb test` there (the mock scenarios too) after building agentloop,
-relay-tui and webtool from the same commits, lists what it will do, and asks you
-to type a code on the terminal.
-
-After you confirm, it pauses relay: while
-`~/Library/Application Support/relay/paused` exists, `relay tick` does nothing,
-and `relay status` shows the file's path, why it is there and how to lift it
-(`rm '<path>'`, and `bb rollback` when a deploy made it). It waits until no wake or tick is running (read
-from the live log, which `--data` must point at, and from markers the ticks
-leave), writes a record, and for each checkout runs `jj new <commit>` and builds
-agentloop, relay-tui and webtool with `make build`. When the live `relay.edn`
-has `:house`, it then builds the steward's image with `relay house build`
-against that data directory. It checks `container system status` first; if
-Apple's container system is not running, it says so and how to start it
-(`container system start`), and does not start it. A missing or failed image
-build does not fail the deploy; the message gives the command to run once the
-system is up. Finally it runs `relay status` against that data directory. Just before it moves a checkout it looks at it
-again, and it stops if anything changed since the plan or jj cannot read it.
-It refuses to start if any checkout has changes in its working copy or sits on
-a merge. When it all works it removes the pause file. If a step fails after a
-checkout was touched (a move that errors or a build that starts counts), relay
-stays paused and the message says so. If every checkout got to its target and
-only `relay status` failed, the message says that and gives the `rm` command
-that lifts the pause. Ctrl-C before any checkout is touched lifts the pause it
-made, forgets the check workspaces and says so. A check workspace jj could not
-forget is listed with the command to forget it by hand. Only one deploy or rollback runs at a
-time, through a lock on `~/Library/Application Support/relay/deploy.lock`.
-
-A relay from before the pause file does not know it. If the relay now running,
-or the one a deploy or rollback would leave in place, has no
-`src/relay/pause.clj`, the command refuses until you stop the tick job yourself
-(`launchctl bootout gui/$(id -u)/relay.tick`), run it with `--paused-externally`,
-and start the job again afterwards.
-
-Records go to `~/Library/Application Support/relay/deploys.edn`, one line each
-time something changes: before the first move, after each checkout, and at the
-end. `bb rollback` reads the latest deploy record that moved a checkout, or
-that failed after touching one, and that no finished rollback has undone. It
-moves each checkout back with `jj new <previous>`, but only if the checkout is
-still where that deploy left it; a deploy that failed in a rebuild without
-moving anything is undone by rebuilding in place. A checkout the record does
-not name (webtool, in a record from before deploys moved it) is left alone.
-A rollback does not rebuild the steward's image. It rebuilds, runs `relay
-status`, and lifts the pause. Run it again and it undoes the deploy before. Every run writes its first record before it
-pauses relay, so if one is killed before it touched anything (while waiting for
-wakes, say), `bb rollback` sees that and only lifts the pause; nothing is moved.
-After a partial failure, run it again to finish; it does not lift a pause left
-by an earlier failure until it has worked.
 
 ## Pentests
 
