@@ -2,6 +2,9 @@
   "Staging data: what it holds, and where it may be made."
   (:require [babashka.fs :as fs]
             [cheshire.core]
+            [relay.digest]
+            [relay.skills]
+            [relay.tools]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [clojure.test.check :as tc]
@@ -67,7 +70,7 @@
   (let [home (temp)
         dir (str home "/stage")]
     (try
-      (let [made (init! {:dir dir :home home :scout-web? true})
+      (let [made (init! {:dir dir :home home :scout-web? true :daily-note? true})
             sys (inbound/system made)
             state (inbound/current-state sys)]
         (testing "the settings are the ones staging promises"
@@ -104,6 +107,20 @@
             (is (:public r))
             (is (str/includes? (:instructions r) "Harbour Sound Society"))
             (is (core/role-text-public? state "hub"))))
+        (testing "a daily note the hub writes, from its routine and skill"
+          (let [c (config/load-config made)
+                r (core/routine state "hub" "daily-note")
+                skill (core/doc-version state "skills/hub/daily-note.md" {})]
+            (is (= {:at "07:30" :role "hub"} (:daily-note c)))
+            (is (= :active (:status r)))
+            (is (= "daily 07:10" (:schedule r)) "before the note goes out")
+            (is (str/includes? (:instructions r) "daily_note_write"))
+            (is (= "Writing the daily note" (:title (relay.skills/parse (:content skill)))))
+            (doseq [part ["ahead" "grants" "github" "learned"]]
+              (is (str/includes? (:content skill) (str "## " part))))
+            (is (contains? (relay.tools/offered c "hub") "daily_note_write"))
+            (is (empty? (relay.digest/flagged (core/recipe-changes state) 0))
+                "the operator's own seed is never flagged")))
         (testing "it is marked, so --force may empty it again"
           (is (fs/exists? (fs/path made staging/marker)))))
       (finally (fs/delete-tree home)))))
