@@ -136,8 +136,8 @@ which is written in Go. The steward's shell needs Apple's `container`
      `:ingest` (see The mailbox and other sources). `relay poll` checks
      them now.
    - The steward's shell: `:house {:mounts [...]}` and `:shell true` on
-     the steward, then `relay house build` once, which needs the network
-     (see The steward's shell).
+     the steward, then `container system start` and `relay house build`
+     once, which needs the network (see The steward's shell).
    - Folders the steward may tidy: `:files` on the steward (see
      Organizing files).
 6. For pushes to a phone, run an [ntfy](https://ntfy.sh) server.
@@ -281,10 +281,12 @@ The commands for research reports (`relay review`, `relay verify`,
 and `--untrusted` are gone too: nothing waits for you, and what you
 write is yours.
 
-To update relay itself, pull this repository and agentloop, rebuild
-agentloop with `make -C ../agentloop build` (or the copy your `:bin`
-names, which relay runs first), and run `relay house build`
-if you use the shell, since its image may have changed. The tick picks
+To update relay itself, pull this repository, agentloop, relay-tui and
+webtool, rebuild agentloop with `make -C ../agentloop build` (or the copy
+your `:bin` names, which relay runs first), relay-tui and webtool with
+`make build` in each, and run `relay house build` if you use the shell,
+since its image may have changed. Restart the service if it runs (`bb
+service restart`). The tick picks
 up the new code at its next run. (Deploy and rollback, under
 Development, is how relay's author runs it on her own machine.)
 
@@ -769,6 +771,10 @@ into any OTel viewer without your data going with it. It does name your
 roles and tools and the labels each session held.
 
 ## How it works
+
+[docs/architecture.md](docs/architecture.md) draws the whole system: its
+processes, how a request becomes a draft and a message, and where each
+rule is enforced.
 
 A role is an id, a title and its own standing instructions. Between
 wakes nothing runs. `relay tick`, run by launchd once a minute, fires any
@@ -1263,14 +1269,15 @@ shell a network, a port or a writable mount. relay refuses `:shell` for
 a public role, and refuses a mount that is, holds or sits inside the
 data directory, the home directory, relay's settings, or a place where
 keys, passwords, tokens or browser profiles are kept (`~/.ssh`,
-`~/Library/Keychains` and the rest of the list agentloop's workbench
-used). A path under `/System/Volumes/Data`, the same files by another
+`~/Library/Keychains` and the rest of the list in
+`relay.shell/forbidden`). A path under `/System/Volumes/Data`, the same files by another
 name on macOS, is checked as the path it stands for. relay checks again
 when it starts the container, with symbolic links resolved and by file
 identity.
 
 The container and its image are named after the data directory, so two
-data directories never share one. `relay house build` builds the image
+data directories never share one. On macOS, start Apple's container
+service first with `container system start`. `relay house build` builds the image
 from `resources/house/Containerfile` (Alpine with coreutils, find, grep,
 rg, awk, sed, python3, sqlite3, jq, pdftotext, file, tar and zip); that
 needs the network, running it does not. `relay house up` starts the

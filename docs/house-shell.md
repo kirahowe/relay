@@ -2,7 +2,8 @@
 
 This is how the steward's shell works: what it is for, its parts, how a
 command gets from the model into the container and back, and where each
-guarantee is kept. B13 folds it into `docs/architecture.md`.
+guarantee is kept. `docs/architecture.md` shows where it sits in the
+whole system.
 
 ## What it is for
 
@@ -179,7 +180,7 @@ sequenceDiagram
   participant S as scratch labels
   participant D as session D (read a stranger's mail)
   B->>S: record [private], read [] before
-  Note over B: sleep 2; cat x (running)
+  Note over B: sleep 2, then cat x, still running
   D->>S: record [contaminated, private]
   D->>D: echo ... > x
   Note over B: cat x prints D's text
@@ -194,7 +195,7 @@ sequenceDiagram
 | I1: the shell has no network | `run-argv` always gives `--network none`; relay.edn names only the runner program, and one naming a network is refused | property `the-shell-always-runs-with-no-network-and-read-only-mounts`; live test and pentest `s18-shell-walls` try TCP, UDP, DNS, vsock to the host and unix sockets |
 | I1: no session for a house role has a way out | config refuses `egress`, a remote MCP tool that is not `read` or `edit`, and `:shell` for a public role; `tools/manifest` refuses again | property `no-session-for-a-house-role-has-a-way-out` over generated relay.edn; property `the-manifest-alone-keeps-a-house-role-in` over the same settings without relay.edn's checks |
 | I7: Kira's files cannot be changed | every mount ends in `:ro`; the root is read-only; commands run as an unprivileged user | live test writes, removes, moves and creates files in a mount and finds them unchanged |
-| No secret is mounted | `mount-problem`: never the data directory, home, relay's settings or the workbench's list of secret places, with a `/System/Volumes/Data` prefix (a macOS firmlink) checked as the path it stands for; checked again on real paths when the container starts, and by file identity (`identity-problem`) | property `a-mount-that-passes-shows-no-secret`; firmlink cases in `secrets-are-never-mounted`; tests of a symbolic link and a firmlink to the data directory |
+| No secret is mounted | `mount-problem`: never the data directory, home, relay's settings or a known place for secrets (`~/.ssh`, keychains, browser profiles and the rest of `relay.shell`'s list), with a `/System/Volumes/Data` prefix (a macOS firmlink) checked as the path it stands for; checked again on real paths when the container starts, and by file identity (`identity-problem`) | property `a-mount-that-passes-shows-no-secret`; firmlink cases in `secrets-are-never-mounted`; tests of a symbolic link and a firmlink to the data directory |
 | Provenance survives scratch | `record-session!` before each command; the scratch labels read again when it ends; `result-labels` | tests `what-one-session-leaves-in-scratch-carries-its-labels` and `a-command-reads-scratch-as-carrying-what-was-written-while-it-ran` |
 | Tests never collide | names from the SHA-256 of the data directory's whole real path; tests remove exactly their own container and image by name | property `names-come-from-the-data-directory` over paths with different parents |
 

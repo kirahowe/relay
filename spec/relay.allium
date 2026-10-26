@@ -725,6 +725,18 @@ value TokenUsage {
     cache_write: Integer
 }
 
+value Date {
+    -- A calendar day in config.timezone.
+    day: String
+}
+
+value Fingerprint {
+    -- The size and SHA-256 of a moved file, or of every entry of a
+    -- moved folder.
+    sizes: Map<String, Integer>
+    digests: Map<String, String>
+}
+
 value WeekSpend {
     -- The Monday the week starts on, at midnight in config.timezone, or
     -- at that Monday's first moment when a clock change skips midnight.
@@ -1056,7 +1068,7 @@ entity Doc {
 -- The operator's board. There is one board, and every active card is
 -- on it. Cards are private only: a public role is not offered the card
 -- tools, and a card command from a public role's session is refused. A
--- card change never wakes a role and never notifies anyone.
+-- card change never wakes a role and never tells anyone.
 entity Card {
     -- The id is the seq of the event that added it.
     kind: CardKind
@@ -1234,6 +1246,10 @@ config {
     -- event for the wake, or the key still not set up), or ran and
     -- found nothing.
     daily_note_grants: String? = null
+    -- The WebSocket listener's token, from :serve :websocket
+    -- :token-command. Null for no listener, and so no calendar feed.
+    websocket_token: String? = null
+
     -- How long an external tool may run when it has no timeout_seconds.
     external_tool_timeout: Duration = 10.minutes
 
@@ -1438,7 +1454,7 @@ rule SendMemoToOperator {
         -- role can have.
 }
 
-rule NotifyOperatorOfMemo {
+rule TellOperatorOfMemo {
     when: memo: Memo.created
 
     requires: memo.is_for_operator
@@ -1473,8 +1489,8 @@ rule ReplyToAMessage {
 
     ensures: message.replies = message.replies + Reply(channel: channel, text: text, created_at: now)
     ensures: Memo.created(
-        from: operator,
-        to: message.told_by,   -- for mail, the source's role when that one is gone or public
+        sender: operator,
+        recipient: message.told_by,   -- for mail, the source's role when that one is gone or public
         subject: "Re: " + message.subject,
         body: text,   -- and a line naming the message, and tell_operator's in_reply_to
         sent_at: now,
@@ -1484,13 +1500,14 @@ rule ReplyToAMessage {
     if message.memo != null and message.memo.to = operator and message.memo.status = unread:
         ensures: message.memo.status = read   -- answered; closed by the operator
     if message.origin = daily_note:
-        ensures: what the reply asks for ("revert N", "not N", "drop N")
-            is done (RevertChange, DeclineOffer, DismissSuggestion), and
-            relay answers once in the
-            thread with what it did, on the reply's own channel only (the
-            client alone for a reply from the client)
-        if the reply says nothing but "revert N", "not N" and "drop N":
-            ensures: no memo is sent; relay has done all it asks
+        ensures: NoteReplyActedOn(message: message, text: text, channel: channel)
+            -- what the reply asks for ("revert N", "not N", "drop N") is
+            -- done (RevertChange, DeclineOffer, DismissSuggestion), and
+            -- relay answers once in the thread with what it did, on the
+            -- reply's own channel only (the client alone for a reply from
+            -- the client). When the reply says nothing but "revert N",
+            -- "not N" and "drop N", no memo is sent: relay has done all
+            -- it asks.
 
     @guidance
         -- The reply is the operator's own, so the memo is trusted (I5). It
@@ -1981,7 +1998,7 @@ rule FireRoutines {
 rule RunRoutineNow {
     when: OperatorRunsRoutine(owner?, name)
 
-    let routine = the one active routine called name, of owner when given
+    let routine = active_routine(name, owner)   -- black box: the one active routine called name, of owner when given
 
     requires: exists routine
     requires: not routine.has_open_run
@@ -2429,11 +2446,12 @@ rule TellOperatorHarnessNeedsThem {
 }
 
 rule ResolveAlerts {
-    when: HarnessRecovers or SourcePolled or PublicRoleRunsAgain or ToolWorksAgain
+    when: TroubleEnded(trouble)
+    -- a harness recovers, a source is polled, a public role runs again,
+    -- or a tool works again
 
-    ensures: for alert in Messages where kind = alert and not resolved
-                 and is_about_the_trouble_that_ended:
-        alert.resolved = now
+    for alert in Messages where kind = alert and resolved = null and is_about(alert, trouble):
+        ensures: alert.resolved = now
 
     @guidance
         -- harness_needs_attention and harness_unreachable for that
@@ -2616,8 +2634,8 @@ rule RememberToolDefinitions {
 
     requires: not wake.chat
 
-    for tool in Tools where pins[tool.name] != null and accepted_tool_digest = null:
-        ensures: tool.accepted_tool_digest = pins[tool.name]
+    for tool in Tools where pinned_digest(pins, tool) != null and tool.accepted_tool_digest = null:
+        ensures: tool.accepted_tool_digest = pinned_digest(pins, tool)   -- black box: the digest pins names for the tool
 
     @guidance
         -- pins are the digests agentloop's session pinned in this run,
@@ -3095,7 +3113,8 @@ rule MakeDailyNote {
 }
 
 rule RecordRecipeChange {
-    when: an event writes a skill doc, a routine, a role's note or a role
+    when: RecipeWritten(event)
+    -- an event writes a skill doc, a routine, a role's note or a role
     ensures: RecipeChange.created(what, change, owner, name, actor, labels, sources, before, peek)
 
     @guidance
@@ -3111,9 +3130,9 @@ rule RecordRecipeChange {
 }
 
 rule WriteNotePart {
-    when: RoleCalls(role, daily_note_write, part, items)
-    requires: role = config.daily_note_role
-    ensures: NotePart.replaced(part, items.without(Dismissed), labels: session.labels)
+    when: DailyNoteWriteRequested(caller, part, items, labels)
+    requires: caller = config.daily_note_role
+    ensures: NotePart.replaced(part, without_dismissed(items), labels: labels)
 }
 
 rule RevertChange {
@@ -3129,8 +3148,9 @@ rule RevertChange {
     requires: change.what != role or change.change = changed
     requires: change.undo_of = null
     ensures: change.reverted = true
-    ensures: what change replaced is put back, with the labels of the
-        text it restores; what it made new is removed
+    ensures: ChangeUndone(change: change)
+        -- what change replaced is put back, with the labels of the text
+        -- it restores; what it made new is removed
 
     @guidance
         -- When change.prior was undone too, the undo goes back past it
@@ -3144,10 +3164,10 @@ rule DeclineOffer {
     -- relay decline <n>, _relay/messages/act with op decline, or a reply
     -- "not N" from any channel (or "not this one" when the note has one
     -- suggestion).
-    requires: note.numbered[n].offer != null
+    requires: numbered_item(note, n).offer != null
         -- With no offer, a no is refused and changes nothing; only a
         -- drop removes the item.
-    ensures: Declined.created(keys: note.numbered[n].keys)
+    ensures: Declined.created(keys: numbered_item(note, n).keys)
 
     @guidance
         -- Later notes show any item with one of its keys without its
@@ -3156,8 +3176,8 @@ rule DeclineOffer {
 
 rule RecordOfferOutcome {
     when: OfferOutcomeRecorded(caller, key, outcome)
-    requires: caller = daily_note.role
-    requires: outcome is one line of at most 200 characters
+    requires: caller = config.daily_note_role
+    requires: is_one_line(outcome) and outcome.length <= 200
     ensures: OfferOutcome.created(key: slug(key), outcome: outcome)
 }
 
@@ -3165,7 +3185,7 @@ rule DismissSuggestion {
     when: OperatorDismisses(note, n)
     -- relay dismiss <n>, _relay/messages/act on a dismiss item, or a
     -- reply "drop N" from any channel. It may follow a DeclineOffer.
-    ensures: Dismissed.created(keys: note.numbered[n].keys)
+    ensures: Dismissed.created(keys: numbered_item(note, n).keys)
 
     @guidance
         -- Later parts drop any suggestion with one of its keys, and the
@@ -3174,10 +3194,10 @@ rule DismissSuggestion {
 
 rule AnnounceGitHubItems {
     when: DispatcherTicks(lost_wakes)
-    let news = items an ingest poll found new, opened by a person (user type User, not a bot)
-    requires: news.any
+    let news = new_person_items()   -- black box: items an ingest poll found new, opened by a person (user type User, not a bot)
+    requires: news.count > 0
     requires: config.daily_note_at = null
-    ensures: Message.created(origin: github_news, kind: note, urgency: low, sections: news.by_repository)
+    ensures: Message.created(origin: github_news, kind: note, urgency: low, sections: by_repository(news))
 
     @guidance
         -- Nothing about a new item is urgent. With a daily note, the
@@ -3209,10 +3229,10 @@ rule AddCalendarEvent {
     -- The calendar is the agent's own. The operator and the dispatcher
     -- never write it, so the feed holds only what a role wrote, and a
     -- public role has none. relay never writes the operator's calendar.
-    requires: caller is Role and not caller.is_public
+    requires: caller.kind = role and not caller.role.is_public
     requires: title != "" and title.length <= 200
     requires: end = null or end > start
-    requires: year(start) in 1970..9999
+    requires: year(start) >= 1970 and year(start) <= 9999
     requires: CalendarEvent.where(not is_removed).count < config.max_calendar_events
 
     ensures: CalendarEventVersion.created(
@@ -3231,10 +3251,10 @@ rule AddCalendarEvent {
 rule UpdateCalendarEvent {
     when: CalendarUpdateRequested(caller, event, title?, start?, end?, location?, description?, why?)
 
-    requires: caller is Role and not caller.is_public
+    requires: caller.kind = role and not caller.role.is_public
     requires: not event.is_removed
-    requires: the new version differs from event.current
-    requires: the new end is after the new start
+    requires: differs_from_current(event, title, start, end, location, description)
+    requires: new_end(event, start, end) > new_start(event, start)
 
     ensures: CalendarEventVersion.created(
         event: event,
@@ -3257,7 +3277,7 @@ rule UpdateCalendarEvent {
 rule RemoveCalendarEvent {
     when: CalendarRemoveRequested(caller, event, why?)
 
-    requires: caller is Role and not caller.is_public
+    requires: caller.kind = role and not caller.role.is_public
     requires: not event.is_removed
 
     ensures: CalendarEventVersion.created(
@@ -3292,7 +3312,7 @@ rule ServeCalendarFeed {
     -- its title, location and description broken, as a message to the
     -- operator has, since a calendar app makes links live.
     requires: request.path = "/calendar.ics" and request.method = GET
-    requires: request.token = feed_token(config.serve.websocket.token)
+    requires: request.token = feed_token(config.websocket_token)
 }
 
 -- Organizing files
@@ -3303,21 +3323,24 @@ rule MoveFiles {
     -- relay's own code makes the moves on the host; the model and the
     -- container never touch the disk. Every move is checked before any
     -- is made, and one refused move refuses the call.
-    requires: caller is Role and not caller.is_public and caller.files != []
-    requires: moves.count in 1..100
-    requires: every folder in caller.files, as its real path, passes the
-        shell's place and identity checks   -- never a secret, the home directory, the data directory or the data volume
-    requires: for m in moves:
-        real(m.from) and real(m.to) lie inside one of caller.files
-        and m.from is a file or a folder holding no link
-        and m.from is not one of caller.files and holds none of them
-        and nothing exists at m.to
-        and m.from and m.to are on one disk
-    requires: no two moves touch the same path or one inside another
+    requires: caller.kind = role and not caller.role.is_public and caller.role.files.count > 0
+    requires: moves.count >= 1 and moves.count <= 100
+    requires: roots_pass_place_checks(caller.role.files)
+        -- every folder in files, as its real path, passes the shell's
+        -- place and identity checks: never a secret, the home directory,
+        -- the data directory or the data volume
+    requires: every_move_allowed(moves, caller.role.files)
+        -- for each move m: real(m.from) and real(m.to) lie inside one of
+        -- the folders; m.from is a file or a folder holding no link;
+        -- m.from is not one of the folders and holds none of them;
+        -- nothing exists at m.to; m.from and m.to are on one disk
+    requires: no_overlapping_moves(moves)
+        -- no two moves touch the same path or one inside another
 
-    ensures: MoveCall.created(actor: caller, moves: moves, status: moving)
-    ensures: each move is made with an atomic rename, the folders its
-        target needs made and recorded, then the call is moved
+    ensures: MoveCall.created(actor: caller.role, moves: moves, status: moved)
+        -- recorded as moving before anything moves; each move is made
+        -- with an atomic rename, the folders its target needs made and
+        -- recorded, then the call is recorded as moved
 
     @guidance
         -- Both events carry the session's labels and private, since
@@ -3325,35 +3348,45 @@ rule MoveFiles {
 }
 
 rule UndoMove {
-    when: MoveUndoRequested(operator, call, only?)
-    -- only: the steps named, by where they went or came from; else every
-    -- step left.
+    when: MoveUndoRequested(call, only?)
+    -- Asked by the operator. only: the steps named, by where they went
+    -- or came from; else every step left.
 
     requires: call.status = moved
-    let back = the steps asked for, not in call.undone, where
-        no later call not undone yet moved from or to a path that
-        touches call.moves[step.index].to or .from
-        and fingerprint(call.moves[step.index].to) = step.fingerprint
-        and nothing exists at call.moves[step.index].from
-        and the folders above both are where they were, links resolved
-    let by_hand = the steps asked for where nothing is at the target and
-        the same kind of thing is back at the source, put there by no
-        move not undone yet
-    requires: back + by_hand is not empty
+    let back = steps_that_can_go_back(call, only)
+        -- the steps asked for, not in call.undone, where no later call
+        -- not undone yet moved from or to a path that touches the step's
+        -- target or source, the target's fingerprint is the step's,
+        -- nothing exists at the source, and the folders above both are
+        -- where they were, links resolved
+    let by_hand = steps_put_back_by_hand(call, only)
+        -- the steps asked for where nothing is at the target and the
+        -- same kind of thing is back at the source, put there by no move
+        -- not undone yet
+    requires: back.count + by_hand.count > 0
 
-    ensures: each step in back is renamed back, in reverse order; a step
-        in by_hand is not moved
-    ensures: each empty folder is removed that call made for a step now
-        back, or that another call made for a step now back and that
-        holds a target this undo put back, unless an earlier undo removed
-        it or kept it for something new, or a later call not undone yet
-        moved something out of it. Each removal, and each folder kept
-        because something new is in it, is recorded on the call that
-        made the folder.
+    ensures: StepsMovedBack(call: call, steps: back)
+        -- each step in back is renamed back, in reverse order; a step in
+        -- by_hand is not moved
+    ensures: EmptyFoldersRemoved(call: call, steps: back)
+        -- each empty folder is removed that call made for a step now
+        -- back, or that another call made for a step now back and that
+        -- holds a target this undo put back, unless an earlier undo
+        -- removed it or kept it for something new, or a later call not
+        -- undone yet moved something out of it. Each removal, and each
+        -- folder kept because something new is in it, is recorded on
+        -- the call that made the folder.
     ensures: call.undone = call.undone + back + by_hand
-    ensures: Memo.created(from: dispatcher, to: call.actor, subject: "The
-        operator undid move <id>", body: what went back, in full paths)
-        if call.actor is an active role
+    if call.actor.status = active:
+        ensures: Memo.created(
+            sender: dispatcher,
+            recipient: call.actor,
+            subject: "The operator undid move " + call.id,
+            body: what_went_back(call, back),   -- black box: what went back, in full paths
+            sent_at: now,
+            status: unread,
+            attempts: 0
+        )
 
     @guidance
         -- Each step is checked on its own. A step that cannot go back
@@ -4007,19 +4040,19 @@ invariant ASupersededMemoStaysDead {
         memo.status = dead
 }
 
-invariant ADeadLetterNotifiesTheOperatorAtMostOnce {
+invariant ADeadLetterReachesTheOperatorAtMostOnce {
     -- Each dead letter is passed on exactly once: as a memo to the
     -- handler, or as one message to the operator, never both.
     for letter in DeadLetters:
         (Messages where dead_letter = letter).count <= 1
 }
 
-invariant EveryMemoToTheOperatorNotifiesOnce {
+invariant EveryMemoToTheOperatorIsOneMessage {
     for memo in Memos where recipient = null:
         (Messages where memo = memo).count = 1
 }
 
-invariant OnlyMemosToTheOperatorNotifyAsMemos {
+invariant OnlyMemosToTheOperatorBecomeMemoMessages {
     for message in Messages where origin = memo_for_operator:
         message.memo.recipient = null
 }

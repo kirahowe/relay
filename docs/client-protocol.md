@@ -377,7 +377,7 @@ the card's text form, for a client that does not know its kind.
 
 ```json
 {"id": 1840, "kind": "tracker", "status": "active", "complete": false,
- "rev": 1842, "owner": "hub", "addedAt": "2026-10-20T15:03:00Z",
+ "rev": 1842, "owner": "steward", "addedAt": "2026-10-20T15:03:00Z",
  "title": {"text": "Catch up monthly financials", "outsider": false, "rev": 1840},
  "progress": {"done": 6, "total": 24},
  "labels": ["private"],
