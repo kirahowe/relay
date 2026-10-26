@@ -130,6 +130,29 @@
            (render/routines state utc ["b"])))
     (is (= ["a: A" "b: B"] (render/roles state (roster/roster state cfg t0))))))
 
+(deftest a-recipe-shaped-from-outside-says-where-it-came-from
+  ;; Regression (U1b review, s6): a routine written by a session that
+  ;; read a web page listed with no mark at all.
+  (let [as (fn [state actor type args sources]
+             (first (core/run-command state {:type type :actor actor :args args :labels ["contaminated"]
+                                             :sources sources}
+                                      {:now t0 :config cfg})))
+        state (-> core/empty-state
+                  (cmd :role/add {:id "a" :title "A" :instructions "x"})
+                  (as "a" :routine/write {:name "pay" :schedule "every 1m" :instructions "x"} ["web:https://evil.example/p"])
+                  (as "a" :routine/write {:name "tidy" :schedule "daily 09:00" :instructions "x"} [])
+                  (as "a" :doc/put {:path "skills/a/pay.md" :content "# Pay\nUse when: paying"} ["mail:x@evil.example"]))]
+    (is (= [(format "%-16s %-18s %s (since %s) (from a web page)" "a" "pay" "every 1m" "2026-10-15 12:00")
+            (format "%-16s %-18s %s (since %s)" "a" "tidy" "daily 09:00" "2026-10-15 12:00")]
+           (render/routines state utc ["a"]))
+        "the mark says what kind of thing, and never the page itself")
+    (is (some #(= (format "      routine %-16s %s (from a web page)" "pay" "every 1m") %)
+              (render/status state utc t0))
+        "status marks it the same way")
+    (is (some #(and (str/starts-with? % "skills/a/pay.md") (str/ends-with? % "(from a mail)"))
+              (render/docs state utc (core/docs state nil)))
+        "and so does a skill in relay docs")))
+
 (deftest relay-roles-shows-what-each-role-is-doing
   (let [as (fn [state actor type args]
              (first (core/run-command state {:type type :actor actor :args args} {:now t0 :config cfg})))
@@ -174,7 +197,7 @@
       (log/init! data)
       (let [printed (with-out-str
                       (is (= {:exit 0 :out ["Nothing waiting."]} (cli/execute ["--data" data "inbox"])))
-                      (is (= ["Roles" "  No roles yet. Add the hub, which takes your requests: relay add hub < setup/hub.md"
+                      (is (= ["Roles" "  No roles yet. relay init adds your steward."
                               "" "Your inbox: 0 open"]
                              (:out (cli/execute ["--data" data "status"]))))
                       (testing "an unknown command says so, shows the short usage and fails"
@@ -202,4 +225,29 @@
                                          :args {:to "hub" :subject "Your calendar: 2 new" :body "b"}}
                                   {:now t0 :config cfg})
         lines (vec (render/status state utc t0))]
-    (is (some #{"      open  [2] Your calendar: 2 new (from your calendar)"} lines) (pr-str lines))))
+    ;; Regression (U1b review): "GitHub kira/shelf: 1 new (from GitHub
+    ;; (kira/shelf))" said its source twice.
+    (is (some #{"      open  [2] Your calendar: 2 new"} lines) "the subject names the source, so it is not said again")
+    (is (not-any? #(str/includes? % "(from") lines) (pr-str lines))))
+
+(deftest a-status-memo-line-fits-a-phone-and-says-its-source-below
+  ;; Regression (U1b review): open-memo lines ran to 130 columns.
+  (let [subject (str "Holiday hours for the office and the hall, and what the page said about the "
+                     "booking deadline in November")
+        state (-> core/empty-state
+                  (cmd :role/add {:id "steward" :title "Steward" :instructions "x"}))
+        [state] (core/run-command state {:type :memo/send :actor core/operator
+                                         :labels ["contaminated" "web:https://example.org/office-holidays.html"]
+                                         :args {:to "steward" :subject subject :body "b"}}
+                                  {:now t0 :config cfg})
+        [state] (core/run-command state {:type :memo/send :actor core/operator :labels ["contaminated" "github:kira/shelf"]
+                                         :args {:to "steward" :subject "GitHub kira/shelf: 1 new" :body "b"}}
+                                  {:now t0 :config cfg})
+        lines (vec (render/status state utc t0))
+        i (first (keep-indexed (fn [i l] (when (str/starts-with? l "      open  [2] Holiday") i)) lines))]
+    (is i (pr-str lines))
+    (is (<= (count (lines i)) 60) (lines i))
+    (is (str/ends-with? (lines i) "…") "the subject is cut")
+    (is (str/starts-with? (lines (inc i)) "            from the web page") (lines (inc i)))
+    (is (every? #(<= (count %) 60) (take-while #(str/starts-with? % "            ") (drop (inc i) lines))))
+    (is (some #{"      open  [3] GitHub kira/shelf: 1 new"} lines) (pr-str lines))))

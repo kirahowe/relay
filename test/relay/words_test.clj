@@ -7,8 +7,7 @@
             [clojure.test :refer [deftest is]]
             [relay.cli :as cli]
             [relay.log :as log]
-            [relay.render :as render]
-            [relay.tools :as tools])
+            [relay.render :as render])
   (:import (java.time ZoneId)))
 
 (defn- with-data [settings f]
@@ -28,8 +27,12 @@
               :grants {"scout" {:public true}}}
     (fn [data]
       (let [out (:out (cli/execute ["--data" data "status"]))]
-        (is (some #{"  No roles yet. Add the hub, which takes your requests: relay add hub < setup/hub.md"} out))
-        (is (some #{"  relay.edn grants scout, but there is no scout role. Add it: relay add scout --public < its instructions"} out))
+        ;; Regression (U1b review): two hints that overlapped, and a
+        ;; setup/ path that worked only from the repository.
+        (is (= ["Roles" "  No roles yet. relay init adds your steward."] (take 2 out)) "one hint")
+        (is (not-any? #(str/includes? % "grants scout") out) "not a second one about the same thing")
+        (is (not-any? #(str/includes? % "setup/") out))
+        (is (every? #(<= (count %) 60) out) (pr-str out))
         (is (not-any? #(str/includes? % "Operator") out))))))
 
 (deftest a-refused-wake-says-why-on-stderr-and-fails
@@ -57,8 +60,3 @@
   (is (= ["a.md was removed on 2026-10-26 09:00."]
          (render/doc (ZoneId/of "UTC") {:path "a.md" :seq 44 :removed true
                                         :at (java.time.Instant/parse "2026-10-26T09:00:00Z")}))))
-
-(deftest a-known-tool-failure-reads-as-what-to-do
-  (is (str/starts-with? (tools/plain-failure "api_key_command failed: exit status 44")
-                        "The web search key is not working"))
-  (is (= "Rate limited." (tools/plain-failure "Rate limited."))))

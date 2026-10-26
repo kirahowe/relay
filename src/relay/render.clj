@@ -65,21 +65,50 @@
     ["Nothing waiting."]
     (mapcat #(memo state zone %) memos)))
 
-(defn- memo-source
-  "The end of a status line for a memo: where its text came from, when
-  an outsider wrote any of it."
-  [state {:keys [id labels]}]
-  (when-let [s (provenance/summary (core/sources-of state id labels))]
-    (str " (from " s ")")))
+(declare wrap)
+
+(def status-width
+  "The widest line relay status writes for a memo: a phone-width
+  terminal."
+  60)
+
+(def ^:private source-indent "            ")
+
+(defn- names-source?
+  "Whether a memo's subject already names where it came from: each
+  source's own name (the repository, the calendar, the sender) is in it."
+  [subject srcs]
+  (let [subj (str/lower-case (str subject))]
+    (every? (fn [l] (let [[_ what] (str/split l #":" 2)]
+                      (and what (str/includes? subj (str/lower-case what)))))
+            srcs)))
+
+(defn- memo-source-lines
+  "The lines after a status line for a memo: where its text came from,
+  when an outsider wrote any of it and its subject does not already say
+  so, on lines of their own below it, indented and wrapped to fit."
+  [state {:keys [id labels subject]}]
+  (let [srcs (core/sources-of state id labels)]
+    (when-let [s (and (not (names-source? subject srcs)) (provenance/summary srcs))]
+      (map #(str source-indent %) (wrap (str "from " s) (- status-width (count source-indent)))))))
+
+(defn- memo-line
+  "A status line for a memo: `head` then its subject, cut to fit, then
+  `tail`."
+  [head subject tail]
+  (let [room (max 20 (- status-width (count head) (count tail)))
+        subject (str subject)
+        subject (if (> (count subject) room) (str (subs subject 0 (dec room)) "…") subject)]
+    (str head subject tail)))
 
 (defn- open-memo [state zone {:keys [id subject attempts retry-at labels] :as m}]
-  (text/for-operator labels
-                     (str (format "      open  [%d] %s" id subject)
-                          (cond-> ""
-                            (pos? attempts) (str " (" attempts " failed attempts")
-                            (and (pos? attempts) retry-at) (str ", next " (local retry-at zone))
-                            (pos? attempts) (str ")"))
-                          (memo-source state m))))
+  (map #(text/for-operator labels %)
+       (cons (memo-line (format "      open  [%d] " id) subject
+                        (cond-> ""
+                          (pos? attempts) (str " (" attempts " failed attempts")
+                          (and (pos? attempts) retry-at) (str ", next " (local retry-at zone))
+                          (pos? attempts) (str ")")))
+             (memo-source-lines state m))))
 
 (defn- role-line-labels [state id]
   (core/union (core/role-labels state id) (core/id-labels state (:reports-to (core/role state id)))))
@@ -91,6 +120,14 @@
   (str (when working "  [working]")
        (when conversation (if (core/in-turn? conversation) "  [in a conversation turn]" "  [conversation open]"))))
 
+(defn- recipe-mark
+  "The end of a listing's line for a recipe (a routine or a skill) whose
+  latest version came from a wake that read outside text directly: a
+  short mark of what kind of thing it was (relay.provenance/mark), so
+  the operator can see where a recipe came from (decision 14)."
+  [state seq labels]
+  (some->> (provenance/mark (core/sources-of state seq labels)) (str " ")))
+
 (defn- role-status [state zone now id]
   (let [{:keys [title reports-to]} (core/role state id)
         id-ls (core/id-labels state id)
@@ -101,12 +138,15 @@
                            (format "  %-20s %s%s%s" id title
                                    (if reports-to (str ", reports to " reports-to) "")
                                    (activity (core/working-wake state id) (core/open-conversation state id))))]
-       (for [{:keys [name schedule labels]} (core/active-routines state id)]
-         (text/for-operator (core/union labels id-ls) (format "      routine %-16s %s" name schedule)))
-       (map #(text/for-operator id-ls (open-memo state zone %)) (core/unread-memos state id))
-       (for [{memo-id :id :keys [subject labels] :as m} dead]
-         (text/for-operator (core/union labels id-ls)
-                            (str (format "      dead  [%d] %s" memo-id subject) (memo-source state m))))
+       (for [{:keys [name schedule labels version]} (core/active-routines state id)]
+         (text/for-operator (core/union labels id-ls) (str (format "      routine %-16s %s" name schedule)
+                                                           (recipe-mark state version labels))))
+       (mapcat #(map (fn [l] (text/for-operator id-ls l)) (open-memo state zone %)) (core/unread-memos state id))
+       (mapcat (fn [{memo-id :id :keys [subject labels] :as m}]
+                 (map #(text/for-operator (core/union labels id-ls) %)
+                      (cons (memo-line (format "      dead  [%d] " memo-id) subject "")
+                            (memo-source-lines state m))))
+               dead)
        ;; Retrying cannot help while its tools are out, so it is only
        ;; offered once they are back.
        (when (and (seq dead) (not unavailable))
@@ -161,9 +201,11 @@
      (concat paused [""]))
    ["Roles"]
    (if (empty? (core/active-role-ids state))
-     ["  No roles yet. Add the hub, which takes your requests: relay add hub < setup/hub.md"]
+     ;; One hint: relay init adds the steward to a log with no roles,
+     ;; and works from wherever relay is installed.
+     ["  No roles yet. relay init adds your steward."]
      (mapcat #(role-status state zone now %) (core/active-role-ids state)))
-   (when config
+   (when (and config (seq (core/active-role-ids state)))
      (for [id (sort (keys (:grants config)))
            :when (not (core/role state id))]
        (str "  relay.edn grants " id ", but there is no " id " role. Add it: relay add " id
@@ -226,9 +268,10 @@
   "The routines of the given owners, or of every active role."
   [state zone owners]
   (for [owner (or (seq owners) (core/active-role-ids state))
-        {:keys [name schedule baseline labels]} (core/active-routines state owner)]
+        {:keys [name schedule baseline labels version]} (core/active-routines state owner)]
     (text/for-operator (core/union labels (core/id-labels state owner))
-                       (format "%-16s %-18s %s (since %s)" owner name schedule (local baseline zone)))))
+                       (str (format "%-16s %-18s %s (since %s)" owner name schedule (local baseline zone))
+                            (recipe-mark state version labels)))))
 
 (defn notes [zone notes]
   (mapcat (fn [{:keys [name text written-at labels]}]
@@ -283,9 +326,10 @@
   [state zone docs]
   (if (empty? docs)
     ["There are no docs."]
-    (for [{:keys [path at actor content labels]} docs]
+    (for [{:keys [path at actor content labels seq]} docs]
       (text/for-operator labels (str path " (" (count content) " characters, last written "
-                                     (when* at zone) " by " actor ")")))))
+                                     (when* at zone) " by " actor ")"
+                                     (when (str/starts-with? path "skills/") (recipe-mark state seq labels)))))))
 
 (defn doc
   "One version of a doc: its content, all of it behind the gutter."
@@ -465,7 +509,7 @@
                                       ", all day")]
                                 start [(str indent (ready-when start zone))])
                               (body lines (ready-lines-each it) (ready-ref it))
-                              (when from [(str indent from)])
+                              (when from (map #(str indent %) (wrap from room)))
                               (for [r (take-last 1 replies)]
                                 (str indent "You replied: " (let [t (get r "text")] (if (> (count t) 30) (str (subs t 0 29) "…") t))))
                               (when (and (get it "replyTo") (empty? replies))
@@ -497,7 +541,7 @@
                   ", all day")]
             start [(str indent (ready-when start zone))])
           (mapcat (fn [l] (mapcat #(para %) (remove str/blank? (str/split-lines (str l))))) lines)
-          (when from [(str indent from)])
+          (when from (para from))
           (mapcat (fn [r] (para (str "You replied: " (get r "text")))) replies)
           (when (and (get it "replyTo") (empty? replies))
             [(str indent "Reply: relay reply " (get it "replyTo") " -m \"...\"")])

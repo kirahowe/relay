@@ -307,6 +307,23 @@
            (every? (fn [w] (not-any? #(or (re-find unsafe-chars %) (re-find #"https?://" %)) (texts w))) wires)
            (not-any? #(re-find #"https?://" %) shown)))))
 
+(def gen-long-sources
+  ;; Several named sources make the longest "Drew on:" lines.
+  (gen/vector (gen/elements ["web:https://example.org/a/very/long/path/to/office-holidays-2026.html"
+                             "mail:someone.with.a.long.name@lanternhall.example" "github:kira/shelf"
+                             "ics:work-calendar" "search:web" "contaminated"])
+              1 5))
+
+(defspec every-line-of-relay-ready-fits-a-phone 200
+  ;; Regression (U1b review): the "Drew on:" footer and preview lines ran
+  ;; past 60 columns.
+  (prop/for-all [title gen-hostile line gen-hostile srcs gen-long-sources]
+    (let [wires (mapv #(ready/wire (assoc % :sources srcs)) (hostile-items title line (vec (cons "contaminated" srcs))))
+          now (Instant/parse "2026-10-27T12:00:00Z")
+          lines (concat (render/ready wires (ZoneId/of "UTC") now)
+                        (mapcat #(render/ready-one % (ZoneId/of "UTC") now) wires))]
+      (every? #(<= (count %) render/ready-width) lines))))
+
 (defspec her-own-text-is-only-made-visible 200
   (prop/for-all [title gen-hostile line gen-hostile]
     (let [wires (mapv ready/wire (hostile-items title line ["private"]))]
