@@ -19,29 +19,40 @@
 ;; --- text, as every channel shows it
 
 (defn- item-text
-  "An item as text: shown (from outside marked and defanged, hidden
-  characters visible), and in a listed section, behind a dash with its
-  later lines indented."
-  [msg {:keys [list]} it]
-  (let [t (messages/shown (messages/item-labels msg it) (str/trim (:text it)))]
+  "An item as text, through `show` (relay.messages/shown for a screen,
+  plain for a mail app): links broken when it came from outside, refs as
+  words, and in a listed section, behind a dash with its later lines
+  indented. A link relay built itself follows on a line of its own,
+  unbroken."
+  [show msg {:keys [list]} it]
+  (let [t (show (messages/item-labels msg it) (str/trim (:text it)))
+        t (cond-> t (:link it) (str "\n" (:link it)))]
     (if list
       (str "- " (str/replace t "\n" "\n  "))
       t)))
 
+(defn- body-with
+  [show msg]
+  (str/join "\n\n"
+            (for [{:keys [heading list items] :as sec} (:sections msg)]
+              (str (when heading (str (show (:labels msg) (messages/squeeze-line heading)) "\n\n"))
+                   (str/join (if list "\n" "\n\n") (map #(item-text show msg sec %) items))))))
+
 (defn body-text
   "A message's sections as plain text, with \\n line breaks: each
   section's heading, then its items, a blank line between paragraphs and
-  none between the items of a list."
+  none between the items of a list, then the line saying what outside
+  text it drew on, if any (relay.messages/drew-on). For a mail app:
+  hidden characters are taken out and said so."
   [msg]
-  (str/join "\n\n"
-            (for [{:keys [heading list items] :as sec} (:sections msg)]
-              (str (when heading (str (messages/shown-line (:labels msg) heading) "\n\n"))
-                   (str/join (if list "\n" "\n\n") (map #(item-text msg sec %) items))))))
+  (str (body-with messages/plain msg)
+       (when-let [d (messages/drew-on msg)] (str "\n\n" (messages/plain [] d)))))
 
 (defn subject-text
-  "A message's subject as one line the operator is shown."
+  "A message's subject as one line the operator is shown, as written:
+  never marked, so the real subject shows in a list of mail."
   [msg]
-  (messages/shown-line (:labels msg) (:subject msg)))
+  (messages/plain-line (:labels msg) (:subject msg)))
 
 (defn- batch-subject [msgs]
   (let [s (subject-text (first msgs))]
@@ -91,31 +102,69 @@
 
 (defn- crlf [s] (str/replace (str/replace s "\r\n" "\n") #"[\r\n]" "\r\n"))
 
+(def ^:private replyable-origins
+  "What relay told that a reply reaches someone for: a role's message,
+  and the daily note, whose writer hears the answer."
+  (conj messages/role-origins "daily-note"))
+
+(defn- re-subject [s]
+  (str "Re: " (str/replace (str s) #"^(?i)(re:\s*)+" "")))
+
+(defn- clip [s n]
+  (let [s (messages/squeeze-line s)] (if (> (count s) n) (str (subs s 0 (dec n)) "…") s)))
+
+(defn- from-header [{:keys [from from-name]}]
+  (if (messages/from-name? from-name)
+    (str (encode-header from-name) " <" from ">")
+    from))
+
 (defn email
   "One email for a message or for several that go together: {:from :to
   :headers [[name value] ...] :text the whole RFC 5322 message with CRLF
-  line ends}. `parent` gives the message a message answers, by id, so the
-  mail threads to it. Text only, UTF-8, one recipient: the channel's :to."
-  [{:keys [from to]} msgs parent]
-  (let [msgs (vec msgs)
-        one (when-not (next msgs) (first msgs))
-        p (when one (some-> (:in-reply-to one) parent))
-        body (if one
-               (body-text one)
-               (str/join "\n\n----\n\n" (for [m msgs] (str (subject-text m) "\n\n" (body-text m)))))
-        headers (cond-> [["From" from]
-                         ["To" to]
-                         ["Subject" (encode-header (batch-subject msgs))]
-                         ["Date" (.format date-format (.atOffset ^Instant (:created-at (last msgs)) ZoneOffset/UTC))]
-                         ["Message-ID" (batch-id msgs from)]]
-                  p (into [["In-Reply-To" (message-id p from)] ["References" (message-id p from)]])
-                  true (into [["MIME-Version" "1.0"]
-                              ["Content-Type" "text/plain; charset=UTF-8"]
-                              ["Content-Transfer-Encoding" "base64"]]))
-        encoded (.encodeToString (Base64/getMimeEncoder) (.getBytes (str (crlf body) "\r\n") StandardCharsets/UTF_8))]
-    {:from from :to to :headers headers
-     :text (str (str/join (for [[k v] headers] (str k ": " v "\r\n")))
-                "\r\n" encoded "\r\n")}))
+  line ends}. Text only, UTF-8, one recipient: the channel's :to, from
+  its :from under its :from-name.
+
+  `parent` gives the message a message answers, by id. When that one was
+  mailed (`mailed?` says, by id), the mail threads to it: In-Reply-To and
+  References, and the subject is Re: its subject, the reply's own
+  subject leading the body. When it was not, there is no thread to join,
+  so the body opens with what it answers instead. `replies?` says a
+  reply to this mail reaches relay (it reads the agent's mailbox), and
+  then a mail that can be answered ends by saying so."
+  ([channel msgs parent] (email channel msgs parent {}))
+  ([{:keys [from to] :as channel} msgs parent {:keys [mailed? replies?]}]
+   (let [msgs (vec msgs)
+         one (when-not (next msgs) (first msgs))
+         p (when one (some-> (:in-reply-to one) parent))
+         threaded (and p (if mailed? (mailed? (:id p)) true))
+         context (when (and p (not threaded))
+                   (let [said (some-> (last (:replies p)) :text)]
+                     (str "In answer to \"" (clip (subject-text p) 120) "\""
+                          (if said (str ", where you wrote: \"" (clip (messages/plain [] said) 300) "\"") "")
+                          ".")))
+         subject (cond threaded (re-subject (subject-text p))
+                       :else (batch-subject msgs))
+         footer (when (and one replies? (replyable-origins (:origin one)))
+                  "Reply to this mail to answer.")
+         body (if one
+                (str/join "\n\n" (remove nil? [context
+                                                (when threaded (subject-text one))
+                                                (body-text one)
+                                                (when footer (str "-- \n" footer))]))
+                (str/join "\n\n----\n\n" (for [m msgs] (str (subject-text m) "\n\n" (body-text m)))))
+         headers (cond-> [["From" (from-header channel)]
+                          ["To" to]
+                          ["Subject" (encode-header subject)]
+                          ["Date" (.format date-format (.atOffset ^Instant (:created-at (last msgs)) ZoneOffset/UTC))]
+                          ["Message-ID" (batch-id msgs from)]]
+                   threaded (into [["In-Reply-To" (message-id p from)] ["References" (message-id p from)]])
+                   true (into [["MIME-Version" "1.0"]
+                               ["Content-Type" "text/plain; charset=UTF-8"]
+                               ["Content-Transfer-Encoding" "base64"]]))
+         encoded (.encodeToString (Base64/getMimeEncoder) (.getBytes (str (crlf body) "\r\n") StandardCharsets/UTF_8))]
+     {:from from :to to :headers headers
+      :text (str (str/join (for [[k v] headers] (str k ": " v "\r\n")))
+                 "\r\n" encoded "\r\n")})))
 
 (defn curl-quote
   "A value for a curl config file, in double quotes. Nil when it holds a
@@ -171,26 +220,32 @@
 
 (defn wire
   "A message as a client is sent it (_relay/messages): string keys, and
-  every text already safe to show, with outsider beside it when it came
-  from outside. Nothing internal: no origin, no labels' names."
+  every text already safe to show, with outsider beside it when an
+  outsider may have written it, and drewOn, the one line saying what
+  outside text a role's message drew on, when it did. Nothing internal:
+  no origin, no labels' names."
   [{:keys [id kind urgency subject sections in-reply-to thread created-at rev deliveries labels replies acted] :as msg}]
-  {"id" id "kind" kind "urgency" urgency "at" (str created-at) "rev" rev
-   "thread" thread "inReplyTo" in-reply-to
-   "subject" (element labels (messages/squeeze-line subject))
-   "sections" (vec (for [{:keys [heading list items]} sections]
-                     (cond-> {"items" (vec (for [{:keys [action] :as it} items]
-                                             (cond-> (assoc (element (messages/item-labels msg it) (:text it))
-                                                            "refs" (vec (:refs it)))
-                                               ;; What the operator can do with it
-                                               ;; (_relay/messages/act), and whether
-                                               ;; it was done.
-                                               action (assoc "action" {"op" (:op action) "n" (:n action)
-                                                                       "done" (get acted (:n action))}))))}
-                       heading (assoc "heading" (element labels heading))
-                       list (assoc "list" true))))
-   "deliveries" (vec (for [[ch {:keys [status]}] deliveries]
-                       {"channel" ch "status" (name status)}))
-   ;; The operator's own replies, verified by the channel they came
-   ;; through, so never from outside.
-   "replies" (vec (for [{:keys [id at channel text]} replies]
-                    {"id" id "at" (str at) "channel" channel "text" (element [] text)}))})
+  (cond->
+   {"id" id "kind" kind "urgency" urgency "at" (str created-at) "rev" rev
+    "thread" thread "inReplyTo" in-reply-to
+    "subject" (element labels (messages/squeeze-line subject))
+    "sections" (vec (for [{:keys [heading list items]} sections]
+                      (cond-> {"items" (vec (for [{:keys [action link] :as it} items]
+                                              (cond-> (assoc (element (messages/item-labels msg it) (:text it))
+                                                             "refs" (vec (:refs it)))
+                                                ;; A link relay built itself.
+                                                link (assoc "link" link)
+                                                ;; What the operator can do with it
+                                                ;; (_relay/messages/act), and whether
+                                                ;; it was done.
+                                                action (assoc "action" {"op" (:op action) "n" (:n action)
+                                                                        "done" (get acted (:n action))}))))}
+                        heading (assoc "heading" (element labels heading))
+                        list (assoc "list" true))))
+    "deliveries" (vec (for [[ch {:keys [status]}] deliveries]
+                        {"channel" ch "status" (name status)}))
+    ;; The operator's own replies, verified by the channel they came
+    ;; through, so never from outside.
+    "replies" (vec (for [{:keys [id at channel text]} replies]
+                     {"id" id "at" (str at) "channel" channel "text" (element [] text)}))}
+    (messages/drew-on msg) (assoc "drewOn" (text/visible-line (messages/drew-on msg)))))

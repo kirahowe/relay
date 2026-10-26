@@ -5,16 +5,20 @@
   come out. relay.core records it and relay.dispatch asks for it when it
   is due.
 
-  The note has two kinds of content. relay works out the first in code:
-  every change to how a role works (a skill, a routine, a note it keeps,
-  or a role itself) written since the last note by a session that had
-  read something from outside, with what changed, where the outside text
-  came from, and how to undo it (decision 14). No model writes or can
-  leave out that section. The rest is what the role named in
-  :daily-note wrote with daily_note_write before the note was made: what
-  is coming up in the next two weeks with an offer of help each, grants,
-  new GitHub items, and what it learned. Suggestions the operator
-  dismissed are left out, and stay out.
+  The note has two kinds of content. relay works out some in code: every
+  change to how a role works (a skill, a routine, a note it keeps, or a
+  role itself) written since the last note by a session that read
+  something from outside directly in its wake (its sources, relay.
+  provenance), with what changed, a line of what it now says, where the
+  outside text came from, and how to undo it (decision 14); what relay
+  could not check; and the new GitHub issues and pull requests people
+  opened, each with a link relay builds itself. No model writes or can
+  leave out those. The rest is what the role named in :daily-note wrote
+  with daily_note_write before the note was made: what is coming up in
+  the next two weeks with an offer of help each, grants, GitHub items
+  worth a word, and what it learned. Suggestions the operator dismissed
+  are left out, and stay out. Every section is there each day, saying so
+  when it has nothing, so the note always reads the same way.
 
   The note numbers what the operator can act on: a change to undo
   (\"revert 1\") and a suggestion to drop (\"not 2\"). The numbers are
@@ -25,8 +29,10 @@
   operator's zone, until one is recorded for that day, as the morning
   brief before it was. A note with nothing to say is recorded and not
   sent."
+  (:refer-clojure :exclude [peek])
   (:require [clojure.string :as str]
             [relay.messages :as messages]
+            [relay.provenance :as provenance]
             [relay.text :as text])
   (:import (java.time Instant LocalDate LocalTime ZoneId ZonedDateTime)
            (java.time.format DateTimeFormatter)
@@ -108,6 +114,20 @@
 
 (defn role-of [config] (get-in config [:daily-note :role]))
 
+(defn grant-routine
+  "The routine that searches for grants, as [owner name], from relay.edn's
+  `:daily-note {:grants \"scout/grant-search\"}`, or nil."
+  [config]
+  (when-let [g (get-in config [:daily-note :grants])]
+    (when-let [[_ owner name] (re-matches #"([a-z][a-z0-9-]{0,39})/(\S+)" (str g))]
+      [owner name])))
+
+(def grant-search-states
+  "What relay knows of the grant search since the last note, from the
+  wakes of the routine relay.edn names (grant-routine): it ran, it has
+  not run, or it ran and the web search key did not work."
+  #{:ran :not-run :key-failing})
+
 (defn slot ^Instant [^LocalDate date ^LocalTime at ^ZoneId zone]
   ;; A time a clock change skips moves forward by the gap.
   (.toInstant (ZonedDateTime/of date at zone)))
@@ -132,10 +152,13 @@
   (let [{:keys [at role]} daily-note]
     (cond
       (nil? daily-note) nil
-      (not (and (map? daily-note) (every? #{:at :role} (keys daily-note))
+      (not (and (map? daily-note) (every? #{:at :role :grants} (keys daily-note))
                 (messages/parse-hhmm at)))
       (str "relay.edn's :daily-note is {:at \"07:30\" :role \"steward\"}: the time of day as HH:MM, and the"
            " role that writes the note's suggestions, not " (pr-str daily-note) ".")
+      (and (contains? daily-note :grants) (nil? (grant-routine {:daily-note daily-note})))
+      (str "relay.edn's :daily-note :grants names the routine that searches for grants as owner/name,"
+           " such as \"scout/grant-search\", not " (pr-str (:grants daily-note)) ".")
       (not (and (string? role) (re-matches #"[a-z][a-z0-9-]{0,39}" role)))
       "relay.edn's :daily-note needs :role, the role that writes the note's suggestions, such as \"steward\"."
       (public? role)
@@ -144,36 +167,54 @@
 
 ;; --- changes to how a role works
 
-(def ^:private source-pattern #"[a-z]+:.+")
-
 (defn outside?
-  "Whether labels say a session read something from outside: text
-  marked contaminated, or a label naming an outside source (mail:,
-  github:, ics:)."
+  "Whether labels say an outsider may have written the text: contaminated,
+  or a label naming an outside source. Its links are broken wherever it
+  is shown."
   [labels]
-  (boolean (some #(or (= "contaminated" %) (and (string? %) (re-matches source-pattern %))) labels)))
+  (text/contaminated? labels))
 
-(defn- source-words [label]
-  (let [[kind what] (str/split label #":" 2)]
-    (case kind
-      "mail" (cond (= "unverified-operator" what) "a mail that says it is from you, not verified"
-                   (= "unknown" what) "a mail from an unknown sender"
-                   :else (str "a mail that says it is from " (text/defang what)))
-      "github" (str "GitHub, " what)
-      "ics" (str "the calendar " what)
-      nil)))
+(defn change-sources
+  "What a change was shaped by: the outside text its writer read directly
+  (its :sources), or for a change folded from an event that recorded
+  none, what its labels name."
+  [c]
+  (if (sequential? (:sources c)) (:sources c) (provenance/sources (:labels c))))
+
+(defn shaped-by-outside?
+  "Whether a change was shaped by outside text its writer read directly
+  in its wake. Labels carried from earlier wakes do not count, and a
+  change the operator asked for in a wake that read nothing from outside
+  is hers."
+  [c]
+  (provenance/outside? (change-sources c)))
 
 (defn source-phrase
   "Where the outside text a change was shaped by came from, in plain
-  words: each source label's, or \"something from outside\" when no
-  label says more, as from the web."
-  [labels]
-  (let [words (vec (keep source-words (sort (distinct (filter #(and (string? %) (re-matches source-pattern %)) labels)))))]
-    (case (count words)
-      0 "something from outside"
-      1 (first words)
-      2 (str (first words) " and " (second words))
-      (str (first words) ", " (second words) " and " (- (count words) 2) " more"))))
+  words (relay.provenance/summary)."
+  [c]
+  (or (provenance/summary (change-sources c)) "something from outside"))
+
+(def ^:private peek-limit 100)
+
+(defn peek
+  "One line of what a text now says, for the note: the first line
+  `after` has that `before` lacks, without a heading's # or a list's dash,
+  cut to 100 characters. Nil when it adds none."
+  [before after]
+  (let [had (set (map str/trim (str/split-lines (str before))))
+        line (->> (str/split-lines (str after))
+                  (map str/trim)
+                  (remove str/blank?)
+                  (remove had)
+                  (map #(str/trim (str/replace % #"^(#+|[-*]|\d+[.)])\s*" "")))
+                  (remove str/blank?)
+                  first)]
+    (when line
+      (let [line (messages/squeeze-line line)]
+        (if (> (cp-count line) peek-limit)
+          (str (subs line 0 (.offsetByCodePoints ^String line 0 (dec peek-limit))) "…")
+          line)))))
 
 (defn line-delta
   "How many lines `after` has that `before` lacks, and the reverse,
@@ -250,16 +291,18 @@
    (let [t (str text)
          t (if (> (count t) 120) (str (subs t 0 119) "…") t)
          t (if (outside? labels) (text/defang t) t)]
-     (str "Dropped \"" (messages/squeeze-line t) "\". It will not be suggested again."))))
+     (let [t (str/trim (messages/squeeze-line t))]
+       ;; A suggestion that ends a sentence is not given a second stop.
+       (str "Dropped \"" t "\"" (when-not (re-find #"[.!?]$" t) ".") " It will not be suggested again.")))))
 
 (defn flagged
   "The changes to check: those after event `since` that a role (never
-  the operator) wrote from a session that had read something from
-  outside, oldest first."
+  the operator) wrote from a session that read something from outside
+  directly in its wake, oldest first."
   [changes since]
   (vec (filter #(and (> (:seq %) (or since 0))
                      (not (#{"operator" "dispatcher"} (:actor %)))
-                     (outside? (:labels %)))
+                     (shaped-by-outside? %))
                changes)))
 
 (defn quiet
@@ -268,7 +311,7 @@
   [changes since]
   (vec (filter #(and (> (:seq %) (or since 0))
                      (not (#{"operator" "dispatcher"} (:actor %)))
-                     (not (outside? (:labels %))))
+                     (not (shaped-by-outside? %)))
                changes)))
 
 ;; --- the note
@@ -282,56 +325,125 @@
   limits; it counts the rest, which relay changes lists."
   40)
 
+(def empty-lines
+  "What a section of the note says when it has nothing, so every note
+  has the same sections."
+  {"ahead" "Nothing coming up in the next two weeks that I can help with."
+   "grants" "Nothing on grants since the last note."
+   "github" "Nothing new from people on GitHub."
+   "learned" "Nothing new."})
+
+(defn grants-empty-line
+  "What the Grants section says when nobody wrote it, from what relay
+  knows of the search (grant-search-states): never that there is nothing
+  new unless a search ran."
+  [grant-search]
+  (case grant-search
+    :not-run "The grant search has not run since the last note."
+    :key-failing "The grant search did not run: the web search key is not working."
+    :ran "No new grants since the last note."
+    (empty-lines "grants")))
+
+(defn github-link
+  "The link relay builds for a GitHub item from the repository relay.edn
+  names and the item's number, never from text an outsider wrote, so it
+  can stay a link: https://github.com/<repo>/issues/<n>, or /pull/<n> for
+  a pull request. Nil when the repository or number does not fit."
+  [{:keys [repo number kind]}]
+  (when (and (string? repo) (re-matches #"[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+" repo) (pos-int? number))
+    (str "https://github.com/" repo (if (= "pull request" kind) "/pull/" "/issues/") number)))
+
+(defn github-sections
+  "New GitHub items from people as sections, one a repository, each item
+  one line with its link."
+  [items]
+  (vec (for [[repo its] (sort-by key (group-by :repo items))]
+         {:heading (str "GitHub: " repo) :list true
+          :items (vec (for [{:keys [number kind title user] :as it} (sort-by :number its)
+                            :let [link (github-link it)]]
+                        (cond-> {:text (str (str/capitalize (str kind)) " #" number " by " user ": "
+                                            (messages/squeeze-line title))
+                                 :labels ["contaminated" (str "github:" (str/lower-case (str repo)))]}
+                          link (assoc :link link))))})))
+
 (defn compose
   "The note for `date`: {:subject :sections :numbered :flagged}, or nil
   sections when there is nothing to say. `changes` are the recorded
   changes to how roles work, `since` the event of the last note,
-  `written` the parts written since, {part {:items :labels}}, and
-  `dismissed` the keys of suggestions the operator turned down.
+  `written` the parts written since, {part {:items :labels}}, `dismissed`
+  the keys of suggestions the operator turned down, `github` the new
+  items people opened since the last note ({:repo :number :kind :title
+  :user}), with `github?` whether any GitHub source is watched,
+  `problems` what relay could not check, one line each, and
+  `grant-search` what relay knows of the grant search (grant-search-states,
+  nil when relay.edn names none).
   :numbered is what each number in the note stands for:
   {:n :op \"revert\" :change seq :text} or {:n :op \"dismiss\" :part
   :keys :text}. The number is the only one the operator is shown for an
   item: a reply, the client and `relay revert` all take it. A flagged
   change that cannot be undone (revert-refusal) is listed with the
   reason and gets no number."
-  [{:keys [^LocalDate date changes since written dismissed]}]
+  [{:keys [^LocalDate date changes since written dismissed github github? problems grant-search]}]
   (let [flags (flagged changes since)
         n (atom 0)
         numbered (atom [])
         number! (fn [entry] (let [k (swap! n inc)] (swap! numbered conj (assoc entry :n k)) k))
         shown-flags (take flags-shown flags)
         flag-items (vec (for [c shown-flags]
-                          (if-let [why (revert-refusal c)]
-                            {:text (str (change-line c) ", shaped by " (source-phrase (:labels c)) ". " why)}
-                            (let [k (number! {:op "revert" :change (:seq c) :text (change-line c)})]
-                              {:text (str k ". " (change-line c) ", shaped by " (source-phrase (:labels c))
-                                          ". Reply \"revert " k "\" to undo it.")
-                               :action {:op "revert" :n k}}))))
+                          (let [peek (:peek c)
+                                peek (when peek (if (outside? (:labels c)) (text/defang peek) peek))
+                                says (when peek (str " It says: \"" peek "\"."))]
+                            (if-let [why (revert-refusal c)]
+                              {:text (str (change-line c) ", shaped by " (source-phrase c) "." says " " why)
+                               :labels (:labels c)}
+                              (let [k (number! {:op "revert" :change (:seq c) :text (change-line c)})]
+                                {:text (str k ". " (change-line c) ", shaped by " (source-phrase c) "." says
+                                            " Reply \"revert " k "\" to undo it.")
+                                 :labels (:labels c)
+                                 :action {:op "revert" :n k}})))))
         flag-items (cond-> flag-items
                      (> (count flags) flags-shown)
                      (conj {:text (str "And " (plural (- (count flags) flags-shown) "more change")
                                        " like these. relay changes lists them all.")}))
-        part-section
+        part-items
         (fn [part]
           (let [{:keys [items labels]} (get written part)
                 items (cond->> items (dismissable part) (remove #(dismissed? dismissed part %)))]
-            (when (seq items)
-              {:heading (part-headings part)
-               :items (vec (for [{:keys [text offer] :as it} items]
-                             (if (dismissable part)
-                               (let [k (number! {:op "dismiss" :part part :keys (item-keys part it) :text text :labels (vec labels)})]
-                                 {:text (str k ". " text (when offer (str " " offer)))
-                                  :labels labels :action {:op "dismiss" :n k}})
-                               {:text (str text (when offer (str " " offer))) :labels labels})))})))
+            (vec (for [{:keys [text offer] :as it} items]
+                   (if (dismissable part)
+                     (let [k (number! {:op "dismiss" :part part :keys (item-keys part it) :text text :labels (vec labels)})]
+                       {:text (str k ". " text (when offer (str " " offer)))
+                        :labels labels :action {:op "dismiss" :n k}})
+                     {:text (str text (when offer (str " " offer))) :labels labels})))))
+        ahead (part-items "ahead")
+        grants (part-items "grants")
+        github-said (part-items "github")
+        ;; A quiet change is the writer's to describe, in its own words.
+        learned (part-items "learned")
+        hub-sections (github-sections github)
+        section (fn [part heading items]
+                  {:heading heading
+                   :items (if (seq items)
+                            items
+                            [{:text (if (= "grants" part) (grants-empty-line grant-search) (empty-lines part))}])})
+        something? (or (seq flag-items) (seq problems) (seq ahead) (seq grants) (seq github-said)
+                       (seq hub-sections) (seq learned))
         sections (vec (concat
                        (when (seq flag-items) [{:heading "Changes to check" :items flag-items}])
-                       (keep part-section parts)))
+                       (when (seq problems) [{:heading "What I could not check" :items (mapv (fn [t] {:text t}) problems)}])
+                       [(section "ahead" (part-headings "ahead") ahead)
+                        (section "grants" (part-headings "grants") grants)]
+                       (cond
+                         (seq hub-sections) (cond-> hub-sections
+                                              (seq github-said) (conj {:heading "GitHub" :items github-said}))
+                         (or github? (seq github-said)) [(section "github" (part-headings "github") github-said)])
+                       [(section "learned" (part-headings "learned") learned)]))
         dismiss? (some #(= "dismiss" (:op %)) @numbered)
         sections (cond-> sections
                    dismiss? (conj {:items [{:text "Reply \"not N\" to drop a suggestion. It will not come back."}]}))]
     {:subject (str "Daily note for " (.format date-format date)
                    (when (seq flags) (str ": " (plural (count flags) "change") " to check")))
-     :sections (when (seq (mapcat :items sections)) sections)
+     :sections (when something? sections)
      :numbered @numbered
      :flagged (mapv :seq flags)}))
 
@@ -436,12 +548,12 @@
     (if (empty? changes)
       ["No role has changed how it works yet."]
       (vec (concat
-            (for [[[_ {:keys [seq at labels actor] :as c}] [_ r]] (map vector shown refs)]
+            (for [[[_ {:keys [seq at actor] :as c}] [_ r]] (map vector shown refs)]
               (str (or r "  ")
                    "  " (.format fmt (.atZone (Instant/parse (str at)) zone)) "  " (change-line c)
                    (when (= "operator" actor) ", by you")
-                   (when (and (not (#{"operator" "dispatcher"} actor)) (outside? labels))
-                     (str ", shaped by " (source-phrase labels)))
+                   (when (and (not (#{"operator" "dispatcher"} actor)) (shaped-by-outside? c))
+                     (str ", shaped by " (source-phrase c)))
                    (cond (contains? reverted seq) ", undone"
                          (not (revertable? c)) ", which cannot be undone")))
             (when (seq kinds)

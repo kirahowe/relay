@@ -70,7 +70,7 @@
       "body" "" "html_url" (str "https://github.com/owner/repo/issues/" n) "comments" 0
       "updated_at" "2026-10-26T12:10:00Z"})))
 
-(deftest the-tick-sends-new-github-items-from-people-in-one-push
+(deftest the-tick-keeps-new-github-items-from-people-for-the-daily-note
   (let [s (srv/run-server (fn [_] {:status 200 :headers {"Content-Type" "application/json"} :body issues-json})
                           {:ip "127.0.0.1" :port 0 :legacy-return-value? false})
         base (str "http://127.0.0.1:" (srv/server-port s))
@@ -85,17 +85,16 @@
       (tick! (at "2026-10-26T12:00:00Z")) ;; the first poll marks where to start
       (is (= [] (pushed)))
       (tick! (at "2026-10-26T12:15:00Z"))
-      (let [[p & more] (pushed)]
-        (is (nil? more) "one push for the tick")
-        (is (= "2 new on GitHub" (:title p)))
-        (is (str/includes? (:body p) "Issue #5 in owner/repo by alice")))
+      (is (= [] (pushed)) "nothing about them is urgent")
+      (is (= [5 6] (map :number (:github-news (inbound/current-state (at "2026-10-26T12:16:00Z")))))
+          "a bot's is not news")
       (testing "the steward still gets the memo, the bot's item too"
         (let [memos (filter #(= "steward" (:to %)) (vals (:memos (inbound/current-state (at "2026-10-26T12:16:00Z")))))]
           (is (= 1 (count memos)))
           (is (str/includes? (:body (first memos)) "dependabot"))))
       (testing "the same items again are no news"
         (tick! (at "2026-10-26T12:30:00Z"))
-        (is (= 1 (count (pushed)))))
+        (is (= [5 6] (map :number (:github-news (inbound/current-state (at "2026-10-26T12:31:00Z")))))))
       (finally (srv/server-stop! s)))))
 
 (deftest the-command-line-lists-undoes-and-drops
@@ -113,7 +112,7 @@
       (is (= 0 exit))
       (is (str/starts-with? venues "1.  ") "the note's number, the same one a reply and the client use")
       (is (not (some #(str/includes? % (str c)) (butlast out))) "never the log's own number")
-      (is (str/includes? venues "Changed the note \"venues\" (1 line added, 1 removed), shaped by a mail that says it is from eve@example[.]net"))
+      (is (str/includes? venues "Changed the note \"venues\" (1 line added, 1 removed), shaped by a mail from eve@example.net"))
       (is (str/starts-with? (last out) "To undo one: relay revert <n> for item n of the latest daily note"))
       ;; Regression (U1): `relay revert 1` took 1 as the log's number, and
       ;; removed the first role ever added.

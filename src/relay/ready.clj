@@ -14,63 +14,42 @@
     :move      a files_move call: what moved where, by which role, and
                its undo
 
-  An item is {:id \"message:7\" :kind :at :seq :title :lines [text] :from
-  \"from a mail by x@y\" or nil :labels [..]} and what its kind adds. A
-  kind is one source, a function of the state that gives items (`sources`):
-  a new kind is one more entry there, and a line in `kind-words`. Nothing
-  else in this namespace knows the kinds.
+  An item is {:id \"message:7\" :kind :at :seq :title :lines [text]
+  :labels [..] :sources [..]} and what its kind adds. A kind is one
+  source, a function of the state that gives items (`sources`): a new
+  kind is one more entry there. Nothing else in this namespace knows the
+  kinds.
 
-  Labels are provenance. The operator is shown where a thing came from
-  (`provenance`), never a label's name: a label of the form kind:detail,
-  such as mail:x@y or web, reads as \"from a mail by x@y\" or \"from the
-  web\". `wire` is the form a client is sent, with every text already
-  made safe to show."
+  The operator is shown where a thing came from (`provenance`) in words,
+  from its sources: the outside text the session that made it read
+  directly (relay.provenance), never a label's name, and never what that
+  session merely had in context. Labels still decide whether its links
+  are broken. `wire` is the form a client is sent, with every text
+  already made safe to show."
   (:require [clojure.string :as str]
             [relay.cards :as cards]
             [relay.core :as core]
             [relay.messages :as messages]
             [relay.move-view :as move-view]
+            [relay.provenance :as provenance]
             [relay.text :as text]))
 
 ;; --- where a thing came from
 
-(def ^:private detail-limit 80)
-
-(defn- detail [s]
-  (let [s (messages/squeeze-line s)
-        s (if (> (count s) detail-limit) (str (subs s 0 detail-limit) "…") s)]
-    (text/visible-line s)))
-
-(def ^:private sources-by-kind
-  "How a label of a known kind reads: kind -> (fn [detail-or-nil] words)."
-  {"mail" (fn [d] (if d (str "a mail by " d) "a mail"))
-   "web" (fn [_] "the web")
-   "github" (fn [d] (if d (str "GitHub (" d ")") "GitHub"))
-   "calendar" (fn [d] (if d (str "a calendar (" d ")") "a calendar"))})
-
-(defn outside?
-  "Whether text with these labels came from outside: anything but her
-  own things."
-  [labels]
-  (boolean (some #(not= "private" %) (filter string? labels))))
-
 (defn provenance
-  "Where text with these labels came from, in plain words for the
-  operator, or nil when it is all her own. A label of the form kind:detail
-  (or a bare kind) of a known kind reads by that kind; any other label
-  that marks outside text reads as \"from outside\". No label's name ever
-  appears, and a detail is cut and made visible."
-  [labels]
-  (let [labels (distinct (filter string? labels))
-        known (for [l labels
-                    :let [[_ k d] (re-matches #"([a-z]+)(?::(.+))?" l)
-                          f (get sources-by-kind k)]
-                    :when f]
-                (f (when d (detail d))))
-        outside? (outside? labels)]
-    (cond
-      (seq known) (str/join ", " (map #(str "from " %) (sort (distinct known))))
-      outside? "from outside")))
+  "Where a thing came from, in plain words for the operator, from its
+  sources (relay.provenance): the one line a message's footer would be,
+  \"Drew on: the web page x; a mail from y\", or nil when it is all her
+  own or relay's. No label's name ever appears, and nothing in it can
+  drive a screen."
+  [sources]
+  (some-> (provenance/drew-on sources) text/visible-line))
+
+(defn- sources-of-item
+  "An item's sources: its own, or for one made without them, what its
+  labels name."
+  [{:keys [sources labels] :as it}]
+  (if (contains? it :sources) sources (provenance/sources labels)))
 
 ;; --- the sources
 
@@ -84,7 +63,13 @@
                  (cond-> text
                    (= "reverted" done) (str " (undone)")
                    (= "dismissed" done) (str " (dropped)"))))
+   ;; Links relay built itself, by line, kept followable.
+   :links (into {} (keep-indexed (fn [i it] (when (:link it) [i (:link it)]))
+                                 (for [sec (:sections m) it (:items sec)] it)))
    :labels (vec (:labels m))
+   ;; Only a role's message says where it came from; relay's own say
+   ;; what they are.
+   :sources (if (messages/role-origins (:origin m)) (vec (:sources m)) [])
    :replies (vec (:replies m))
    :acts (vec (for [[i it] (map-indexed vector (for [sec (:sections m) it (:items sec)] it))
                     :let [{:keys [op n]} (when (map? it) (:action it))]
@@ -99,23 +84,27 @@
    :title (:title p)
    :lines (vec (remove str/blank? [(:where p) (:preview p)]))
    :labels (vec (:labels p))
+   :sources (if (sequential? (:sources p)) (:sources p) (provenance/sources (:labels p)))
    :tool (:tool p)})
 
-(defn- event-item [e]
+(defn- event-item [state e]
   {:id (str "event:" (:id e)) :kind :event :at (:recorded-at e) :seq (:seq e)
    :title (:title e)
    :lines (vec (remove str/blank? [(:location e) (:description e)]))
    :labels (vec (:labels e))
+   :sources (core/sources-of state (:seq e) (:labels e))
    :start (:start e) :end (:end e)
    ;; A whole day: its first day and the day after its last.
    :start-date (:start-date e) :end-date (:end-date e)})
 
-(defn- finding-item [c]
+(defn- finding-item [state c]
   (let [p (cards/progress c)]
     {:id (str "card:" (:id c)) :kind :finding :at (:added-at c) :seq (:id c)
      :title (get-in c [:title :text])
      :lines (vec (when (and p (pos? (:total p))) [(str (:done p) " of " (:total p) " done")]))
      :labels (vec (cards/text-labels c))
+     ;; Every event that wrote the card counts, its edits included.
+     :sources (or (:sources c) (core/sources-of state (:id c) (cards/text-labels c)))
      :card (:id c)}))
 
 (defn- move-item
@@ -140,6 +129,7 @@
      :lines (vec (concat lines
                          (when (:stopped c) [(str "It stopped: " (:stopped c))])))
      :labels (vec (:labels c))
+     :sources (if (sequential? (:sources c)) (:sources c) (provenance/sources (:labels c)))
      :move (:id c) :role (:actor c)
      :undo (when (or moving? (seq left)) (:id c))
      :undone (boolean all-undone?)}))
@@ -151,11 +141,11 @@
    (fn [state] (map #(message-item state %) (remove :resolved (vals (:messages state)))))
    (fn [state] (map draft-item (vals (:prepared state))))
    (fn [state]
-     (for [e (core/calendar-events state {})] (event-item e)))
+     (for [e (core/calendar-events state {})] (event-item state e)))
    (fn [state]
      (for [c (core/board state false)
            :when (not= core/operator (:owner c))]
-       (finding-item c)))
+       (finding-item state c)))
    (fn [state] (map move-item (core/move-calls state)))])
 
 (def default-limit 60)
@@ -206,22 +196,27 @@
 ;; --- the wire
 
 (defn- safe
-  "Text for the operator: from outside its links are broken, and every
-  hidden character is made visible. The \"from\" line says where it came
-  from, so the text carries no mark of its own."
+  "Text for the operator: refs as words, links broken when an outsider
+  may have written it, and every hidden character made visible. The
+  \"from\" line says where it came from, so the text carries no mark of
+  its own."
   [labels s]
-  (text/visible (if (outside? labels) (text/defang s) (str s))))
+  (messages/shown labels s))
 
 (defn- safe-line [labels s]
-  (text/visible-line (if (outside? labels) (text/defang (messages/squeeze-line s)) (messages/squeeze-line s))))
+  (messages/shown-line labels s))
 
 (defn- wire-item [{:keys [labels] :as it}]
-  (let [from (provenance labels)]
+  (let [sources (sources-of-item it)
+        from (provenance sources)]
     (cond-> {"id" (:id it) "kind" (name (:kind it)) "at" (str (:at it)) "seq" (:seq it)
              "title" (safe-line labels (:title it))
-             "lines" (mapv #(safe labels %) (:lines it))
+             "lines" (vec (map-indexed (fn [i l]
+                                         (cond-> (safe labels l)
+                                           (get (:links it) i) (str "\n" (text/visible-line (get (:links it) i)))))
+                                       (:lines it)))
              "from" from
-             "outsider" (outside? labels)}
+             "outsider" (provenance/outside? sources)}
       (:message it) (assoc "message" (:message it) "messageKind" (:message-kind it)
                            "urgency" (:urgency it) "thread" (:thread it)
                            "replyTo" (:reply-to it)

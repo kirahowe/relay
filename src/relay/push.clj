@@ -13,8 +13,9 @@
   :file reaches nobody. It is for staging data, where an agent checks that
   a push was sent without any reaching the operator's phone.
 
-  The text is already what the operator is shown: the renderer marked
-  what came from outside and made every hidden character visible."
+  The text is already what the operator is shown: the renderer broke the
+  links of what came from outside and took out every hidden character,
+  saying so."
   (:require [babashka.fs :as fs]
             [babashka.http-client :as http]
             [babashka.process :as p]

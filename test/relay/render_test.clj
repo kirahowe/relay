@@ -75,7 +75,7 @@
            (= (sort ids) (sort (map #(second (re-find #"^  (\S+)" %)) headers)))
            (= (min woken (count ids)) (count (filter #(str/includes? % "[conversation open]") headers)))
            (<= (count recent) 5)
-           (some #{"Operator's inbox: 0 open"} lines)))))
+           (some #{"Your inbox: 0 open"} lines)))))
 
 (deftest status-shows-every-role-and-at-most-five-wakes
   (quick 200 status-lists-every-role-once))
@@ -115,9 +115,9 @@
 ;; --- memos, notes and the rest
 
 (deftest an-inbox-indents-every-line-of-a-memo
-  (is (= ["Nothing waiting."] (render/inbox utc [])))
+  (is (= ["Nothing waiting."] (render/inbox core/empty-state utc [])))
   (is (= ["" "[4] Lunch" "    from clerk, 2026-10-15 12:00" "  │ Noon?" "  │ " "  │ Or one."]
-         (render/inbox utc [{:id 4 :from "clerk" :subject "Lunch" :body "Noon?\n\nOr one." :sent-at t0}]))))
+         (render/inbox core/empty-state utc [{:id 4 :from "clerk" :subject "Lunch" :body "Noon?\n\nOr one." :sent-at t0}]))))
 
 (deftest routines-are-shown-for-one-role-or-all
   (let [state (-> core/empty-state
@@ -149,8 +149,16 @@
            (render/roles state (roster/roster state cfg t0))))))
 
 (deftest a-wake-and-a-doc-say-what-happened
-  (is (= ["idle {}"] (render/wake-result {:result :idle})))
-  (is (= ["ran {:wake 3}"] (render/wake-result {:result :ran :wake 3})))
+  ;; Regression: it printed raw EDN, such as ran {:wake 4, :outcome ...}.
+  (is (= ["Hub had nothing to do."] (render/wake-result "hub" {:result :idle})))
+  (is (= ["Hub ran (wake 3) and finished its memos."]
+         (render/wake-result "hub" {:result :ran :wake 3 :outcome "ran" :left-open 0})))
+  (is (= ["Hub ran (wake 3) and left 1 memo open; it will come back to them."]
+         (render/wake-result "hub" {:result :ran :wake 3 :outcome "ran" :left-open 1})))
+  (is (= ["Hub could not start (wake 4). relay ready says what it needs."]
+         (render/wake-result "hub" {:result :ran :wake 4 :outcome "needs-attention" :left-open 1})))
+  (is (= ["scout is a public role, so a note for it needs --public."]
+         (render/wake-result "scout" {:result :invalid :message "scout is a public role, so a note for it needs --public."})))
   (is (= ["Wrote a/b, version 9"] (render/doc-put "a/b" [{:seq 9}])))
   (is (= ["a/b already says that."] (render/doc-put "a/b" []))))
 
@@ -166,18 +174,32 @@
       (log/init! data)
       (let [printed (with-out-str
                       (is (= {:exit 0 :out ["Nothing waiting."]} (cli/execute ["--data" data "inbox"])))
-                      (is (= ["Roles" "" "Operator's inbox: 0 open"]
+                      (is (= ["Roles" "  No roles yet. Add the hub, which takes your requests: relay add hub < setup/hub.md"
+                              "" "Your inbox: 0 open"]
                              (:out (cli/execute ["--data" data "status"]))))
-                      (testing "an unknown command shows the usage and fails"
-                        (is (= {:exit 1 :out (str/split-lines cli/usage)} (cli/execute ["--data" data "nonsense"])))))]
+                      (testing "an unknown command says so, shows the short usage and fails"
+                        (is (= {:exit 1 :out (concat ["relay has no command nonsense." ""] (str/split-lines cli/short-usage))}
+                               (cli/execute ["--data" data "nonsense"])))))]
         (is (= "" printed)))
       (finally (fs/delete-tree dir)))))
 
-(deftest a-memo-from-a-scout-is-marked-as-from-the-web
-  (let [m {:id 4 :from "scout" :subject "Found" :body "Three grants." :sent-at t0 :labels ["contaminated"]}
-        web? #{"scout"}]
-    (is (some #(= "[4] [from the web] Found" %) (render/memo utc m {:from-web? web?})))
-    (is (some #(= "  [from the web]" %) (render/inbox utc [m] {:from-web? web?})))
-    (testing "from a house role that read the web, it is only from outside"
-      (is (some #(= "[4] [from outside] Found" %) (render/memo utc (assoc m :from "hub") {:from-web? web?})))
-      (is (some #(= "[4] [from outside] Found" %) (render/memo utc m))))))
+(deftest a-memo-says-where-it-came-from-once-and-marks-nothing
+  (let [m {:id 4 :from "scout" :subject "Found https://grants.example" :body "Three grants." :sent-at t0 :labels ["contaminated"]}]
+    (is (= ["" "[4] Found hxxps://grants[.]example" "    from scout, 2026-10-15 12:00" "  │ Three grants."]
+           (render/memo core/empty-state utc m)))
+    (testing "what an ingestor brought says what it is"
+      (is (some #{"    GitHub (o/r), 2026-10-15 12:00"}
+                (render/memo core/empty-state utc (assoc m :from "dispatcher" :labels ["contaminated" "github:o/r"]))))
+      (is (some #{"    Your calendar, 2026-10-15 12:00"}
+                (render/memo core/empty-state utc (assoc m :from "dispatcher" :labels ["contaminated" "ics:calendar"])))))))
+
+(deftest status-lines-sit-under-their-role-with-where-they-came-from-last
+  ;; Regression: the marker went first, ahead of the indent, so a memo
+  ;; did not sit under its role: "[from the calendar calendar]     open  [26] ...".
+  (let [state (-> core/empty-state
+                  (cmd :role/add {:id "hub" :title "Hub" :instructions "x"}))
+        [state] (core/run-command state {:type :memo/send :actor core/operator :labels ["contaminated" "ics:calendar"]
+                                         :args {:to "hub" :subject "Your calendar: 2 new" :body "b"}}
+                                  {:now t0 :config cfg})
+        lines (vec (render/status state utc t0))]
+    (is (some #{"      open  [2] Your calendar: 2 new (from your calendar)"} lines) (pr-str lines))))

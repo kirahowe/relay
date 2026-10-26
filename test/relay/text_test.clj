@@ -10,6 +10,7 @@
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
             [relay.cli :as cli]
+            [relay.core :as core]
             [relay.test-support :as support]
             [relay.inbound :as inbound]
             [relay.log :as log]
@@ -79,25 +80,28 @@
 (defspec text-from-outside-for-the-operator-has-no-followable-url 500
   (prop/for-all [s gen-urlish]
     (let [out (text/visible (text/for-operator ["contaminated"] s))]
-      (and (str/starts-with? out "[from outside] ")
-           (not (str/includes? out "contaminated"))
+      (and (not (str/includes? out "contaminated"))
            (not (re-find #"(?i)\b(https?|ftp)://" out))
            ;; Only the defanged schemes keep their ://.
            (every? #{"hxxp" "hxxps" "fxp"}
                    (map (comp str/lower-case second) (re-seq #"(?i)([a-z][a-z0-9+.\-]*)://" out)))
            (not (re-find #"(?i)\bwww\.[^\s\[]" out))
-           (not (re-find #"[^\s\[][.\u3002\uFF0E\uFF61][^\s\]]" out))
+           ;; No host with a known ending keeps a dot, and no fullwidth
+           ;; or ideographic full stop sits inside a word.
+           (not (re-find #"(?i)(?<![@\w.\-/])(?:[a-z0-9](?:[a-z0-9\-]*[a-z0-9])?\.)+com(?![\w\-])" out))
+           (not (re-find #"[^\s\[][\u3002\uFF0E\uFF61][^\s\]]" out))
            (not (raw-hidden out))))))
 
 (deftest clean-text-is-only-made-visible
   (is (= "see https://example.com é \\u{202e}" (text/visible (text/for-operator ["private"] "see https://example.com é ‮")))))
 
-(deftest the-operator-s-inbox-marks-memos-from-outside
-  (let [lines (render/inbox java.time.ZoneOffset/UTC
+(deftest the-operator-s-inbox-breaks-links-from-outside-and-marks-nothing
+  (let [lines (render/inbox core/empty-state java.time.ZoneOffset/UTC
                             [{:id 3 :from "clerk" :subject "Click https://evil.example/x" :body "www.evil.example"
                               :sent-at (java.time.Instant/now) :labels ["contaminated" "private"]}])
         out (str/join "\n" lines)]
-    (is (str/includes? out "[3] [from outside] Click hxxps://evil[.]example/x"))
+    (is (str/includes? out "[3] Click hxxps://evil[.]example/x"))
+    (is (not (str/includes? out "[from")))
     (is (str/includes? out "www[.]evil[.]example"))))
 
 
@@ -115,7 +119,9 @@
         (submit {:type :journal/write :args {:text url}} "clerk")
         (submit {:type :routine/write :args {:name "r" :schedule "every 1d" :instructions url}} "clerk")
         (submit {:type :memo/send :args {:to "clerk" :subject url :body url}} "clerk")
-        (doseq [args [["status"] ["roles"] ["routines"] ["log"] ["log" "--json"] ["docs"] ["doc" "a.md"]
+        ;; relay log --json prints the stored events exactly: it is for a
+        ;; program, not a page to tap on.
+        (doseq [args [["status"] ["roles"] ["routines"] ["log"] ["docs"] ["doc" "a.md"]
                       ["facts" "--all"] ["notes" "clerk"] ["journal" "clerk"] ["inbox"]]
                 :let [out (str/join "\n" (:out (cli/execute (concat ["--data" data] args))))]]
           (is (not (str/includes? out "https://evil")) (str/join " " args))
@@ -132,12 +138,13 @@
           (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "clerk" :title s :instructions s}})
           (inbound/submit! sys {:type :journal/write :actor "clerk" :labels ["contaminated"] :args {:text (str s " https://evil.example")}})
           (let [lines (:out (cli/execute ["--data" data "log" "--json"]))]
-            (every? (fn [line]
-                      (or (and (map? (json/parse-string line))
-                               (every? #(< 31 % 127) (iterator-seq (.iterator (.codePoints ^String line))))
-                               (not (str/includes? line "https://evil")))
-                          false))
-                    lines)))))))
+            (and (every? (fn [line]
+                           (or (and (map? (json/parse-string line))
+                                    (every? #(< 31 % 127) (iterator-seq (.iterator (.codePoints ^String line)))))
+                               false))
+                         lines)
+                 ;; The stored event, exactly: nothing defanged in place.
+                 (= (map #(json/parse-string % true) lines) (log/read-events data)))))))))
 
 ;; --- invisible code points
 
@@ -285,28 +292,37 @@
   (is (= "10[.]0[.]0[.]1 and evil[.]example" (text/defang "10.0.0.1 and evil.example")))
   (is (= "hxxps://pay[.]example/1[.]5" (text/defang "https://pay.example/1.5"))))
 
-(deftest a-mail-s-sender-is-shown-as-a-claim-from-outside
-  (is (= "[from outside: a mail that says it is from security@bank[.]com] Approve it."
-         (text/for-operator ["contaminated" "mail:security@bank.com"] "Approve it.")))
-  (is (= "[from outside: a mail that says it is from you, not verified] Approve it."
-         (text/for-operator ["contaminated" "mail:unverified-operator"] "Approve it.")))
-  (is (= "[from outside] x" (text/for-operator ["contaminated" "mail:unknown"] "x")))
-  (is (= "[from outside] x" (text/for-operator ["contaminated" "mail:not-an-address"] "x"))
-      "a mail label that is no address is never shown as one")
-  (is (= "[from GitHub, owner/repo] x" (text/for-operator ["contaminated" "github:owner/repo"] "x"))))
+(deftest text-is-never-marked-only-its-links-broken
+  (is (= "Approve it at hxxps://bank[.]com" (text/for-operator ["contaminated" "mail:security@bank.com"] "Approve it at https://bank.com")))
+  (is (= "mine https://a.example" (text/for-operator ["private"] "mine https://a.example")))
+  (is (= ["  │ see hxxps://a[.]example"] (text/block ["contaminated"] "see https://a.example")))
+  (is (= ["  │ hi"] (text/block [] "hi"))))
 
-(deftest the-marker-says-where-outside-text-came-from
-  (testing "from the web, from a mail, or from outside when relay does not know"
-    (is (= "[from the web]" (text/outside-marker-for [] :web)))
-    (is (= "[from a mail by stranger@example[.]com]" (text/outside-marker-for [] {:mail "stranger@example.com"})))
-    (is (= "[from outside]" (text/outside-marker-for [] nil)))
-    (is (= "[from outside]" (text/outside-marker-for [] {:mail ""}))))
-  (testing "a sender's address cannot close the marker or bring a line of its own"
-    (let [m (text/outside-marker-for [] {:mail "a] [b\nc@x.example"})]
-      (is (= 1 (count (re-seq #"\]" (str/replace m "[.]" "")))))
-      (is (not (str/includes? m "\n")))))
-  (testing "for-operator and block use it, and only for text from outside"
-    (is (= "[from the web] see hxxps://a[.]example" (text/for-operator ["contaminated"] "see https://a.example" :web)))
-    (is (= "mine" (text/for-operator [] "mine" :web)))
-    (is (= ["  [from the web]" "  │ hi"] (text/block ["contaminated"] "hi" :web)))
-    (is (= ["  │ hi"] (text/block [] "hi" :web)))))
+(deftest defang-leaves-file-names-paths-and-times-alone
+  ;; Regression: every dot in a word was broken, so todo.md read todo[.]md
+  ;; and a log's 08:06:36.382648Z read 08:06:36[.]382648Z.
+  (doseq [s ["todo.md" "interview.txt" "projects/choir.md" "hub/riverbend-interview-prep.md"
+             "2026-10-26T08:06:39.118474Z" "dana@riverbend.test" "Did you read todo.md?"
+             "jquery.min.js" "setup.sh"]]
+    (is (= s (text/defang s)) s))
+  (is (= "github[.]com/kira/tidy" (text/defang "github.com/kira/tidy")))
+  (is (= "www[.]riverbend[.]zz" (text/defang "www.riverbend.zz")))
+  (testing "a host is broken whatever its ending, once a path, query or port follows it"
+    ;; Regression: only hosts with a listed ending were broken, so
+    ;; evil.sh/c?d=SECRET reached a mail app as a link.
+    (doseq [[s d] [["evil.sh/c?d=SECRET" "evil[.]sh/c?d=SECRET"] ["evil.icu/x" "evil[.]icu/x"]
+                   ["evil.md:8080" "evil[.]md:8080"] ["-evil.com/x" "-evil[.]com/x"] ["_evil.com" "_evil[.]com"]
+                   ["(evil.icu)" "(evil[.]icu)"] ["evil.lol" "evil[.]lol"] ["пример.рф/x" "пример[.]рф/x"]
+                   ["evil.xn--p1ai/x" "evil[.]xn--p1ai/x"] ["a.b.md" "a[.]b[.]md"] ["x@evil.com/s" "x@evil[.]com/s"]]]
+      (is (= d (text/defang s)) s))))
+
+(deftest refs-become-words
+  (is (= "Closed Mondays." (text/refs-as-words "Closed Mondays [[fact:4]].")))
+  (is (= "See the choir notes (projects/choir.md)." (text/refs-as-words "See the choir notes [[file:projects/choir.md]].")))
+  (is (= "Remembrance Day (office-holidays.html)." (text/refs-as-words "Remembrance Day [[web:office-holidays.html]].")))
+  (is (= "No grants found." (text/refs-as-words "No grants found [[memo:45]][[journal:60]].")))
+  (is (= "a [b] c (x)" (text/refs-as-words "a [b] c [[file:x]]"))))
+
+(deftest hidden-characters-in-mail-are-taken-out-and-said
+  (is (= "samwise (a hidden character removed)" (text/visible-plain "sam\u200bwise")))
+  (is (= "plain\ttext\n" (text/visible-plain "plain\ttext\n"))))

@@ -7,7 +7,9 @@
             [clojure.test.check :as tc]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
-            [relay.digest :as digest])
+            [relay.channels]
+            [relay.digest :as digest]
+            [relay.messages])
   (:import (java.time Instant LocalDate LocalTime ZoneId ZoneOffset)))
 
 (defn- quick [n property]
@@ -73,17 +75,33 @@
   (is (not (digest/outside? []))))
 
 (deftest the-source-is-named-in-plain-words
-  (is (= "a mail that says it is from eve@example[.]net"
-         (digest/source-phrase ["contaminated" "mail:eve@example.net"])))
-  (is (= "GitHub, owner/repo" (digest/source-phrase ["contaminated" "github:owner/repo" "private"])))
-  (is (= "the calendar work" (digest/source-phrase ["ics:work"])))
-  (is (= "a mail that says it is from you, not verified" (digest/source-phrase ["mail:unverified-operator"])))
-  (is (= "something from outside" (digest/source-phrase ["contaminated"])) "as from the web")
-  (is (= "GitHub, a/b and the calendar c" (digest/source-phrase ["ics:c" "github:a/b"])))
-  (is (str/ends-with? (digest/source-phrase ["ics:c" "github:a/b" "mail:x@y.org" "ics:d"]) "and 2 more"))
-  (testing "no label's name is shown"
-    (is (not-any? #(str/includes? (digest/source-phrase ["contaminated" %]) "contaminated")
-                  ["mail:x@y.org" "github:a/b"]))))
+  (let [phrase #(digest/source-phrase {:labels %})]
+    (is (= "a mail from eve@example.net" (phrase ["contaminated" "mail:eve@example.net"])))
+    (is (= "GitHub (owner/repo)" (phrase ["contaminated" "github:owner/repo" "private"])))
+    (is (= "the work calendar" (phrase ["ics:work"])))
+    (is (= "a mail that says it is from you, not verified" (phrase ["mail:unverified-operator"])))
+    (is (= "something from outside" (phrase ["contaminated"])))
+    (is (= "the web page office-holidays.html" (digest/source-phrase {:sources ["web:office-holidays.html"]
+                                                                     :labels ["contaminated" "ics:x"]}))
+        "what the session read directly, not all it held")
+    (is (= "GitHub (a/b) and the c calendar" (phrase ["ics:c" "github:a/b"])))
+    (is (str/ends-with? (phrase ["ics:c" "github:a/b" "mail:x@y.org" "ics:dd" "ics:e"]) "and 2 more"))
+    (testing "no label's name is shown"
+      (is (not-any? #(str/includes? (phrase ["contaminated" %]) "contaminated")
+                    ["mail:x@y.org" "github:a/b"])))))
+
+(deftest a-change-is-flagged-for-what-its-writer-read-directly
+  (let [c {:seq 4 :what "skill" :name "g" :change "changed" :actor "steward" :delta {:added 1 :removed 0}
+           :labels ["contaminated" "ics:calendar" "private"]}]
+    (is (= [c] (digest/flagged [c] 0)) "an older change, with only labels, counts them")
+    (is (empty? (digest/flagged [(assoc c :sources [])] 0)) "one whose writer read nothing outside is quiet")
+    (is (= 1 (count (digest/flagged [(assoc c :sources ["mail:x@y.org"])] 0))))))
+
+(deftest a-peek-is-the-first-new-line
+  (is (= "Ask about holiday hours" (digest/peek nil "# Ask about holiday hours\nUse when: x")))
+  (is (= "Use when: y" (digest/peek "# T\nUse when: x" "# T\nUse when: y")))
+  (is (nil? (digest/peek "a" "a")))
+  (is (= 100 (count (digest/peek nil (apply str (repeat 300 "x")))))))
 
 (deftest line-deltas-count-what-was-added-and-removed
   (is (= {:added 2 :removed 0} (digest/line-delta nil "a\nb")))
@@ -214,9 +232,12 @@
                          "learned" {:items [{:text "I keep the venues you like in a note now."}] :labels ["private"]}}
                :dismissed #{}})]
     (is (= "Daily note for Monday 26 October: 1 change to check" (:subject note)))
-    (is (= ["Changes to check" "Coming up" "What I learned" nil] (map :heading (:sections note))))
-    (is (= (str "1. Changed the how-to \"grants\" (2 lines added), shaped by a mail that says it is from"
-                " eve@example[.]net. Reply \"revert 1\" to undo it.")
+    (is (= ["Changes to check" "Coming up" "Grants" "What I learned" nil] (map :heading (:sections note)))
+        "every section, each day")
+    (is (= "Nothing on grants since the last note." (:text (first (:items (nth (:sections note) 2)))))
+        "relay.edn names no grant search, so relay says nothing of one")
+    (is (= (str "1. Changed the how-to \"grants\" (2 lines added), shaped by a mail from"
+                " eve@example.net. Reply \"revert 1\" to undo it.")
            (:text (first (:items (first (:sections note)))))))
     (is (= "2. Interview with Maple Co, Thu 29 Oct 10:00 Want prep notes?"
            (:text (first (:items (second (:sections note)))))))
@@ -355,3 +376,35 @@
     (is (= (inc digest/flags-shown) (count items)))
     (is (= "And 20 more changes like these. relay changes lists them all." (:text (last items))))
     (is (str/starts-with? (:subject note) "Daily note for Monday 26 October: 60 changes"))))
+
+(deftest github-items-and-what-relay-could-not-check-collect-into-the-note
+  (let [note (digest/compose
+              {:date (LocalDate/parse "2026-10-26") :since 0 :changes [] :written {} :dismissed #{}
+               :github [{:repo "kira/tidy" :number 41 :kind "issue" :title "Crash on sam​wise" :user "maria-dev"}
+                        {:repo "kira/shelf" :number 3 :kind "pull request" :title "Fix https://evil.example" :user "bob"}]
+               :github? true
+               :problems ["relay could not check mailbox since Mon 26 Oct 07:00. The last try said: refused"]})
+        headings (map :heading (:sections note))]
+    (is (= ["What I could not check" "Coming up" "Grants" "GitHub: kira/shelf" "GitHub: kira/tidy" "What I learned"]
+           headings))
+    (let [tidy (first (filter #(= "GitHub: kira/tidy" (:heading %)) (:sections note)))
+          it (first (:items tidy))]
+      (is (= "Issue #41 by maria-dev: Crash on sam​wise" (:text it)))
+      (is (= "https://github.com/kira/tidy/issues/41" (:link it)) "a link relay built, from the repo and number")
+      (is (= ["contaminated" "github:kira/tidy"] (:labels it))))
+    (testing "in mail the link stays a link, the title's links are broken, and a hidden character is said"
+      (let [m (relay.messages/message {:kind "digest" :subject (:subject note) :sections (:sections note)})
+            body (relay.channels/body-text (assoc m :id 9 :origin "daily-note" :labels []))]
+        (is (str/includes? body "https://github.com/kira/tidy/issues/41"))
+        (is (str/includes? body "https://github.com/kira/shelf/pull/3"))
+        (is (str/includes? body "Fix hxxps://evil[.]example"))
+        (is (str/includes? body "Crash on samwise (a hidden character removed)"))))
+    (testing "a note with nothing but sections that have nothing is not sent"
+      (is (nil? (:sections (digest/compose {:date (LocalDate/parse "2026-10-26") :since 0 :changes [] :written {}
+                                            :dismissed #{} :github [] :github? true :problems []})))))))
+
+(deftest a-github-link-is-built-only-from-what-relay-knows
+  (is (= "https://github.com/a/b/issues/1" (digest/github-link {:repo "a/b" :number 1 :kind "issue"})))
+  (is (= "https://github.com/a/b/pull/2" (digest/github-link {:repo "a/b" :number 2 :kind "pull request"})))
+  (is (nil? (digest/github-link {:repo "a/b c" :number 1})))
+  (is (nil? (digest/github-link {:repo "a/b" :number -1}))))

@@ -5,19 +5,18 @@
                 bidi overrides, zero-width characters, variation selectors
                 and anything else Unicode draws as nothing) as \\u{XXXX},
                 so text cannot rewrite the terminal or hide what it says.
-    defang      breaks URLs and domains so a tap or click cannot follow
-                them.
-    for-operator  defang, with a marker saying where it came from ([from
-                the web], [from a mail by x], or [from outside]), for
-                text whose labels say an outsider may have written it. The edge
-                that shows text applies visible to it once, last.
+    defang      breaks links and hosts so a tap or click cannot follow
+                them, and leaves file names, paths and times alone.
+    for-operator  defang, for text whose labels say an outsider may have
+                written it. The edge that shows text applies visible to
+                it once, last.
 
     sanitize    cleans what the operator pastes, at the entry (see
                 sanitize-input, the one function every entry point calls),
                 and says what it changed.
 
-  The operator is never shown a label's name: text from outside is
-  marked as from outside."
+  The operator is never shown a label's name. Where something came from
+  is said in words, once, by relay.provenance."
   (:require [clojure.string :as str]))
 
 (def default-ignorable
@@ -91,12 +90,79 @@
   [s]
   (escape s true))
 
+(def file-extensions
+  "Endings that mark a file name rather than a host. A name with one dot
+  and one of these endings (todo.md, setup.sh, video.mov) is left as
+  written when nothing follows it that only a link has: a path, a port,
+  a query or a fragment."
+  #{"md" "markdown" "txt" "rtf" "tex" "pdf" "doc" "docx" "odt" "xls" "xlsx" "ods" "ppt" "pptx" "odp"
+    "csv" "tsv" "json" "jsonl" "edn" "yaml" "yml" "toml" "ini" "cfg" "conf" "xml" "html" "htm" "css"
+    "scss" "js" "mjs" "cjs" "ts" "tsx" "jsx" "clj" "cljs" "cljc" "bb" "java" "kt" "go" "py" "rb" "rs"
+    "c" "h" "cpp" "hpp" "cs" "sh" "zsh" "bash" "pl" "lua" "sql" "db" "sqlite" "log" "diff" "patch"
+    "bak" "tmp" "png" "jpg" "jpeg" "gif" "webp" "heic" "svg" "ico" "tif" "tiff" "bmp" "mp3" "m4a"
+    "wav" "flac" "ogg" "aac" "mp4" "m4v" "mov" "mkv" "avi" "webm" "zip" "tar" "gz" "tgz" "bz2" "xz"
+    "7z" "rar" "dmg" "pkg" "ics" "vcf" "eml" "mbox" "epub" "ps" "so" "dylib" "pem" "crt" "allium"})
+
+(def never-domains
+  "The file-extensions that are no top-level domain, so a name ending in
+  one is a file whatever its dots (jquery.min.js, notes.2026.txt). Any
+  other, such as md, sh or zip, counts only in a name with one dot: a
+  host under it could carry data in its labels."
+  #{"markdown" "txt" "rtf" "pdf" "docx" "xlsx" "pptx" "csv" "tsv" "json" "jsonl" "edn" "yaml" "yml"
+    "toml" "xml" "html" "htm" "css" "scss" "js" "mjs" "cjs" "tsx" "jsx" "clj" "cljs" "cljc" "png"
+    "jpg" "jpeg" "gif" "webp" "heic" "svg" "mp3" "m4a" "wav" "flac" "mp4" "gz" "tgz" "bz2" "xz"
+    "ics" "eml" "allium"})
+
+(def ^:private host-candidate
+  ;; A run of dotted labels, not inside a longer one, then what follows it
+  ;; that only a link has: a path, a query, a fragment or a port. The
+  ;; @ before it says it is a mail address's domain. A ? or # counts
+  ;; only with something after it, so a question ending in a file name
+  ;; keeps it.
+  #"(?:(@)|(?<![\p{L}\p{M}\p{N}_\-@])(?<![\p{L}\p{M}\p{N}_\-]\.))([\p{L}\p{M}\p{N}_\-]+(?:\.[\p{L}\p{M}\p{N}_\-]+)+)(/|[?#](?=\S)|:\d)?")
+
+(defn- break-dots [s] (str/replace s "." "[.]"))
+
+(defn- tld-like?
+  "Whether a label could end a host: a word of two or more letters, alone
+  or before a hyphen or underscore (com-x reads as com to a linker), or a
+  punycode label."
+  [label]
+  (boolean (or (re-matches #"[\p{L}\p{M}]{2,}(?:[_\-].*)?" label)
+               (str/starts-with? (str/lower-case label) "xn--"))))
+
+(defn- host?
+  "Whether a dotted word may be followed as a link: one with a label after
+  the first that could end a host (tld-like?), unless nothing that only a
+  link has follows it and it reads as a file name or is a mail address's
+  domain."
+  [at word after]
+  (let [labels (str/split word #"\.")
+        ending (str/lower-case (peek labels))]
+    (boolean
+     (and (some tld-like? (rest labels))
+          (or (some? after)
+              (and (str/blank? at)
+                   (not (or (never-domains ending)
+                            (and (file-extensions ending) (= 2 (count labels)))))))))))
+
 (defn defang
-  "Text with every URL broken so it cannot be followed: http becomes
-  hxxp, https hxxps and ftp fxp, any other scheme's :// becomes [:]//, and
-  every dot inside a word becomes [.], which breaks bare domains too. A
-  plain number keeps its dots (12.50, 1.5.2), so amounts read as
-  written; a dotted quad such as 10.0.0.1 is an address and does not."
+  "Text with every link broken so it cannot be followed, and nothing
+  else changed: http becomes hxxp, https hxxps and ftp fxp, any other
+  scheme's :// becomes [:]//, and in a word that holds a scheme or starts
+  www., every dot becomes [.]. A dotted quad such as 10.0.0.1 has its dots
+  broken, and so does any dotted name that ends in a word of letters
+  (evil.icu, пример.рф) or carries a punycode label, whatever its ending,
+  unless it is a file name (todo.md, interview.txt) with no path, port,
+  query or fragment after it, or the domain of a mail address with
+  nothing after it. Fullwidth and ideographic full stops, which a browser
+  reads as dots, are broken wherever they sit between two characters.
+  Doc paths (projects/choir.md), times (08:06:36.382648Z) and amounts
+  (12.50) are left as they are.
+
+  Hidden characters (hidden?) are not looked through: a caller that
+  removes them must do so first, or a host split by one would come
+  together again after this has looked at it."
   [s]
   (-> (str s)
       (str/replace #"(?i)([a-z][a-z0-9+.\-]*)://"
@@ -107,70 +173,37 @@
                        (str scheme "[:]//"))))
       (str/replace #"\S+"
                    (fn [word]
-                     (if (and (re-matches #"[$€£¥(+\-]?\d+(\.\d+){1,2}[),.;:%]*" word)
-                              (not (re-find #"\d+\.\d+\.\d+\.\d+" word)))
-                       word
-                       ;; Fullwidth and ideographic full stops work as dots
-                       ;; in a host too. A dot already broken as [.] stays
-                       ;; as it is, so defanging twice is defanging once.
-                       (str/replace word #"(?<=\S)(?:[\u3002\uFF0E\uFF61]|(?<!\[)\.|\.(?!\]))(?=\S)" "[.]"))))))
+                     (let [word (str/replace word #"(?<=\S)[。．｡](?=\S)" "[.]")]
+                       (if (or (str/includes? word "://") (str/includes? word "[:]//")
+                               (re-find #"(?i)\bwww\." word))
+                         (str/replace word #"(?<=[^\s\[])\.(?=[^\s\]])" "[.]")
+                         (-> word
+                             (str/replace #"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?![\w.])" break-dots)
+                             (str/replace host-candidate
+                                          (fn [[m at host after]]
+                                            (if (host? at host after)
+                                              (str at (break-dots host) after)
+                                              m))))))))))
 
-(defn contaminated? [labels] (boolean (some #{"contaminated"} labels)))
-
-(def outside-marker
-  "What marks text from outside for the operator when relay knows no more
-  of where it came from: plain words, never the name of a label."
-  "[from outside]")
-
-(defn source-words
-  "Where something came from, in plain words, from the one label among
-  `labels` that names a source (mail:..., github:..., ics:...), or nil
-  when none or several do."
+(defn contaminated?
+  "Whether labels say an outsider may have written the text: contaminated,
+  or a label naming an outside source (mail:..., github:...)."
   [labels]
-  (let [sources (filter #(and (string? %) (re-matches #"[a-z]+:.+" %)) labels)]
-    (when (= 1 (count sources))
-      (let [[kind what] (str/split (first sources) #":" 2)]
-        (case kind
-          ;; A mail's sender is what its From header says, which anyone
-          ;; can write, so it is shown as a claim, from outside. A mail
-          ;; that names the operator and was not verified never carries
-          ;; their address here (relay.ingest/mail-label).
-          "mail" (cond
-                   (= "unverified-operator" what) "from outside: a mail that says it is from you, not verified"
-                   (str/includes? what "@") (str "from outside: a mail that says it is from " what))
-          "github" (str "from GitHub, " what)
-          "ics" (str "from the calendar " what)
-          nil)))))
+  (boolean (some #(and (string? %) (or (= "contaminated" %) (re-matches #"[a-z]+:.+" %))) labels)))
 
-(defn marker
-  "What marks text from outside: where it came from when one label says
-  so, its links broken too, else [from outside]."
-  [labels]
-  (if-let [w (source-words labels)] (str "[" (defang w) "]") outside-marker))
-
-(defn outside-marker-for
-  "The marker for text from outside, saying where it came from when relay
-  knows: `:web` for what a scout brought back, {:mail address} for a mail
-  from that sender, and otherwise what the labels say (marker). A sender's
-  address is an outsider's text, so it is defanged and can hold no bracket
-  or line break that would end the marker early."
-  [labels from]
-  (let [addr (when (map? from) (str/trim (str/replace (str (:mail from)) #"[\s\[\]]+" " ")))]
-    (cond (= :web from) "[from the web]"
-          (seq addr) (str "[from a mail by " (defang addr) "]")
-          :else (marker labels))))
+;; Where something came from is said once, in words, where it matters: a
+;; message's footer (relay.provenance/drew-on), the end of a status line,
+;; the "from" line of a ready item. Text itself carries no mark, so a
+;; subject or a line reads as written.
 
 (defn for-operator
-  "Text for the operator from a source with these labels: from outside
-  defanged and marked, saying where it came from when `from` says
-  (outside-marker-for). It is not yet visible: the edge that shows it
-  (the command line, a push) applies visible, exactly once, since visible
-  is not idempotent (it doubles a backslash)."
-  ([labels s] (for-operator labels s nil))
-  ([labels s from]
-   (if (contaminated? labels)
-     (str (outside-marker-for labels from) " " (defang s))
-     (str s))))
+  "Text for the operator from a source with these labels: when an
+  outsider may have written any of it (the labels carry contaminated),
+  its links broken (defang). It is not yet visible: the edge that shows
+  it (the command line, a push) applies visible, exactly once, since
+  visible is not idempotent (it doubles a backslash)."
+  [labels s]
+  (if (contaminated? labels) (defang s) (str s)))
 
 (def gutter
   "What every line of untrusted multi-line text is shown behind. Nothing
@@ -180,16 +213,11 @@
 
 (defn block
   "A role's or an outsider's multi-line text as screen lines: every line,
-  the first included, behind `gutter`, and from outside, defanged and
-  headed by a [from outside] line of the screen's own, which covers the
-  whole block. Not yet visible: the edge applies visible-line to each
-  line. The one helper for showing a role's or an outsider's text."
-  ([labels s] (block labels s nil))
-  ([labels s from]
-   (let [bad (contaminated? labels)
-         t (if bad (defang (str s)) (str s))]
-     (vec (concat (when bad [(str "  " (outside-marker-for labels from))])
-                  (map #(str gutter %) (str/split t #"\n" -1)))))))
+  the first included, behind `gutter`, its links broken when an outsider
+  may have written it. Not yet visible: the edge applies visible-line to
+  each line. The one helper for showing a role's or an outsider's text."
+  [labels s]
+  (vec (map #(str gutter %) (str/split (for-operator labels s) #"\n" -1))))
 
 (def ^:private scripts
   "The scripts whose letters most often pass for one another's."
@@ -409,3 +437,57 @@
         value (walk x)
         report (apply merge-reports empty-report @reports)]
     {:value value :report report :notes (report-lines report)}))
+
+;; --- refs, as the operator reads them
+
+(def ^:private ref-pattern #"[ \t]?\[\[([a-z]+):([^\[\]\n]+)\]\]")
+
+(defn- unescape-ref [s]
+  (str/replace s #"%(25|5B|5D|0A)" (fn [[_ code]] (case code "25" "%" "5B" "[" "5D" "]" "0A" " "))))
+
+(defn refs-as-words
+  "Text with every ref (relay.refs, [[kind:id]]) made words the operator
+  can use: a file or a web page as its path or address in brackets, and
+  any other (a memo, a fact, a journal entry, a card, something shown)
+  left out, with the space before it, since its number means nothing to
+  her. The refs stay on the item, for a client to open."
+  [s]
+  (str/replace (str s) ref-pattern
+               (fn [[whole kind id]]
+                 (let [lead (if (re-find #"^[ \t]" whole) " " "")]
+                   (case kind
+                     ("file" "web") (str lead "(" (unescape-ref id) ")")
+                     "")))))
+
+(defn strip-hidden
+  "Text with every hidden code point (hidden?) taken out, newlines and
+  tabs kept, and how many were: [text n]."
+  [s]
+  (let [s (str s)
+        sb (StringBuilder.)
+        n (volatile! 0)]
+    (doseq [cp (iterator-seq (.iterator (.codePoints s)))]
+      (if (hidden? cp) (vswap! n inc) (.appendCodePoint sb (int cp))))
+    [(str sb) @n]))
+
+(defn without-hidden
+  "Text with every hidden code point taken out (strip-hidden)."
+  [s]
+  (first (strip-hidden s)))
+
+(defn hidden-note
+  "What is said after text that had `n` hidden characters taken out, or
+  \"\" when it had none."
+  [n]
+  (if (pos? n) (str " (" (if (= 1 n) "a hidden character" "hidden characters") " removed)") ""))
+
+(defn visible-plain
+  "Text for a reader that is not a terminal, such as a mail app or a
+  phone's notification: every hidden code point (hidden?) taken out,
+  since nothing there can drive a screen, with \"(hidden characters
+  removed)\" after it when any were, so nothing hides unseen. Newlines and
+  tabs stay. Text to be defanged too is stripped before it is defanged
+  (relay.messages/plain), never after."
+  [s]
+  (let [[t n] (strip-hidden s)]
+    (str t (hidden-note n))))

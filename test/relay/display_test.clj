@@ -429,5 +429,6 @@
                   (= fence (last lines))
                   (not-any? #(str/starts-with? (str/triml %) fence) (butlast (rest lines)))
                   (not (re-find #"(?i)https?://" out))
-                  (not (str/includes? out "example.com"))
+                  ;; No host is left whole: example.coma is no host.
+                  (not (re-find #"(?i)(?<![@\w.\-/])example\.com(?![\w\-])" out))
                   (not (re-find #"[​‮]" out)))))))

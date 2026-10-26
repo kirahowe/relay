@@ -34,6 +34,26 @@
             [relay.websocket :as ws]
             [relay.week :as week]))
 
+(def short-usage
+  "What relay help prints: the everyday commands, each line at most 60
+  characters, so it reads on a phone's terminal."
+  "relay: your assistant, and what it has ready for you.
+
+  relay                    open the dashboard
+  relay ready              what is ready for you
+  relay reply <n> -m <text>
+                           answer message <n>
+  relay memo hub -s <subject> -m <text>
+                           ask for something
+  relay revert <n>         undo a change the note flags
+  relay dismiss <n>        drop a suggestion from the note
+  relay undo <n>           put back files that were moved
+  relay status             what is running, and what it cost
+
+Every command takes --data <dir>, unless the file
+~/.config/relay/config.edn names it.
+relay help all lists every command.")
+
 (def usage
   "relay: a relay of agent roles, with an append-only log as the record.
 
@@ -42,7 +62,7 @@ Every command needs the data directory, from --data <dir> or from the file
 
   relay init                          make the data directory, asking for its settings
   relay status                        roles, open work, harnesses, recent wakes
-  relay inbox                         memos waiting for the operator
+  relay inbox                         memos waiting for you
   relay ready [--all]                 what is ready for you, the 10 newest: what
                                       you were told, drafts, calendar entries,
                                       findings, file moves
@@ -71,7 +91,8 @@ Every command needs the data directory, from --data <dir> or from the file
                                       the client (relay-tui unless relay.edn
                                       names another with :client), with <role>
                                       in focus when given
-  relay help                          print this (also relay --help)
+  relay help                          the everyday commands (also relay --help)
+  relay help all                      print this
   relay acp [<role>] [--trace <file>]
                                       talk with the roles from an ACP client, which
                                       runs this as its agent command: through
@@ -100,7 +121,7 @@ Every command needs the data directory, from --data <dir> or from the file
   relay fact revert <id> <version>    put back an earlier version of a fact
   relay notes <role>                  a role's notes
   relay journal <role> [-n <count>]   a role's latest journal entries
-  relay cards [--archived]            the operator's board: the active cards, and
+  relay cards [--archived]            your board: the active cards, and
                                       with --archived the archived ones too
   relay card <id>                     one card
   relay card <id> <op> [--item <n>] [--row <n>] [--column <n>] [--state <s>]
@@ -371,7 +392,7 @@ id public too.")
             :doc (let [{:keys [path version]} args
                        v (core/doc-version state path {:version version})]
                    (when-not v (fail! (str "There is no doc at " path (when version (str " with version " version)) ".")))
-                   (render/doc v))
+                   (render/doc zone v))
             :doc-history (let [vs (get-in state [:docs (:path args) :versions])]
                            (when (empty? vs) (fail! (str "There is no doc at " (:path args) ".")))
                            (render/doc-history zone (:path args) vs)))}))
@@ -603,8 +624,7 @@ id public too.")
         lines (fn [ls] {:exit 0 :out ls})]
     (case cmd
       "status" (lines (render/status (state) zone ((:clock sys)) (:config sys) (pause/recovery-lines (pause-file opts))))
-      "inbox" (lines (render/inbox zone (core/unread-memos (state) core/operator)
-                                   {:from-web? #(config/public? (:config sys) %)}))
+      "inbox" (lines (let [st (state)] (render/inbox st zone (core/unread-memos st core/operator))))
       "ready" (let [all (ready/ready (state) {:limit Integer/MAX_VALUE})
                     shown (if (:all opts) all (take ready-shown all))
                     [ref] more]
@@ -616,8 +636,15 @@ id public too.")
                     (lines (render/ready-one (ready/wire it) zone ((:clock sys)))))
                   (lines (render/ready (mapv ready/wire shown) zone ((:clock sys)) (- (count all) (count shown))))))
       "reply" (let [[id] more
-                    text (or (:message opts) (stdin-text))]
-                (when-not (some-> id parse-long) (fail! "usage: relay reply <message> -m <text>"))
+                    _ (when-not (some-> id parse-long) (fail! "usage: relay reply <message> -m <text>"))
+                    text (or (:message opts)
+                             *stdin*
+                             ;; Read from the terminal or a pipe, saying
+                             ;; so on stderr, so it never waits unseen.
+                             (do (binding [*out* *err*]
+                                   (println "Type your reply, then press Ctrl-D on a new line. (Or pass -m \"...\".)")
+                                   (flush))
+                                 (slurp *in*)))]
                 (submit! sys :message/reply {:in-reply-to (parse-long id) :text text})
                 (result 0 (str "Sent your reply to message " id ".")))
       "memo" (let [[to] more
@@ -658,7 +685,9 @@ id public too.")
       "wake" (let [[r] more
                    woke (dispatch/wake! sys r {:note (sanitized (:note opts)) :dispatched (:dispatched opts)
                                                :public (:public opts)})]
-               {:exit (if (#{:ran :idle} (:result woke)) 0 1) :out (render/wake-result woke)})
+               (if (or (= :idle (:result woke)) (and (= :ran (:result woke)) (= "ran" (:outcome woke))))
+                 {:exit 0 :out (render/wake-result r woke)}
+                 {:exit 1 :out [] :err (render/wake-result r woke)}))
       :dashboard (result (dispatch/dashboard! sys (:open opts) {:data (when (:data opts) (str (fs/absolutize dir)))}))
       "acp" (let [[r] more]
               (result (serve/acp! sys r {:trace (:trace opts) :socket (:socket opts) :run-dir (:run-dir opts)})))
@@ -746,7 +775,9 @@ id public too.")
                  (if ok (lines ok) (apply result 1 refused))))
       "poll" (let [said (ingest-run/poll-now! sys (first more))]
                (dispatch/announce-github! sys)
-               (apply result 0 said))
+               ;; A source it could not check fails the command, so a
+               ;; script can tell.
+               (apply result (if (some #(str/includes? % ": could not check it: ") said) 1 0) said))
       "note" (note! sys more)
       "changes" (let [st (state)
                       notes (filter #(= "daily-note" (:origin %)) (vals (:messages st)))]
@@ -792,7 +823,7 @@ id public too.")
                              :taken (set (keep (fn [[t spec]] (when-not (= n (:connection spec)) t)) (:tools config)))
                              :say say :ask ask
                              :pin! (fn [pins] (submit! sys :tools/pin {:pins pins}))}))))
-      (apply result 1 (str/split-lines usage)))))
+      (apply result 1 (str "relay has no command " cmd ".") "" (str/split-lines short-usage)))))
 
 (def ^:private last-messages-file
   "Where the tick keeps the :messages of the last relay.edn that loaded,
@@ -931,8 +962,10 @@ id public too.")
   [args]
   (let [{:keys [cmd more opts]} (parse-line args)]
     (cond
-      (or (nil? cmd) (#{"help" "-h" "--help"} cmd))
+      (and (= "help" cmd) (= "all" (first more)))
       (apply result 0 (str/split-lines usage))
+      (or (nil? cmd) (#{"help" "-h" "--help"} cmd))
+      (apply result 0 (str/split-lines short-usage))
       ;; A tick marks itself as running before it looks for the pause file,
       ;; and a paused tick touches nothing else (see relay.pause).
       (= "tick" cmd)

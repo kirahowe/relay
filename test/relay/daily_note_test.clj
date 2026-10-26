@@ -102,7 +102,7 @@
         m (note w)]
     (is (= "digest" (:kind m)))
     (is (= "Daily note for Monday 26 October: 1 change to check" (:subject m)))
-    (is (str/includes? (note-text m) "1. New how-to \"grants\" (1 line added), shaped by a mail that says it is from eve@example[.]net. Reply \"revert 1\" to undo it."))
+    (is (str/includes? (note-text m) "1. New how-to \"grants\" (1 line added), shaped by a mail from eve@example.net. It says: \"Grants\". Reply \"revert 1\" to undo it."))
     (is (str/includes? (note-text m) "2. Interview, Thu 10:00 Prep notes?"))
     (is (not (re-find #"relay revert|change:" (note-text m))) "one number per item, and no command for a phone")
     (is (not (str/includes? (note-text m) "venues")) "a quiet change is the writer's to describe")
@@ -417,12 +417,13 @@
         written (core/written-parts (:state w))
         w (ok (compose w "2026-10-26"))
         m (note w)
-        it (first (mapcat :items (:sections m)))]
+        it (first (filter #(str/includes? (:text %) "Arts fund") (mapcat :items (:sections m))))
+        grants (first (keep-indexed (fn [i sec] (when (= "Grants" (:heading sec)) i)) (:sections m)))]
     (is (= ["contaminated" "mail:eve@example.net"] (get-in written ["grants" :labels])))
-    (is (str/includes? (:text it) "Arts fund"))
+    (is it)
     (is (= ["contaminated" "mail:eve@example.net"] (:labels it)))
-    (is (true? (get-in (channels/wire m) ["sections" 0 "items" 0 "outsider"])))
-    (is (str/includes? (channels/body-text m) "eve@example[.]net"))
+    (is (true? (get-in (channels/wire m) ["sections" grants "items" 0 "outsider"])))
+    (is (not (str/includes? (channels/body-text m) "[from")) "no line of it is stamped")
     (is (every? #(contains? (set (:labels draft)) %) ["contaminated" "mail:eve@example.net"])
         "the draft carries the labels of what it shows")))
 
@@ -613,8 +614,30 @@
           :url (str "https://github.com/Owner/Repo/issues/" number) :comments 0}
          more))
 
-(deftest new-items-from-people-get-one-push-a-tick
+(deftest new-items-from-people-wait-for-the-daily-note
+  ;; Nothing about a new issue is urgent: with a daily note, they collect
+  ;; into it, each with a link relay builds, rather than a push a tick.
   (let [cursor [{:repo "Owner/Repo" :since "2026-10-26T00:00:00Z" :etag nil}]
+        w (-> (seed)
+              (run "dispatcher" :ingest/record {:source "repos" :cursor cursor
+                                                :items [(issue 1 7) (issue 2 8 :kind "pull request" :user "bob")]})
+              ok)]
+    (is (empty? (:last (ok (run w "dispatcher" :github/announce {})))) "no push")
+    (let [w (ok (compose w "2026-10-26"))
+          m (note w)
+          sec (first (filter #(= "GitHub: Owner/Repo" (:heading %)) (:sections m)))]
+      (is (= ["Issue #7 by alice: Title 7" "Pull request #8 by bob: Title 8"] (map :text (:items sec))))
+      (is (= ["https://github.com/Owner/Repo/issues/7" "https://github.com/Owner/Repo/pull/8"] (map :link (:items sec))))
+      (is (str/includes? (channels/body-text m) "https://github.com/Owner/Repo/pull/8") "followable in mail")
+      (is (= [] (:github-news (:state w))) "told once"))))
+
+(deftest without-a-daily-note-new-items-from-people-get-one-push-a-tick
+  (let [cursor [{:repo "Owner/Repo" :since "2026-10-26T00:00:00Z" :etag nil}]
+        cfg (config/resolve-config (dissoc settings :daily-note))
+        run (fn [{:keys [state now] :as w} actor type args]
+              (let [[state' events] (core/run-command state {:type type :actor actor :args args :labels []}
+                                                      {:now now :config cfg})]
+                (assoc w :state state' :last events :rejected nil)))
         w (-> (seed)
               (run "dispatcher" :ingest/record {:source "repos" :cursor cursor
                                                 :items [(issue 1 7) (issue 2 8 :kind "pull request" :user "bob")
@@ -624,9 +647,10 @@
     (let [w (ok (run w "dispatcher" :github/announce {}))
           [msg] (filter #(= "message/created" (:type %)) (:last w))]
       (is (= "2 new on GitHub" (get-in msg [:data :subject])))
-      (is (= ["Issue #7 in Owner/Repo by alice: Title 7 https://github.com/Owner/Repo/issues/7"
-              "Pull request #8 in Owner/Repo by bob: Title 8 https://github.com/Owner/Repo/issues/8"]
+      (is (= "GitHub: Owner/Repo" (get-in msg [:data :sections 0 :heading])) "grouped by repository")
+      (is (= ["Issue #7 by alice: Title 7" "Pull request #8 by bob: Title 8"]
              (map :text (get-in msg [:data :sections 0 :items]))))
+      (is (= "https://github.com/Owner/Repo/pull/8" (get-in msg [:data :sections 0 :items 1 :link])))
       (is (= ["contaminated" "github:owner/repo"] (get-in msg [:data :sections 0 :items 0 :labels])))
       (is (= [] (:github-news (:state w))))
       (testing "nothing new, nothing sent"
@@ -665,6 +689,48 @@
               (run "steward" :note/write {:name "new" :text "y"} from-mail)
               ok
               (compose "2026-10-29") ok)]
-    (is (= ["Changes to check"] (keep :heading (:sections (note w)))))
+    (is (= ["Changes to check" "Coming up" "Grants" "GitHub" "What I learned"] (keep :heading (:sections (note w)))))
     (is (str/includes? (note-text (note w)) "note \"new\""))
     (is (not (str/includes? (note-text (note w)) "note \"old\"")))))
+
+;; --- the grant search, said as it was
+
+(def grant-cfg (config/resolve-config (assoc-in settings [:daily-note :grants] "scout/grant-search")))
+
+(defn- grants-line [state]
+  (let [m (digest/compose {:date (java.time.LocalDate/parse "2026-10-27") :changes [] :since 0
+                           :written {"learned" {:items [{:text "I keep venues in a note."}] :labels []}}
+                           :dismissed #{} :grant-search (core/grant-search state grant-cfg 0)})]
+    (:text (first (:items (first (filter #(= "Grants" (:heading %)) (:sections m))))))))
+
+(deftest the-grants-section-says-whether-the-search-ran
+  ;; Regression: the section said "No new grants" when no search ran, and
+  ;; when the search key was failing.
+  (let [w (seed)
+        w (assoc w :state (first (core/run-command (:state w) {:type :role/add :actor "operator" :public true :labels []
+                                                               :args {:id "scout" :title "Scout" :instructions "Search."}}
+                                                   {:now t0 :config cfg})))
+        search-wake (fn [w failing?]
+                      (let [w (ok (let [[st evs] (core/run-command (:state w) {:type :memo/send :actor "operator" :public true :labels []
+                                                                                    :args {:to "scout" :subject "grant-search" :body "Search."}}
+                                                                       {:now (:now w) :config cfg})]
+                                   (assoc w :state st :last evs)))
+                            memo (:seq (first (:last w)))
+                            w (assoc-in w [:state :memos memo :routine] "grant-search")
+                            w (ok (run w "dispatcher" :wake/start {:role "scout"}))
+                            wake (:seq (first (:last w)))
+                            w (cond-> w failing? (-> (run "scout" :tool/failed {:wake wake :tool "web_search" :why "search-key"}) ok))]
+                        (ok (run w "dispatcher" :wake/end {:wake wake :outcome "ran"}))))]
+    (is (= "The grant search has not run since the last note." (grants-line (:state w))))
+    (let [w (search-wake w true)]
+      (is (= :key-failing (core/grant-search (:state w) grant-cfg 0)))
+      (is (= "The grant search did not run: the web search key is not working." (grants-line (:state w))))
+      (let [w (search-wake w false)]
+        (is (= "No new grants since the last note." (grants-line (:state w))) "only once a search ran")))
+    (testing "only a role records a failure, on its own wake, and only a known one"
+      (is (:rejected (run w "steward" :tool/failed {:wake 999 :tool "x" :why "search-key"})))
+      (is (:rejected (run w "scout" :tool/failed {:wake 999 :tool "x" :why "anything"}))))
+    (testing "relay.edn's :grants is owner/name"
+      (is (str/includes? (try (config/resolve-config (assoc-in settings [:daily-note :grants] "grant search")) ""
+                              (catch clojure.lang.ExceptionInfo e (ex-message e)))
+                         "owner/name")))))

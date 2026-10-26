@@ -74,15 +74,15 @@
     (is (str/includes? (problem (assoc ntfy :link "not a url")) ":link"))
     (is (str/includes? (problem (assoc ntfy :to "x@y.z")) "does not take"))))
 
-(deftest a-push-from-outside-is-marked-and-cannot-be-followed
+(deftest a-push-from-outside-cannot-be-followed-and-hides-nothing
   (with-ntfy
     (fn [url seen]
       (push/push! {:via :ntfy :url url :topic "t"}
                   (rendered "Open https://evil.example" "Go to www.evil.example/x ‮now" ["contaminated"]))
       (push/push! {:via :ntfy :url url :topic "t"} (rendered "Fine" "https://ok.example"))
       (let [[bad ok] (map :body @seen)]
-        (is (= "[from outside] Open hxxps://evil[.]example" (:title bad)))
-        (is (= "[from outside] Go to www[.]evil[.]example/x \\u{202e}now" (:message bad)))
+        (is (= "Open hxxps://evil[.]example" (:title bad)) "never stamped, so the subject shows")
+        (is (= "Go to www[.]evil[.]example/x now (a hidden character removed)" (:message bad)))
         (is (= "https://ok.example" (:message ok)))
         (is (nil? (:click ok)) "no link unless the channel has one")))))
 
@@ -105,7 +105,7 @@
     (push/push! settings (rendered "Second" "Two https://evil.example now" ["contaminated"]))
     (let [lines (map #(json/parse-string % true) (str/split-lines (slurp file)))]
       (is (= [{:title "First" :body "One" :labels []}
-              {:title "[from outside] Second" :body "[from outside] Two hxxps://evil[.]example now"
+              {:title "Second" :body "Two hxxps://evil[.]example now"
                :labels ["contaminated"]}]
              (map #(select-keys % [:title :body :labels]) lines))
           "marked and defanged, as for any other kind")

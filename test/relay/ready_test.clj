@@ -22,6 +22,7 @@
             [relay.render :as render]
             [relay.test-support :as support]
             [relay.text :as text]
+            [relay.tools :as tools]
             [relay.workspace :as workspace])
   (:import (java.time Instant ZoneId)))
 
@@ -222,15 +223,14 @@
 
 ;; --- where a thing came from
 
-(deftest a-label-reads-as-where-it-came-from
+(deftest a-source-reads-as-where-it-came-from
   (is (nil? (ready/provenance [])))
   (is (nil? (ready/provenance ["private"])) "her own things say nothing")
-  (is (= "from a mail by x@y.org" (ready/provenance ["private" "mail:x@y.org"])))
-  (is (= "from the web" (ready/provenance ["web"])))
-  (is (= "from the web" (ready/provenance ["contaminated" "web:example.org"]))
-      "a kind we know wins over the bare mark")
-  (is (= "from outside" (ready/provenance ["contaminated"])))
-  (is (= "from a mail by a@b, from the web" (ready/provenance ["web" "mail:a@b"]))))
+  (is (= "Drew on: a mail from x@y.org" (ready/provenance ["private" "mail:x@y.org"])))
+  (is (= "Drew on: the web page office-holidays.html" (ready/provenance ["contaminated" "web:office-holidays.html"]))
+      "a source we know wins over the bare mark")
+  (is (= "Drew on: something from outside" (ready/provenance ["contaminated"])))
+  (is (= "Drew on: a mail from a@b; the web page a.html" (ready/provenance ["web:a.html" "mail:a@b"]))))
 
 (def gen-label
   (gen/one-of [(gen/elements ["private" "contaminated" "web" "mail" "github" "mail:a@b.org" "web:x.org" "github:o/r"])
@@ -241,7 +241,7 @@
   (prop/for-all [labels (gen/vector gen-label 0 5)]
     (let [p (ready/provenance labels)]
       (or (nil? p)
-          (and (str/starts-with? p "from ")
+          (and (str/starts-with? p "Drew on: ")
                (not (re-find #"contaminated|private" p))
                (not (re-find #"[\u0000-\u0008\u000a-\u001f\u007f‮​]" p)))))))
 
@@ -250,16 +250,17 @@
               (ct/run "clerk" :prepared/record {:call "c1" :tool "campaign-draft-demo" :title "Reply to the booker"
                                            :where "Saved."}))
         ;; labels beyond contaminated and private arrive with the mailbox (B8)
-        it (assoc (first (items w)) :labels ["mail:booker@example.org" "private"])
+        it (assoc (first (items w)) :labels ["contaminated" "mail:booker@example.org" "private"]
+                  :sources ["mail:booker@example.org"])
         wire (ready/wire it)]
-    (is (= "from a mail by booker@example.org" (get wire "from")))
+    (is (= "Drew on: a mail from booker@example.org" (get wire "from")))
     (is (not (str/includes? (json/generate-string wire) "mail:booker")))
     (is (= true (get wire "outsider")))))
 
 (deftest a-contaminated-call-shows-where-it-came-from
   (let [w (as-role (seed) "clerk" :prepared/record {:call "c1" :tool "campaign-draft-demo" :title "T" :where "W"}
                    ["contaminated" "private"])]
-    (is (= "from outside" (get (ready/wire (first (items w))) "from")))))
+    (is (= "Drew on: something from outside" (get (ready/wire (first (items w))) "from")))))
 
 (deftest the-wire-never-says-contaminated
   (let [w (-> (seed)
@@ -268,7 +269,7 @@
         wire (ready/wire (first (items w)))
         s (json/generate-string wire)]
     (is (not (re-find #"contaminated|private" s)))
-    (is (= "from outside" (get wire "from")))
+    (is (= "Drew on: something from outside" (get wire "from")))
     (is (true? (get wire "outsider")))
     (is (= "Look hxxps://evil[.]example" (get wire "title")) "links are broken, no mark of its own")
     (is (= ["go hxxps://evil[.]example"] (get wire "lines")) "and so are the links in its lines")))
@@ -281,8 +282,8 @@
 
 (def gen-outside-labels
   (gen/fmap (fn [[l more]] (vec (cons l more)))
-            (gen/tuple (gen/elements ["contaminated" "web" "mail:a@b.org" "github:o/r"])
-                       (gen/vector (gen/elements ["private" "web"]) 0 2))))
+            (gen/tuple (gen/elements ["contaminated" "web:a.html" "mail:a@b.org" "github:o/r"])
+                       (gen/vector (gen/elements ["private" "web:a.html"]) 0 2))))
 
 (def unsafe-chars #"[\u0000-\u0008\u000b-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
 
@@ -380,7 +381,7 @@
                        (:labels draft))
             wire (ready/wire (first (items w)))]
         (is (true? (get wire "outsider")))
-        (is (= "from outside" (get wire "from")))
+        (is (= "Drew on: something from outside" (get wire "from")))
         (is (= ["Saved draft c1, version 1." "hxxp://evil[.]example/?d=secret"] (get wire "lines")))))))
 
 (deftest a-call-becomes-a-title-a-place-and-a-preview
@@ -488,7 +489,7 @@
       (is (empty? (core/unread-memos (:state w) core/operator)))
       (let [closed (core/memo (:state w) (:memo m))]
         (is (= [:read "Answered: Thanks." "operator"] ((juxt :status :outcome :closed-by) closed))))
-      (is (some #{"Operator's inbox: 0 open"} (render/status (:state w) (ZoneId/of "UTC") (:now w) ct/cfg []))
+      (is (some #{"Your inbox: 0 open"} (render/status (:state w) (ZoneId/of "UTC") (:now w) ct/cfg []))
           "relay status says nothing is open for her"))
     (testing "a second answer is still threaded, and closes nothing again"
       (let [w (ct/run w "operator" :message/reply {:in-reply-to (:id m) :text "One more thing."})]
@@ -519,7 +520,7 @@
             ""
             "Draft: Concert in May (1h ago)"
             "  Saved draft c1, version 1, to the group Subscribers."
-            "  from outside"
+            "  Drew on: something from outside"
             ""
             (str "Message " mid ": Concert email is drafted (1h ago)")
             "  It is in your drafts, ready to read."
@@ -779,6 +780,8 @@
         (inbound/submit! sys {:type :memo/send :actor "operator" :args {:to "clerk" :subject "s" :body "b"}})
         (let [started (inbound/submit! sys {:type :wake/start :actor "dispatcher" :args {:role "clerk"}})
               wake-id (:seq (first (filter #(= "wake/started" (:type %)) started)))]
+          ;; What relay's tool command handed the session in this wake.
+          (tools/record-read! data "clerk" wake-id ["contaminated"])
           (dispatch/store-prepared! sys "clerk" wake-id transcript [])
           (dispatch/store-prepared! sys "clerk" wake-id transcript [])
           (let [state (inbound/current-state sys)
@@ -786,8 +789,8 @@
             (is (empty? more) "read twice, recorded once; the read-class call is not a draft")
             (is (= ["Concert" ["Saved draft c1, version 1." "Hello"]]
                    [(:title d) (:lines d)]))
-            (is (= "from outside" (get (ready/wire d) "from")) "the call carries what the session had seen"))
-          (testing "labels relay already knows are added, as a resumed transcript may lack them"
+            (is (= "Drew on: something from outside" (get (ready/wire d) "from")) "the call carries what the session read"))
+          (testing "what the session read anywhere in the wake counts, as a resumed transcript may lack it; labels it only held do not"
             (let [t (str/join "\n"
                               (map json/generate-string
                                    [{:type "message" :message {:message {:role "assistant"
@@ -796,6 +799,7 @@
                                     {:type "tool_result" :tool_result {:result {:call_id "z" :content "Saved."}}}]))]
               (dispatch/store-prepared! sys "clerk" wake-id t ["mail:x@y.org" "private"])
               (let [later (first (filter #(= "Later" (:title %)) (ready/ready (inbound/current-state sys))))]
-                (is (= "from outside" (get (ready/wire later) "from")) "a label relay does not keep reads as outside")
-                (is (true? (get (ready/wire later) "outsider"))))))))
+                (is (= "Drew on: something from outside" (get (ready/wire later) "from")))
+                (is (true? (get (ready/wire later) "outsider")))
+                (is (some #{"contaminated"} (:labels later)) "its labels still say everything it held"))))))
       (finally (fs/delete-tree dir)))))

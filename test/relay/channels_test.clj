@@ -247,3 +247,63 @@
     (is (some #{"=smtp,smtps"} argv))
     (is (= "smtps://smtp.example.org:465/example.org" (second (drop-while #(not= "--url" %) argv)))))
   (is (not (some #{"-K"} (channels/curl-argv (dissoc mail-channel :user :credentials-command) "/tmp/m.eml")))))
+
+;; --- what a mail app shows
+
+(defn- msg-of [id subject text & {:as more}]
+  (merge (assoc (messages/message {:kind (if (:in-reply-to more) "reply" "note") :subject subject :sections [[text]]
+                                   :in-reply-to (:in-reply-to more)})
+                :id id :created-at (Instant/parse "2026-10-26T12:00:00Z") :labels [] :origin "told")
+         (dissoc more :in-reply-to)))
+
+(deftest a-mail-has-a-name-it-is-from-and-says-how-to-answer
+  (let [{:keys [text]} (channels/email (assoc mail-channel :from-name "Your assistant")
+                                       [(msg-of 3 "Draft ready" "It is in your drafts.")]
+                                       (constantly nil) {:replies? true})
+        h (into {} (headers text))]
+    (is (= "Your assistant <agent@example.org>" (h "From")))
+    (is (str/ends-with? (body text) "-- \r\nReply to this mail to answer.\r\n")))
+  (testing "relay's own alert has nothing to answer, so it does not say so"
+    (let [{:keys [text]} (channels/email mail-channel [(msg-of 3 "Could not check mailbox" "x" :origin "ingest-failing")]
+                                         (constantly nil) {:replies? true})]
+      (is (not (str/includes? (body text) "Reply to this mail")))))
+  (testing "nor does a mail when relay does not read the agent's mailbox"
+    (is (not (str/includes? (body (:text (channels/email mail-channel [(msg-of 3 "s" "x")] (constantly nil) {:replies? false})))
+                            "Reply to this mail"))))
+  (testing "a name that could break the header is refused in relay.edn"
+    (is (some? (messages/channel-problem "mail" (assoc mail-channel :from-name "Eve\" <eve@x.org>, \"X"))))
+    (is (some? (messages/channel-problem "mail" (assoc mail-channel :from-name "a\r\nBcc: e@x.org"))))
+    (is (nil? (messages/channel-problem "mail" (assoc mail-channel :from-name "Your assistant"))))))
+
+(deftest a-reply-to-a-mailed-message-threads-and-says-re
+  (let [parent (msg-of 12 "Draft ready" "x")
+        reply (msg-of 15 "Venue noted" "The Old Hall it is." :in-reply-to 12)
+        {:keys [text]} (channels/email mail-channel [reply] {12 parent} {:mailed? #{12}})
+        h (into {} (headers text))]
+    (is (= "Re: Draft ready" (h "Subject")) "so a mail app that threads by subject keeps it together")
+    (is (= (channels/message-id parent agent-address) (h "In-Reply-To")))
+    (is (str/starts-with? (body text) "Venue noted\r\n\r\nThe Old Hall it is."))))
+
+(deftest a-reply-to-a-message-never-mailed-says-what-it-answers
+  ;; Regression: it threaded to a mail the operator never got.
+  (let [parent (assoc (msg-of 12 "Prep notes?" "x") :replies [{:id 13 :text "Yes please, by Thursday."}])
+        reply (msg-of 15 "Prep notes started" "I will have them by Wednesday." :in-reply-to 12)
+        {:keys [text]} (channels/email mail-channel [reply] {12 parent} {:mailed? #{}})
+        h (into {} (headers text))]
+    (is (nil? (h "In-Reply-To")))
+    (is (nil? (h "References")))
+    (is (= "Prep notes started" (h "Subject")))
+    (is (str/starts-with? (body text) "In answer to \"Prep notes?\", where you wrote: \"Yes please, by Thursday.\""))))
+
+(deftest provenance-is-one-footer-line-never-a-stamp
+  (let [m (msg-of 3 "Holiday hours" "Closed Monday [[fact:4]]. See https://office.example/h"
+                  :labels ["contaminated" "private"] :sources ["web:office-holidays.html"])
+        b (channels/body-text m)]
+    (is (= "Holiday hours" (channels/subject-text m)))
+    (is (= "Closed Monday. See hxxps://office[.]example/h\n\nDrew on: the web page office-holidays.html" b)
+        "refs as words, links broken, one line at the end")
+    (testing "the operator's own thread, and relay's own messages, say nothing of it"
+      (is (not (str/includes? (channels/body-text (assoc m :sources [])) "Drew on")))
+      (is (not (str/includes? (channels/body-text (assoc m :origin "work-abandoned")) "Drew on"))))
+    (testing "the client is sent it as one field"
+      (is (= "Drew on: the web page office-holidays.html" (get (channels/wire m) "drewOn"))))))

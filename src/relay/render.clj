@@ -8,15 +8,16 @@
   part of a line the renderer writes, and any line break in it is escaped
   where it is printed. Text that may run to several lines is shown with
   text/block: every line behind text/gutter, which nothing else starts
-  with, under a line saying it came from outside when it did. Nothing
-  here names a label or a class: the operator sees where a thing came
-  from."
+  with. Text an outsider may have written has its links broken. Where a
+  thing came from is said once, in words (relay.provenance), at the end
+  of its line. Nothing here names a label or a class."
   (:require [cheshire.core :as json]
             [clojure.walk]
             [clojure.string :as str]
             [relay.cards :as cards]
             [relay.config :as config]
             [relay.core :as core]
+            [relay.provenance :as provenance]
             [relay.spend :as spend]
             [relay.text :as text]
             [relay.week :as week])
@@ -38,31 +39,47 @@
         (str (.toLocalDate z))
         (local at zone)))))
 
+(defn- came-from
+  "Where a memo came from, in words: what brought it in, for one an
+  ingestor brought (relay.provenance), else who sent it."
+  [state {:keys [id from labels]}]
+  (let [ws (provenance/phrases (core/sources-of state id labels))]
+    (if (and (= core/dispatcher from) (seq ws))
+      (let [w (str/join ", " ws)] (str (str/upper-case (subs w 0 1)) (subs w 1)))
+      (str "from " (if (= core/operator from) "you" from)))))
+
 (defn memo
-  "One memo, as the operator's inbox shows it. One from outside is marked
-  so and its URLs broken: as from the web when `from-web?` says its sender
-  works on the web, a scout, and otherwise as from outside."
-  ([zone m] (memo zone m {}))
-  ([zone {:keys [id from subject body sent-at labels]} {:keys [from-web?]}]
-   (let [where (when (and from-web? (from-web? from)) :web)]
-     (concat
-      ["" (str "[" id "] " (text/for-operator labels subject where))
-       (str "    from " from ", " (local sent-at zone))]
-      (text/block labels body where)))))
+  "One memo, as the operator's inbox shows it: its subject, where it came
+  from and when, and its text behind the gutter, links broken when an
+  outsider may have written it."
+  [state zone {:keys [id subject body sent-at labels] :as m}]
+  (concat
+   ["" (str "[" id "] " (text/for-operator labels subject))
+    (str "    " (came-from state m) ", " (local sent-at zone))]
+   ;; Refs read as words, as in every message.
+   (text/block labels (text/refs-as-words body))))
 
 (defn inbox
-  ([zone memos] (inbox zone memos {}))
-  ([zone memos opts]
-   (if (empty? memos)
-     ["Nothing waiting."]
-     (mapcat #(memo zone % opts) memos))))
+  [state zone memos]
+  (if (empty? memos)
+    ["Nothing waiting."]
+    (mapcat #(memo state zone %) memos)))
 
-(defn- open-memo [zone {:keys [id subject attempts retry-at]}]
-  (format "    open  [%d] %s%s" id subject
-          (cond-> ""
-            (pos? attempts) (str " (" attempts " failed attempts")
-            (and (pos? attempts) retry-at) (str ", next " (local retry-at zone))
-            (pos? attempts) (str ")"))))
+(defn- memo-source
+  "The end of a status line for a memo: where its text came from, when
+  an outsider wrote any of it."
+  [state {:keys [id labels]}]
+  (when-let [s (provenance/summary (core/sources-of state id labels))]
+    (str " (from " s ")")))
+
+(defn- open-memo [state zone {:keys [id subject attempts retry-at labels] :as m}]
+  (text/for-operator labels
+                     (str (format "      open  [%d] %s" id subject)
+                          (cond-> ""
+                            (pos? attempts) (str " (" attempts " failed attempts")
+                            (and (pos? attempts) retry-at) (str ", next " (local retry-at zone))
+                            (pos? attempts) (str ")"))
+                          (memo-source state m))))
 
 (defn- role-line-labels [state id]
   (core/union (core/role-labels state id) (core/id-labels state (:reports-to (core/role state id)))))
@@ -76,25 +93,31 @@
 
 (defn- role-status [state zone now id]
   (let [{:keys [title reports-to]} (core/role state id)
-        id-ls (core/id-labels state id)]
-    (concat
-     [(text/for-operator (role-line-labels state id)
-                         (format "  %-20s %s%s%s" id title
-                                 (if reports-to (str ", reports to " reports-to) "")
-                                 (activity (core/working-wake state id) (core/open-conversation state id))))]
-     (for [{:keys [name schedule labels]} (core/active-routines state id)]
-       (text/for-operator (core/union labels id-ls) (format "    routine %-18s %s" name schedule)))
-     (map #(text/for-operator (core/union (:labels %) id-ls) (open-memo zone %)) (core/unread-memos state id))
-     (for [{memo-id :id :keys [subject labels]} (core/dead-memos state id)]
-       (text/for-operator (core/union labels id-ls)
-                          (format "    dead  [%d] %s (relay retry %s)" memo-id subject id)))
-     (when-let [{:keys [server tool retry-at]} (get-in state [:roles id :tools-unavailable])]
-       [(text/for-operator id-ls
-                           (str "    tools unavailable"
-                                (cond tool (str ": " tool) server (str ": server " server))
-                                (if (and retry-at (.isAfter ^Instant retry-at now))
-                                  (str ", next try " (local retry-at zone))
-                                  ", tried again at the next tick")))]))))
+        id-ls (core/id-labels state id)
+        unavailable (get-in state [:roles id :tools-unavailable])
+        dead (core/dead-memos state id)]
+      (concat
+       [(text/for-operator (role-line-labels state id)
+                           (format "  %-20s %s%s%s" id title
+                                   (if reports-to (str ", reports to " reports-to) "")
+                                   (activity (core/working-wake state id) (core/open-conversation state id))))]
+       (for [{:keys [name schedule labels]} (core/active-routines state id)]
+         (text/for-operator (core/union labels id-ls) (format "      routine %-16s %s" name schedule)))
+       (map #(text/for-operator id-ls (open-memo state zone %)) (core/unread-memos state id))
+       (for [{memo-id :id :keys [subject labels] :as m} dead]
+         (text/for-operator (core/union labels id-ls)
+                            (str (format "      dead  [%d] %s" memo-id subject) (memo-source state m))))
+       ;; Retrying cannot help while its tools are out, so it is only
+       ;; offered once they are back.
+       (when (and (seq dead) (not unavailable))
+         [(text/for-operator id-ls (str "      relay retry " id " tries the set-aside memos again"))])
+       (when-let [{:keys [server tool retry-at]} unavailable]
+         [(text/for-operator id-ls
+                             (str "      tools unavailable"
+                                  (cond tool (str ": " tool) server (str ": server " server))
+                                  (if (and retry-at (.isAfter ^Instant retry-at now))
+                                    (str ", next try " (local retry-at zone))
+                                    ", tried again at the next tick")))]))))
 
 (defn- dollars
   "An amount in US dollars to the cent. One above zero that rounds to
@@ -137,7 +160,14 @@
    (when paused
      (concat paused [""]))
    ["Roles"]
-   (mapcat #(role-status state zone now %) (core/active-role-ids state))
+   (if (empty? (core/active-role-ids state))
+     ["  No roles yet. Add the hub, which takes your requests: relay add hub < setup/hub.md"]
+     (mapcat #(role-status state zone now %) (core/active-role-ids state)))
+   (when config
+     (for [id (sort (keys (:grants config)))
+           :when (not (core/role state id))]
+       (str "  relay.edn grants " id ", but there is no " id " role. Add it: relay add " id
+            (when (get-in config [:grants id :public]) " --public") " < its instructions")))
    (mapcat (fn [line] ["" line])
     (for [[h {:keys [condition paused-until said]}] (sort-by key (:harnesses state))]
      (str "Harness " h ": "
@@ -154,7 +184,8 @@
    ;; A setting naming the steward by an id no role has, said plainly.
    (mapcat (fn [line] ["" line])
            (when config (config/role-name-problems config (core/active-role-ids state))))
-   ["" (format "Operator's inbox: %d open" (count (core/unread-memos state core/operator)))]
+   ["" (format "Your inbox: %d open%s" (count (core/unread-memos state core/operator))
+               (if (seq (core/unread-memos state core/operator)) " (relay inbox shows them)" ""))]
    (for [id (core/active-role-ids state)
          :let [why (when config (core/unwakeable-reason state config id))]
          :when why]
@@ -258,9 +289,9 @@
 
 (defn doc
   "One version of a doc: its content, all of it behind the gutter."
-  [{:keys [path seq content removed labels]}]
+  [zone {:keys [path seq content removed labels at]}]
   (if removed
-    [(str path " was removed in version " seq ".")]
+    [(str path " was removed" (if at (str " on " (when* at zone)) "") ".")]
     (concat [(str path ", version " seq ":")] (text/block labels content))))
 
 (defn doc-history
@@ -275,26 +306,38 @@
   "Events one to a line, the last `tail` of them when given: as JSON, or
   as a summary with the event's data cut to 120 characters."
   [events {:keys [tail json]}]
-  (for [e (if tail (take-last tail events) events)
-        :let [tainted? (text/contaminated? (:labels e))]]
+  (for [e (if tail (take-last tail events) events)]
     (if json
       ;; Still JSON, and plain ASCII: every other code point is written as
       ;; \uXXXX by the encoder, so nothing can drive the terminal and
-      ;; every line still parses. A contaminated event's strings are
-      ;; defanged in place.
+      ;; every line still parses. It is the stored event exactly: JSON is
+      ;; for a program to read, not a page to tap on.
       ;; The encoder leaves DEL as it is, the one ASCII control it does.
-      (-> (json/generate-string (cond-> e tainted? (update :data #(clojure.walk/postwalk
-                                                                   (fn [x] (if (string? x) (text/defang x) x)) %)))
-                                {:escape-non-ascii true})
+      (-> (json/generate-string e {:escape-non-ascii true})
           (str/replace "\u007f" "\\u007f"))
       (text/for-operator (:labels e)
                          (format "%5d %s %-22s %-12s %s" (:seq e) (:at e) (:type e) (:actor e)
                                  (let [s (pr-str (:data e))] (subs s 0 (min 120 (count s)))))))))
 
 (defn wake-result
-  "What `relay wake` says it did."
-  [result]
-  [(str (name (:result result)) " " (pr-str (dissoc result :result)))])
+  "What `relay wake` says it did, in a sentence."
+  [role {:keys [result wake outcome left-open message]}]
+  (let [who (str/capitalize (str role))]
+    [(case result
+       :ran (case outcome
+              "ran" (str who " ran (wake " wake ")"
+                         (if (pos? (or left-open 0))
+                           (str " and left " left-open " memo" (when-not (= 1 left-open) "s") " open; it will come back to them.")
+                           " and finished its memos."))
+              "limited" (str who " stopped early (wake " wake "): it hit a limit. relay ready says more.")
+              "unreachable" (str who " could not reach its model service (wake " wake "). relay tries again at the next tick.")
+              "needs-attention" (str who " could not start (wake " wake "). relay ready says what it needs.")
+              (str who " ran (wake " wake ")."))
+       :idle (str who " had nothing to do.")
+       :busy (str who " is busy already. Try again when it finishes.")
+       :paused (str who " is paused, so it was not woken.")
+       :runaway (str who " was woken too often, so relay is holding it. relay ready says more.")
+       (or message (str who " was not woken.")))]))
 
 (defn doc-put [path events]
   [(if (seq events)
@@ -528,6 +571,22 @@
 
 (defn- wake-name [chat id] (str (if chat "conversation " "wake ") id))
 
+(def ^:private told-words
+  "What relay told the operator, by what it records it as, in her words."
+  {"told" "notes" "memo-for-operator" "notes" "daily-note" "daily notes"
+   "daily-note-acted" "answers to your replies" "github-news" "GitHub news"})
+
+(defn- told-word [k] (get told-words k "alerts"))
+
+(def ^:private check-words
+  "Each health check, as what went wrong."
+  {"no-journal-entry" "kept no record of what it did"
+   "memos-left-open" "left work unfinished"
+   "tool-calls-refused-or-failed" "some steps failed"
+   "cut-short" "was cut short"
+   "crashed" "crashed"
+   "many-operator-memos" "told you a lot at once"})
+
 (defn week-report
   "relay week's report (relay.week/report) as lines."
   [{:keys [window interruptions actions messages roles health flags]} ^ZoneId zone]
@@ -561,7 +620,10 @@
      (let [per-day (:per-day messages)]
        (for [d (days-between window zone per-day)] (format "  %s  %d" d (get per-day d 0))))
      (when (seq (:per-kind messages))
-       [(str "  by kind: " (str/join ", " (for [[k n] (sort-by (comp - val) (:per-kind messages))] (str k " " n))))])
+       [(str "  by kind: " (str/join ", " (for [[k n] (sort-by (juxt (comp - val) key)
+                                                                 (reduce (fn [m [k n]] (update m (told-word k) (fnil + 0) n))
+                                                                         {} (:per-kind messages)))]
+                                            (str k " " n))))])
      (when (seq (:memos-by-role messages))
        [(str "  memos to you, by sender: "
              (str/join ", " (for [[r n] (:memos-by-role messages)] (str r " " n))))])
@@ -588,7 +650,7 @@
        ["  none"]
        (for [{:keys [id role role-labels chat started-at failed]} health]
          (role-line role-labels (str "  " (wake-name chat id) ", " role ", " (local started-at zone) ": "
-                                     (str/join ", " failed)))))
+                                     (str/join ", " (map #(get check-words % %) failed))))))
      ["" "Flags"]
      (if (empty? flags)
        ["  none (relay flag <wake> good|bad [note] marks one)"]
