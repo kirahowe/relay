@@ -309,7 +309,11 @@ findings they put on the board, and files they moved, each move with the
 `relay undo` that puts it back. Each says where it came from, in words
 ("from a mail by x@y.org", "from the web"), and never names a label. It
 is short and fits 60 columns: the 10 newest, each with how long ago it
-came, and `--all` for every one. Text cut short ends with `…`. The client shows the same list as its
+came, and `--all` for every one. Text cut short ends with `…` and a line
+that says how to read it whole: `relay ready <n>` prints one message by
+its number, nothing cut. A file move shows paths relative to the folder
+you granted, one line per file, under a summary ("41 files in notes, into
+13 folders"). The client shows the same list as its
 ready view (`_relay/ready` in `docs/client-protocol.md`), and a change
 reaches it without asking.
 

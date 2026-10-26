@@ -29,6 +29,7 @@
             [relay.cards :as cards]
             [relay.core :as core]
             [relay.messages :as messages]
+            [relay.move-view :as move-view]
             [relay.text :as text]))
 
 ;; --- where a thing came from
@@ -85,6 +86,10 @@
                    (= "dismissed" done) (str " (dropped)"))))
    :labels (vec (:labels m))
    :replies (vec (:replies m))
+   :acts (vec (for [[i it] (map-indexed vector (for [sec (:sections m) it (:items sec)] it))
+                    :let [{:keys [op n]} (when (map? it) (:action it))]
+                    :when (and op (integer? n))]
+                {:n n :op op :line i :done (get-in m [:acted n])}))
    ;; The daily note is relay's own, but its writer hears the answer
    ;; ("revert 1", "not 2"), so it can be answered too.
    :reply-to (when (or (core/message-author state m) (= "daily-note" (:origin m))) (:id m))})
@@ -113,8 +118,6 @@
      :labels (vec (cards/text-labels c))
      :card (:id c)}))
 
-(defn- file-name [path] (last (str/split (str path) #"/")))
-
 (defn- move-item
   "A files_move call: what moved where, which role moved it, and whether
   the operator can still undo it (relay undo, _relay/undo). A call relay
@@ -123,22 +126,19 @@
   [c]
   (let [undone (set (:undone c))
         moving? (= :moving (:status c))
-        shown (if moving?
-                (map-indexed (fn [i m] [i m]) (:moves c))
-                (for [{:keys [index]} (:done c)] [index ((:moves c) index)]))
+        shown (vec (if moving?
+                     (map-indexed (fn [i m] [i m]) (:moves c))
+                     (for [{:keys [index]} (:done c)] [index ((:moves c) index)])))
         left (core/move-steps-left c)
-        all-undone? (and (not moving?) (seq (:done c)) (empty? left))]
+        all-undone? (and (not moving?) (seq (:done c)) (empty? left))
+        {:keys [title lines]} (when (seq shown) (move-view/view (:roots c) shown undone))]
     {:id (str "move:" (:id c)) :kind :move :at (or (:finished-at c) (:at c)) :seq (:id c)
      :title (cond
               moving? "relay stopped while it moved these; check them by hand"
               (empty? (:done c)) "Nothing was moved"
-              (= 1 (count shown)) (str (file-name (:from (second (first shown)))) (when all-undone? " (undone)"))
-              :else (str (count shown) " things" (when all-undone? " (undone)")))
-     :lines (vec (concat
-                  [(str "By " (:actor c) ".")]
-                  (for [[i {:keys [from to]}] shown]
-                    (str from " → " to (when (undone i) " (undone)")))
-                  (when (:stopped c) [(str "It stopped: " (:stopped c))])))
+              :else title)
+     :lines (vec (concat lines
+                         (when (:stopped c) [(str "It stopped: " (:stopped c))])))
      :labels (vec (:labels c))
      :move (:id c) :role (:actor c)
      :undo (when (or moving? (seq left)) (:id c))
@@ -227,6 +227,7 @@
                            "replyTo" (:reply-to it)
                            "replies" (mapv (fn [r] {"at" (str (:at r)) "text" (safe [] (:text r))})
                                            (:replies it)))
+      (seq (:acts it)) (assoc "acts" (mapv (fn [a] {"n" (:n a) "op" (:op a) "line" (:line a) "done" (:done a)}) (:acts it)))
       (:start it) (assoc "start" (str (:start it)) "end" (str (:end it)))
       (:start-date it) (assoc "allDay" true "startDate" (str (:start-date it))
                               "lastDate" (str (.minusDays ^java.time.LocalDate (:end-date it) 1)))

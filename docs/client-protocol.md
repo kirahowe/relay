@@ -166,14 +166,22 @@ command line instead.
     `alert`, `digest` or `reply`), `"urgency"`, `"thread"`, `"replyTo"`
     (the number to answer it under, or null when relay wrote it itself and
     nobody can answer) and `"replies"`, `[{"at", "text"}]`, the operator's
-    answers.
+    answers. A daily note also has `"acts"`, `[{"n", "op", "line",
+    "done"}]`: for each numbered item, the note's own number `n`, what it
+    offers (`"revert"` or `"dismiss"`), the index in `lines` of the line
+    that begins with that number, and `done` (null, `"reverted"` or
+    `"dismissed"`). `_relay/messages/act` takes `n`.
   - `draft` has, in `lines`, where the tool said it put the draft and a
     start of its text.
   - `event` adds `"start"` and `"end"`, instants.
   - `finding` adds `"card"`, the card's number.
-  - `move` is a files_move call. Its `lines` say which role moved what
-    where, one line per move, and `from` says where what the role read
-    before it came from. It adds `"move"` (the call's number), `"role"`,
+  - `move` is a files_move call. Its first line is a summary ("41 files
+    in notes, into 13 folders") and each later line is one file, `from →
+    to`, relative to the folder the role was granted, which the summary
+    names by its short name (when a call spans several granted folders,
+    each line starts with its folder's name). `title` is the file's name,
+    or the count. No line holds a full path or names the role. `from` says
+    where what the role read before it came from. It adds `"move"` (the call's number), `"role"`,
     `"undo"` (the number to give `_relay/undo`, or null when nothing is
     left to undo) and `"undone"` (true once all of it is put back).
   - A client that does not know a kind shows its title and lines.
@@ -208,8 +216,8 @@ command line instead.
 - Errors: -32000 with relay's reason: no such message, a message relay
   wrote itself other than the daily note ("there is nobody to answer
   it"), or a role that is gone.
-- relay-tui: `a` or Enter on a message in the ready view, then Enter
-  to send. One reply at a time is in flight, and a refusal gives the
+- relay-tui: `a` on a message in the ready view (selected or open
+  whole; Enter opens it, it does not reply), then Enter to send. One reply at a time is in flight, and a refusal gives the
   words back.
 
 ### `_relay/undo`
@@ -217,8 +225,9 @@ command line instead.
 - Scope: connection.
 - Params: `{"move": int}`: a move item's `undo`. Anything else is refused
   (-32602).
-- Answer: `{"lines": [string]}` once relay has put the move back, the
-  same lines `relay undo` prints. It runs the same code as `relay undo`:
+- Answer: `{"lines": [string], "summary": string}` once relay has put the
+  move back: the same lines `relay undo` prints, and a short plain
+  `summary` for a status line ("Put back 3 files."). It runs the same code as `relay undo`:
   every moved thing goes back exactly, and the folders the move made are
   removed once empty. The item then comes changed, with `undone`.
 - Errors: -32000 with B9's reason when undo is impossible, touching
@@ -226,7 +235,8 @@ command line instead.
   where it was, a folder is not the folder it was, the move was already
   undone, there is no such move, or relay stopped during the move (the
   reason then lists the moves to check by hand).
-- relay-tui: `u` on a move item in the ready view.
+- relay-tui: `u` on a move item in the ready view; the status line shows
+  `summary`.
 
 ### `_relay/messages/act`
 
@@ -243,7 +253,9 @@ command line instead.
 - The act is the operator's, with no labels. The message's `rev` moves
   and `_relay/messages/changed` sends it again, with the item's
   `action.done` set.
-- relay-tui: not used yet. A key on the selected item is meant to send it.
+- relay-tui: `v` (revert) and `d` (dismiss) on a numbered item of a daily
+  note opened whole in the ready view. The item numbers are the note's
+  own, and the ready item lists them as `acts` (see `_relay/ready`).
 
 ## Methods: a session
 

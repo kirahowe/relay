@@ -341,14 +341,20 @@
   [{:strs [kind]}]
   (if (= "move" kind) 12 4))
 
-(defn- ready-kind [{:strs [kind message card]} ]
+(defn- ready-kind [{:strs [kind message card undone]}]
   (case kind
     "message" (str "Message " message)
     "draft" "Draft"
     "event" "Calendar"
     "finding" (str "Board, card " card)
-    "move" "Moved"
+    "move" (if undone "Moved back" "Moved")
     (str/capitalize kind)))
+
+(defn ready-ref
+  "What `relay ready <ref>` takes to show an item whole: a message's
+  number, else the item's id."
+  [{:strs [id kind message]}]
+  (if (and (= "message" kind) message) (str message) id))
 
 (defn- ready-when [^String iso zone]
   (when iso
@@ -389,7 +395,7 @@
      ["Nothing is ready."]
      (let [indent "  "
            room (- ready-width 2)
-           body (fn [lines n]
+           body (fn [lines n ref]
                   (let [all (->> lines
                                  (mapcat #(str/split-lines (str %)))
                                  (remove str/blank?)
@@ -398,7 +404,8 @@
                         shown (if (> (count all) n)
                                 (update shown (dec n) cut-mark room)
                                 shown)]
-                    (map #(str indent %) shown)))]
+                    (concat (map #(str indent %) shown)
+                            (when (> (count all) n) [(str indent "All of it: relay ready " ref)]))))]
        (vec (concat
              (rest (mapcat
                     (fn [{:strs [title lines from replies start at] :as it}]
@@ -414,7 +421,7 @@
                                         (str " to " (ready-day (get it "lastDate"))))
                                       ", all day")]
                                 start [(str indent (ready-when start zone))])
-                              (body lines (ready-lines-each it))
+                              (body lines (ready-lines-each it) (ready-ref it))
                               (when from [(str indent from)])
                               (for [r (take-last 1 replies)]
                                 (str indent "You replied: " (let [t (get r "text")] (if (> (count t) 30) (str (subs t 0 29) "…") t))))
@@ -425,6 +432,34 @@
                     items))
              (when (pos? more)
                ["" (str "… and " more " older. relay ready --all shows every one.")])))))))
+
+(defn ready-one
+  "One ready item from its wire form, whole: nothing is cut. Lines are
+  at most ready-width characters; text that came from elsewhere is
+  indented, so it never starts a line of the screen's own."
+  [{:strs [title lines from replies start at] :as it} zone now]
+  (let [indent "  "
+        room (- ready-width 2)
+        para (fn [s] (map #(str indent %) (wrap s room)))]
+    (vec (concat
+          (map-indexed (fn [i l] (if (zero? i) l (str indent l)))
+                       (wrap (str (ready-kind it) ": " title
+                                  (when-let [a (ready-age at now zone)] (str " (" a ")")))
+                             room))
+          (cond
+            (get it "allDay")
+            [(str indent (ready-day (get it "startDate"))
+                  (when-not (= (get it "startDate") (get it "lastDate"))
+                    (str " to " (ready-day (get it "lastDate"))))
+                  ", all day")]
+            start [(str indent (ready-when start zone))])
+          (mapcat (fn [l] (mapcat #(para %) (remove str/blank? (str/split-lines (str l))))) lines)
+          (when from [(str indent from)])
+          (mapcat (fn [r] (para (str "You replied: " (get r "text")))) replies)
+          (when (and (get it "replyTo") (empty? replies))
+            [(str indent "Reply: relay reply " (get it "replyTo") " -m \"...\"")])
+          (when-let [u (get it "undo")]
+            [(str indent "Undo: relay undo " u)])))))
 
 ;; --- eval runs (bb eval)
 

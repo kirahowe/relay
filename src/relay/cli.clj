@@ -46,6 +46,8 @@ Every command needs the data directory, from --data <dir> or from the file
   relay ready [--all]                 what is ready for you, the 10 newest: what
                                       you were told, drafts, calendar entries,
                                       findings, file moves
+  relay ready <n>                     one message whole, by its number (a cut
+                                      item says how to open it whole)
   relay reply <message> -m <text>     answer a message from relay ready; the role
                                       that told you is woken with your answer
   relay memo <to> -s <subject>        send a memo; body from -m or stdin
@@ -604,8 +606,15 @@ id public too.")
       "inbox" (lines (render/inbox zone (core/unread-memos (state) core/operator)
                                    {:from-web? #(config/public? (:config sys) %)}))
       "ready" (let [all (ready/ready (state) {:limit Integer/MAX_VALUE})
-                    shown (if (:all opts) all (take ready-shown all))]
-                (lines (render/ready (mapv ready/wire shown) zone ((:clock sys)) (- (count all) (count shown)))))
+                    shown (if (:all opts) all (take ready-shown all))
+                    [ref] more]
+                (if ref
+                  (let [id (if (re-matches #"\d+" ref) (str "message:" ref) ref)
+                        it (first (filter #(= id (:id %)) all))]
+                    (when-not it
+                      (fail! (str "Nothing ready is numbered " ref ". relay ready lists what is ready.")))
+                    (lines (render/ready-one (ready/wire it) zone ((:clock sys)))))
+                  (lines (render/ready (mapv ready/wire shown) zone ((:clock sys)) (- (count all) (count shown))))))
       "reply" (let [[id] more
                     text (or (:message opts) (stdin-text))]
                 (when-not (some-> id parse-long) (fail! "usage: relay reply <message> -m <text>"))

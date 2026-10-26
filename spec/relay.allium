@@ -934,6 +934,11 @@ entity MoveCall {
     -- operator to check its moves by hand.
     actor: Role
     moves: List<MovePlan>
+    -- The real paths of the folders the actor was granted when the call
+    -- was made. The ready view and relay moves show paths relative to
+    -- them, under the folder's short name. A call recorded before this
+    -- has none, and is shown relative to the folder its files share.
+    roots: List<String>?
     status: MoveStatus
     done: List<MoveStep>
     undone: Set<Integer>

@@ -17,6 +17,7 @@
             [relay.hub-test :as ht]
             [relay.inbound :as inbound]
             [relay.log :as log]
+            [relay.move-view :as move-view]
             [relay.ready :as ready]
             [relay.render :as render]
             [relay.test-support :as support]
@@ -146,7 +147,78 @@
       (and (= (boolean (:undo it)) (boolean (or moving? (seq left))))
            (= (:undone it) (boolean (and (not moving?) (seq (:done c)) (empty? left))))
            (nil? (ready/provenance (:labels it)))
-           (every? #(str/includes? (str/join "\n" (:lines it)) (:from ((:moves c) (:index %)))) (:done c))))))
+           (every? #(str/includes? (str/join "\n" (:lines it)) (subs (:from ((:moves c) (:index %))) 3)) (:done c))
+           (not (str/includes? (str/join "\n" (:lines it)) "/f/"))
+           (not (str/includes? (str/join "\n" (:lines it)) "By steward"))))))
+
+;; --- file moves read relative to the granted folder
+
+(deftest a-move-reads-relative-to-the-granted-folder
+  (let [roots ["/Users/k/notes"]
+        shown [[0 {:from "/Users/k/notes/board mtg.md" :to "/Users/k/notes/meetings/2026-09-01-board-meeting.md"}]
+               [1 {:from "/Users/k/notes/rehearsal.txt" :to "/Users/k/notes/choir/rehearsal.txt"}]
+               [2 {:from "/Users/k/notes/a.txt" :to "/Users/k/notes/choir/a.txt"}]]]
+    (is (= {:title "3 files"
+            :lines ["3 files in notes, into 2 folders"
+                    "board mtg.md → meetings/2026-09-01-board-meeting.md"
+                    "rehearsal.txt → choir/rehearsal.txt"
+                    "a.txt → choir/a.txt (undone)"]}
+           (move-view/view roots shown #{2})))
+    (is (= {:title "board mtg.md"
+            :lines ["1 file in notes" "board mtg.md → meetings/2026-09-01-board-meeting.md"]}
+           (move-view/view roots (take 1 shown) #{})))
+    (testing "several granted folders: each line names its folder"
+      (is (= ["2 files in notes, docs, into 2 folders" "notes: a.txt → b/a.txt" "docs: c.txt → d/c.txt"]
+             (:lines (move-view/view ["/h/notes" "/h/docs"]
+                                      [[0 {:from "/h/notes/a.txt" :to "/h/notes/b/a.txt"}]
+                                       [1 {:from "/h/docs/c.txt" :to "/h/docs/d/c.txt"}]]
+                                      #{})))))
+    (testing "a call recorded without its folders uses the folder its files share"
+      (is (= ["2 files in notes, into 2 folders" "x/a.txt → y/a.txt" "x/b.txt → z/b.txt"]
+             (:lines (move-view/view nil
+                                      [[0 {:from "/h/notes/x/a.txt" :to "/h/notes/y/a.txt"}]
+                                       [1 {:from "/h/notes/x/b.txt" :to "/h/notes/z/b.txt"}]]
+                                      #{})))))))
+
+(def gen-segment (gen/elements ["a" "b c" "x.md" "2026-09-01" "notes"]))
+
+(defspec move-lines-are-one-per-file-and-never-hold-the-granted-path 200
+  (prop/for-all [n (gen/choose 1 30)
+                 dirs (gen/vector (gen/vector gen-segment 0 2) 1 30)
+                 names (gen/vector gen-segment 30)]
+    (let [root "/private/tmp/claude-501/-Users-k-code/granted/notes"
+          shown (vec (for [i (range n)
+                           :let [d (str/join "/" (nth dirs (mod i (count dirs))))]]
+                       [i {:from (str root "/" (nth names i) i) :to (str root "/" (when (seq d) (str d "/")) (nth names i) i)}]))
+          {:keys [title lines]} (move-view/view [root] shown #{})]
+      (and (= (inc n) (count lines))
+           (= (if (= 1 n) (str (nth names 0) 0) (str n " files")) title)
+           (str/starts-with? (first lines) (str n (if (= 1 n) " file" " files") " in notes"))
+           (not-any? #(or (str/includes? % "/private") (str/includes? % "\n")) lines)
+           (every? #(str/includes? % " → ") (rest lines))))))
+
+;; --- a daily note's numbered items
+
+(deftest a-notes-numbered-items-carry-their-own-numbers-and-whether-they-were-done
+  (let [m {:id 5 :kind "digest" :subject "Daily note" :created-at "2026-10-26T12:00:00Z" :labels []
+           :origin "daily-note" :acted {3 "dismissed"}
+           :sections [{:heading "Changes to check"
+                       :items [{:text "1. A change" :action {:op "revert" :n 1}}
+                               {:text "And 2 more changes"}]}
+                      {:heading "Ahead"
+                       :items [{:text "3. Dentist" :action {:op "dismiss" :n 3}}
+                               {:text "4. Taxes" :action {:op "dismiss" :n 4}}]}]}
+        it (first (filter #(= :message (:kind %)) (ready/ready (assoc-in core/empty-state [:messages 5] m))))]
+    (is (= [{:n 1 :op "revert" :line 0 :done nil}
+            {:n 3 :op "dismiss" :line 2 :done "dismissed"}
+            {:n 4 :op "dismiss" :line 3 :done nil}]
+           (:acts it)))
+    (is (= [{"n" 1 "op" "revert" "line" 0 "done" nil}
+            {"n" 3 "op" "dismiss" "line" 2 "done" "dismissed"}
+            {"n" 4 "op" "dismiss" "line" 3 "done" nil}]
+           (get (ready/wire it) "acts")))
+    (is (every? #(str/starts-with? (nth (:lines it) (:line %)) (str (:n %) ". ")) (:acts it))
+        "a line's own number is the one the act uses")))
 
 ;; --- where a thing came from
 
@@ -487,7 +559,11 @@
           out-one (render/ready [one] (ZoneId/of "America/Toronto") now)]
       (is (= "  Wed 11 Nov to Thu 12 Nov, all day" (second out-two)))
       (is (= "  Wed 11 Nov, all day" (second out-one)))
-      (is (not-any? #(re-find #"\d\d:\d\d" %) (concat out-two out-one)) "no time of day"))))
+      (is (not-any? #(re-find #"\d\d:\d\d" %) (concat out-two out-one)) "no time of day"))
+    (testing "relay ready <n> shows it as days too"
+      (let [out (render/ready-one two (ZoneId/of "America/Toronto") now)]
+        (is (= "  Wed 11 Nov to Thu 12 Nov, all day" (second out)))
+        (is (not-any? #(re-find #"\d\d:\d\d" %) out) "no time of day")))))
 
 (defspec an-all-day-events-last-day-is-its-span-less-one 30
   (prop/for-all [offset (gen/choose 30 400)
@@ -504,13 +580,14 @@
   (let [now (Instant/parse "2026-10-26T12:00:00Z")
         out (render/ready [{"id" "prepared:1" "kind" "draft" "title" "Long" "at" (str now)
                             "lines" ["one" "two" "three" "four" "five"]}] (ZoneId/of "UTC") now)]
-    (is (= ["Draft: Long (just now)" "  one" "  two" "  three" "  four …"] out)))
+    (is (= ["Draft: Long (just now)" "  one" "  two" "  three" "  four …" "  All of it: relay ready prepared:1"] out)))
   (testing "a full last line keeps the width"
     (let [now (Instant/parse "2026-10-26T12:00:00Z")
           long (apply str (repeat 58 "x"))
           out (render/ready [{"id" "prepared:1" "kind" "draft" "title" "T" "at" (str now)
                               "lines" [long long long long long]}] (ZoneId/of "UTC") now)]
-      (is (str/ends-with? (last out) " …"))
+      (is (str/ends-with? (last (butlast out)) " …"))
+      (is (= "  All of it: relay ready prepared:1" (last out)))
       (is (every? #(<= (count %) 60) out))))
   (testing "nothing is marked when nothing was cut"
     (let [now (Instant/parse "2026-10-26T12:00:00Z")]
@@ -534,6 +611,53 @@
            (every? #(re-find #"^(Message 1|Calendar):" %) headings)
            (= 2 (count headings))))))
 
+(deftest relay-ready-one-shows-a-whole-item
+  (let [now (Instant/parse "2026-10-26T12:00:00Z")
+        lines (for [i (range 12)] (str "Line " i " " (apply str (repeat 80 "w ")) "end"))
+        it {"id" "message:28" "kind" "message" "message" 28 "title" "Prep checklist" "at" (str now)
+            "lines" (vec lines) "from" "from the web" "replyTo" 28
+            "replies" [{"at" (str now) "text" (apply str (repeat 70 "r "))}]}
+        out (render/ready-one it (ZoneId/of "UTC") now)
+        text (str/join " " (map str/trim out))]
+    (is (= "Message 28: Prep checklist (just now)" (first out)))
+    (is (every? #(<= (count %) 60) out))
+    (is (every? #(str/includes? text (str "Line " % " ")) (range 12)) "nothing is cut")
+    (is (str/includes? text "end") )
+    (is (not-any? #(str/includes? % "…") out))
+    (is (some #{"  from the web"} out))
+    (is (some #(str/starts-with? % "  You replied: r r") out) "the whole reply")
+    (testing "a cut item in the list says how to open it"
+      (let [out (render/ready [it] (ZoneId/of "UTC") now)]
+        (is (some #{"  All of it: relay ready 28"} out))))))
+
+(deftest relay-ready-with-a-number-prints-one-item-whole
+  (let [dir (str (fs/create-temp-dir {:prefix "relay-ready-one"}))
+        data (str dir "/data")
+        run (fn [& args] ((requiring-resolve 'relay.cli/execute) (into ["--data" data] args)))]
+    (try
+      (fs/create-dirs data)
+      (spit (str data "/relay.edn") (pr-str {:timezone "UTC" :default-harness :x
+                                             :harnesses {:x {:kind :script :command ["true"]}}}))
+      (log/init! data)
+      (let [sys (inbound/system data {})
+            body (vec (for [i (range 9)] (str "Step " i " of the checklist, written out in full.")))]
+        (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "clerk" :title "Clerk" :instructions "x"}})
+        (inbound/submit! sys {:type :memo/send :actor "operator" :args {:to "clerk" :subject "s" :body "b"}})
+        (inbound/submit! sys {:type :wake/start :actor "dispatcher" :args {:role "clerk"}})
+        (let [m (inbound/submit! sys {:type :message/send :actor "clerk"
+                                      :args {:subject "Prep checklist" :sections [{:items body}]}})
+              _ m]
+          (is (some #(str/includes? % "All of it: relay ready") (:out (run "ready"))) "the list says how")
+          (let [n (second (re-find #"Message (\d+)" (first (filter #(str/starts-with? % "Message ") (:out (run "ready"))))))
+                out (:out (run "ready" n))]
+            (is (some? n))
+            (is (not-any? #(str/includes? % "…") out))
+            (is (= 9 (count (filter #(str/includes? % "of the checklist") out))))
+            (is (every? #(<= (count %) 60) out)))))
+      (testing "an unknown number is refused plainly"
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Nothing ready is numbered 9999" (run "ready" "9999"))))
+      (finally (fs/delete-tree dir)))))
+
 (defspec relay-ready-marks-a-cut-exactly-when-it-cut 200
   (prop/for-all [lines (gen/vector (gen/fmap str/join (gen/vector (gen/elements ["word " "a" "longerword " "x"]) 0 30)) 0 7)]
     (let [now (Instant/parse "2026-10-26T12:00:00Z")
@@ -541,7 +665,8 @@
                             (ZoneId/of "UTC") now)
           wrapped (mapcat #(render/wrap % 58) (remove str/blank? lines))]
       (and (every? #(<= (count %) 60) out)
-           (= (> (count wrapped) 4) (boolean (some #(str/ends-with? % " …") out)))))))
+           (= (> (count wrapped) 4) (boolean (some #(str/ends-with? % " …") out)))
+           (= (> (count wrapped) 4) (boolean (some #{"  All of it: relay ready prepared:1"} out)))))))
 
 (deftest relay-ready-and-relay-reply-through-the-cli
   (let [dir (str (fs/create-temp-dir {:prefix "relay-ready-cli"}))
