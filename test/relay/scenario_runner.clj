@@ -80,12 +80,23 @@
                (remove str/blank? (str/split-lines (slurp (str file))))))
     []))
 
+(defn- folder-files
+  "Every file under `root`, as {:path (relative) :text}."
+  [root]
+  (if (and root (fs/directory? root))
+    (vec (for [f (fs/glob root "**" {:hidden true})
+               :when (fs/regular-file? f {:nofollow-links true})]
+           {:path (str (fs/relativize root f)) :text (slurp (str f))}))
+    []))
+
 (defn world
   "What a scenario's assertions see in a data directory: the state, the
   events, what the notifier sent, each wake's transcript entries by wake id,
-  and `now`, relay's clock, when given."
+  `now`, relay's clock, when given, and the files in a :files grant's
+  folder, when there is one."
   ([dir] (world dir nil))
-  ([dir now]
+  ([dir now] (world dir now nil))
+  ([dir now files-root]
    (let [events (log/read-events dir)
          state (core/replay events)]
      {:state state
@@ -95,7 +106,10 @@
                                   :let [f (fs/path dir "runs" role (str id) "transcript.jsonl")]
                                   :when (fs/exists? f)]
                               [id (json-lines f)]))
-      :now now})))
+      :now now
+      :files (folder-files files-root)})))
+
+(defn- world-of [{:keys [dir clock files-root]}] (world dir (clock) files-root))
 
 (defn- same-dir? [a b]
   (let [home (System/getProperty "user.home")]
@@ -181,6 +195,21 @@
 
 (declare with-step-script!)
 
+(defn- crlf [text] (str/replace text #"\r?\n" "\r\n"))
+
+(defn- mail!
+  "A mail arrives: recorded as the mailbox's POP3 ingestor records what a
+  poll fetched, with a key of its own."
+  [{:keys [dir clock mails]} text]
+  (let [raw (crlf text)
+        n (swap! mails inc)
+        sys (inbound/system dir {:clock clock})]
+    (inbound/submit! sys {:type :ingest/record :actor core/dispatcher
+                          :args {:source scenario/mailbox-source :keys [] :cursor nil
+                                 :items [{:key (str "scenario-mail-" n) :version "1" :raw raw
+                                          :size (count (.getBytes ^String raw "UTF-8")) :partial false}]}})
+    {:log [(str "mail " n " arrived")]}))
+
 (defn- step!
   "Runs one step. Returns {:log [lines] :failures [lines]}."
   [{:keys [dir offset] :as ctx} step]
@@ -204,7 +233,7 @@
        :failures (vec (mapcat :failures ticks))})
 
     (:script step)
-    (with-step-script! dir (:script step) #(step! ctx (dissoc step :script)))
+    (with-step-script! dir (:script step) #(step! ctx (dissoc step :script)) (:files-root ctx))
 
     (:tick step)
     {:log (vec (for [i (range (:tick step))
@@ -218,8 +247,11 @@
         (when (:stopped-clock? ctx) (write-clock! dir ((:clock ctx))))
         {:log [(str "advance " (:advance-minutes step) " minute(s)")]})
 
+    (:mail step)
+    (mail! ctx (:mail step))
+
     (:assert step)
-    {:failures (scenario/check-all (world dir ((:clock ctx))) (:assert step))}))
+    {:failures (scenario/check-all (world-of ctx) (:assert step))}))
 
 ;; --- the harness: mock or real
 
@@ -239,8 +271,9 @@
 
 (defn- scripted-model
   "A mock-anthropic responder playing the scenario's script. Returns it with
-  an atom of the problems met on the way."
-  [script dir]
+  an atom of the problems met on the way. `files-root` is what
+  {:files-path ...} in a reply is under."
+  [script dir & [files-root]]
   (let [used (atom {})
         problems (atom [])]
     {:problems problems
@@ -252,7 +285,7 @@
                         [before _] (swap-vals! used (fn [u] (second (scenario/next-reply script u role))))
                         [reply _] (scenario/next-reply script before role)]
                     (try
-                      (scenario/resolve-refs (:state (world dir)) reply)
+                      (scenario/resolve-refs (:state (world dir)) (scenario/resolve-paths files-root reply))
                       (catch clojure.lang.ExceptionInfo e
                         (swap! problems conj (str role "'s reply: " (ex-message e)))
                         {:status 400 :type "invalid_request_error" :message (ex-message e)}))))}))
@@ -262,10 +295,10 @@
   playing `script` (a step's :script), whatever model the run uses, and
   then puts relay.edn back as it was. Returns what `f` did, with the
   script's problems among its failures."
-  [dir script f]
+  [dir script f & [files-root]]
   (let [file (str (fs/path dir "relay.edn"))
         before (slurp file)
-        model (scripted-model script dir)
+        model (scripted-model script dir files-root)
         server (mock/start! (:responder model))]
     (try
       (use-mock! dir (:url server))
@@ -305,15 +338,25 @@
                            (or temp? fresh?) (assoc :check? false)
                            fixed (assoc :clock clock)))
         dir (staging/canonical dir (System/getProperty "user.home"))
-        ctx {:dir dir :clock clock :offset offset :stopped-clock? (some? fixed)}
-        mock-model (when-not live? (scripted-model (scenario/script model) dir))
+        ;; relay opens no folder inside its data directory or under the
+        ;; home directory, so the folder a :files grant opens is a
+        ;; temporary one of its own, removed with the run.
+        files-root (when (scenario/files-grant? (:settings s))
+                     (let [root (str (fs/real-path (fs/create-temp-dir {:prefix "relay-scenario-files-"})))]
+                       (doseq [[p text] (:files s)]
+                         (fs/create-dirs (fs/parent (fs/path root p)))
+                         (spit (str (fs/path root p)) text))
+                       root))
+        ctx {:dir dir :clock clock :offset offset :stopped-clock? (some? fixed) :files-root files-root
+             :mails (atom 0)}
+        mock-model (when-not live? (scripted-model (scenario/script model) dir files-root))
         server (when mock-model (mock/start! (:responder mock-model)))
         before (System/getProperty "relay.bin")
         log-lines (atom [])
         failures (atom [])
         assert-failures (atom [])]
     (when server (use-mock! dir (:url server)))
-    (update-settings! dir #(cond-> (scenario/merge-settings % (:settings s))
+    (update-settings! dir #(cond-> (scenario/merge-settings % (:settings s) files-root)
                              (and live? (:model opts)) (assoc-in [:harnesses :agentloop :model] (:model opts))
                              harness (update-in [:harnesses :agentloop] merge harness)))
     (when fixed (write-clock! dir started))
@@ -331,16 +374,20 @@
                        (swap! failures conj (str "Step " (pr-str step) " threw: " (ex-message e)))
                        (reduced nil))))
               nil steps)
-      (swap! assert-failures into (scenario/check-all (world dir (clock)) (:assert s)))
+      (swap! assert-failures into (scenario/check-all (world-of ctx) (:assert s)))
       (when mock-model (swap! failures into @(:problems mock-model)))
       (finally
         (when server ((:stop server)))
         (if before (System/setProperty "relay.bin" before) (System/clearProperty "relay.bin"))))
     (let [all-failures (into @failures @assert-failures)
           pass? (empty? all-failures)
-          end (world dir (clock))
+          end (world-of ctx)
           delete? (and temp? pass? (not keep?))]
       (when delete? (fs/delete-tree dir))
+      ;; The folder goes with the run: a kept run keeps a copy of it.
+      (when files-root
+        (when-not delete? (fs/copy-tree files-root (fs/path dir "files-folder") {:replace-existing true}))
+        (fs/delete-tree files-root))
       {:pass? pass? :dir (when-not delete? dir) :log @log-lines :failures all-failures
        :assert-failures @assert-failures
        :requests (when server (count @(:requests server)))

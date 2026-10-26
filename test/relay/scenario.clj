@@ -26,6 +26,9 @@
                                ; carry on from
     {:advance-minutes 2}       ; move relay's clock forward
     {:assert [assertion ...]}  ; check the state so far
+    {:mail \"From: ...\\n...\"}    ; a mail arrives in the agent's mailbox, as its
+                               ; POP3 ingestor would record it (needs :settings
+                               ; :mailbox); line ends become CRLF
 
   A :run step may not name a data directory, pause file or trace file
   (--data, --pause-file, --trace in any form), and may
@@ -47,9 +50,10 @@
 
   An assertion is [:has kind pattern], [:none kind pattern] or
   [:count kind pattern n]. Kind is one of :memo :wake :role :routine
-  :dead-letter :message (what relay told the operator), :event (the log's
-  events, as JSON read back) or :sent (what the file notifier received),
-  and also:
+  :dead-letter :message (what relay told the operator, with :text, its
+  subject and every item's text as one string, and :told, true for a
+  role's tell_operator), :event (the log's events, as JSON read back) or
+  :sent (what the file notifier received), and also:
 
     :fact        one per fact: its latest version, plus :current, :changes
                  (each version's change, such as [:added :corrected]), :why
@@ -64,12 +68,14 @@
     :tool-call   one per call in any wake's transcript: :role :wake :n (its
                  place in the run) :name :input :verdict (agentloop's: allow
                  or deny) :error :result.
-    :citation    one per ref (relay.refs) in a memo to the operator, or in
+    :citation    one per ref (relay.refs) in a memo to the operator, in
                  the outcome the hub gave when closing a memo from the
-                 operator, as
+                 operator, or in a role's tell_operator message, as
                  relay.refs/resolve gives it (:ref :kind :status :title
-                 :text :labels), with :memo, the memo's id. Refs repeated
-                 in a memo count once.
+                 :text :labels), with :memo or :message, the id of what
+                 held it. Refs repeated in one of them count once.
+    :file        one per file in the folder a :files grant opens (below):
+                 :path (relative to the folder) and :text, read at the end
 
   A :wake also has :requests, :input-tokens, :output-tokens,
   :cache-read-tokens, :cache-write-tokens, :cost-usd, :models (the models
@@ -92,15 +98,25 @@
     [:min-length n]      a string of at least n characters, trimmed
     [:subset s] [:same-set s]  a collection within, or equal to, s as sets
     [:contains p]        a collection with an element matching p
+    [:anywhere p]        the value, or anything nested in it (a map's
+                         values, a collection's elements), matches p
 
   Eval cases (relay.eval) add keys a scenario run reads too:
 
     :clock    \"2026-10-12T09:00\", relay's clock at the start, in the staging
               time zone; without it the clock starts at the real time
     :settings {:grants {\"clerk\" {:tools [\"fail-demo\"]}}}, merged into the
-              staging relay.edn: only :grants, and in them only :tools,
-              naming tools relay.staging defines. A role's :tools replace
-              its staging ones."
+              staging relay.edn: :grants, and in them only :tools, naming
+              tools relay.staging defines (a role's :tools replace its
+              staging ones), and :files true, which opens a folder of
+              made-up files for files_move; and :mailbox, the role the
+              agent's mailbox reports to, for :mail steps. The mailbox is
+              never polled: a :mail step is how mail arrives.
+    :files    {\"Receipts/2026-10.txt\" \"text\"}, the files a :files grant's
+              folder starts with. The folder is made outside the staging
+              directory, as relay requires, and removed with it. In the
+              model's replies, {:files-path \"Receipts\"} is that path in
+              the folder, in full."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [relay.core :as core]
@@ -134,7 +150,13 @@
     (let [v (instant value) f (instant from) t (instant to)]
       (boolean (and v f t (not (.isBefore v f)) (not (.isAfter v t)))))))
 
-(def ops #{:includes :regex :not :any :all :on-date :between :min-length :subset :same-set :contains})
+(def ops #{:includes :regex :not :any :all :on-date :between :min-length :subset :same-set :contains :anywhere})
+
+(defn- nested
+  "The value and everything nested in it: a map's values, a collection's
+  elements, all the way down."
+  [value]
+  (tree-seq coll? (fn [x] (if (map? x) (vals x) (seq x))) value))
 
 (defn match?
   "Whether `value` fits `pattern`."
@@ -156,12 +178,13 @@
         :min-length (and (string? value) (>= (count (str/trim value)) (first args)))
         :subset (and (coll? value) (let [s (set (first args))] (every? #(contains? s %) value)))
         :same-set (and (coll? value) (= (set value) (set (first args))))
-        :contains (and (coll? value) (boolean (some #(match? (first args) %) value)))))
+        :contains (and (coll? value) (boolean (some #(match? (first args) %) value)))
+        :anywhere (boolean (some #(match? (first args) %) (nested value)))))
 
     :else (= pattern value)))
 
 (def kinds #{:memo :wake :role :routine :dead-letter :message :event :sent
-             :fact :journal :note :doc :tool-call :citation :ready})
+             :fact :journal :note :doc :tool-call :citation :ready :file})
 
 ;; --- the newer kinds, from the state and the wakes' transcripts
 
@@ -236,21 +259,40 @@
     (vec (for [e (sort-by :id (mapcat val (:journals state)))]
            (assoc e :wake (:id (last (filter #(and (= (:owner e) (:role %)) (< (:id %) (:id e))) ws))))))))
 
+(defn message-text
+  "A message's subject and every item's text, one per line."
+  [m]
+  (str/join "\n" (cons (:subject m) (for [sec (:sections m) it (:items sec)]
+                                      (if (map? it) (:text it) (str it))))))
+
+(defn- told? [m] (= "told" (:origin m)))
+
+(defn message-items [{:keys [state]}]
+  (vec (for [m (sort-by :id (vals (:messages state)))]
+         (assoc m :text (message-text m) :told (told? m)))))
+
 (defn citation-items
   "One item per distinct ref in each thing said to the operator (see the
   namespace doc)."
   [{:keys [state]}]
-  (vec (for [m (sort-by :id (vals (:memos state)))
-             :let [text (cond (= core/operator (:to m)) (str (:subject m) "\n" (:body m))
-                              (= core/operator (:from m)) (:outcome m))]
-             :when text
-             ref (distinct (map :ref (refs/parse text)))]
-         (assoc (refs/resolve state ref) :memo (:id m)))))
+  (let [refs-in (fn [text] (distinct (map :ref (refs/parse text))))]
+    (vec (concat
+          (for [m (sort-by :id (vals (:memos state)))
+                :let [text (cond (= core/operator (:to m)) (str (:subject m) "\n" (:body m))
+                                 (= core/operator (:from m)) (:outcome m))]
+                :when text
+                ref (refs-in text)]
+            (assoc (refs/resolve state ref) :memo (:id m)))
+          (for [m (sort-by :id (vals (:messages state)))
+                :when (told? m)
+                ref (refs-in (message-text m))]
+            (assoc (refs/resolve state ref) :message (:id m)))))))
 
 (defn items
   "The things of one kind in a world: {:state :events :sent}, and for the
-  newer kinds also :transcripts (wake id to its transcript's entries) and
-  :now (relay's clock at the end). Sorted so that failures read the same
+  newer kinds also :transcripts (wake id to its transcript's entries),
+  :now (relay's clock at the end) and :files ({:path :text} for each file
+  in a :files grant's folder). Sorted so that failures read the same
   every time."
   [{:keys [state events sent transcripts] :as world} kind]
   (case kind
@@ -264,9 +306,10 @@
     :role (sort-by :id (vals (:roles state)))
     :routine (sort-by (juxt :owner :name) (mapcat vals (vals (:routines state))))
     :dead-letter (sort-by :id (vals (:dead-letters state)))
-    :message (sort-by :id (vals (:messages state)))
+    :message (message-items world)
     :citation (citation-items world)
     :ready (ready/ready state)
+    :file (sort-by :path (:files world))
     :event events
     :sent sent))
 
@@ -360,7 +403,7 @@
   "The relay commands a scenario may run. Everything here changes or reads
   only the data directory."
   #{"status" "inbox" "memo" "close" "roles" "add" "update" "remove" "routines" "routine" "unroutine"
-    "retry" "wake" "facts" "fact" "notes" "journal" "docs" "doc" "put" "log"})
+    "retry" "wake" "facts" "fact" "notes" "journal" "docs" "doc" "put" "log" "cards" "card"})
 
 (defn path-option?
   "Whether a command-line argument picks a path: the data directory, the
@@ -384,6 +427,12 @@
   (when clock
     (.toInstant (.atZone (LocalDateTime/parse clock) ^ZoneId zone))))
 
+(def mailbox-source
+  "The ingest source a scenario's :mailbox becomes: the agent's mailbox,
+  as relay.edn would give it, polled only at midnight UTC and then at a
+  closed port on this machine. A :mail step records mail as it."
+  "mailbox")
+
 (defn settings-problems
   "What is wrong with a scenario's :settings."
   [settings]
@@ -392,26 +441,68 @@
     (cond
       (nil? settings) []
       (not (map? settings)) [":settings is a map."]
-      (not= #{:grants} (set (keys settings))) [":settings may hold only :grants."]
-      (not (map? (:grants settings))) [":settings :grants maps a role id to {:tools [...]}."]
+      (seq (remove #{:grants :mailbox} (keys settings))) [":settings may hold only :grants and :mailbox."]
+      (and (contains? settings :mailbox) (not (and (string? (:mailbox settings))
+                                                    (re-matches #"[a-z][a-z0-9-]{0,39}" (:mailbox settings)))))
+      [":settings :mailbox is the id of the role the mailbox reports to, such as \"hub\"."]
+      (and (contains? settings :grants) (not (map? (:grants settings))))
+      [":settings :grants maps a role id to {:tools [...]}."]
       :else
       (vec (for [[role grant] (:grants settings)
                  problem [(when-not (string? role) (str "A role in :settings :grants is a string, not " (pr-str role) "."))
-                          (when-not (and (map? grant) (= #{:tools} (set (keys grant))) (vector? (:tools grant)))
-                            (str "The grant for " role " in :settings is {:tools [...]}, nothing else."))
+                          (when-not (and (map? grant) (seq grant) (every? #{:tools :files} (keys grant))
+                                         (or (not (contains? grant :tools)) (vector? (:tools grant)))
+                                         (or (not (contains? grant :files)) (true? (:files grant))))
+                            (str "The grant for " role " in :settings is {:tools [...]} and may add :files true, nothing else."))
                           (when-let [bad (seq (remove known (when (map? grant) (:tools grant))))]
                             (str "The grant for " role " names " (str/join ", " bad)
                                  "; :settings may grant only " (str/join ", " (sort known)) "."))]
                  :when problem]
              problem)))))
 
+(defn files-grant?
+  "Whether a scenario's :settings open a folder of files to some role."
+  [settings]
+  (boolean (some (comp true? :files) (vals (:grants settings)))))
+
 (defn merge-settings
-  "The staging relay.edn settings with a scenario's :settings merged in."
-  [settings {:keys [grants]}]
-  (reduce (fn [s [role grant]]
-            (cond-> s
-              (contains? grant :tools) (assoc-in [:grants role :tools] (:tools grant))))
-          settings grants))
+  "The staging relay.edn settings with a scenario's :settings merged in.
+  `files-root` is the folder a :files grant opens."
+  ([settings scenario-settings] (merge-settings settings scenario-settings nil))
+  ([settings {:keys [grants mailbox]} files-root]
+   (cond-> (reduce (fn [s [role grant]]
+                     (cond-> s
+                       (contains? grant :tools) (assoc-in [:grants role :tools] (:tools grant))
+                       (:files grant) (assoc-in [:grants role :files] [files-root])))
+                   settings grants)
+     mailbox (assoc-in [:ingest mailbox-source]
+                       {:kind :pop3 :url "pop3://127.0.0.1:1" :user "agent" :authserv-id "mx.staging.example"
+                        :to mailbox :every-minutes 1440}))))
+
+(defn resolve-paths
+  "`x` with each {:files-path p} replaced by p in full under `root`."
+  [root x]
+  (walk/postwalk
+   (fn [form]
+     (if (and (map? form) (= [:files-path] (keys form)))
+       (if root
+         (str root (when-not (str/blank? (:files-path form)) (str "/" (:files-path form))))
+         (throw (ex-info "{:files-path ...} needs a :files grant in :settings." {})))
+       form))
+   x))
+
+(defn- files-problems [{:keys [files settings]}]
+  (cond
+    (and (contains? settings :grants) (files-grant? settings) (not (map? files)))
+    [":settings grants :files, so the scenario needs :files, a map of relative path to text."]
+    (nil? files) []
+    (not (files-grant? settings)) [":files needs a role granted :files true in :settings."]
+    (not (and (map? files) (seq files))) [":files maps a relative path to its text."]
+    :else (vec (for [[p t] files
+                     :when (not (and (string? p) (string? t)
+                                     (re-matches #"[A-Za-z0-9][A-Za-z0-9 ._-]*(/[A-Za-z0-9][A-Za-z0-9 ._-]*)*" p)
+                                     (not (re-find #"(^|/)\.\.(/|$)" p))))]
+                 (str ":files has " (pr-str p) ", which is not a relative path of plain names.")))))
 
 (defn problems
   "What is wrong with a scenario's shape, as a vector of messages."
@@ -420,8 +511,12 @@
                        (let [ks (set (when (map? step) (keys step)))]
                          (cond
                            (not (map? step)) (str "Step " (pr-str step) " is not a map.")
-                           (not= 1 (count (filter ks [:run :tick :advance-minutes :assert])))
-                           (str "Step " (brief step) " needs exactly one of :run, :tick, :advance-minutes, :assert.")
+                           (not= 1 (count (filter ks [:run :tick :advance-minutes :assert :mail])))
+                           (str "Step " (brief step) " needs exactly one of :run, :tick, :advance-minutes, :assert, :mail.")
+                           (and (:mail step) (not (and (string? (:mail step)) (not (str/blank? (:mail step))))))
+                           (str "Step " (brief step) " needs :mail to be the mail's text, headers first.")
+                           (and (:mail step) (not (:mailbox (:settings scenario))))
+                           (str "Step " (brief step) " brings in mail, so :settings needs :mailbox.")
                            (and (:run step) (not (and (vector? (:run step)) (seq (:run step)))))
                            (str "Step " (brief step) " needs :run to be a vector of arguments.")
                            (and (:run step) (some path-option? (:run step)))
@@ -449,6 +544,7 @@
                      [(str ":clock is a local date and time such as \"2026-10-12T09:00\", not "
                            (pr-str (:clock scenario)) ".")]))
                  (settings-problems (:settings scenario))
+                 (files-problems scenario)
                  (when-not (seq assert) ["A scenario needs :assert."])
                  (when-not (or (nil? model) (and (map? model) (every? vector? (vals model))))
                    [":model maps a role id to a vector of replies."])

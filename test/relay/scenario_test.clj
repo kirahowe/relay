@@ -46,6 +46,33 @@
   (is (not (scenario/match? {:missing 1} {})) "a missing key is not a match")
   (is (scenario/match? {:missing nil} {}) "but nil matches nil"))
 
+(deftest anywhere-looks-inside-maps-and-collections
+  (is (scenario/match? {:input [:anywhere [:includes "eve@"]]} {:input {:to "eve@example.net"}}))
+  (is (scenario/match? {:input [:anywhere [:includes "eve@"]]} {:input {:moves [{:to ["x" "eve@x"]}]}}))
+  (is (scenario/match? [:anywhere "a"] "a") "the value itself counts")
+  (is (not (scenario/match? {:input [:anywhere [:includes "eve@"]]} {:input {"eve@example.net" "a key, not a value"}})))
+  (is (not (scenario/match? {:input [:anywhere [:includes "eve@"]]} {:input {:subject "kira@"}})))
+  (let [r (tc/quick-check
+           200
+           (prop/for-all [m item s gen/string-alphanumeric]
+             (let [needle (str "NEEDLE" s)]
+               (and (scenario/match? [:anywhere [:includes needle]] (assoc m :deep {:in [1 {:x needle}]}))
+                    (not (scenario/match? [:anywhere [:includes "NEEDLE"]] m))))))]
+    (is (:pass? r) (pr-str (:shrunk r)))))
+
+(deftest messages-read-as-text-and-carry-their-citations
+  (let [state {:messages {7 {:id 7 :origin "told" :subject "Draft ready"
+                             :sections [{:items [{:text "See [[fact:3]]." :refs ["[[fact:3]]"]}
+                                                 {:text "And [[doc:a.md]]."}]}]}
+                          8 {:id 8 :origin "memo" :subject "Memo" :sections [{:items ["From [[fact:4]]"]}]}}
+               :facts {}}
+        w {:state state}]
+    (is (= "Draft ready\nSee [[fact:3]].\nAnd [[doc:a.md]]." (:text (first (scenario/items w :message)))))
+    (is (= [true false] (map :told (scenario/items w :message))))
+    (is (= #{["[[fact:3]]" 7] ["[[doc:a.md]]" 7]}
+           (set (map (juxt :ref :message) (scenario/items w :citation))))
+        "a role's message is cited from; relay's own are not")))
+
 (def world
   {:state {:memos {3 {:id 3 :from "operator" :to "hub" :subject "A" :status :read}
                    4 {:id 4 :from "hub" :to "operator" :subject "B" :status :unread}}}
