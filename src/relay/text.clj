@@ -120,6 +120,32 @@
   plain words, never the name of a label."
   "[from outside]")
 
+(defn source-words
+  "Where something came from, in plain words, from the one label among
+  `labels` that names a source (mail:..., github:..., ics:...), or nil
+  when none or several do."
+  [labels]
+  (let [sources (filter #(and (string? %) (re-matches #"[a-z]+:.+" %)) labels)]
+    (when (= 1 (count sources))
+      (let [[kind what] (str/split (first sources) #":" 2)]
+        (case kind
+          ;; A mail's sender is what its From header says, which anyone
+          ;; can write, so it is shown as a claim, from outside. A mail
+          ;; that names the operator and was not verified never carries
+          ;; their address here (relay.ingest/mail-label).
+          "mail" (cond
+                   (= "unverified-operator" what) "from outside: a mail that says it is from you, not verified"
+                   (str/includes? what "@") (str "from outside: a mail that says it is from " what))
+          "github" (str "from GitHub, " what)
+          "ics" (str "from the calendar " what)
+          nil)))))
+
+(defn marker
+  "What marks text from outside: where it came from when one label says
+  so, its links broken too, else [from outside]."
+  [labels]
+  (if-let [w (source-words labels)] (str "[" (defang w) "]") outside-marker))
+
 (defn for-operator
   "Text for the operator from a source with these labels: from outside
   defanged and marked. It is not yet visible: the edge that shows it (the
@@ -127,7 +153,7 @@
   not idempotent (it doubles a backslash)."
   [labels s]
   (if (contaminated? labels)
-    (str outside-marker " " (defang s))
+    (str (marker labels) " " (defang s))
     (str s)))
 
 (def gutter
@@ -145,7 +171,7 @@
   [labels s]
   (let [bad (contaminated? labels)
         t (if bad (defang (str s)) (str s))]
-    (vec (concat (when bad [(str "  " outside-marker)])
+    (vec (concat (when bad [(str "  " (marker labels))])
                  (map #(str gutter %) (str/split t #"\n" -1))))))
 
 (def ^:private scripts

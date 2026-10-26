@@ -277,3 +277,13 @@
   (is (= "$12.50 for 1.5 hours" (text/defang "$12.50 for 1.5 hours")))
   (is (= "10[.]0[.]0[.]1 and evil[.]example" (text/defang "10.0.0.1 and evil.example")))
   (is (= "hxxps://pay[.]example/1[.]5" (text/defang "https://pay.example/1.5"))))
+
+(deftest a-mail-s-sender-is-shown-as-a-claim-from-outside
+  (is (= "[from outside: a mail that says it is from security@bank[.]com] Approve it."
+         (text/for-operator ["contaminated" "mail:security@bank.com"] "Approve it.")))
+  (is (= "[from outside: a mail that says it is from you, not verified] Approve it."
+         (text/for-operator ["contaminated" "mail:unverified-operator"] "Approve it.")))
+  (is (= "[from outside] x" (text/for-operator ["contaminated" "mail:unknown"] "x")))
+  (is (= "[from outside] x" (text/for-operator ["contaminated" "mail:not-an-address"] "x"))
+      "a mail label that is no address is never shown as one")
+  (is (= "[from GitHub, owner/repo] x" (text/for-operator ["contaminated" "github:owner/repo"] "x"))))
