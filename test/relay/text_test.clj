@@ -273,7 +273,14 @@
                   (or (= a b) (do (prn view a b) false))))
               forged))))
 
+(defspec defanging-twice-is-defanging-once 500
+  ;; Text defanged where it was written (a name in a daily note's line)
+  ;; is defanged again where it is shown; it must read the same.
+  (prop/for-all [s gen-urlish]
+    (= (text/defang s) (text/defang (text/defang s)))))
+
 (deftest defang-keeps-amounts-and-breaks-addresses
+  (is (= "evil[.]example" (text/defang "evil[.]example")) "a dot already broken stays as it is")
   (is (= "$12.50 for 1.5 hours" (text/defang "$12.50 for 1.5 hours")))
   (is (= "10[.]0[.]0[.]1 and evil[.]example" (text/defang "10.0.0.1 and evil.example")))
   (is (= "hxxps://pay[.]example/1[.]5" (text/defang "https://pay.example/1.5"))))

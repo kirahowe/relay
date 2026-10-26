@@ -111,8 +111,9 @@
                               (not (re-find #"\d+\.\d+\.\d+\.\d+" word)))
                        word
                        ;; Fullwidth and ideographic full stops work as dots
-                       ;; in a host too.
-                       (str/replace word #"(?<=\S)[.\u3002\uFF0E\uFF61](?=\S)" "[.]"))))))
+                       ;; in a host too. A dot already broken as [.] stays
+                       ;; as it is, so defanging twice is defanging once.
+                       (str/replace word #"(?<=\S)(?:[\u3002\uFF0E\uFF61]|(?<!\[)\.|\.(?!\]))(?=\S)" "[.]"))))))
 
 (defn contaminated? [labels] (boolean (some #{"contaminated"} labels)))
 

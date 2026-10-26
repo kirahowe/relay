@@ -581,7 +581,27 @@
             told (last (sort-by :id (vals (:messages (:state w)))))
             t (channels/body-text told)]
         (is (str/includes? t "evil[.]example"))
-        (is (not (str/includes? t "evil.example")))))))
+        (is (not (str/includes? t "evil.example"))))))
+  (testing "a suggestion from outside text, when dropped"
+    (let [w (-> (seed)
+                (run "steward" :digest/write-part {:part "ahead" :items [{:text "Visit evil.example/kira-pin-4821"}]}
+                     from-mail)
+                ok
+                (compose "2026-10-26") ok
+                (advance 600))
+          m (note w)
+          w (ok (reply w "r1" operator-address "not 1" verified))
+          told (last (sort-by :id (vals (:messages (:state w)))))]
+      (is (= (:id m) (:in-reply-to told)) "the answer is the one relay told")
+      (is (str/includes? (channels/body-text told) "from outside") "and it says where the text came from")
+      (is (true? (get-in (channels/wire told) ["sections" 0 "items" 0 "outsider"])) "in the client too")
+      (doseq [[where t] [["the mail" (channels/body-text told)]
+                         ["the client" (str/join "\n" (for [s (get (channels/wire told) "sections")
+                                                            it (get s "items")]
+                                                        (get it "text")))]
+                         ["the command line" (core/acted-line (:state w) m 1)]]]
+        (is (str/includes? t "evil[.]example") where)
+        (is (not (str/includes? t "evil.example")) where)))))
 
 ;; --- GitHub items from people
 
