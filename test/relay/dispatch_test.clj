@@ -520,6 +520,27 @@
     (is (not-any? #(str/includes? % "relay chat") (str/split-lines cli/usage)) "chat is not listed")
     (is (nil? (cli/command-of ["--help"])))))
 
+(deftest a-command-s-help-reads-no-settings
+  ;; Regression (U1b review): `relay memo --help` ran the command, and
+  ;; with no --data loaded the default data directory named in
+  ;; ~/.config/relay/config.edn, so asking for help read live settings.
+  ;; Here that file is not EDN, so reading it at all would fail.
+  (let [cfg (str *dir* "/config.edn")]
+    (spit cfg "{:data")
+    (binding [cli/*config-file* cfg]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Could not read" (cli/execute ["status"]))
+          "the trap works: a command does read it")
+      (doseq [args [["memo" "--help"] ["memo" "-h"] ["status" "--help"] ["routine" "run" "--help"]
+                    ["ready" "--all" "--help"]]]
+        (let [r (cli/execute args)]
+          (is (= 0 (:exit r)) (pr-str args))
+          (is (some #(str/starts-with? % (str "  relay " (first args))) (:out r))
+              (str "it is that command's help: " (pr-str args)))
+          (is (not-any? #(str/starts-with? % "  relay fact") (:out r)) "and only that command's")))
+      (let [r (cli/execute ["nonsense" "--help"])]
+        (is (= 1 (:exit r)) "a command relay does not have says so")
+        (is (= "relay has no command nonsense." (first (:out r))))))))
+
 (deftest a-conversation-killed-earlier-is-reaped-before-the-next-one-starts
   (let [dead (p/process ["true"])
         _ @dead]

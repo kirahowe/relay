@@ -43,7 +43,7 @@
   relay ready              what is ready for you
   relay reply <n> -m <text>
                            answer message <n>
-  relay memo hub -s <subject> -m <text>
+  relay memo steward -s <subject> -m <text>
                            ask for something
   relay revert <n>         undo a change the note flags
   relay dismiss <n>        drop a suggestion from the note
@@ -93,6 +93,7 @@ Every command needs the data directory, from --data <dir> or from the file
                                       in focus when given
   relay help                          the everyday commands (also relay --help)
   relay help all                      print this
+  relay <command> --help              just that command's lines from this list
   relay acp [<role>] [--trace <file>]
                                       talk with the roles from an ACP client, which
                                       runs this as its agent command: through
@@ -550,7 +551,7 @@ id public too.")
     (when-not (:daily-note config)
       (fail! "relay.edn has no :daily-note, so there is no daily note. Set :daily-note {:at \"07:30\" :role \"steward\"}."))
     (case sub
-      nil (let [{:keys [subject sections]} (core/compose-note state today now)]
+      nil (let [{:keys [subject sections]} (core/compose-note state config today now)]
             (if-not sections
               (result 0 "The daily note has nothing to say yet, so none would go out now."
                       (str "The steward writes its parts from its routine: relay routine run "
@@ -563,7 +564,7 @@ id public too.")
                              (get-in config [:daily-note :at]) "."))
               ;; Nothing to say yet: nothing is recorded, so the day's note
               ;; can still go out once the steward has written its parts.
-              (nil? (:sections (core/compose-note state today now)))
+              (nil? (:sections (core/compose-note state config today now)))
               (result 0 "Today's note has nothing to say yet, so nothing was sent, and it can still go out today."
                       (str "The steward writes its parts from its routine: relay routine run "
                            (digest/role-of config) " daily-note."))
@@ -955,6 +956,23 @@ id public too.")
             (:out result) (update :out #(mapv text/visible-line %))
             (:err result) (update :err #(mapv text/visible-line %)))))))
 
+(defn command-help
+  "The lines of `relay help all` about one command: each entry whose
+  line starts `relay <cmd>`, with the lines that continue it. Empty when
+  relay has no such command. Pure."
+  [cmd]
+  (let [entries (reduce (fn [acc line]
+                          (cond (re-find #"^  relay " line) (conj acc [line])
+                                (and (seq acc) (re-find #"^\s{3,}\S" line)) (conj (pop acc) (conj (peek acc) line))
+                                :else (conj acc nil)))
+                        [] (str/split-lines usage))
+        head (str "  relay " cmd)]
+    (vec (mapcat identity (filter #(and % (let [l (first %)]
+                                            (and (str/starts-with? l head)
+                                                 (or (= (count l) (count head))
+                                                     (#{\space \tab} (nth l (count head)))))))
+                                  entries)))))
+
 (defn execute
   "Runs one command line. Returns {:exit :out}, :out being the lines to
   print. Prints nothing itself, except what a command that talks with the
@@ -966,6 +984,13 @@ id public too.")
       (apply result 0 (str/split-lines usage))
       (or (nil? cmd) (#{"help" "-h" "--help"} cmd))
       (apply result 0 (str/split-lines short-usage))
+      ;; A command's own help is printed before anything is loaded: no
+      ;; config file, no data directory, so asking never touches them.
+      (and (string? cmd) (or (:help opts) (:h opts)))
+      (let [lines (command-help cmd)]
+        (if (seq lines)
+          (apply result 0 lines)
+          (apply result 1 (str "relay has no command " cmd ".") "" (str/split-lines short-usage))))
       ;; A tick marks itself as running before it looks for the pause file,
       ;; and a paused tick touches nothing else (see relay.pause).
       (= "tick" cmd)
