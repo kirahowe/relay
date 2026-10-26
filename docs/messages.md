@@ -71,7 +71,8 @@ classDiagram
     sections : Section[]
     in-reply-to : message id or nil
     thread : id of the first message
-    labels : where its text came from
+    labels : everything its writer may have seen
+    sources : what outside text its writer read directly
     origin : what relay was telling (internal)
     deliveries : channel to Delivery
   }
@@ -102,9 +103,14 @@ classDiagram
   daily note is a `digest`.
 - `urgency` is the role's to choose (`normal` when it gives none).
   relay's own alerts set theirs in code.
-- An item's `labels` are its provenance. The operator never sees a
-  label's name: text from outside is shown with `[from outside]` and its
-  links broken, in every channel.
+- An item's `labels` bound what its text may hold: text an outsider may
+  have written has its links broken, in every channel. The message's
+  `sources` say what outside text the role read directly in its wake
+  (relay.provenance), and a role's message ends with one line naming
+  them ("Drew on: the web page x; a mail from y"). The operator never
+  sees a label's name, and no subject or line is stamped. Refs read as
+  words. An item may carry a `link` relay built itself, which every
+  channel keeps followable.
 - `origin` (`told`, `memo-for-operator`, `harness-unreachable` and so
   on) is relay's own record of what it was telling, so it can tell the
   operator once. No channel sends it.

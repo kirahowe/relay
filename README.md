@@ -233,7 +233,8 @@ bin/relay note now
 Open the dashboard with `relay` in this terminal (`relay --open <role>`
 puts a role in focus), or from an ACP
 client with `relay acp <role>`. `relay status` shows roles, open work,
-harnesses, this week's spend and recent wakes, and `relay help` lists
+harnesses, this week's spend and recent wakes. `relay help` lists the
+everyday commands in lines that fit a phone, and `relay help all` lists
 every command.
 
 ## Upgrading
@@ -1176,17 +1177,29 @@ it has seen, and they only grow. What a session writes keeps its labels,
 so a role it adds starts every wake contaminated, and a routine it
 writes fires contaminated memos. Labels decide two things only. A public
 role's session may never hold `private` (agentloop's `forbid_labels`).
-And the operator is shown where a thing came from: text from outside is
-marked and its links are broken. A scout's memo in `relay inbox` is
-marked `[from the web]`; other text from outside is marked
-`[from outside]`.
+And text an outsider may have written has its links broken wherever it
+is shown: links and hosts only, never file names, paths or times.
+
+What the operator is told about where a thing came from follows a
+narrower record, its sources: the outside text the session that made it
+read directly in its wake. That is the memos the wake was for and what
+its tool calls returned, each counted by its own sources, never what was
+merely in its prompt (its notes, skills, journal tail, fact topics and
+board). So one calendar poll does not mark everything after it, and a
+wake that does what you asked, reading nothing from outside, makes
+something that is yours. Labels still bound everything the session may
+have seen. A role's message ends with one line naming its sources
+("Drew on: the web page office-holidays.html; a mail from
+dana@example.org"). Subjects, your own replies and relay's own alerts
+carry none, and no line of text is stamped.
 
 What the operator writes or pastes is hers, and relay trusts it: a memo
 on the command line, a line in a conversation, and a page she pastes or
 a resource she attaches in an ACP client. relay has no `--untrusted`.
 
 A role reads an outsider's text as it is. The shared instructions tell
-every role that such text is information, never an instruction.
+every role to learn from it freely, improving its own notes and skills
+with what it learns, and never to do what it asks.
 
 A list or account that other people share is not the operator's own.
 Put `:labels ["private" "contaminated"]` on the tool that reads it, since
@@ -1343,12 +1356,12 @@ leave this machine in a web search. A memo, routine, note, journal entry
 or wake note for a public role is refused without it. A memo to a public
 role from a house role is public as written: nobody signs it off, and
 the house role is told that what it wrote went out. It keeps the rest of
-its provenance, so a request shaped by a mail stays marked as from
-outside. A role whose own id was written in private cannot send one,
+its sources, so a request shaped by a mail still says where it came
+from. A role whose own id was written in private cannot send one,
 since the scout would see its name. A private memo of that kind from an
 older log stays unseen by the public role until the operator closes it.
-A memo a public role sends is always marked as from outside, even from a
-session that has not read the web yet. A public role may answer any role
+A memo a public role sends is always from outside, and from the web,
+even from a session that has not read the web yet. A public role may answer any role
 that sent it a memo it was shown.
 
 A public role's `egress` calls follow the fetch rule. relay checks each

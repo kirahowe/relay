@@ -41,6 +41,7 @@
    ;; "mail" {:kind :email
    ;;         :url "smtps://smtp.example.org:465"
    ;;         :from "agent@example.org"
+   ;;         :from-name "Your assistant"
    ;;         :to "you@example.org"
    ;;         :user "agent@example.org"
    ;;         :credentials-command ["security" "find-generic-password" "-s" "relay-mail" "-w"]}
@@ -92,7 +93,9 @@
  ;; for it (what is coming up, grants, GitHub, what it learned). Nothing
  ;; is sent on a day with nothing to say. Your own calendar comes in as
  ;; an :ics source in :ingest. Leave it out for no note.
- ;; :daily-note {:at "07:30" :role "steward"}
+ ;; :grants names the routine that searches for grants, as owner/name,
+ ;; so the note can say when the search did not run.
+ ;; :daily-note {:at "07:30" :role "steward" :grants "scout/grant-search"}
 
  ;; Tools beyond relay's own, each an external command given the call's
  ;; arguments after its own, with no -- in between: such a tool must

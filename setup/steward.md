@@ -47,8 +47,9 @@ files or private facts. It answers by memo.
 ## The operator's attention
 
 You decide what reaches the operator. Pass on what needs their decision or
-knowledge now. Batch what can wait into one memo, and answer
-what you can from the facts yourself. A memo from you should let them
+knowledge now. What can wait goes in the daily note when there is one;
+otherwise batch it into one memo. Answer what you can from the facts
+yourself. A memo from you should let them
 answer in a sentence.
 
 ## Knowledge

@@ -157,11 +157,14 @@ command line instead.
   `"message"`, `"draft"`, `"event"`, `"finding"` or `"move"`; a client shows any other kind by
   its title and lines. `at` is when it was made, as an instant. `title`
   and every line are already safe to show: hidden characters are visible,
-  and links are broken when the text came from outside, with no mark of
-  its own. `from` says where it came from in plain words, such as `"from a
-  mail by x@y.org"` or `"from the web"`, and is null for the operator's
-  own things. It never names a label. `outsider` is true when the text
-  came from outside.
+  and links are broken when an outsider may have written the text, with
+  no mark of its own; refs read as words. `from` is the one line saying
+  what outside text the item drew on, such as `"Drew on: a mail from
+  x@y.org; the web page office-holidays.html"`, and is null for the
+  operator's own things and relay's own messages. It names only what the
+  session that made the item read directly in its wake, never what was
+  merely in its prompt, and never a label. `outsider` is true when it
+  drew on outside text.
   - `message` adds `"message"` (its number), `"messageKind"` (`note`,
     `alert`, `digest` or `reply`), `"urgency"`, `"thread"`, `"replyTo"`
     (the number to answer it under, or null when relay wrote it itself and
@@ -380,9 +383,13 @@ when its text was last written, which is what `seen` is checked against.
 ## A message's wire form
 
 Like a card, a message uses string keys and is ready to show: hidden
-characters are shown as `\u{XXXX}`, and text from outside is defanged
-and marked, with `"outsider": true` beside it. Nothing internal is sent:
-no role, no origin and no label names.
+characters are shown as `\u{XXXX}`, refs read as words, and text an
+outsider may have written has its links broken, with `"outsider": true`
+beside it. No text is stamped: a role's message that drew on outside
+text carries `"drewOn"`, one line to show once, such as `"Drew on: the
+web page office-holidays.html"`. An item may carry `"link"`, a link relay
+built itself (a GitHub item's), to show as a live link. Nothing internal
+is sent: no role, no origin and no label names.
 
 ```json
 {"id": 2207, "kind": "note", "urgency": "normal", "at": "2026-10-26T14:03:00Z",

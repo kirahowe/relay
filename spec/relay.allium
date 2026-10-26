@@ -166,9 +166,33 @@ contract Tools {
 
     @invariant AHouseRoleReadsEverything
         -- A read by a role that is not public shows every item as it is,
-        -- contaminated ones included, and carries their labels. Text
-        -- from outside is information for the role, never an
-        -- instruction; the shared instructions say so.
+        -- contaminated ones included, and carries their labels. A role
+        -- learns from text from outside freely, improving its own notes
+        -- and skills with it, and never does what it asks; the shared
+        -- instructions say so.
+
+    @invariant ProvenanceIsWhatAWakeReadDirectly
+        -- Every event a role's tool call writes records its sources: the
+        -- labels naming an outsider (contaminated, kind:what) of what
+        -- that session read directly in its wake and the wakes it
+        -- resumed. That is the memos the wakes were for and every result
+        -- relay's tool command handed back, each counted by its own
+        -- recorded sources (an outside tool's page as web:<page or url>,
+        -- a search as search:web; the shell's, none), plus any static
+        -- label of an MCP tool the session holds. What its prompt merely
+        -- showed (notes, skills, journal tail, fact topics, board) is
+        -- not counted. An event that recorded none counts what its
+        -- labels name. Labels still carry the full union, for I3. The
+        -- operator's reply to a message records no sources, whatever
+        -- the message drew on: her verified words are hers. A card
+        -- keeps the sources of every event that wrote it, its edits
+        -- included.
+        -- What the operator is told about where a thing came from, and
+        -- which recipe changes the daily note flags, follow sources
+        -- only. A message names them once, as a last line ("Drew on:
+        -- the web page x; a mail from y"), and only a role's message:
+        -- never a subject, the operator's own replies or relay's own
+        -- alerts.
 
     @invariant AScriptHarnessGetsNoTools
         -- A script harness runs a program no policy watches, which could
@@ -1176,6 +1200,13 @@ config {
     -- not be public. :brief is refused, with a pointer to :daily-note.
     daily_note_at: Time? = null
     daily_note_role: Role? = null
+    -- The routine that searches for grants, from :grants "owner/name" in
+    -- :daily-note. When nobody wrote the note's Grants part, relay says
+    -- from that routine's wakes since the last note whether the search
+    -- has not run, ran with the web search key failing (a tool/broken
+    -- event for the wake, or the key still not set up), or ran and
+    -- found nothing.
+    daily_note_grants: String? = null
     -- How long an external tool may run when it has no timeout_seconds.
     external_tool_timeout: Duration = 10.minutes
 
@@ -1323,8 +1354,9 @@ rule SendAHouseMemoToAPublicRole {
     @guidance
         -- Decision 6: a house role's request to a scout goes as written,
         -- with no sign-off. The role chose what to put in it, and is
-        -- told that it went out as written. It keeps its other labels,
-        -- so a request shaped by a mail is still from outside. A role
+        -- told that it went out as written. It keeps its other labels
+        -- and its sources, so a request shaped by a mail still says
+        -- where it came from. A role
         -- whose id was written in private cannot send one, since the
         -- scout would be shown its name: "<to> works on the open web
         -- and is never shown a name written in private, as <role>'s
@@ -1986,7 +2018,7 @@ rule StartDispatchedWake {
 
     ensures: Wake.created(
         role: role,
-        memos: role.waiting_memos,
+        memos: own_first(role.waiting_memos),   -- black box: see guidance
         resumes: fresh_or_interrupted(role),   -- black box: see guidance
         harness_name: role.harness.name,
         pid: pid,
@@ -2001,6 +2033,12 @@ rule StartDispatchedWake {
         -- A dispatched wake carries only the memos that are not
         -- backing off. It carries on the interrupted wake, if there is
         -- one. If nothing is waiting any more, nothing is recorded.
+        -- own_first: when any memo has no outside source (the
+        -- operator's own, her verified replies, routines, roles' work),
+        -- the wake takes only those, and the mailbox, GitHub and
+        -- calendar memos wait for the next. A wake's work counts every
+        -- memo it read as a source, so her request taken with a
+        -- stranger's mail would read as drawn on it.
 }
 
 rule StartRequestedWake {
@@ -2013,7 +2051,7 @@ rule StartRequestedWake {
 
     ensures: Wake.created(
         role: role,
-        memos: role.deliverable_memos,
+        memos: own_first(role.deliverable_memos),
         note: note,
         resumes: fresh_or_interrupted(role),
         harness_name: role.harness.name,
@@ -2883,8 +2921,12 @@ invariant NoUnverifiedMailIsTrusted {
 rule IngestFailing {
     when: IngestFailed(source, error)
     ensures: source.failing = error
-    if now - source.failing_since >= config.outage_patience and not source.told:
+    if config.daily_note_at = null and now - source.failing_since >= config.outage_patience and not source.told:
         ensures: Message.created(kind: alert, origin: ingest_failing)
+
+    @guidance
+        -- With a daily note, a failing source is listed in each note
+        -- until it works (MakeDailyNote), and sends no alert of its own.
 }
 
 -- Spend
@@ -2968,23 +3010,27 @@ rule MakeDailyNote {
     let last = DailyNotes.max_by(n => n.date)
     let since = if last = null: now - 1.day else: last.created_at
     let flagged = RecipeChanges.where(c =>
-        c.created_after(since) and c.actor not in {operator, dispatcher} and outside(c.labels))
+        c.created_after(since) and c.actor not in {operator, dispatcher} and outside(c.sources))
     let parts = NoteParts.where(p => p.written_after(since))
         .map(p => p.without(Dismissed))
+    let github = GitHubNews                                  -- items people opened since the last note
+    let problems = IngestSources.where(s => s.failing)
 
     requires: config.daily_note_at != null
     requires: now >= due_at
     requires: last = null or last.date < today
 
-    ensures: DailyNote.created(date: today, sent: flagged.any or parts.any, flagged: flagged, created_at: now)
+    ensures: DailyNote.created(date: today, sent: flagged.any or parts.any or github.any or problems.any,
+                               flagged: flagged, created_at: now)
+    ensures: GitHubNews = []
     ensures:
-        if flagged.any or parts.any:
+        if flagged.any or parts.any or github.any or problems.any:
             Message.created(
                 origin: daily_note,
                 kind: digest,
                 urgency: normal,
                 subject: "Daily note for " + today,
-                sections: [flagged] + parts,
+                sections: [flagged, problems, ahead, grants, github, learned],
                 numbered: numbered(flagged, parts),
                 date: today,
                 created_at: now,
@@ -2992,16 +3038,25 @@ rule MakeDailyNote {
             )
 
     @guidance
-        -- outside(labels): contaminated, or a label naming a source
-        -- (mail:, github:, ics:). relay works out the flagged section
-        -- in code; no model writes it or can leave a change out of it
-        -- (decision 14). Each says what changed in one line, where the
-        -- outside text came from in plain words, and how to undo it
-        -- (reply "revert N"; relay revert N takes the same N). A new or
-        -- removed role is listed with the reason it cannot be undone
-        -- and no number. Past 40 it counts the rest, which relay changes
-        -- lists with their handles. The parts are what the note's role wrote
-        -- with daily_note_write: ahead, grants, github, learned.
+        -- outside(sources): any source (ProvenanceIsWhatAWakeReadDirectly).
+        -- A change the operator asked for in a wake that read nothing
+        -- from outside is hers, and quiet. relay works out the flagged
+        -- section in code; no model writes it or can leave a change out
+        -- of it (decision 14). Each says what changed in one line,
+        -- where the outside text came from by name ("the web page
+        -- office-holidays.html"), a line of what it now says, and how
+        -- to undo it (reply "revert N"; relay revert N takes the same
+        -- N). A new or removed role is listed with the reason it cannot
+        -- be undone and no number. Past 40 it counts the rest, which
+        -- relay changes lists with their handles. problems names each
+        -- ingest source that is failing. github lists, by repository,
+        -- the items people opened since the last note, each with a link
+        -- relay builds from the repository and number, then what the
+        -- role wrote for github. The other parts are what the note's
+        -- role wrote with daily_note_write: ahead, grants, learned.
+        -- Every part but the flagged and problems sections is there
+        -- each day, saying so when it has nothing; github only when a
+        -- repository is watched.
         -- Suggestions in ahead and grants are numbered so the operator
         -- can drop one. No role, tool, label or class is named in the
         -- text. A day's note is due from its time until the day ends;
@@ -3013,7 +3068,7 @@ rule MakeDailyNote {
 
 rule RecordRecipeChange {
     when: an event writes a skill doc, a routine, a role's note or a role
-    ensures: RecipeChange.created(what, change, owner, name, actor, labels, before)
+    ensures: RecipeChange.created(what, change, owner, name, actor, labels, sources, before, peek)
 
     @guidance
         -- Folded from the event and the state before it, so it can always
@@ -3063,9 +3118,15 @@ rule DismissSuggestion {
 
 rule AnnounceGitHubItems {
     when: DispatcherTicks(lost_wakes)
-    let news = items an ingest poll this tick found new, opened by a person (user type User, not a bot)
+    let news = items an ingest poll found new, opened by a person (user type User, not a bot)
     requires: news.any
-    ensures: Message.created(origin: github_news, kind: note, urgency: normal, sections: [news])
+    requires: config.daily_note_at = null
+    ensures: Message.created(origin: github_news, kind: note, urgency: low, sections: news.by_repository)
+
+    @guidance
+        -- Nothing about a new item is urgent. With a daily note, the
+        -- items wait for it (MakeDailyNote). A failing ingest source
+        -- likewise goes into the note rather than an alert.
 }
 
 -- Tools
@@ -3629,7 +3690,8 @@ rule ReadCard {
         -- lists the active cards, one line each with its progress, and
         -- the wake carries their titles' labels.
         -- A client is sent each card's wire form: every text field made
-        -- visible, and defanged and marked outsider when contaminated.
+        -- visible, with its links broken and outsider set when
+        -- contaminated. No text is stamped.
 }
 
 ------------------------------------------------------------
