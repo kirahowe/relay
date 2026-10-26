@@ -761,6 +761,8 @@ entity Message {
     -- came through (OperatorMail), oldest first.
     replies: List<String>
     origin: MessageOrigin
+    -- The role that told her (tell_operator); none for relay's own.
+    told_by: Role?
     about: Role?
     harness: Harness?
     memo: Memo?
@@ -776,6 +778,15 @@ entity Message {
     -- (route). The client channel is not among them: every message is
     -- always the client's to show (_relay/messages).
     deliveries: List<Delivery>
+    -- The operator's answers (ReplyToAMessage), oldest first.
+    replies: List<Reply>
+}
+
+value Reply {
+    -- The operator's answer to a message, from a channel, as she gave it.
+    channel: String
+    text: String
+    created_at: Timestamp
 }
 
 entity Delivery {
@@ -888,6 +899,23 @@ value MoveStep {
     -- The folders the move made for its target, which undo removes once
     -- they are empty again.
     created: List<String>
+}
+
+entity Prepared {
+    -- What a role prepared for the operator with an edit tool that is not
+    -- relay's own, such as a draft in her account. Recorded from the role's
+    -- session after the wake or the conversation turn (RecordWhatWasPrepared),
+    -- once per call. The id is the seq of the event that recorded it.
+    role: Role
+    tool: String
+    call: String
+    -- The input's subject, title, name or summary, else the tool's name in words.
+    title: String
+    -- The first line of the tool's result: where it put the thing.
+    place: String
+    -- A start of the input's body, text, content or description.
+    preview: String?
+    recorded_at: Timestamp
 }
 
 entity Note {
@@ -1312,6 +1340,58 @@ rule NotifyOperatorOfMemo {
     @guidance
         -- A memo to the operator always becomes a message, once: a
         -- note with the memo's subject and its body as the one item.
+}
+
+rule ReplyToAMessage {
+    when: MessageReplied(caller, message, text)
+
+    requires: caller.is_operator
+    requires: message.told_by != null   -- a role told her; relay's own messages have nobody to answer
+    requires: message.told_by.is_active
+    requires: text.length > 0 and text.length <= 4000   -- not blank
+
+    ensures: message.replies = message.replies + Reply(channel: "client", text: text, created_at: now)
+    ensures: Memo.created(
+        from: caller,
+        to: message.told_by,
+        subject: "Re: " + message.subject,
+        body: text,   -- and a line naming the message, and tell_operator's in_reply_to
+        sent_at: now,
+        status: unread,
+        attempts: 0
+    )
+
+    @guidance
+        -- The reply is the operator's own, so the memo is trusted (I5). It
+        -- carries the labels of the subject it quotes. The client channel
+        -- is _relay/reply; B8 gives every channel the same rule once it
+        -- knows the reply is hers.
+}
+
+rule RecordWhatWasPrepared {
+    when: EditCallRead(caller, tool, call, input, result, session_labels)
+
+    requires: caller.kind = role
+    requires: not caller.is_public
+    requires: tool.class = edit and not tool.is_relays_own
+    requires: not exists Prepared{tool: tool, call: call}
+
+    ensures: Prepared.created(
+        role: caller,
+        tool: tool,
+        call: call,
+        title: title_of(input, tool),   -- black box: subject, title, name or summary, else the tool's name in words
+        place: first_line(result),
+        preview: preview_of(input),   -- black box: body, text, content or description
+        recorded_at: now
+    )
+
+    @guidance
+        -- The dispatcher reads the session after a wake and as a
+        -- conversation goes, and records each call that was allowed and
+        -- ended without an error. The record carries the labels the
+        -- session held at the call, so the ready view says where the
+        -- thing came from. Nothing waits for it.
 }
 
 rule PublicItem {

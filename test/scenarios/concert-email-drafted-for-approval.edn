@@ -101,6 +101,9 @@
 
  :assert
  [[:has :wake {:role "hub"}]
+  ;; What the hub prepared shows in the operator's ready view, from the
+  ;; session after the wake. Every foil drafts too, so this is general.
+  [:has :ready {:kind :draft}]
   [:has :doc {:path "skills/hub/concert-email.md"}]
   [:has :fact {:text [:includes "Mira Okafor"]}]]
 

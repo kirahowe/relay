@@ -57,6 +57,9 @@
                  text) and :supersedes-text (the first text of the fact it
                  replaced)
     :journal     one per entry: :id :owner :text :at :wake
+    :ready       one per item of what is ready for the operator
+                 (relay.ready/ready): :kind (:message :draft :event or
+                 :finding), :title, :lines and :labels
     :note :doc   the current ones
     :tool-call   one per call in any wake's transcript: :role :wake :n (its
                  place in the run) :name :input :verdict (agentloop's: allow
@@ -101,6 +104,7 @@
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [relay.core :as core]
+            [relay.ready :as ready]
             [relay.refs :as refs]
             [relay.staging :as staging]
             [relay.transcript :as transcript])
@@ -157,7 +161,7 @@
     :else (= pattern value)))
 
 (def kinds #{:memo :wake :role :routine :dead-letter :message :event :sent
-             :fact :journal :note :doc :tool-call :citation})
+             :fact :journal :note :doc :tool-call :citation :ready})
 
 ;; --- the newer kinds, from the state and the wakes' transcripts
 
@@ -262,6 +266,7 @@
     :dead-letter (sort-by :id (vals (:dead-letters state)))
     :message (sort-by :id (vals (:messages state)))
     :citation (citation-items world)
+    :ready (ready/ready state)
     :event events
     :sent sent))
 

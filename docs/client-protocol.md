@@ -130,7 +130,68 @@ command line instead.
 - This is the client channel: every message relay tells the operator is
   here, whichever other channels relay.edn routes it to, and whatever
   became of those deliveries.
-- relay-tui: not used yet.
+- relay-tui: not used yet. It reads `_relay/ready` instead, which
+  carries the messages with everything else prepared for the operator.
+
+### `_relay/ready`
+
+- Scope: connection.
+- Params: `{"limit": int}`, how many of the newest items to send, from 1
+  to 500 (60 when left out), or `{}`. Anything else, `sessionId` included,
+  is refused (-32602).
+- Answer: `{"rev": int, "items": [Item]}`, newest first. `rev` is the seq
+  of the log's last event. This is the client channel's view of
+  everything prepared for the operator: what relay told her, drafts a
+  role made with an edit tool that is not relay's own, entries on the
+  agent's calendar that have not ended, and findings a role put on the
+  board.
+- An Item is `{"id", "kind", "at", "title", "lines": [string], "from":
+  string or null, "outsider": bool}` and what its kind adds. `id` is
+  stable and names the kind and its number (`"message:7"`,
+  `"prepared:12"`, `"event:3"`, `"card:9"`). `kind` is `"message"`,
+  `"draft"`, `"event"` or `"finding"`; a client shows any other kind by
+  its title and lines. `at` is when it was made, as an instant. `title`
+  and every line are already safe to show: hidden characters are visible,
+  and links are broken when the text came from outside, with no mark of
+  its own. `from` says where it came from in plain words, such as `"from a
+  mail by x@y.org"` or `"from the web"`, and is null for the operator's
+  own things. It never names a label. `outsider` is true when the text
+  came from outside.
+  - `message` adds `"message"` (its number), `"messageKind"` (`note`,
+    `alert`, `digest` or `reply`), `"urgency"`, `"thread"`, `"replyTo"`
+    (the number to answer it under, or null when relay wrote it itself and
+    nobody can answer) and `"replies"`, `[{"at", "text"}]`, the operator's
+    answers.
+  - `draft` has, in `lines`, where the tool said it put the draft and a
+    start of its text.
+  - `event` adds `"start"` and `"end"`, instants.
+  - `finding` adds `"card"`, the card's number.
+  - A file move (B9) is one more kind, `"move"`, with its undo; a client
+    that does not know a kind shows its title and lines.
+- Errors: -32000 "relay has not read what is ready yet. Try again." just
+  after start.
+- After it: the first call subscribes the connection to
+  `_relay/ready/changed`.
+- relay-tui: the ready view (`R`). It asks once the connection is up, so
+  the keys row can count what is there.
+
+### `_relay/reply`
+
+- Scope: connection.
+- Params: `{"inReplyTo": int, "text": string}`: the number of a message
+  (an item's `replyTo`) and the operator's answer, at most 4000
+  characters. Anything else is refused (-32602).
+- Answer: `{}`, once relay has recorded the reply. The reply is the
+  operator's own (a client channel is the operator's hand): relay records
+  it against the message (`replies` on its item, and every subscribed
+  connection is sent the item changed) and sends the role that wrote the
+  message a memo from the operator, quoting it and saying which message it
+  answers. The role answers with `tell_operator` and `in_reply_to`.
+- Errors: -32000 with relay's reason: no such message, a message relay
+  wrote itself ("there is nobody to answer it"), or a role that is gone.
+- relay-tui: `a` or Enter on a message in the ready view, then Enter
+  to send. One reply at a time is in flight, and a refusal gives the
+  words back.
 
 ## Methods: a session
 
@@ -186,6 +247,7 @@ command line instead.
 | `_relay/roles/changed` | connection | `{"roles": [Role]}`, the whole roster, sent when any of it changed since this connection was last sent it | replaces the roster whole |
 | `_relay/cards/changed` | connection | `{"rev", "cards": [Card]}`, every card whose rev is not the one this connection was last sent, archived cards included so the client can drop them | updates the one board, open conversation or not; a changed card brings the board into view unless the operator is busy in the pane |
 | `_relay/messages/changed` | connection | `{"rev", "messages": [Message]}`, oldest first: every message made, or whose deliveries changed, since this connection was last sent messages | not used yet |
+| `_relay/ready/changed` | connection | `{"rev", "items": [Item], "gone": [id]}`: every item new or different from what this connection was last sent, and the ids of those that left (an event that ended, a card archived, an item that fell past the newest 60) | applies them to the view it holds, which is the same as asking again |
 | `_relay/replayed` | session | `{"sessionId", "truncated": bool}`, after the replay that follows `session/load` or an attaching `session/new`; `truncated` says the oldest updates were dropped | marks the conversation loaded, says so at the top when truncated, and stops calls the replay left open once the roster says the turn is idle |
 
 A prompt's text is cleaned before the agent sees it: the text of text
@@ -197,7 +259,8 @@ change, when the turn starts. It is kept in the replay.
 
 relay sends `_relay/cards/changed` only to a connection that has called
 `_relay/cards`, `_relay/messages/changed` only to one that has called
-`_relay/messages`, and `_relay/roles/changed` only to one that has called
+`_relay/messages`, `_relay/ready/changed` only to one that has called
+`_relay/ready`, and `_relay/roles/changed` only to one that has called
 `_relay/roles`. A replay starts with the session's latest labels (a
 `session_info_update` carrying `agentloop/labels`) and usage, and keeps
 consecutive text chunks of one kind merged.

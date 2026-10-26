@@ -796,6 +796,35 @@ message goes. A role that works on the web cannot use it; it reports
 back by memo. A memo to `operator` and relay's own alerts become
 messages too.
 
+### What is ready for you
+
+`relay ready` lists, newest first, everything relay has prepared or told
+you: what roles told you, drafts they made in your own accounts with an
+edit tool, entries on the agent's calendar that have not ended, and
+findings they put on the board. Each says where it came from, in words
+("from a mail by x@y.org", "from the web"), and never names a label. It
+is short and fits 60 columns. The client shows the same list as its
+ready view (`_relay/ready` in `docs/client-protocol.md`), and a change
+reaches it without asking.
+
+To answer a message, `relay reply <message> -m <text>` (the client does
+the same from the view). The reply is yours, so it is trusted. It is
+recorded against the message, and the role that wrote the message gets a
+memo from you quoting it and naming the message, which wakes it. It
+answers with `tell_operator`, giving the message's number as
+`in_reply_to`, and the thread shows both. A message relay wrote itself
+(an alert, the digest) has nobody to answer.
+
+relay learns what a role prepared by reading the session after a wake or
+a conversation turn. For every call that was allowed and ended without an
+error to a tool relay.edn gives class `edit`, it records the tool, a
+title (the input's `subject`, `title`, `name` or `summary`, else the
+tool's name in words), where the tool said it put it (the first line of
+its result), and a start of the text (the input's `body`, `text`,
+`content` or `description`). A call is recorded once however often the
+session is read. Nothing here is a decision: it is a record of what
+already happened, and a draft does not wait for anything.
+
 `:messages` in relay.edn has channels and routes:
 
 ```clojure

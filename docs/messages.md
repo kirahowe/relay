@@ -251,6 +251,18 @@ changed since. The wire form has every text already made safe to show,
 with `outsider` beside it. It carries no role, no origin and no label
 names. See `docs/client-protocol.md`.
 
+### The ready view and replies
+
+The client's view of what is ready (`relay.ready`, `_relay/ready`) is a
+fold over the same state: messages, with everything else prepared for the
+operator, each item saying where it came from in plain words. A message
+that a role told the operator can be answered from it. `_relay/reply`
+(and `relay reply` on the command line) records a `reply/received` event
+against the message, with `channel: "client"`, and sends the role a memo
+from the operator that quotes the reply and names the message. The role
+answers with `tell_operator` and `in_reply_to`, which threads as before.
+`docs/client-protocol.md` has the wire forms.
+
 ## Where I2 is enforced
 
 I2: for every model input and every route, each delivery goes only to
