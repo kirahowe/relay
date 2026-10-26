@@ -37,8 +37,12 @@
   The scratch directory outlives a session, so whatever a session could
   have left there carries over: relay keeps the union of the labels
   of every session that ran a command since the container started, and
-  every result carries it. A session that read a stranger's mail and wrote
-  to /scratch cannot pass that text to a later session as clean."
+  of the untrusted folders mounted when it ran, and every result carries
+  it. A session that read a stranger's mail and wrote to /scratch cannot
+  pass that text to a later session as clean, nor can a folder marked
+  trusted later clean what was copied from it. Which folders are trusted
+  is part of the container's spec, so changing it starts a new container
+  with an empty scratch."
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [clojure.edn :as edn]
@@ -345,9 +349,12 @@
   (into (vec (:runner (merge defaults house))) ["build" "--tag" image "--file" containerfile context]))
 
 (defn spec
-  "A digest of how the container is run, so a change to :house restarts it."
-  [run-argv]
-  (sha256-hex (pr-str run-argv)))
+  "A digest of how the container is run and which of its `mounts` are
+  trusted, so a change to either restarts it. A folder trusted only now
+  could have put a stranger's text in scratch before; a new container
+  starts with an empty one."
+  [run-argv mounts]
+  (sha256-hex (pr-str [run-argv (mapv (juxt mount-path mount-trusted?) mounts)])))
 
 ;; --- what the steward reads back
 
@@ -500,7 +507,7 @@
                                           {:relay/usage true})))
                         [real m])))
         argv (run-argv house names mounts)]
-    {:house house :names names :run-argv argv :spec (spec argv) :data-dir data-dir}))
+    {:house house :names names :run-argv argv :spec (spec argv (:mounts house)) :data-dir data-dir}))
 
 (defn running?
   "Whether the container answers."
@@ -622,8 +629,12 @@
   [{:keys [data-dir house names spec] :as ctx} session-labels command]
   (let [{:keys [timeout-seconds output-limit] :as h} (merge defaults house)
         _ (when-not (= spec (:spec (read-state data-dir))) (up! ctx))
+        ;; What the command could copy into scratch: the session's own
+        ;; labels and the untrusted folders'. Recorded before it runs, so
+        ;; scratch keeps it whatever relay.edn says of the folders later.
+        writes (:labels (provenance house session-labels))
         attempt (fn []
-                  (let [before (record-session! data-dir session-labels)]
+                  (let [before (record-session! data-dir writes)]
                     [before (run-runner! (exec-argv house names timeout-seconds command)
                                          {:ms (* 1000 (+ timeout-seconds 30)) :limit output-limit})]))
         [before r] (let [[_ r :as first-try] (attempt)]

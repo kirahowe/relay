@@ -3917,7 +3917,11 @@ invariant StewardShell {
     -- scratch that it read. A mount is outside text unless the settings
     -- mark it {:trusted true}: relay cannot tell what a command read, so
     -- while any untrusted folder is mounted, every result is contaminated
-    -- and names each such folder (files:<name>) as its source.
+    -- and names each such folder (files:<name>) as its source. The
+    -- untrusted folders' labels are recorded in scratch too, before the
+    -- command runs, and which mounts are trusted is part of how the
+    -- container runs, so trusting a folder later starts a new container
+    -- rather than cleaning what was copied from it.
     for result in ShellResults:
         "private" in result.labels
         includes_all(result.labels, result.container.scratch_labels)

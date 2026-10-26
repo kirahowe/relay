@@ -157,9 +157,13 @@ cannot tell which files a command read, so while any untrusted folder is
 mounted, every result is also `contaminated` and names each such folder
 as its source (`files:<name>`, shown to Kira as "your files in <name>").
 With only trusted mounts a result has no source. `/scratch`
-outlives a session, so relay records each session's labels before it runs
-a command, and every result carries all the labels recorded since the
-container started. Session B above was clean, but it reads what session A
+outlives a session, so relay records each session's labels, and the
+untrusted folders', before it runs a command, and every result carries
+all the labels recorded since the container started. A folder marked
+trusted later cannot clean what a command copied from it: which folders
+are trusted is part of the container's spec, so the change starts a new
+container with an empty scratch, and until then the record keeps the
+folder's labels. Session B above was clean, but it reads what session A
 left, so Kira is shown that text as from outside, and a recipe change B
 makes from it is flagged (decision 14). The record lives on the host, in
 the data directory, where nothing in the container can reach it. It is
@@ -195,8 +199,8 @@ sequenceDiagram
 | I1: the shell has no network | `run-argv` always gives `--network none`; relay.edn names only the runner program, and one naming a network is refused | property `the-shell-always-runs-with-no-network-and-read-only-mounts`; live test and pentest `s18-shell-walls` try TCP, UDP, DNS, vsock to the host and unix sockets |
 | I1: no session for a house role has a way out | config refuses `egress`, a remote MCP tool that is not `read` or `edit`, and `:shell` for a public role; `tools/manifest` refuses again | property `no-session-for-a-house-role-has-a-way-out` over generated relay.edn; property `the-manifest-alone-keeps-a-house-role-in` over the same settings without relay.edn's checks |
 | I7: Kira's files cannot be changed | every mount ends in `:ro`; the root is read-only; commands run as an unprivileged user | live test writes, removes, moves and creates files in a mount and finds them unchanged |
-| No secret is mounted | `mount-problem`: never the data directory, home, relay's settings or a known place for secrets (`~/.ssh`, keychains, browser profiles and the rest of `relay.shell`'s list), with a `/System/Volumes/Data` prefix (a macOS firmlink) checked as the path it stands for; checked again on real paths when the container starts, and by file identity (`identity-problem`) | property `a-mount-that-passes-shows-no-secret`; firmlink cases in `secrets-are-never-mounted`; tests of a symbolic link and a firmlink to the data directory |
-| Provenance survives scratch | `record-session!` before each command; the scratch labels read again when it ends; `result-labels` | tests `what-one-session-leaves-in-scratch-carries-its-labels` and `a-command-reads-scratch-as-carrying-what-was-written-while-it-ran` |
+| No secret is mounted | `mount-problem`: never the data directory, home, relay's settings or the workbench's list of secret places, with a `/System/Volumes/Data` prefix (a macOS firmlink) checked as the path it stands for; checked again on real paths when the container starts, and by file identity (`identity-problem`) | property `a-mount-that-passes-shows-no-secret`; firmlink cases in `secrets-are-never-mounted`; tests of a symbolic link and a firmlink to the data directory |
+| Provenance survives scratch | `record-session!` before each command, with the session's labels and the untrusted folders'; the scratch labels read again when it ends; `provenance`; mount trust in `spec` | tests `what-one-session-leaves-in-scratch-carries-its-labels`, `a-command-reads-scratch-as-carrying-what-was-written-while-it-ran`, `scratch-holds-what-an-untrusted-folder-could-have-put-there` and `trusting-a-folder-replaces-the-shell-and-its-scratch` |
 | Tests never collide | names from the SHA-256 of the data directory's whole real path; tests remove exactly their own container and image by name | property `names-come-from-the-data-directory` over paths with different parents |
 
 ## Running it

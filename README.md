@@ -1305,7 +1305,11 @@ What a command prints shows your files, so it is labelled `private`, and
 `/scratch` lasts until the container restarts, so every result also
 carries the labels of every session that ran a command since then: text
 a session read in a stranger's mail and left in scratch is still from
-outside when a later session reads it. relay reads those labels when a
+outside when a later session reads it. The untrusted folders count the
+same way: a file a command copied from one into scratch stays outside
+text after you mark the folder trusted. Which folders are trusted is part
+of how the container runs, so changing it starts a new container with an
+empty scratch. relay reads those labels when a
 command starts and again when it ends, so a command that runs while
 another session writes to scratch carries that session's labels too.
 

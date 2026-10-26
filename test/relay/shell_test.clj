@@ -5,6 +5,7 @@
   against a stand-in runner. The live tests against Apple container are in
   shell-live-test."
   (:require [babashka.fs :as fs]
+            [clojure.edn :as edn]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.test.check.clojure-test :refer [defspec]]
@@ -619,3 +620,49 @@
       (is (str/includes? (relay.channels/body-text m) "Drew on: your files in notes"))
       (is (= [(:seq c)] (mapv :seq (relay.digest/flagged [c] 0))))
       (is (= "your files in notes" (relay.digest/source-phrase c))))))
+
+;; --- Codex R2: trusting a folder later does not clean what scratch holds
+
+(deftest scratch-holds-what-an-untrusted-folder-could-have-put-there
+  ;; relay records the folders' provenance in scratch before a command
+  ;; runs, so whatever the command copies there carries it, even once
+  ;; relay.edn no longer marks the folder as outside text.
+  (let [sys (data! {:mounts [(str *dir* "/notes")]})
+        notes-label "files:notes"]
+    (is (= ["contaminated" notes-label "private"]
+           (:labels (sh sys ["private"] (str "cp " *dir* "/notes/todo.txt copied.txt")))))
+    (is (= ["contaminated" notes-label "private"]
+           (vec (:scratch-labels (edn/read-string (slurp (str *dir* "/data/shell/container.edn"))))))
+        "recorded in scratch, not only in the result")
+    (testing "with the folder trusted but the container the same, the copy is still outside text"
+      (let [trusted (assoc-in (:config sys) [:house :mounts] [{:path (str *dir* "/notes") :trusted true}])
+            old (ctx sys)
+            same-container (assoc (shell/context (:data-dir sys) trusted) :spec (:spec old))]
+        (is (= ["contaminated" notes-label "private"]
+               (:labels (shell/sh! same-container ["private"] "cat copied.txt"))))))))
+
+(deftest trusting-a-folder-replaces-the-shell-and-its-scratch
+  (let [sys (data! {:mounts [(str *dir* "/notes")]})]
+    (sh sys ["private"] (str "cp " *dir* "/notes/todo.txt copied.txt"))
+    (let [sys2 (assoc-in sys [:config :house :mounts] [{:path (str *dir* "/notes") :trusted true}])]
+      (is (not= (:spec (ctx sys)) (:spec (ctx sys2))) "trust is part of how the container runs")
+      (is (false? (:current (shell/status (ctx sys2)))))
+      (is (= ["private"] (:labels (sh sys2 ["private"] "true")))
+          "a new container, and so an empty scratch with no labels")
+      (is (= 2 (count (runs))))
+      (testing "and back again"
+        (is (= ["contaminated" "files:notes" "private"] (:labels (sh sys ["private"] "true"))))
+        (is (= 3 (count (runs))))))))
+
+(defspec trust-is-part-of-the-container-spec 100
+  (prop/for-all [paths (gen/vector-distinct (gen/elements ["/Users/a/notes" "/Users/a/dl" "/Users/a/repo" "/Users/a/mail"]) {:min-elements 1 :max-elements 4})
+                 trust (gen/vector gen/boolean 4)
+                 flip gen/nat]
+    (let [mounts (mapv (fn [p t] {:path p :trusted t}) paths trust)
+          i (mod flip (count mounts))
+          flipped (update-in mounts [i :trusted] not)
+          spec-of (fn [ms] (shell/spec (shell/run-argv {:mounts ms} {:container "c" :image "i" :id "x"}
+                                                      (mapv (fn [m] [(:path m) (:path m)]) ms))
+                                       ms))]
+      (and (= (spec-of mounts) (spec-of mounts))
+           (not= (spec-of mounts) (spec-of flipped))))))
