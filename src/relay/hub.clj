@@ -83,6 +83,7 @@
             [relay.core :as core]
             [relay.json :as strict]
             [relay.roster :as roster]
+            [relay.text :as text]
             [relay.workspace :as workspace]))
 
 (def default-replay-cap
@@ -282,9 +283,14 @@
   (let [{:keys [command error]} (workspace/card-op-command (params-of msg))]
     (if error
       (refuse h rid -32602 error)
-      (submit h command {:kind :card-op :rid rid :card (get-in command [:args :card])} :with-state true))))
+      ;; What the operator typed on a card is cleaned like any paste, and
+      ;; the answer says what changed.
+      (let [{:keys [value notes]} (text/sanitize-input (:args command))]
+        (submit h (assoc command :args value)
+                {:kind :card-op :rid rid :card (get-in command [:args :card]) :notes notes}
+                :with-state true)))))
 
-(defn- card-op-result [h {:keys [rid card]} {:keys [ok changed rejection message] :as result}]
+(defn- card-op-result [h {:keys [rid card notes]} {:keys [ok changed rejection message] :as result}]
   (let [{:keys [conn]} (record h rid)
         state (or (:state result) (:state h))]
     (cond
@@ -297,7 +303,8 @@
         (if (get-in h [:conns conn :board])
           (assoc-in h [:conns conn :board :cards card] (:rev (core/card state card)))
           h)
-        (answer h rid (workspace/card-op-answer state card changed))
+        (answer h rid (cond-> (workspace/card-op-answer state card changed)
+                        (seq notes) (assoc "notes" (vec notes))))
         (board-changes h)))))
 
 ;; --- the replay buffer
@@ -456,6 +463,52 @@
              (not (awaiting? h #(and (= :turn-start (:kind %)) (= role (:role %))))))
       (submit h (workspace/turn-start-command wake session) {:kind :turn-start :rid rid :role role})
       h)))
+
+(defn- notice-line
+  "What relay tells the operator about a prompt it cleaned, as an ordinary
+  agent_message_chunk any ACP client shows, marked _meta relay/notice."
+  [session notes]
+  (workspace/notification-line "session/update"
+                               {"sessionId" session
+                                "update" {"sessionUpdate" "agent_message_chunk"
+                                          "content" {"type" "text" "text" (str (str/join "\n" notes) "\n\n")}
+                                          "_meta" {"relay/notice" true}}}))
+
+(defn- tell
+  "Tells every connection attached to a conversation what sanitizing
+  changed in the operator's prompt, once, and keeps it in the replay."
+  [h role notes]
+  (if (empty? notes)
+    h
+    (let [line (notice-line (get-in h [:convs role :session]) notes)]
+      (reduce #(write %1 %2 line) (remember h role line) (attached h role)))))
+
+(def ^:private block-strings
+  "The text fields of a prompt block, and of the resource inside it. Data
+  (an image, a blob) and the mime type are not text."
+  ["text" "uri" "name" "title" "description"])
+
+(defn sanitize-prompt
+  "A prompt's params with every text the operator wrote cleaned
+  (relay.text/sanitize-input): the text of text blocks, embedded
+  resources and resource links. Returns [params notes], notes being what
+  to tell the operator."
+  [params]
+  (let [blocks (get params "prompt")]
+    (if-not (sequential? blocks)
+      [params []]
+      (let [pick #(when (map? %) (select-keys % block-strings))
+            cleaned (mapv (fn [b]
+                            (if-not (map? b)
+                              {:block b :report text/empty-report}
+                              (let [{:keys [value report]}
+                                    (text/sanitize-input {:own (pick b) :resource (pick (get b "resource"))})]
+                                {:block (cond-> (merge b (:own value))
+                                          (map? (get b "resource")) (update "resource" merge (:resource value)))
+                                 :report report})))
+                          blocks)
+            report (apply text/merge-reports text/empty-report (map :report cleaned))]
+        [(assoc params "prompt" (mapv :block cleaned)) (text/report-lines report)]))))
 
 (defn- mirror
   "The prompt's text as user_message_chunk updates, which every other
@@ -627,8 +680,9 @@
       (or (running h role) (seq (queued h role)))
       (refuse h rid -32000 "A prompt is already running or waiting in this conversation. Send this once it is done, or cancel it.")
       (full? h role) (refuse h rid -32000 full-message)
-      :else (-> h (update-record rid :state :queued :role role :kind :prompt :params (params-of msg))
-                (pump role)))))
+      :else (let [[params notes] (sanitize-prompt (params-of msg))]
+              (-> h (update-record rid :state :queued :role role :kind :prompt :params params :notes notes)
+                  (pump role))))))
 
 (defn- cancel
   "session/cancel is for the session, from whichever attached connection:
@@ -859,8 +913,8 @@
     (case kind
       :turn-start
       (cond
-        ok (let [{:keys [conn params]} r]
-             (-> h (mirror role conn params)
+        ok (let [{:keys [conn params notes]} r]
+             (-> h (tell role notes) (mirror role conn params)
                  (send-upstream rid role {"jsonrpc" "2.0" "method" "session/prompt" "params" params} :prompt)))
         ;; It waits for the role, and is asked for again when the log
         ;; changes.
