@@ -14,6 +14,7 @@
             [relay.harness.agentloop :as agentloop]
             [relay.inbound :as inbound]
             [relay.files :as files]
+            [relay.ingest-run :as ingest-run]
             [relay.log :as log]
             [relay.messages :as messages]
             [relay.moves :as moves]
@@ -130,6 +131,9 @@ Every command needs the data directory, from --data <dir> or from the file
                                       build its image (this needs the network),
                                       start it, remove it, or say how it is (the
                                       tick starts it when it is missing)
+  relay poll [<source>]               check relay.edn's :ingest sources now (the
+                                      mailbox, GitHub, calendars), due or not, and
+                                      say what came in
   relay tool --data <dir> --role <r> [--wake <w>] <name>
                                       run a role's tool call (harnesses use this)
 
@@ -551,6 +555,7 @@ id public too.")
                (when-not id (fail! "usage: relay undo <move>, a number from relay moves"))
                (let [{:keys [ok refused]} (moves/undo! sys id)]
                  (if ok (lines ok) (apply result 1 refused))))
+      "poll" (apply result 0 (ingest-run/poll-now! sys (first more)))
       "connect" (let [[n url] more
                       config (:config sys)]
                   (when-not (and n url)

@@ -16,6 +16,7 @@
             [relay.harness :as harness]
             [relay.harness.agentloop :as agentloop]
             [relay.inbound :as inbound]
+            [relay.ingest-run :as ingest-run]
             [relay.json :as strict]
             [relay.log :as log]
             [relay.prompt :as prompt]
@@ -825,8 +826,9 @@
   "One pass: end wakes whose process has gone, fire due
   routines, report what needs reporting, deliver messages that are due
   (held for quiet hours or the digest, left stranded, or failed and due
-  again), then start a wake for every role with work waiting, and send the morning brief when
-  it is due. Returns the roles woken."
+  again), poll the ingest sources that are due, then start a wake for
+  every role with work waiting, and send the morning brief when it is
+  due. Returns the roles woken."
   ([sys] (tick! sys {}))
   ([{:keys [config] :as sys} {:keys [spawn!] :or {spawn! spawn-wake!}}]
    (let [state (inbound/current-state sys)]
@@ -843,7 +845,12 @@
        (try (shell/up! (shell/context (:data-dir sys) config))
             (catch Exception e
               (binding [*out* *err*] (println "relay tick: the shell is not running:" (ex-message e))))))
-     (let [roles (core/roles-to-wake state config t)]
+     ;; What came in from outside becomes memos before anyone is woken,
+     ;; so the role that reads them is woken by this tick.
+     (when (seq (:ingest config))
+       (ingest-run/poll-due! sys t))
+     (let [state (if (seq (:ingest config)) (inbound/current-state sys) state)
+           roles (core/roles-to-wake state config t)]
        (doseq [r roles] (spawn! sys r))
        ;; Last, since it waits on cal and rem. A failure leaves the day's
        ;; brief unrecorded, so the next tick tries again; a rejection is
