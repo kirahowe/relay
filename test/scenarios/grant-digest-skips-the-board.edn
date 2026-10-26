@@ -1,0 +1,167 @@
+;; Eval case: the scout's grant search comes back with four grants, two
+;; of which are already on the operator's board, where the society tracks
+;; the grants it is applying for. The hub should tell the operator about
+;; the two new ones only, each with its deadline, in one message, and
+;; leave out what the board already has. The hub's request to the scout
+;; and the scout's answer are fixed (a step script), so a live run
+;; measures only the digest. All of it is made
+;; up: the funders and the Harbour Sound Society do not exist. See
+;; relay.eval.
+{:doc "The grant digest tells the operator only about grants the board does not already have."
+ :live? true
+
+ :eval {:id "grant-digest-skips-the-board" :version 2 :tier :capability
+        :tags [:house :scouts :digest :cards] :trials 3}
+
+ :clock "2026-11-12T10:00"
+
+ :model
+ {"hub" [{:tool-uses [{:name "cards" :input {}}]}
+         {:tool-uses [{:name "tell_operator"
+                       :input {:subject "Two new grants the choir could apply for"
+                               :urgency "low"
+                               :body "The web search found two grants that are not on your board yet. The other two it found, the Lantern Foundation's and the Arts Council's, are already there."
+                               :items ["Tidewater Fund, Small Ensembles: up to $3,000, due 30 November."
+                                       "Port Ellery Community Foundation, Neighbourhood Grant: up to $1,500, due 12 December."]}}]}
+         {:tool-uses [{:name "memo_close"
+                       :input {:memo {:memo-id {:subject "Grants found"}}
+                               :outcome "Told the operator about the two grants that are not on the board."}}]}
+         {:tool-uses [{:name "journal_write"
+                       :input {:text "The scout found four grants; two were already on the board. Told the operator about the Tidewater Fund and Port Ellery grants."}}]}
+         {:text "Done."}]}
+
+ :foils
+ {;; It passes on everything the scout found.
+  "repeats-the-board"
+  {:fails #{:skips-what-the-board-has}
+   :model {"hub" [{:tool-uses [{:name "tell_operator"
+                                :input {:subject "Four grants the choir could apply for" :urgency "low"
+                                        :body "The web search found these."
+                                        :items ["Lantern Foundation, Community Arts: up to $5,000, due 15 January."
+                                                "Nova Scotia Arts Council, Creative Communities: up to $10,000, due 1 February."
+                                                "Tidewater Fund, Small Ensembles: up to $3,000, due 30 November."
+                                                "Port Ellery Community Foundation, Neighbourhood Grant: up to $1,500, due 12 December."]}}]}
+                  {:tool-uses [{:name "memo_close"
+                                :input {:memo {:memo-id {:subject "Grants found"}} :outcome "Told the operator."}}]}
+                  {:tool-uses [{:name "journal_write" :input {:text "Passed on the grants."}}]}
+                  {:text "Done."}]}}
+
+  ;; It passes on the board's grants under other names than the scout gave.
+  "board-under-other-names"
+  {:fails #{:skips-what-the-board-has}
+   :model {"hub" [{:tool-uses [{:name "cards" :input {}}]}
+                  {:tool-uses [{:name "tell_operator"
+                                :input {:subject "Four grants the choir could apply for" :urgency "low"
+                                        :body "The web search found these."
+                                        :items ["Community Arts grant: up to $5,000, due 15 January."
+                                                "Nova Scotia Arts Council: up to $10,000, due 1 February."
+                                                "Tidewater Fund, Small Ensembles: up to $3,000, due 30 November."
+                                                "Port Ellery Community Foundation, Neighbourhood Grant: up to $1,500, due 12 December."]}}]}
+                  {:tool-uses [{:name "memo_close"
+                                :input {:memo {:memo-id {:subject "Grants found"}} :outcome "Told the operator."}}]}
+                  {:tool-uses [{:name "journal_write" :input {:text "Passed on the grants."}}]}
+                  {:text "Done."}]}}
+
+  ;; It spreads a board grant over two items: the name in one, its
+  ;; amount and deadline in the next.
+  "board-spread-over-items"
+  {:fails #{:skips-what-the-board-has}
+   :model {"hub" [{:tool-uses [{:name "cards" :input {}}]}
+                  {:tool-uses [{:name "tell_operator"
+                                :input {:subject "Grants the choir could apply for" :urgency "low"
+                                        :body "The web search found these."
+                                        :items ["Tidewater Fund, Small Ensembles: up to $3,000, due 30 November."
+                                                "Port Ellery Community Foundation, Neighbourhood Grant: up to $1,500, due 12 December."
+                                                "The Lantern Foundation's grant is open as well."
+                                                "That one is up to $5,000 and closes on January 15."]}}]}
+                  {:tool-uses [{:name "memo_close"
+                                :input {:memo {:memo-id {:subject "Grants found"}} :outcome "Told the operator."}}]}
+                  {:tool-uses [{:name "journal_write" :input {:text "Passed on the grants."}}]}
+                  {:text "Done."}]}}
+
+  ;; It drops one of the new ones along with the board's.
+  "drops-a-new-one"
+  {:fails #{:lists-the-new-grants :says-when-each-is-due}
+   :model {"hub" [{:tool-uses [{:name "cards" :input {}}]}
+                  {:tool-uses [{:name "tell_operator"
+                                :input {:subject "A new grant the choir could apply for" :urgency "low"
+                                        :body "One grant the web search found is not on your board yet."
+                                        :items ["Tidewater Fund, Small Ensembles: up to $3,000, due 30 November."]}}]}
+                  {:tool-uses [{:name "memo_close"
+                                :input {:memo {:memo-id {:subject "Grants found"}} :outcome "Told the operator."}}]}
+                  {:tool-uses [{:name "journal_write" :input {:text "Passed on one grant."}}]}
+                  {:text "Done."}]}}
+
+  ;; The right grants, but no deadlines.
+  "no-deadlines"
+  {:fails #{:says-when-each-is-due}
+   :model {"hub" [{:tool-uses [{:name "cards" :input {}}]}
+                  {:tool-uses [{:name "tell_operator"
+                                :input {:subject "Two new grants the choir could apply for" :urgency "low"
+                                        :body "Two grants the web search found are not on your board yet."
+                                        :items ["Tidewater Fund, Small Ensembles: up to $3,000."
+                                                "Port Ellery Community Foundation, Neighbourhood Grant: up to $1,500."]}}]}
+                  {:tool-uses [{:name "memo_close"
+                                :input {:memo {:memo-id {:subject "Grants found"}} :outcome "Told the operator."}}]}
+                  {:tool-uses [{:name "journal_write" :input {:text "Passed on two grants."}}]}
+                  {:text "Done."}]}}
+
+  ;; One message per grant: no one message holds both.
+  "one-message-each"
+  {:fails #{:one-digest :lists-the-new-grants :says-when-each-is-due}
+   :model {"hub" [{:tool-uses [{:name "cards" :input {}}]}
+                  {:tool-uses [{:name "tell_operator"
+                                :input {:subject "A new grant: Tidewater Fund" :urgency "low"
+                                        :body "Tidewater Fund, Small Ensembles: up to $3,000, due 30 November."}}]}
+                  {:tool-uses [{:name "tell_operator"
+                                :input {:subject "A new grant: Port Ellery" :urgency "low"
+                                        :body "Port Ellery Community Foundation, Neighbourhood Grant: up to $1,500, due 12 December."}}]}
+                  {:tool-uses [{:name "memo_close"
+                                :input {:memo {:memo-id {:subject "Grants found"}} :outcome "Told the operator."}}]}
+                  {:tool-uses [{:name "journal_write" :input {:text "Passed on two grants."}}]}
+                  {:text "Done."}]}}}
+
+ :steps
+ [{:run ["card" "add" "checklist" "--title" "Grants we are applying for"
+         "--item" "Lantern Foundation, Community Arts grant: due 15 January"
+         "--item" "Nova Scotia Arts Council, Creative Communities: due 1 February"]}
+  {:run ["memo" "hub" "-s" "Grant search" "-m" "Could you get the scout to look for grants we could apply for this winter?"]}
+  ;; The hub's request and the scout's answer, the same in every run.
+  {:tick 2
+   :script {"hub" [{:tool-uses [{:name "memo_send"
+                                 :input {:to "scout" :subject "Grants for a small community choir"
+                                         :body "Please look for open grants that a small community choir in Nova Scotia could apply for this winter, with the funder, amount, deadline and page of each."}}]}
+                   {:tool-uses [{:name "memo_close"
+                                 :input {:memo {:memo-id {:subject "Grant search"}} :outcome "Asked the scout."}}]}
+                   {:tool-uses [{:name "journal_write" :input {:text "Asked the scout for grants."}}]}
+                   {:text "Done."}]
+            "scout" [{:tool-uses [{:name "memo_send"
+                                   :input {:to "hub" :subject "Grants found"
+                                           :body "Four open grants for a small community choir in Nova Scotia:\n\n1. Lantern Foundation, Community Arts: up to $5,000, due 15 January. https://lantern-foundation.example/community-arts\n2. Nova Scotia Arts Council, Creative Communities: up to $10,000, due 1 February. https://arts-council.example/creative-communities\n3. Tidewater Fund, Small Ensembles: up to $3,000, due 30 November. https://tidewater-fund.example/small-ensembles\n4. Port Ellery Community Foundation, Neighbourhood Grant: up to $1,500, due 12 December. https://pecf.example/neighbourhood"}}]}
+                     {:tool-uses [{:name "memo_close"
+                                   :input {:memo {:memo-id {:subject "Grants for a small community choir"}} :outcome "Sent the hub four grants."}}]}
+                     {:tool-uses [{:name "journal_write" :input {:text "Found four grants and sent them to the hub."}}]}
+                     {:text "Done."}]}}
+  {:tick 1}]
+
+ :assert
+ [[:has :memo {:to "hub" :from "scout" :subject "Grants found" :labels [:contains "contaminated"]}]
+  [:has :wake {:role "hub"}]]
+
+ :graders
+ [{:id :lists-the-new-grants
+   :doc "The operator is told about both grants the board does not have."
+   :check [:has :message {:told true :text [:all [:includes "Tidewater"] [:includes "Port Ellery"]]}]}
+  {:id :skips-what-the-board-has
+   :doc "Nothing told to the operator lists a grant the board already has as one to look at. Saying in passing that the board has them is fine; listing them with their amounts or deadlines is not. Either board grant's deadline or amount anywhere counts, under whatever name; so does any of its names with an amount or a deadline in the same sentence or item."
+   :check [:none :message {:told true
+                           :text [:any
+                                  [:regex "(?i)\\b15(th)?\\s+Jan|\\bJan(uary|\\.)?\\s+15(th)?\\b|\\b1(st)?\\s+Feb|\\bFeb(ruary|\\.)?\\s+1(st)?\\b|\\$\\s?(5|10),?000\\b|\\$\\s?(5|10)\\s?k\\b"]
+                                  [:regex "(?i)(lantern|community arts|arts council|creative communities)[^\\n.;]*(\\$\\d|\\bdue\\b|deadline|\\bclos(e|es|ing)\\b|january|february|\\bjan\\b|\\bfeb\\b)"]]}]}
+  {:id :says-when-each-is-due
+   :doc "The message gives each new grant's deadline."
+   :check [:has :message {:told true :text [:all [:regex "(?i)30\\s+Nov|Nov(ember)?\\s+30"]
+                                            [:regex "(?i)12\\s+Dec|Dec(ember)?\\s+12"]]}]}
+  {:id :one-digest
+   :doc "One message, not one per grant."
+   :check [:count :message {:told true} 1]}]}

@@ -35,7 +35,9 @@
   An oracle (the case's :model script) must pass every check, and each foil
   must fail exactly the checks in its :fails, gating or not. That is how a
   grader is shown to tell a good run from a bad one before any money is
-  spent on it.
+  spent on it. A case tagged :house must also have, for each of its own
+  check graders, a foil that fails it (`unfoiled`), so no grader of the
+  house's cases is one that nothing has ever been seen to fail.
 
   Results follow Inspect AI's sample shape (id, epoch, scores with value C
   or I), so a later export to its log format is a renaming. pass^k is
@@ -166,6 +168,19 @@
     ["eval-defaults.edn is {:graders [...]}."]
     (vec (mapcat grader-problems (:graders defaults)))))
 
+(defn unfoiled
+  "The ids of a case's own check graders that no foil names in :fails."
+  [case]
+  (let [foiled (set (mapcat :fails (vals (:foils case))))]
+    (vec (for [g (:graders case) :when (and (map? g) (not (judge? g)) (not (foiled (:id g))))] (:id g)))))
+
+(defn house-case-problems
+  "For a case tagged :house: each of its own graders that no foil fails."
+  [case]
+  (when (some #{:house} (get-in case [:eval :tags]))
+    (for [id (unfoiled case)]
+      (str "Grader " id " is never failed by a foil; a :house case needs one for each grader."))))
+
 (defn case-problems
   "What is wrong with an eval case, beyond what relay.scenario/problems
   finds, as messages."
@@ -191,6 +206,7 @@
           (when-let [bad (seq (remove default-ids (:skip-defaults case)))]
             [(str ":skip-defaults names " (str/join ", " bad) ", which eval-defaults.edn does not define.")])
           (when-not (map? (:model case)) ["An eval case needs its oracle, a :model script."])
+          (house-case-problems case)
           (when-not (or (nil? (:foils case)) (map? (:foils case))) [":foils maps a name to {:model ... :fails #{...}}."])
           (for [[nm {:keys [model fails] :as foil}] (when (map? (:foils case)) (:foils case))
                 problem [(when-not (and (map? foil) (map? model) (every? vector? (vals model)))

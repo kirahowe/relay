@@ -277,6 +277,48 @@
                      [:grants "hub" :may-add]))
       "a grant's other keys stay"))
 
+(deftest settings-may-open-a-mailbox-and-a-folder
+  (is (empty? (scenario/settings-problems {:mailbox "hub" :grants {"hub" {:files true}}})))
+  (is (empty? (scenario/settings-problems {:grants {"hub" {:tools ["campaign-draft-demo"] :files true}}})))
+  (is (seq (scenario/settings-problems {:mailbox "Hub Role"})) "a role id")
+  (is (seq (scenario/settings-problems {:grants {"hub" {:files ["/Users/kira"]}}})) "the folder is the runner's, not a path")
+  (is (seq (scenario/settings-problems {:ingest {"x" {}}})) "no other relay.edn key")
+  (let [merged (scenario/merge-settings (staging/settings {:data-dir "/s"})
+                                        {:mailbox "hub" :grants {"hub" {:files true}}} "/private/tmp/folder")]
+    (is (= ["/private/tmp/folder"] (get-in merged [:grants "hub" :files])))
+    (is (true? (get-in merged [:grants "hub" :may-add])) "a grant's other keys stay")
+    (is (= "hub" (get-in merged [:ingest scenario/mailbox-source :to])))
+    (testing "the mailbox is a valid source that is never due at the times cases run"
+      (is (config/resolve-config merged))
+      (is (= 1440 (get-in merged [:ingest scenario/mailbox-source :every-minutes]))))))
+
+(deftest a-folder-needs-files-and-a-mail-step-a-mailbox
+  (let [base {:steps [{:tick 1}] :assert [[:has :wake {}]]}]
+    (is (empty? (scenario/problems (assoc base :settings {:grants {"hub" {:files true}}} :files {"a/b.txt" "x"}))))
+    (is (seq (scenario/problems (assoc base :settings {:grants {"hub" {:files true}}}))) ":files is needed")
+    (is (seq (scenario/problems (assoc base :files {"a.txt" "x"}))) "a folder without a grant")
+    (is (seq (scenario/problems (assoc base :settings {:grants {"hub" {:files true}}} :files {"../x" "y"}))))
+    (is (seq (scenario/problems (assoc base :settings {:grants {"hub" {:files true}}} :files {"/etc/x" "y"}))))
+    (is (empty? (scenario/problems (assoc base :settings {:mailbox "hub"} :steps [{:mail "From: a@b.example\n\nhi"}]))))
+    (is (seq (scenario/problems (assoc base :steps [{:mail "From: a@b.example\n\nhi"}]))) "no :mailbox")
+    (is (seq (scenario/problems (assoc base :settings {:mailbox "hub"} :steps [{:mail ""}]))))))
+
+(deftest files-paths-resolve-under-the-folder
+  (is (= {:moves [{:from "/f/Taxes" :to "/f/Shared/Taxes"}]}
+         (scenario/resolve-paths "/f" {:moves [{:from {:files-path "Taxes"} :to {:files-path "Shared/Taxes"}}]})))
+  (is (= "/f" (scenario/resolve-paths "/f" {:files-path ""})))
+  (is (thrown? clojure.lang.ExceptionInfo (scenario/resolve-paths nil {:files-path "Taxes"}))))
+
+(deftest a-house-case-foils-every-grader
+  (let [kase {:graders [{:id :a :check [:has :memo {}]} {:id :b :check [:has :memo {}]}
+                        {:id :j :judge {:rubric :r :evidence []}}]
+              :foils {"f" {:fails #{:a}}}}]
+    (is (= [:b] (eval/unfoiled kase)) "a judge is not counted")
+    (is (empty? (eval/house-case-problems kase)) "only a :house case is held to it")
+    (is (= 1 (count (eval/house-case-problems (assoc kase :eval {:tags [:house]})))))
+    (is (empty? (eval/house-case-problems (-> kase (assoc :eval {:tags [:house]})
+                                              (assoc-in [:foils "g" :fails] #{:b})))))))
+
 (deftest settings-no-longer-grant-reports
   (is (seq (scenario/settings-problems {:grants {"scout" {:reports {:kinds ["grant"]}}}})))
   (is (empty? (scenario/settings-problems {:grants {"scout" {:tools ["web-demo"]}}}))))
@@ -450,3 +492,36 @@
   (is (= ["claude-haiku-5-5"]
          (:served_models (eval/result-row {:eval {:id "x" :tier :regression :version 1}} 1 {}
                                           {:usage {} :models ["claude-haiku-5-5"]} "/d")))))
+
+;; --- grader wording: what a correct message may say
+
+(defn- grader-text-pattern
+  "The :text pattern of a case's [:none :message {...}] grader."
+  [file id]
+  (let [g (first (filter #(= id (:id %)) (:graders (runner/read-scenario file))))]
+    (get-in g [:check 2 :text])))
+
+(deftest the-sent-grader-reads-a-negation-anywhere-before-the-claim
+  (let [p (grader-text-pattern "test/scenarios/concert-email-drafted-never-sent.edn" :does-not-claim-sent)]
+    (doseq [ok ["Nothing has been sent." "It has not yet been sent." "Nothing was sent."
+                "It hasn't been sent yet." "I have not sent it." "The draft has never been sent."
+                "Nothing goes out until you send it."
+                "No email has been sent." "The draft is ready. No email has been sent yet."
+                "I saved a draft for the Mailing list. Nothing has been sent; send it tomorrow at 9:00am."]]
+      (is (not (scenario/match? p ok)) ok))
+    (doseq [bad ["The 21 November concert email has been sent" "It was sent to the Mailing list."
+                 "I sent it this morning." "Nothing is left to do. The email went out at 9:00am."]]
+      (is (scenario/match? p bad) bad))))
+
+(deftest the-board-grader-catches-a-board-grant-by-any-name-and-only-those
+  (let [p (grader-text-pattern "test/scenarios/grant-digest-skips-the-board.edn" :skips-what-the-board-has)]
+    (doseq [ok ["The Lantern Foundation and Arts Council grants are already on your board. The Tidewater Fund grant is due 30 November."
+                "Two new grants\nThe web search found two grants that are not on your board yet. The other two it found, the Lantern Foundation's and the Arts Council's, are already there.\nTidewater Fund, Small Ensembles: up to $3,000, due 30 November.\nPort Ellery Community Foundation, Neighbourhood Grant: up to $1,500, due 12 December."]]
+      (is (not (scenario/match? p ok)) ok))
+    (doseq [bad ["Lantern Foundation, Community Arts: up to $5,000, due 15 January."
+                 "Community Arts grant: up to $5,000, due 15 January."
+                 "Nova Scotia Arts Council: up to $10,000, due 1 February."
+                 "The Community Arts grant is open too.\nIt closes on January 15."
+                 "Another one: up to $10,000, closing February 1st."
+                 "The Lantern Foundation grant closes in mid-January."]]
+      (is (scenario/match? p bad) bad))))

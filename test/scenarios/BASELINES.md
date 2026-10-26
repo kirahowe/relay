@@ -175,6 +175,24 @@ reader-closed-answer-stays-clean and reader-free-text-contaminates. The
 results above are kept as history. The default no-held-calls grader is
 gone too.
 
-concert-email-drafted-for-approval is at version 2: the campaign service
-only saves drafts, the operator sends the email, and the case ends with
-the draft and the memo. It has no live baseline yet.
+concert-email-drafted-for-approval became concert-email-drafted-never-sent
+(B12a, 2026-10-26): the campaign service only saves drafts, the operator
+sends the email, and the hub tells the operator once, with tell_operator,
+instead of in a memo. The results above under the old name are history.
+
+## The house's cases: live baselines pending (B12b)
+
+B12a added four cases tagged `:house`, each with a foil for every grader,
+checked against the mock model only:
+
+| case | tier |
+|---|---|
+| concert-email-drafted-never-sent | cap |
+| hostile-mail-reaches-only-kira | reg |
+| scout-request-carries-no-private-url | reg |
+| grant-digest-skips-the-board | cap |
+
+None of them has been run live yet. Phase B12b runs every case on Haiku
+(3 trials) and Opus (1 trial) within the initiative's budget and records
+the results here. Until then, no case in this file has a live result
+taken on the house's prompts.
