@@ -593,21 +593,25 @@
                       " Put refs after what you drew on. `items` are listed after the body, one each, such"
                       " as the placeholders a draft still needs. `urgency` is low (can wait for the day's"
                       " digest), normal (the default) or high (they should see it now). To answer a message"
-                      " of yours they replied to, give its number as `in_reply_to`.")
+                      " of yours they replied to, give its number as `in_reply_to`. When this tells them"
+                      " what came of a memo you were sent (done, or why you cannot), give its number as"
+                      " `memo`, and relay will not tell them again when you close or block it.")
     :parameters (obj {:subject text
                       :body text
                       :items {:type "array" :items text}
                       :urgency {:type "string" :enum messages/urgencies}
-                      :in_reply_to {:type "integer" :description "The number of the message this answers."}}
+                      :in_reply_to {:type "integer" :description "The number of the message this answers."}
+                      :memo {:type "integer" :description "The number of the memo you were sent that this is about."}}
                      "subject" "body")
-    :run (fn [sys actor labels {:keys [subject body items urgency in_reply_to]}]
+    :run (fn [sys actor labels {:keys [subject body items urgency in_reply_to memo]}]
            (let [with-refs (fn [t] {:text t :refs (mapv :ref (refs/parse t))})
                  sections (mapv (fn [sec] (update sec :items #(mapv with-refs %)))
                                 (messages/body-sections body items))
                  events (submit sys actor labels :message/send
                                 (cond-> {:subject subject :sections sections}
                                   urgency (assoc :urgency urgency)
-                                  (some? in_reply_to) (assoc :in-reply-to in_reply_to)))]
+                                  (some? in_reply_to) (assoc :in-reply-to in_reply_to)
+                                  (some? memo) (assoc :memo memo)))]
              (str "Told the operator (message " (:seq (first (filter #(= "message/created" (:type %)) events))) ").")))}
 
    "daily_note_draft"
@@ -1462,7 +1466,7 @@
                          ;; was read.
                          (not (identical? r raw)) []
                          (contains? (:tools config) tool-name)
-                         (provenance/tool-sources args (core/union (:labels tool) (:labels r)))
+                         (provenance/tool-sources args (core/union (:labels tool) (:labels r)) tool-name)
                          ;; A refusal of relay's own quotes the session's
                          ;; own call back to it, which is nothing new.
                          (:error r) []

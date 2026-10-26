@@ -511,7 +511,11 @@
     (doseq [args [["help"] ["--help"] ["-h"] ["--data" data "--help"] ["help" "--data" data]]]
       (let [r (cli/execute args)]
         (is (= 0 (:exit r)) (pr-str args))
-        (is (= (str/split-lines cli/short-usage) (:out r)) (pr-str args))
+        (is (= (str/split-lines (if (some #{"--data"} args)
+                                  ;; The main role, from relay.edn, in place of steward.
+                                  (str/replace cli/short-usage "relay memo steward -s" "relay memo hub -s")
+                                  cli/short-usage))
+               (:out r)) (pr-str args))
         (is (not (fs/exists? (str *dir* "/argv.txt"))) (str "no client ran for " (pr-str args)))))
     (testing "the short usage reads on a phone: every line at most 60 characters"
       (is (every? #(<= (count %) 60) (str/split-lines cli/short-usage))))

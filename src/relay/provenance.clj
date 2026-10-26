@@ -22,7 +22,8 @@
   mail:dana@example.org, github:kira/tidy, ics:calendar, files:downloads
   (a folder mounted in the shell and not marked trusted), and two that
   relay records itself and never sends to agentloop: web:<page or URL>
-  for a page a tool read, and search:web for a web search."
+  for a page a tool read, search:web for a web search, and tool:<name>
+  for an outside tool whose labels say no more than contaminated."
   (:require [clojure.string :as str]
             [relay.text :as text]))
 
@@ -72,8 +73,10 @@
   "The sources of one call to an outside tool (one whose static labels
   carry contaminated), given its input and the labels of its result: the
   page or URL it read as web:<target>, a search as search:web, else what
-  the labels name. Nil sources when nothing in it came from outside."
-  [input labels]
+  the labels name; when they name no more than contaminated, the tool
+  itself as tool:<name>, given `tool-name`. Nil sources when nothing in
+  it came from outside."
+  [input labels & [tool-name]]
   (let [labels (sources labels)
         input (if (map? input) input {})
         get* (fn [k] (let [v (or (get input k) (get input (name k)))] (when (and (string? v) (not (str/blank? v))) v)))
@@ -82,6 +85,7 @@
       (empty? labels) []
       target (sources (conj (vec (remove #{contaminated} labels)) (str "web:" (cut target target-limit))))
       (get* :query) (sources (conj (vec (remove #{contaminated} labels)) "search:web"))
+      (and (= [contaminated] labels) (string? tool-name) (not (str/blank? tool-name))) [(str "tool:" tool-name)]
       :else labels)))
 
 ;; --- in words
@@ -109,6 +113,7 @@
         "web" (str "the web page " (text/defang (cut (text/without-hidden what) 80)))
         "search" "a web search"
         "files" (str "your files in " (text/without-hidden what))
+        "tool" (str "the " (text/without-hidden what) " tool")
         "something from outside"))))
 
 (defn subject-prefix
@@ -176,6 +181,7 @@
       "github" "GitHub"
       "ics" "a calendar"
       "files" "your files"
+      "tool" "a tool"
       nil)))
 
 (defn mark

@@ -68,11 +68,17 @@
        (fmt-notes notes)
        (fmt-skills skills)))
 
-(defn- fmt-memo [zone {:keys [id from subject body sent-at attempts routine]}]
+(defn- fmt-memo [zone {:keys [id from subject body sent-at attempts routine request?]}]
   (str "\n## Memo " id ": " subject "\n\n"
        (if routine
          (str "Your routine `" routine "` coming due.")
          (str "From " from ", sent " (local sent-at zone) "."))
+       (when request?
+         (str " This is the operator's own request. The outcome you give `memo_close` reaches them as"
+              " the reply to it, and your final words in this wake do not, so put your whole answer in"
+              " the outcome, including the answer to anything they asked. If you tell them about it"
+              " with `tell_operator` instead, pass `memo` " id " there, and relay will not send the"
+              " outcome as well."))
        (when (pos? attempts)
          (str " Earlier wakes left it open " attempts " time(s); find out what went wrong"
               " before trying the same thing again."))

@@ -403,7 +403,7 @@
       (seq unknown) {:error (str "_relay/messages/act has no parameter " (str/join ", " unknown) ". It takes message, item and op.")}
       (not (integer? message)) {:error "_relay/messages/act needs a message, by number."}
       (not (integer? item)) {:error "_relay/messages/act needs an item, by its number in the message."}
-      (and (contains? params "op") (not (#{"revert" "decline" "dismiss"} op)))
-      {:error "_relay/messages/act takes op revert, decline or dismiss."}
+      (and (contains? params "op") (not (core/note-ops op)))
+      {:error "_relay/messages/act takes op revert, accept, decline or dismiss."}
       :else {:command {:type :digest/act :actor core/operator :labels [] :public false
-                       :args (cond-> {:message message :n item} op (assoc :op op))}})))
+                       :args (cond-> {:message message :n item :via "client"} op (assoc :op op))}})))

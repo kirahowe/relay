@@ -99,7 +99,12 @@
   (is (= ["web:office-holidays.html"] (provenance/tool-sources {:page "office-holidays.html"} ["contaminated"])))
   (is (= ["web:https://a.example/x"] (provenance/tool-sources {"url" "https://a.example/x"} ["contaminated"])))
   (is (= ["search:web"] (provenance/tool-sources {:query "grants"} ["contaminated"])))
-  (is (= [] (provenance/tool-sources {:page "x"} [])) "a tool the operator trusts is no source"))
+  (is (= [] (provenance/tool-sources {:page "x"} [])) "a tool the operator trusts is no source")
+  (testing "an outside tool whose labels say no more is named, never something from outside"
+    (is (= ["tool:cal"] (provenance/tool-sources {:from "today"} ["contaminated" "private"] "cal")))
+    (is (= ["Drew on: the cal tool"] [(provenance/drew-on ["tool:cal"])]))
+    (is (= "(from a tool)" (provenance/mark ["tool:cal"])))
+    (is (= ["ics:calendar"] (provenance/tool-sources {} ["contaminated" "ics:calendar"] "cal")) "a named source wins")))
 
 ;; --- defanging only what is a link
 

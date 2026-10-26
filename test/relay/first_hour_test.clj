@@ -13,6 +13,7 @@
             [relay.cli :as cli]
             [relay.config :as config]
             [relay.core :as core]
+            [relay.dispatch]
             [relay.inbound :as inbound]
             [relay.ingest-run :as ingest-run]
             [relay.log :as log]
@@ -20,6 +21,7 @@
             [relay.render :as render]
             [relay.setup]
             [relay.shell :as shell]
+            [relay.text :as text]
             [relay.tools :as tools])
   (:import (java.time Instant ZoneId)))
 
@@ -261,7 +263,22 @@
     (is (= "repos: now watching kira/tidy and kira/shelf; new issues and pull requests show up from the next check."
            (ingest-run/poll-line "repos" src recorded ["kira/tidy" "kira/shelf"])))
     (is (= "repos: nothing new." (ingest-run/poll-line "repos" src recorded [])))
-    (is (= "repos: 2 new memos for steward." (ingest-run/poll-line "repos" src [{:type "memo/sent"} {:type "memo/sent"}] [])))))
+    (is (= "repos: 1 new in kira/shelf (#44 by lee-m)."
+           (ingest-run/poll-line "repos" src [{:type "memo/sent"
+                                              :data {:subject "GitHub kira/shelf: 1 new"
+                                                     :body "What changed.\n\nNew issue #44 by lee-m: Shelf breaks\nhttps://github.com/kira/shelf/issues/44"}}]
+                                 [])))
+    (is (= "calendar: 3 new (Interview with Tidewater Foundation, Th…, Dentist, Fri 30 Oct 09:00, Board meeting, Mon 2 Nov 18:00)."
+           (ingest-run/poll-line "calendar" {:kind :ics :to "steward"}
+                                 [{:type "memo/sent"
+                                   :data {:subject "Your calendar: 3 new"
+                                          :body (str "What changed.\n\nNew: Interview with Tidewater Foundation, Thu 29 Oct 11:00\n  At: x"
+                                                     "\n\nNew: Dentist, Fri 30 Oct 09:00\n\nNew: Board meeting, Mon 2 Nov 18:00")}}]
+                                 nil)))
+    (let [line (ingest-run/poll-line "mailbox" {:kind :pop3 :to "steward"}
+                                     [{:type "memo/sent" :data {:subject "See evil.example/x now" :body "x"}}] nil)]
+      (is (str/starts-with? line "mailbox: 1 new mail (See "))
+      (is (not (str/includes? line "evil.example/x")) "an outsider's words never make a link"))))
 
 ;; --- the shell
 
@@ -342,9 +359,9 @@
         [m & more] (alerts st)]
     (is (nil? more) "told once, not every tick")
     (is (str/includes? (text-of m) "set :dead-letter-handler \"hub\""))
-    (is (some #(str/includes? % "set :dead-letter-handler \"hub\"")
-              (render/status st (ZoneId/of "UTC") t0 (config/resolve-config base)))
-        "relay status says it too")
+    (let [lines (render/status st (ZoneId/of "UTC") t0 (config/resolve-config base))]
+      (is (str/includes? (str/join " " lines) "set :dead-letter-handler \"hub\"") "relay status says it too")
+      (is (every? #(<= (count %) 60) lines) "in lines that fit a phone"))
     (testing "once relay.edn names hub, the alert is resolved and status is quiet"
       (let [fixed (assoc base :dead-letter-handler "hub")
             st (tick st fixed)]
@@ -352,3 +369,222 @@
         (is (= 1 (count (alerts st))))
         (is (not-any? #(str/includes? % "dead-letter-handler")
                       (render/status st (ZoneId/of "UTC") t0 (config/resolve-config fixed))))))))
+
+;; --- running a routine by hand
+
+(deftest running-a-routine-by-hand-says-what-ran
+  (let [data (data-dir!)
+        sys (inbound/system data {:clock (constantly t0)})]
+    (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "steward" :title "Steward" :instructions "r"}})
+    (inbound/submit! sys {:type :routine/write :actor "operator"
+                          :args {:owner "steward" :name "daily-note" :schedule "daily 07:10" :instructions "Write it."}})
+    (with-redefs [relay.dispatch/wake! (fn [_ role _] {:result :ran :wake 7 :outcome "ran" :left-open 0 :role role})]
+      (let [{:keys [exit out]} (relay! data "routine" "run" "daily-note")]
+        (is (= 0 exit))
+        (is (re-find #"^Sent steward its daily-note routine now \(memo \d+\)\.$" (first out)))
+        (is (= "Steward ran (wake 7) and finished its memos." (second out)))))))
+
+;; --- old habits after an upgrade
+
+(deftest a-removed-command-says-what-replaced-it
+  (doseq [cmd ["holds" "approve" "deny" "review" "verify" "ledger" "trust-level" "release" "brief"]]
+    (let [{:keys [exit out]} (cli/execute [cmd "7"])]
+      (is (= 1 exit) cmd)
+      (is (= 1 (count out)) (str cmd ": one line, not the whole help"))
+      (is (str/starts-with? (first out) (str "relay " cmd " is gone in this version")) cmd))))
+
+(deftest a-memo-to-the-default-steward-names-the-main-role
+  (let [data (data-dir!)
+        _ (spit (str data "/relay.edn") (pr-str (assoc (read-string (slurp (str data "/relay.edn")))
+                                                       :dead-letter-handler "hub" :daily-note {:at "07:30" :role "hub"})))
+        sys (inbound/system data {:clock (constantly t0)})]
+    (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "hub" :title "Hub" :instructions "r"}})
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"There is no role called steward\. Your main role is hub: relay memo hub"
+                          (relay! data "memo" "steward" "-s" "x" "-m" "y")))))
+
+(deftest an-ingest-source-for-no-role-is-named
+  (let [config (config/resolve-config {:timezone "UTC" :default-harness :x
+                                       :harnesses {:x {:kind :agentloop :api-key-command ["true"]}}
+                                       :ingest {"calendar" {:kind :ics :url "https://cal.example.org/a.ics" :to "stewart"}}})]
+    (is (some #(= "The :ingest source calendar goes to stewart, which is not a role, so it is not checked. Did you mean steward?" %)
+              (config/role-name-problems config ["steward"])))))
+
+;; --- what came of the operator's own request
+
+(deftest what-came-of-the-operators-request-reaches-her-as-a-quiet-reply
+  (let [w (-> (seed) (run "operator" :memo/send {:to "steward" :subject "Tidy my notes" :body "Then tell me what you moved."} true))
+        id (:id (last-memo w))
+        w (-> w (run "dispatcher" :wake/start {:role "steward"})
+              (run "steward" :memo/close {:memo id :outcome "Sorted the five notes into folders."}))
+        [m & more] (messages w)]
+    (is (nil? more))
+    (is (= ["reply" "low" "Re: Tidy my notes"] [(:kind m) (:urgency m) (:subject m)]))
+    (is (= "Sorted the five notes into folders." (text-of m)))
+    (is (= "steward" (core/message-author (:state w) m)) "a reply to it goes to the steward")
+    (is (some #(= (str "message:" (:id m)) (:id %)) (ready/ready (:state w) {:limit 100})) "shown in Ready"))
+  (testing "not when the role told her about that request itself"
+    (let [w (-> (seed) (run "operator" :memo/send {:to "steward" :subject "Tidy" :body "x"} true))
+          id (:id (last-memo w))
+          w (-> w (run "dispatcher" :wake/start {:role "steward"})
+                (run "steward" :message/send {:subject "Tidied" :sections [{:items ["Done."]}] :memo id})
+                (run "steward" :memo/close {:memo id :outcome "Done."}))]
+      (is (= ["Tidied"] (map :subject (messages w))))))
+  (testing "a message about one request does not stand for another"
+    (let [w (-> (seed)
+                (run "operator" :memo/send {:to "steward" :subject "Dentist" :body "Book it."} true)
+                (run "operator" :memo/send {:to "steward" :subject "Gym" :body "Cancel it."} true))
+          [dentist gym] (map :id (take-last 2 (sort-by :id (vals (:memos (:state w))))))
+          w (-> w (run "dispatcher" :wake/start {:role "steward"})
+                (run "steward" :message/send {:subject "Dentist booked" :sections [{:items ["Tue 10:00."]}] :memo dentist})
+                (run "steward" :memo/close {:memo dentist :outcome "Booked."})
+                (run "steward" :memo/close {:memo gym :outcome "Gym cancelled; refund in 5 days."}))]
+      (is (= ["Dentist booked" "Re: Gym"] (map :subject (messages w))))
+      (is (= "Gym cancelled; refund in 5 days." (text-of (last (messages w)))))))
+  (testing "a message about something else does not stand for it"
+    (let [w (-> (seed) (run "operator" :memo/send {:to "steward" :subject "Tidy" :body "x"} true))
+          id (:id (last-memo w))
+          w (-> w (run "dispatcher" :wake/start {:role "steward"})
+                (run "steward" :message/send {:subject "Printer ink is low" :sections [{:items ["FYI."]}]})
+                (run "steward" :memo/close {:memo id :outcome "Done."}))]
+      (is (= ["Printer ink is low" "Re: Tidy"] (map :subject (messages w))))))
+  (testing "a message may only be about a memo the role was sent"
+    (let [w (-> (seed) (run "operator" :memo/send {:to "scout" :subject "Grants" :body "x"} true))
+          id (:id (last-memo w))
+          w (run w "dispatcher" :wake/start {:role "steward"})]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Memo \d+ is not addressed to steward"
+                            (run w "steward" :message/send {:subject "s" :sections [{:items ["x"]}] :memo id})))))
+  (testing "not for a memo from a role or relay, nor when she closes it herself"
+    (let [w (-> (seed) (run "dispatcher" :wake/start {:role "steward"})
+                (run "steward" :memo/send {:to "steward" :subject "Self" :body "x"}))
+          w (run w "steward" :memo/close {:memo (:id (last-memo w)) :outcome "Done."})
+          w (-> w (run "operator" :memo/send {:to "steward" :subject "Mine" :body "x"} true))
+          w (run w "operator" :memo/close {:memo (:id (last-memo w)) :outcome "Never mind."})]
+      (is (empty? (messages w))))))
+
+;; --- how Ready shows a message
+
+(deftest ready-shows-list-items-behind-a-dash-and-a-hidden-character-once
+  (let [w (-> (seed) (run "dispatcher" :wake/start {:role "steward"})
+              (run "steward" :message/send {:subject "For the interview"
+                                            :sections [{:items ["Two things to bring."]}
+                                                       {:heading "Still needed" :list true
+                                                        :items ["Figures for the notes" "Pull request by sam​wise"]}]}))
+        it (ready/wire (first (filter #(= :message (:kind %)) (ready/ready (:state w) {:limit 10}))))
+        out (render/ready-one it (ZoneId/of "UTC") t0)]
+    (is (some #{"  - Figures for the notes"} out))
+    (is (some #{"  - Pull request by samwise (a hidden character removed)"} out))
+    (is (not-any? #(str/includes? % "\\") (map text/visible-line out)) "never escaped twice")))
+
+(defn- run-labelled [{:keys [state now] :as w} actor type args labels]
+  (let [[state' events] (core/run-command state {:type type :actor actor :args args :public false :labels labels}
+                                          {:now now :config cfg})]
+    (-> w (assoc :state state') (update :events into events))))
+
+(deftest the-answer-to-a-request-carries-where-the-request-came-from
+  ;; A forwarded mail becomes the operator's memo with an outsider's
+  ;; subject; the answer quotes that subject.
+  (let [w (-> (seed) (run-labelled "operator" :memo/send {:to "steward" :subject "Fwd: Click evil.example/x" :body "Deal with it."}
+                                   ["contaminated" "mail:dana@example.org"]))
+        id (:id (last-memo w))
+        w (-> w (run "dispatcher" :wake/start {:role "steward"})
+              (run "steward" :memo/close {:memo id :outcome "Filed it."}))
+        [m] (messages w)]
+    (is (= "Re: Fwd: Click evil.example/x" (:subject m)))
+    (is (some #{"contaminated"} (:labels m)))
+    (is (= ["mail:dana@example.org"] (:sources m)) "the operator is shown where it came from")))
+
+(deftest a-request-that-failed-is-told-unless-the-role-told-about-it
+  (testing "an unrelated message does not stand for the alert"
+    (let [w (-> (seed) (run "operator" :memo/send {:to "steward" :subject "File taxes" :body "x"} true))
+          id (:id (last-memo w))
+          w (-> w (run "dispatcher" :wake/start {:role "steward"})
+                (run "steward" :message/send {:subject "Printer ink is low" :sections [{:items ["FYI."]}]})
+                (run "steward" :memo/block {:memo id :explanation "No tax forms."}))]
+      (is (= ["Printer ink is low" "Could not finish \"File taxes\""] (map :subject (messages w))))))
+  (testing "the role's own word about it does"
+    (let [w (-> (seed) (run "operator" :memo/send {:to "steward" :subject "File taxes" :body "x"} true))
+          id (:id (last-memo w))
+          w (-> w (run "dispatcher" :wake/start {:role "steward"})
+                (run "steward" :message/send {:subject "I can't file your taxes yet" :sections [{:items ["No forms."]}] :memo id})
+                (run "steward" :memo/block {:memo id :explanation "No tax forms."}))]
+      (is (= ["I can't file your taxes yet"] (map :subject (messages w))))))
+  (testing "the handler is told who told the operator"
+    (let [w (-> (seed) (run "operator" :role/add {:id "clerk" :title "Clerk" :instructions "c"} true)
+                (run "operator" :memo/send {:to "clerk" :subject "File taxes" :body "x"} true))
+          id (:id (last-memo w))
+          go (fn [w told?]
+               (let [w (run w "dispatcher" :wake/start {:role "clerk"})
+                     w (cond-> w told? (run "clerk" :message/send {:subject "Can't file" :sections [{:items ["x"]}] :memo id}))]
+                 (run w "clerk" :memo/block {:memo id :explanation "No forms."})))
+          relay-told (go w false)
+          clerk-told (go w true)]
+      (is (str/includes? (:body (last-memo relay-told)) "relay has told the operator"))
+      (is (= ["Could not finish \"File taxes\""] (map :subject (messages relay-told))))
+      (is (= ["Can't file"] (map :subject (messages clerk-told))))
+      (is (not (str/includes? (:body (last-memo clerk-told)) "relay has told")))
+      (is (str/includes? (:body (last-memo clerk-told)) "clerk has told the operator")))))
+
+(deftest a-role-that-told-why-it-stopped-is-not-said-again
+  (let [w (-> (seed) (run "operator" :routine/write {:owner "steward" :name "weekly-review" :schedule "daily 07:10" :instructions "Review."})
+              (run "operator" :routine/run {:name "weekly-review"}))
+        id (:id (last-memo w))
+        w (-> w (run "dispatcher" :wake/start {:role "steward"})
+              (run "steward" :message/send {:subject "Weekly review: I can't see your reminders yet" :sections [{:items ["The reminders tool returns nothing."]}] :memo id})
+              (run "steward" :memo/block {:memo id :explanation "No reminders."}))]
+    (is (= ["Weekly review: I can't see your reminders yet"] (map :subject (messages w)))))
+  (testing "without its own word, relay says it"
+    (let [w (-> (seed) (run "operator" :routine/write {:owner "steward" :name "weekly-review" :schedule "daily 07:10" :instructions "Review."})
+                (run "operator" :routine/run {:name "weekly-review"}))
+          id (:id (last-memo w))
+          w (-> w (run "dispatcher" :wake/start {:role "steward"})
+                (run "steward" :memo/block {:memo id :explanation "No reminders."}))]
+      (is (= ["Could not finish \"weekly-review\""] (map :subject (messages w)))))))
+
+;; --- the day's first note
+
+(deftest the-note-waits-for-its-writer-a-while
+  (let [at (java.time.LocalTime/parse "07:30") zone (ZoneId/of "UTC")
+        date (java.time.LocalDate/parse "2026-10-26")
+        t #(Instant/parse (str "2026-10-26T" % ":00Z"))]
+    (is (relay.digest/waits? at zone date (t "07:31") true))
+    (is (not (relay.digest/waits? at zone date (t "07:31") false)) "nothing to wait for")
+    (is (not (relay.digest/waits? at zone date (t "08:30") true)) "an hour at most")))
+
+(deftest a-note-made-before-its-writer-wrote-says-so-and-can-be-made-again
+  (let [data (data-dir!)
+        sys (inbound/system data {:clock (constantly t0)})]
+    (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "steward" :title "Steward" :instructions "r"}})
+    (inbound/submit! sys {:type :digest/write-part :actor "steward" :labels []
+                          :args {:part "learned" :items [{:text "I keep your venues in a note now."}]}})
+    (let [events (inbound/submit! sys {:type :digest/compose :actor core/dispatcher :args {:date "2026-10-26"}})
+          note (some #(when (= "message/created" (:type %)) (:data %)) events)]
+      (is (some? note) "what it learned gives it something to say")
+      (when note
+        (is (str/includes? (text-of note) "I haven't gone through your calendar yet today."))
+        (is (not (str/includes? (text-of note) "Nothing coming up")))))
+    (inbound/submit! sys {:type :digest/write-part :actor "steward" :labels []
+                          :args {:part "ahead" :items [{:text "Interview, Thu 10:00" :offer "Prep notes?"}]}})
+    (is (str/includes? (first (:out (relay! data "note" "now"))) "Sent today's daily note"))
+    (is (str/includes? (first (:out (relay! data "note" "now"))) "made already") "once it has its parts, it is the day's")))
+
+(deftest a-wake-marks-the-operators-own-requests
+  (let [w (-> (seed) (run "operator" :memo/send {:to "steward" :subject "Mine" :body "x"} true))
+        mine (:id (last-memo w))
+        w (-> w (run "dispatcher" :wake/start {:role "steward"})
+              (run "steward" :memo/send {:to "steward" :subject "Self" :body "x"}))
+        self (:id (last-memo w))]
+    (is (= [true nil] (map :request? (core/prompt-memos (:state w) [mine self]))))))
+
+(deftest checking-a-new-relay-edn-in-a-scratch-directory-says-only-that
+  (let [check (str *dir* "/check")]
+    (fs/create-dirs check)
+    (spit (str check "/relay.edn")
+          (pr-str {:timezone "UTC" :default-harness :x :harnesses {:x {:kind :agentloop :api-key-command ["true"]}}
+                   :budget {:weekly-usd 20}}))
+    (let [{:keys [exit out]} (relay! check "status")
+          text (str/join "\n" out)]
+      (is (= 0 exit))
+      (is (str/includes? text "relay.edn is valid. This directory has no log"))
+      (is (not (str/includes? text "relay init")))
+      (is (not (str/includes? text "tick has never run")))
+      (is (not (str/includes? text "earlier weeks"))))))

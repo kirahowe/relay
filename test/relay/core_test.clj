@@ -626,7 +626,9 @@
         w (-> w (run "operator" :memo/send {:to "clerk" :subject "more" :body "b"}))]
     (is (empty? (core/roles-to-wake (:state w) cfg (:now w))))
     (let [w (-> w (run "dispatcher" :tick {}) (run "dispatcher" :tick {}))]
-      (is (= ["runaway-guard-tripped"] (notifications w))))
+      ;; Each closed request was answered quietly (request-done); the
+      ;; guard says so once.
+      (is (= ["runaway-guard-tripped"] (remove #{"request-done"} (notifications w)))))
     (testing "the work waits, and wakes once the window has room"
       (is (= ["clerk"] (core/roles-to-wake (:state w) cfg (.plusSeconds (:now w) 3600)))))))
 
@@ -1081,6 +1083,20 @@
 
 (defn- json-round-trip [events]
   (mapv #(json/parse-string (json/generate-string %) true) events))
+
+(deftest an-unrelated-message-does-not-stand-for-a-failed-request
+  ;; The shrunk case the property once found: the role told the operator
+  ;; something else, then blocked her request. She must still be told.
+  (let [start (-> (world)
+                  (run "operator" :role/add {:id "hub" :instructions "c"})
+                  (run "operator" :role/add {:id "clerk" :instructions "c"}))
+        [_ problems] (reduce (fn [[w problems] s]
+                               (let [w (dissoc w :problem)
+                                     w' (step w s)]
+                                 [w' (into problems (check-step w w'))]))
+                             [start []]
+                             [[:send "operator" "hub"] [:start-only "hub"] [:tell "hub" "low"] [:block "hub" 0]])]
+    (is (empty? problems))))
 
 (defspec the-rules-hold-under-any-sequence-of-commands 1000
   (prop/for-all [steps (gen/vector gen-step 1 80)]

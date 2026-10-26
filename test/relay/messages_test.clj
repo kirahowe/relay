@@ -20,6 +20,7 @@
             [relay.hub :as hub]
             [relay.hub-test :as ht]
             [relay.messages :as messages]
+            [relay.ready]
             [relay.test-support :as support]
             [relay.tools :as tools]
             [relay.workspace :as workspace])
@@ -318,6 +319,15 @@
            (empty? (messages/due-now msgs (at "2030-01-01T00:00:00Z") (at "2030-01-01T00:00:00Z")))
            (= (map first ns) (map :origin msgs))
            (every? #(= ["private"] (:labels %)) msgs)
+           ;; History, not ready: none is listed in relay ready or can be answered.
+           (every? :legacy msgs)
+           (empty? (relay.ready/ready state {:limit 1000}))
+           (every? #(try (core/run-command state {:type :message/reply :actor "operator" :labels []
+                                                  :args {:in-reply-to (:id %) :text "yes go ahead"}}
+                                           {:now (at "2026-10-15T00:00:00Z") :config (config/resolve-config {:timezone "UTC" :default-harness :x :harnesses {:x {:kind :agentloop :api-key-command ["true"]}}})})
+                         false
+                         (catch clojure.lang.ExceptionInfo e (boolean (re-find #"from before relay's upgrade" (ex-message e)))))
+                   msgs)
            (= (boolean (some #{"harness-needs-attention" "harness-unreachable"} (map first ns)))
               (boolean (get-in state [:harnesses "agentloop" :operator-told])))
            (= (boolean (some #{"budget-reached"} (map first ns)))
@@ -479,7 +489,7 @@
   (let [h (-> (ht/live) (ht/opened 1))
         [h fx] (ht/say h 1 (ht/req 9 "_relay/messages/act" {:message 12 :item 2}))
         [sub] (ht/submits fx)]
-    (is (= {:type :digest/act :actor "operator" :labels [] :public false :args {:message 12 :n 2}} (:command sub)))
+    (is (= {:type :digest/act :actor "operator" :labels [] :public false :args {:message 12 :n 2 :via "client"}} (:command sub)))
     (is (= [{"jsonrpc" "2.0" "id" 9 "result" {}}]
            (ht/writes (second (ht/run h {:event :submit-result :tag (:tag sub) :ok true})) 1)))
     (testing "a refusal is relay's reason"

@@ -164,7 +164,8 @@
    ;; text the session that wrote each one read directly in its wake
    ;; (relay.provenance), which is what the operator is shown.
    :sources {}
-   :next-seq 1 :last-at nil})
+   ;; When the log began, and its latest event.
+   :next-seq 1 :first-at nil :last-at nil})
 
 (defn- blank? [s] (or (not (string? s)) (str/blank? s)))
 
@@ -941,6 +942,7 @@
         (cond-> (sequential? (:sources event)) (assoc-in [:sources seq] (vec (:sources event))))
         (note-recipe-change state event)
         (update :seen-labels union labels)
+        (update :first-at #(or % (inst at)))
         (assoc :next-seq (inc seq) :last-at (inst at)))))
 
 (def legacy-labels
@@ -1214,9 +1216,12 @@
   (add-message state event data))
 
 ;; What an older relay recorded: a notification, pushed then. It folds
-;; into the message it would be now, with nothing left to deliver.
-(defmethod evolve* "notification/created" [state {:keys [data] :as event}]
-  (add-message state event (messages/from-notification data)))
+;; into the message it would be now, with nothing left to deliver, as
+;; history: done, so it is not ready for the operator, and not to be
+;; answered, since what it asked about (a held call, a report) is gone.
+(defmethod evolve* "notification/created" [state {n :seq :keys [data] :as event}]
+  (-> (add-message state event (messages/from-notification data))
+      (update-in [:messages n] assoc :legacy true :resolved n)))
 
 (defmethod evolve* "notification/delivered" [state _] state)
 (defmethod evolve* "notification/failed" [state _] state)
@@ -1243,6 +1248,7 @@
 (defmethod evolve* "message/replied" [state {:keys [seq at data]}]
   (if (get-in state [:messages (:message data)])
     (-> state
+        (cond-> (:memo data) (update :reply-memos (fnil conj #{}) (:memo data)))
         (update-in [:messages (:message data) :replies] (fnil conj [])
                    {:id seq :at (inst at) :channel (:channel data) :text (:text data) :memo (:memo data)})
         (assoc-in [:messages (:message data) :rev] seq))
@@ -1564,12 +1570,22 @@
           inner (when (and l (not (seen l))) (memo state (get-in state [:dead-letters l :memo])))]
       (if inner (recur inner (conj seen l)) m))))
 
+(defn- told-about?
+  "Whether `role` told the operator about memo `memo` itself, with
+  tell_operator naming it (its `memo`). A message that names no memo, or
+  another, stands for nothing it does not name."
+  [state role memo]
+  (boolean (and memo (some #(and (= role (:role %)) (= memo (:request %)) (= "told" (:origin %)))
+                           (vals (:messages state))))))
+
 (defn- escalate
   "Passes a fresh dead letter on. The operator's own request comes back to
   them at once, in one plain message, since they asked for it. Every dead
   letter goes as a memo to the dead letter handler, unless the memo was
   the handler's own or there is no handler; then the operator is told,
-  by the request it is about, unless they were told of that already."
+  by the request it is about, unless they were told of that already.
+  A role that told the operator itself why it stopped, naming the memo,
+  has said it: relay does not say it again."
   [{:keys [state config] :as tx} letter-id]
   (let [letter (get-in state [:dead-letters letter-id])
         {:keys [from to subject]} (memo state (:memo letter))
@@ -1583,7 +1599,9 @@
         copied (union (memo-labels state m) (ids-labels state [(:from m) to]) (:labels letter))
         operators? (= operator from)
         to-handler? (and handler (active-role? state handler) (not= handler to))
-        tx (if operators?
+        told? (told-about? state to (:memo letter))
+        relay-told? (and operators? (not told?))
+        tx (if relay-told?
              (tell tx "work-abandoned" "alert" "normal" (str "Could not finish \"" subject "\"")
                    (vec (remove nil? [(abandoned-why letter) retry]))
                    :role to :dead-letter letter-id :labels copied)
@@ -1595,7 +1613,8 @@
       (with-public tx false
         #(send-memo % {:from dispatcher :to handler :subject (str "Dead letter: " title)
                        :body (cond-> report
-                               operators? (str "\n\nrelay has told the operator, so do not tell them again."))
+                               relay-told? (str "\n\nrelay has told the operator, so do not tell them again.")
+                               told? (str "\n\n" to " has told the operator, so do not tell them again."))
                        :about letter-id}
                     copied
                     ;; It quotes the memo and what was said about it.
@@ -1606,6 +1625,8 @@
       ;; The request a dead letter of a dead letter is about was the
       ;; operator's own, and they were told when it failed.
       (= operator (:from (request-of state m))) tx
+
+      told? tx
 
       :else
       (let [nested? (some? (:about m))]
@@ -1809,7 +1830,14 @@
              (not (sent-to-by? state actor to)))
     (reject! :not-found (str "There is no role called " to ".")))
   (when-not (or (= operator to) (active-role? state to))
-    (reject! :not-found (str "There is no role called " to ".") (id-labels state to)))
+    (let [main (get-in tx [:config :dead-letter-handler])]
+      (reject! :not-found (str "There is no role called " to "."
+                               ;; The operator's habit or the help's
+                               ;; example may name the steward by its
+                               ;; default id.
+                               (when (and (= operator actor) (string? main) (not= main to) (active-role? state main))
+                                 (str " Your main role is " main ": relay memo " main " -s <subject> -m <text>.")))
+               (id-labels state to))))
   (let [subject (require-text subject "A memo's subject")
         body (require-text body "A memo's body")]
     (when (str/includes? subject "\n") (reject! "A memo's subject is one line."))
@@ -1836,11 +1864,41 @@
       :else
       (send-memo tx {:from actor :to to :subject subject :body body}))))
 
-(defmethod decide* :memo/close [{:keys [actor] :as tx} {{:keys [memo outcome]} :args}]
-  (let [m (open-memo! tx memo)]
+(defn- reply-memo?
+  "Whether memo `id` is the operator's answer to a message (record-reply),
+  which the role answers with tell_operator."
+  [state id]
+  (contains? (:reply-memos state) id))
+
+(defn operator-request?
+  "Whether memo `id` is the operator's own request: from them, and not
+  their answer to a message. What its role closes it with is sent to them
+  as a reply (decide :memo/close)."
+  [state id]
+  (boolean (and (= operator (:from (memo state id))) (not (reply-memo? state id)))))
+
+(defn prompt-memos
+  "The memos `ids` as a wake's prompt shows them, each operator's request
+  marked :request?."
+  [state ids]
+  (for [id ids :let [m (memo state id)] :when m]
+    (cond-> m (operator-request? state id) (assoc :request? true))))
+
+(defmethod decide* :memo/close [{:keys [state actor] :as tx} {{:keys [memo outcome]} :args}]
+  (let [m (open-memo! tx memo)
+        outcome (require-text outcome "The outcome")]
     (when-not (or (= actor (:to m)) (= operator actor))
       (reject! :forbidden (str "Memo " memo " is not addressed to " actor ".")))
-    (emit tx "memo/closed" {:memo memo :outcome (require-text outcome "The outcome")})))
+    (cond-> (emit tx "memo/closed" {:memo memo :outcome outcome})
+      ;; The operator's own request: what came of it is her answer, a
+      ;; quiet reply routed like any other, unless the role has told her
+      ;; about it already, naming it. A public role reports back by memo.
+      (and (= operator (:from m)) (not= operator actor) (not (public-actor? tx))
+           (not (reply-memo? state memo)) (not (told-about? state actor memo)))
+      ;; It quotes the request's subject, so it carries the memo's labels
+      ;; with the closer's own.
+      (tell "request-done" "reply" "low" (str "Re: " (:subject m)) [outcome] :role actor :request memo
+            :labels (memo-labels state m)))))
 
 (defmethod decide* :memo/block [{:keys [actor] :as tx} {{:keys [memo explanation]} :args}]
   (caller-role! tx)
@@ -2339,8 +2397,8 @@
   paragraphs, plain, with the one thing to do."
   {"search-key"
    {:subject "Web search isn't set up yet"
-    :status (str "Web search isn't set up yet: store the Brave Search key with"
-                 " security add-generic-password -a \"$USER\" -s relay-brave -w")
+    :status (str "Web search isn't set up yet. Store the Brave Search key with:\n"
+                 "  security add-generic-password -a \"$USER\" -s relay-brave -w")
     :items ["There's no Brave Search key where relay looks for it, so nothing can be looked up on the web."
             (str "If you keep it in the login keychain, as relay init suggests, add it with:\n\n"
                  "    security add-generic-password -a \"$USER\" -s relay-brave -w\n\n"
@@ -2700,7 +2758,7 @@
   [state ^Instant now ^Instant stale-before]
   (messages/due-now (vals (:messages state)) now stale-before))
 
-(defmethod decide* :message/send [{:keys [state actor] :as tx} {{:keys [subject sections urgency in-reply-to]} :args}]
+(defmethod decide* :message/send [{:keys [state actor] :as tx} {{:keys [subject sections urgency in-reply-to memo]} :args}]
   ;; tell_operator: a role tells the operator something. It gives the
   ;; content and how urgent it is; relay.edn alone says where it goes.
   (caller-role! tx)
@@ -2712,6 +2770,11 @@
     (when-not (some #{urgency} messages/urgencies)
       (reject! (str "urgency is one of " (str/join ", " messages/urgencies) ".")))
     (when (str/includes? (str subject) "\n") (reject! "A message's subject is one line."))
+    ;; The memo it is about, so relay does not tell the operator the
+    ;; same again when the memo is closed or blocked.
+    (when (some? memo)
+      (when-not (= actor (:to (get-in state [:memos memo])))
+        (reject! :invalid (str "Memo " memo " is not addressed to " actor "."))))
     (when-not (and (sequential? sections) (every? map? sections)
                    (every? #(and (sequential? (:items %)) (every? (fn [i] (or (string? i) (map? i))) (:items %))) sections))
       (reject! "A message is sections of items."))
@@ -2721,8 +2784,9 @@
           draft (try (messages/message {:kind kind :urgency urgency :subject subject :sections sections
                                         :in-reply-to in-reply-to})
                      (catch clojure.lang.ExceptionInfo e (reject! (ex-message e))))]
-      (tell tx "told" kind urgency (:subject draft) nil :sections (:sections draft) :in-reply-to in-reply-to
-            :role actor))))
+      (apply tell tx "told" kind urgency (:subject draft) nil
+             (cond-> [:sections (:sections draft) :in-reply-to in-reply-to :role actor]
+               (some? memo) (conj :request memo))))))
 
 ;; ingest (relay.ingest): what came in from outside, as memos
 
@@ -2915,6 +2979,9 @@
   (when-not (= operator actor)
     (reject! :forbidden "Only the operator answers a message."))
   (let [m (or (message state in-reply-to) (reject! :not-found (str "There is no message " in-reply-to ".")))
+        _ (when (:legacy m)
+            (reject! :invalid (str "Message " in-reply-to " is from before relay's upgrade, and what it asked"
+                                   " about is gone, so it cannot be answered. relay ready shows what is current.")))
         ;; relay tells the daily note itself; the role that writes its
         ;; suggestions hears the answer, and record-reply does what it
         ;; asks ("revert 1", "not 2").
@@ -2984,7 +3051,8 @@
   ;; A note with nothing to say is not sent, and `relay note now` may make
   ;; the day's again once there is something.
   ;; The note listed the GitHub items people opened, so they are told.
-  (cond-> (assoc state :daily {:date (:date data) :seq seq :sent (not (false? (:sent data)))})
+  (cond-> (assoc state :daily (cond-> {:date (:date data) :seq seq :sent (not (false? (:sent data)))}
+                                (contains? data :parts) (assoc :parts (vec (:parts data)))))
     (contains? data :github) (assoc :github-news [])))
 
 (defmethod evolve* "digest/part-written" [state {:keys [seq at data labels]}]
@@ -3002,6 +3070,11 @@
               state (:keys data))
       (touch-notes (numbers-keys? (:keys data)))
       (acted (:message data) (:n data) "declined")))
+
+(defmethod evolve* "offer/accepted" [state {:keys [data]}]
+  (-> state
+      (touch-notes (numbers-keys? (:keys data)))
+      (acted (:message data) (:n data) "accepted")))
 
 (defmethod evolve* "offer/outcome" [state {:keys [seq at actor data labels]}]
   (assoc-in state [:offer-outcomes (:key data)] {:key (:key data) :outcome (:outcome data) :by actor
@@ -3024,12 +3097,29 @@
       (mark-undo (:put data) (:change data))
       (acted (:message data) (:n data) "reverted")))
 
+(defn note-writer-busy?
+  "Whether the role that writes the daily note is still at work: running,
+  or with memos open."
+  [state config]
+  (let [role (digest/role-of config)]
+    (boolean (and role (or (working-wake state role) (seq (unread-memos state role)))))))
+
 (defn written-parts
   "The parts written for the next note: those written since the last
   one, {part {:items :labels}}."
   [state]
   (let [since (or (get-in state [:daily :seq]) 0)]
     (into {} (for [[part p] (:daily-parts state) :when (> (:seq p) since)] [part p]))))
+
+(defn note-redoable?
+  "Whether today's note, `date`, made already, may be made again: it was
+  made before its writer had gone through what is coming up (no
+  \"ahead\" part), and now it has."
+  [state date]
+  (boolean (and (= date (daily-date state))
+                (contains? (:daily state) :parts)
+                (not (some #{"ahead"} (get-in state [:daily :parts])))
+                (contains? (written-parts state) "ahead"))))
 
 (def ^:private first-note-look-back
   "How far back the first daily note looks for changes to flag. Every
@@ -3107,12 +3197,16 @@
   (dispatcher-only! tx)
   (let [d (or (try (LocalDate/parse (str date)) (catch Exception _ nil))
               (reject! (str "A daily note needs its date, not " (pr-str date) ".")))]
-    (when (when-let [made (daily-date state)]
-            (or (.isAfter made d) (and (= made d) (not (false? (get-in state [:daily :sent]))))))
+    (when (and (when-let [made (daily-date state)]
+                 (or (.isAfter made d) (and (= made d) (not (false? (get-in state [:daily :sent]))))))
+               (not (note-redoable? state d)))
       (reject! :invalid (str "The daily note for " d " was already made.")))
     (let [{:keys [subject sections numbered flagged]} (compose-note state config d now)]
       (cond-> (emit tx "digest/composed" {:date (str d) :sent (some? sections) :flagged flagged
-                                          :github (count (:github-news state))})
+                                          :github (count (:github-news state))
+                                          ;; What its writer had written, so a note made
+                                          ;; before it wrote anything can be made again.
+                                          :parts (vec (sort (keys (written-parts state))))})
         sections (tell "daily-note" "digest" "normal" subject nil :sections sections
                        :date (str d) :numbered numbered)))))
 
@@ -3243,11 +3337,38 @@
       (emit "offer/declined" {:keys (vec keys) :text text :offer offer :message (:id m) :n n} labels)
       (assoc :actor (:actor tx) :labels (:labels tx) :public (:public tx))))
 
+(defn- accept!
+  "Says yes to the offer of item `entry` of note `m` for the operator: the
+  role that writes the note gets a memo from them asking it to do what it
+  offered, which wakes it. The memo quotes the item, so it carries the
+  item's labels; what is done at her request is hers (no sources)."
+  [{:keys [state config] :as tx} m {:keys [n keys text offer labels]}]
+  (let [role (digest/role-of config)]
+    (when-not (and role (active-role? state role) (not (config/public? config role)))
+      (reject! :not-found "Nobody writes the daily note now, so nobody can take that up."))
+    (let [tx' (-> tx
+                  (assoc :actor operator :labels [] :public false)
+                  (emit "offer/accepted" {:keys (vec keys) :text text :offer offer :message (:id m) :n n} labels)
+                  (dissoc :sources)
+                  (with-public false
+                    #(send-memo % {:from operator :to role
+                                   :subject (messages/clip-subject (str "Yes: " (messages/squeeze-line offer)))
+                                   :body (str "The operator said yes to the offer in item " n " of the daily note:\n\n"
+                                              text "\n" offer "\n\n"
+                                              "Do it now. Then record where it stands with offer_outcome"
+                                              (when (seq keys) (str " under the key " (first keys)))
+                                              ", and close this memo with what you did.")}
+                                labels [])))]
+      (cond-> (assoc tx' :actor (:actor tx) :labels (:labels tx) :public (:public tx))
+        (contains? tx :sources) (assoc :sources (:sources tx))
+        (not (contains? tx :sources)) (dissoc :sources)))))
+
 (defn item-done
   "What has been done with numbered item `entry` of daily note `m`, from
   any note or command: \"reverted\" once its change was undone,
   \"dismissed\" once it, or the same suggestion in another note, was
-  dropped, \"declined\" once its offer was turned down; else nil."
+  dropped, \"declined\" once its offer was turned down, \"accepted\"
+  once it was taken up; else nil."
   [state m {:keys [n op change keys offer]}]
   (let [here (get-in m [:acted n])]
     (cond
@@ -3265,30 +3386,58 @@
 
 (def done-words
   "How what was done with a note's item reads."
-  {"reverted" "undone" "dismissed" "dropped" "declined" "turned down"})
+  {"reverted" "undone" "dismissed" "dropped" "declined" "turned down" "accepted" "taken up"})
+
+(def note-ops
+  "What the operator can do with an item of the daily note."
+  #{"revert" "decline" "dismiss" "accept"})
+
+(defn act-sentence
+  "How the operator does `op` to item `n`, as a sentence that fits where
+  they are (`via`): a command at the command line (\"cli\"), plain words
+  in the client (\"client\", whose keys the client shows), else a word to
+  reply with. Pure."
+  [via op n]
+  (let [[cmd word does to plain]
+        (case op
+          "revert" ["revert" "revert" "undoes it" "to undo it" "undo it"]
+          "decline" ["decline" "not" "says no to its offer" "to say no to its offer" "say no to its offer"]
+          "dismiss" ["dismiss" "drop" "removes it" "to remove it" "drop it"]
+          "accept" ["accept" "yes" "takes up its offer" "to take up its offer" "take up its offer"])]
+    (case via
+      "cli" (str "relay " cmd " " n " " does ".")
+      "client" (str "You can " plain ".")
+      (str "Reply \"" word " " n "\" " to "."))))
 
 (defn- act-on-note
   "Does what the operator asked of item `n` of daily note `m`: undoes its
-  change (revert), says no to its offer (decline: the item stays), or
-  drops it for good (dismiss). `op`, when given, must fit what the item
-  offers; nil does what it offers. Declining an item with no offer is
-  refused and changes nothing: a casual no must not drop a reminder for
-  good, so only drop does."
-  [{:keys [state] :as tx} m n op]
+  change (revert), takes up its offer (accept: its role is asked to do
+  it), says no to its offer (decline: the item stays), or drops it for
+  good (dismiss). `op`, when given, must fit what the item offers; nil
+  does what it offers. Declining an item with no offer is refused and
+  changes nothing: a casual no must not drop a reminder for good, so only
+  drop does. A refusal names what to do in the operator's words for
+  where they are (`via`, act-sentence)."
+  [{:keys [state] :as tx} m n op via]
   (let [{item-op :op :as item} (numbered! m n)
-        op (or op item-op)]
-    (when (and (= "decline" op) (= "dismiss" item-op) (nil? (:offer item)))
-      (reject! :invalid (str "Item " n " has no offer to turn down. Reply \"drop " n "\" to remove it.")))
-    (when-not (or (= op item-op) (and (= "decline" op) (= "dismiss" item-op)))
-      (reject! :invalid (if (= "revert" item-op)
-                          (str "Item " n " is a change. Reply \"revert " n "\" to undo it.")
-                          (str "Item " n " is a suggestion. Reply \"not " n "\" to say no to its offer, or \"drop "
-                               n "\" to remove it."))))
+        op (or op item-op)
+        say #(act-sentence via % n)]
     (when-let [done (item-done state m item)]
-      (when-not (and (= "declined" done) (= "dismiss" op))
+      (when-not (and (#{"declined" "accepted"} done) (= "dismiss" op))
         (reject! :invalid (str "Item " n " was " (done-words done) " already."))))
+    (cond
+      (and (= "revert" item-op) (not= "revert" op))
+      (reject! :invalid (str "Item " n " is a change. " (say "revert")))
+      (and (= "dismiss" item-op) (= "revert" op))
+      (reject! :invalid (str "Item " n " is " (digest/item-noun (:part item)) ", not a change. "
+                             (when (:offer item) (str (say "decline") " ")) (say "dismiss")))
+      (and (= "decline" op) (nil? (:offer item)))
+      (reject! :invalid (str "Item " n " has no offer to turn down. " (say "dismiss")))
+      (and (= "accept" op) (nil? (:offer item)))
+      (reject! :invalid (str "Item " n " has no offer to take up.")))
     (case op
       "revert" (revert! tx (:change item) {:message (:id m) :n n})
+      "accept" (accept! tx m item)
       "decline" (decline! tx m item)
       "dismiss" (dismiss! tx m item))))
 
@@ -3309,52 +3458,58 @@
         item (first (filter #(and (= "revert" (:op %)) (= change (:change %))) (:numbered m)))]
     (revert! tx change (when item {:message (:id m) :n (:n item)}))))
 
-(defmethod decide* :digest/act [{:keys [state] :as tx} {{:keys [message n op]} :args}]
+(defmethod decide* :digest/act [{:keys [state] :as tx} {{:keys [message n op via]} :args}]
   ;; The operator acts on a numbered item of a daily note: from the
-  ;; client, the command line, or a reply.
+  ;; client, the command line (via says which), or a reply.
   (operator-act! tx)
   (when-not (integer? n) (reject! "Name the item by its number in the note."))
-  (when-not (or (nil? op) (#{"revert" "decline" "dismiss"} op)) (reject! "op is revert, decline or dismiss."))
+  (when-not (or (nil? op) (note-ops op)) (reject! "op is revert, accept, decline or dismiss."))
   (let [m (if (some? message)
             (note-message! state message)
             (or (latest-note state) (reject! :not-found "There is no daily note yet.")))]
-    (act-on-note tx m n op)))
+    (act-on-note tx m n op (#{"cli" "client"} via))))
 
 (defn acted-line
   "What relay did with item `n` of daily note `m`, in plain words: the
   undo, the no to its offer or the drop it made (digest/undone-line,
   declined-line, dropped-line), read from `state`, the state after it."
-  [state m n]
-  (let [{:keys [op change text offer labels]} (first (filter #(= n (:n %)) (:numbered m)))]
+  [state m n & [config]]
+  (let [{:keys [op change text offer labels part]} (first (filter #(= n (:n %)) (:numbered m)))
+        done (get-in state [:messages (:id m) :acted n])]
     (cond
       (= "revert" op) (digest/undone-line (recipe-change-by-seq state change))
-      (= "declined" (get-in state [:messages (:id m) :acted n])) (digest/declined-line text offer labels)
-      :else (digest/dropped-line text labels))))
+      (= "declined" done) (digest/declined-line text offer labels)
+      (= "accepted" done) (digest/accepted-line text offer labels (or (digest/role-of config) "the steward"))
+      :else (digest/dropped-line text labels part))))
 
 (defn- act-on-reply
   "Acts on what the operator's reply to a daily note asks for (relay.
   digest/reply-acts), each on its own: one that cannot be done says why
   and stops no other. Then tells the operator once, in the thread, what
   was done, on the channel the reply came through and no other: a reply
-  in the client is answered in the client alone, and nothing is pushed."
+  in the client is answered in the client alone, and nothing is pushed.
+  The note itself shows each item done, so when everything asked was
+  done the answer is history (resolved), not a new item in Ready; one
+  that refused something stays there. :refused counts the refusals."
   [tx m text channel]
   (let [acts (digest/reply-acts text (:numbered m))]
     (if (empty? acts)
       tx
-      (let [[tx lines] (reduce (fn [[tx lines] {:keys [op n]}]
-                                 (try (let [tx (act-on-note (assoc tx :actor operator :labels [] :public false) m n op)]
-                                        [tx (conj lines (str n ": " (acted-line (:state tx) m n)))])
-                                      (catch clojure.lang.ExceptionInfo e
-                                        (if (rejection e)
-                                          [tx (conj lines (str n ": " (ex-message e)))]
-                                          (throw e)))))
-                               [tx []] acts)
+      (let [[tx lines refused] (reduce (fn [[tx lines refused] {:keys [op n]}]
+                                         (try (let [tx (act-on-note (assoc tx :actor operator :labels [] :public false) m n op nil)]
+                                                [tx (conj lines (str n ": " (acted-line (:state tx) m n (:config tx)))) refused])
+                                              (catch clojure.lang.ExceptionInfo e
+                                                (if (rejection e)
+                                                  [tx (conj lines (str n ": " (ex-message e))) (inc refused)]
+                                                  (throw e)))))
+                                       [tx [] 0] acts)
             ;; The lines name the items, so they carry the items' labels.
             labels (union (mapcat :labels (filter #(some #{(:n %)} (map :n acts)) (:numbered m)))
                           (:labels m))]
         (tell (assoc tx :actor dispatcher :labels [] :public false)
               "daily-note-acted" "reply" "normal" (str "Re: " (:subject m)) lines :in-reply-to (:id m)
-              :only-channel channel :labels labels)))))
+              :only-channel channel :labels labels :refused refused
+              :resolved (when (zero? refused) true))))))
 
 ;; GitHub items from people, one push a tick
 
