@@ -170,10 +170,15 @@ command line instead.
     (the number to answer it under, or null when relay wrote it itself and
     nobody can answer) and `"replies"`, `[{"at", "text"}]`, the operator's
     answers. A daily note also has `"acts"`, `[{"n", "op", "line",
-    "done"}]`: for each numbered item, the note's own number `n`, what it
-    offers (`"revert"` or `"dismiss"`), the index in `lines` of the line
-    that begins with that number, and `done` (null, `"reverted"` or
-    `"dismissed"`). `_relay/messages/act` takes `n`.
+    "done", "offer"}]`: for each numbered item, the note's own number
+    `n`, what it offers (`"revert"` or `"dismiss"`), the index in `lines`
+    of the line that begins with that number, `done` (null, `"reverted"`,
+    `"dismissed"` or `"declined"`, whichever note or command did it), and
+    `offer`, true when the item has an offer of help that can be turned
+    down on its own. `_relay/messages/act` takes `n`. A message whose
+    sections have headings also has `"sections"`, `[{"heading", "lines"}]`:
+    the same lines as `lines`, in order, under their headings, so a client
+    showing it whole keeps them. `heading` may be null.
   - `draft` has, in `lines`, where the tool said it put the draft and a
     start of its text.
   - `event` adds `"start"` and `"end"`, instants.
@@ -213,8 +218,8 @@ command line instead.
   memo is closed as answered. The role answers with `tell_operator` and
   `in_reply_to`. A daily note is relay's own but can be answered too:
   the memo goes to the role that writes it (`:daily-note :role`), and
-  "revert 1" or "not 2" in the reply is done as `_relay/messages/act`
-  would, with relay's answer in the thread, delivered to the client
+  "revert 1", "not 2" or "drop 2" in the reply is done as
+  `_relay/messages/act` would, with relay's answer in the thread, delivered to the client
   alone. A reply that says nothing else makes no memo.
 - Errors: -32000 with relay's reason: no such message, a message relay
   wrote itself other than the daily note ("there is nobody to answer
@@ -230,34 +235,41 @@ command line instead.
   (-32602).
 - Answer: `{"lines": [string], "summary": string}` once relay has put the
   move back: the same lines `relay undo` prints, and a short plain
-  `summary` for a status line ("Put back 3 files."). It runs the same code as `relay undo`:
-  every moved thing goes back exactly, and the folders the move made are
-  removed once empty. The item then comes changed, with `undone`.
-- Errors: -32000 with B9's reason when undo is impossible, touching
-  nothing: a moved file was changed or moved again, something new is
-  where it was, a folder is not the folder it was, the move was already
-  undone, there is no such move, or relay stopped during the move (the
-  reason then lists the moves to check by hand).
+  `summary` for a status line ("Put back 3 of 4 files."). It runs the same code as `relay undo`:
+  each moved thing that is as the move left it goes back exactly, and
+  the folders the moves made are removed once empty. A moved file that
+  was changed or moved again, or whose old place holds something new,
+  stays, and `lines` names it, relative to the granted folder, with why.
+  The item then comes changed, with `undone` once all of it is back.
+- Errors: -32000 with the reason when nothing could go back, touching
+  nothing: each file that could not, and why, relative to the granted
+  folder; or the move was already undone, there is no such move, or
+  relay stopped during the move (the reason then lists the moves to
+  check by hand).
 - relay-tui: `u` on a move item in the ready view; the status line shows
   `summary`.
 
 ### `_relay/messages/act`
 
 - Scope: connection.
-- Params: `{"message": int, "item": int}`: a daily note's id and the
-  number of one of its items. Anything else is refused (-32602).
-- Answer: `{}` once relay has done what the item offers: an item whose
-  `action.op` is `"revert"` has its change undone (what was there before
-  is put back), and one whose op is `"dismiss"` is dropped for good, from
-  this note and every later one.
+- Params: `{"message": int, "item": int, "op": string}`: a daily note's
+  id, the number of one of its items, and, optionally, `op`: `"revert"`,
+  `"decline"` or `"dismiss"`. Anything else is refused (-32602).
+- Answer: `{}` once relay has done it: an item whose `action.op` is
+  `"revert"` has its change undone (what was there before is put back);
+  one whose op is `"dismiss"` is dropped for good, from this note and
+  every later one, or, with op `"decline"`, keeps its place and loses its
+  offer, in this note and every later one. Without `op` relay does what
+  the item offers. Declining an item with no offer is refused and changes
+  nothing.
 - Errors: -32602 for the params; -32000 for relay's refusal, such as an
   item the note does not have, one done already, or adding or removing a
   role, which is never undone.
 - The act is the operator's, with no labels. The message's `rev` moves
   and `_relay/messages/changed` sends it again, with the item's
   `action.done` set.
-- relay-tui: `v` (revert) and `d` (dismiss) on a numbered item of a daily
-  note opened whole in the ready view. The item numbers are the note's
+- relay-tui: `v` (revert), `n` (no to the offer) and `d` (drop) on a
+  numbered item of a daily note opened whole in the ready view. The item numbers are the note's
   own, and the ready item lists them as `acts` (see `_relay/ready`).
 
 ## Methods: a session
@@ -405,9 +417,10 @@ is sent: no role, no origin and no label names.
 ```
 
 An item a daily note numbers carries `"action": {"op": "revert" |
-"dismiss", "n": int, "done": null | "reverted" | "dismissed"}`: what the
-operator can do with it through `_relay/messages/act`, by `n`, and
-whether it was done.
+"dismiss", "n": int, "done": null | "reverted" | "dismissed" |
+"declined"}`: what the operator can do with it through
+`_relay/messages/act`, by `n`, and whether it was done, from this note or
+any other that has the same item.
 
 `kind` is `note`, `alert`, `digest` or `reply`; `urgency` is `low`,
 `normal` or `high`. A section may have a `heading`, in the same form as

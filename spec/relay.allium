@@ -485,8 +485,9 @@ entity Role {
     -- public role's, and only with a :house section.
     has_shell: Boolean
     -- Granted :files in the settings: the folders the role may move and
-    -- rename files within, with files_move (OrganizeFiles). Separate from
-    -- the shell's read-only mounts. Never a public role's.
+    -- rename files within, with files_move (OrganizeFiles), and read its
+    -- own moves with files_moves. Separate from the shell's read-only
+    -- mounts. Never a public role's.
     files: List<String>
     -- The wake to carry on from, when the last one was cut short.
     interrupted_wake: Wake?
@@ -854,7 +855,10 @@ entity NoteItem {
     op: revert | dismiss
     change: RecipeChange?        -- for revert
     keys: List<String>           -- for dismiss: the suggestion's keys
-    done: reverted | dismissed | null
+    offer: String?               -- for dismiss: the offer it showed, if any
+    -- What was done with it, from this note or any other that numbers
+    -- the same change or keys.
+    done: reverted | dismissed | declined | null
 }
 
 entity RecipeChange {
@@ -886,9 +890,24 @@ entity NotePart {
 }
 
 entity Dismissed {
-    -- A suggestion the operator turned down, by key.
+    -- A suggestion the operator dropped, by key.
     key: String
     text: String
+}
+
+entity Declined {
+    -- An offer of help the operator said no to, by its item's key. The
+    -- item stays in later notes, without the offer.
+    key: String
+    text: String
+    offer: String
+}
+
+entity OfferOutcome {
+    -- What came of an offer the note's writer followed up, by the item's
+    -- key, as it recorded with offer_outcome. daily_note_draft shows it.
+    key: String
+    outcome: String
 }
 
 entity Fact {
@@ -966,7 +985,15 @@ entity MoveCall {
     status: MoveStatus
     done: List<MoveStep>
     undone: Set<Integer>
+    -- The undone steps the operator had moved back by hand.
+    by_hand: Set<Integer>
+    -- The folders this call made that an undo removed, or kept because
+    -- something new was in them; no later undo removes either.
+    removed: List<String>
+    kept: List<String>
     stopped: String?
+    -- The folders the moves left empty, which relay never removes.
+    emptied: List<String>
 }
 
 value MovePlan {
@@ -1457,11 +1484,12 @@ rule ReplyToAMessage {
     if message.memo != null and message.memo.to = operator and message.memo.status = unread:
         ensures: message.memo.status = read   -- answered; closed by the operator
     if message.origin = daily_note:
-        ensures: what the reply asks for ("revert N", "not N") is done
-            (RevertChange, DismissSuggestion), and relay answers once in the
+        ensures: what the reply asks for ("revert N", "not N", "drop N")
+            is done (RevertChange, DeclineOffer, DismissSuggestion), and
+            relay answers once in the
             thread with what it did, on the reply's own channel only (the
             client alone for a reply from the client)
-        if the reply says nothing but "revert N" and "not N":
+        if the reply says nothing but "revert N", "not N" and "drop N":
             ensures: no memo is sent; relay has done all it asks
 
     @guidance
@@ -3111,11 +3139,32 @@ rule RevertChange {
         -- them, never at text one of them wrote.
 }
 
+rule DeclineOffer {
+    when: OperatorDeclines(note, n)
+    -- relay decline <n>, _relay/messages/act with op decline, or a reply
+    -- "not N" from any channel (or "not this one" when the note has one
+    -- suggestion).
+    requires: note.numbered[n].offer != null
+        -- With no offer, a no is refused and changes nothing; only a
+        -- drop removes the item.
+    ensures: Declined.created(keys: note.numbered[n].keys)
+
+    @guidance
+        -- Later notes show any item with one of its keys without its
+        -- offer, and the writer is shown the offers declined.
+}
+
+rule RecordOfferOutcome {
+    when: OfferOutcomeRecorded(caller, key, outcome)
+    requires: caller = daily_note.role
+    requires: outcome is one line of at most 200 characters
+    ensures: OfferOutcome.created(key: slug(key), outcome: outcome)
+}
+
 rule DismissSuggestion {
     when: OperatorDismisses(note, n)
     -- relay dismiss <n>, _relay/messages/act on a dismiss item, or a
-    -- reply "not N" from any channel (or "not this one" when the note
-    -- has one).
+    -- reply "drop N" from any channel. It may follow a DeclineOffer.
     ensures: Dismissed.created(keys: note.numbered[n].keys)
 
     @guidance
@@ -3273,21 +3322,43 @@ rule MoveFiles {
 }
 
 rule UndoMove {
-    when: MoveUndoRequested(operator, call)
+    when: MoveUndoRequested(operator, call, only?)
+    -- only: the steps named, by where they went or came from; else every
+    -- step left.
 
     requires: call.status = moved
-    requires: for step in call.done where not step.index in call.undone:
-        fingerprint(call.moves[step.index].to) = step.fingerprint
+    let back = the steps asked for, not in call.undone, where
+        no later call not undone yet moved from or to a path that
+        touches call.moves[step.index].to or .from
+        and fingerprint(call.moves[step.index].to) = step.fingerprint
         and nothing exists at call.moves[step.index].from
         and the folders above both are where they were, links resolved
+    let by_hand = the steps asked for where nothing is at the target and
+        the same kind of thing is back at the source, put there by no
+        move not undone yet
+    requires: back + by_hand is not empty
 
-    ensures: each step is renamed back, in reverse order
-    ensures: each folder the steps made is removed when it is empty
-    ensures: call.undone = every done index
+    ensures: each step in back is renamed back, in reverse order; a step
+        in by_hand is not moved
+    ensures: each empty folder is removed that call made for a step now
+        back, or that another call made for a step now back and that
+        holds a target this undo put back, unless an earlier undo removed
+        it or kept it for something new, or a later call not undone yet
+        moved something out of it. Each removal, and each folder kept
+        because something new is in it, is recorded on the call that
+        made the folder.
+    ensures: call.undone = call.undone + back + by_hand
+    ensures: Memo.created(from: dispatcher, to: call.actor, subject: "The
+        operator undid move <id>", body: what went back, in full paths)
+        if call.actor is an active role
 
     @guidance
-        -- When a requirement fails, undo says what changed and touches
-        -- nothing. A folder it made that holds something new is kept.
+        -- Each step is checked on its own. A step that cannot go back
+        -- stays where it is and is named with why, relative to the
+        -- granted folder, and the rest go back. When none can, undo says
+        -- why and touches nothing. A folder it made that holds something
+        -- new is kept. files_moves shows the actor its calls, with what
+        -- was put back.
         -- The operator asks for it with relay undo or, from the ready
         -- view, _relay/undo; both run the same code. Each call is a move
         -- item in the ready view, offering undo while a step is left to

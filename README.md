@@ -499,8 +499,11 @@ is short and has up to five parts:
 The role named in `:role` writes the last four with its
 `daily_note_write` tool, usually from a routine that runs shortly
 before the note's time. `daily_note_draft` shows it what it has
-written, the suggestions you turned down and the changes since the last
-note. The note is whatever it has written by then, plus the changes
+written, the items you dropped, the offers you said no to, what came of
+offers it followed up and the changes since the last note. When you
+take up an offer and it does the work, it records where that stands
+with `offer_outcome`, so the next note says so instead of offering the
+same help again. The note is whatever it has written by then, plus the changes
 relay found. `relay init` sets this up for the steward: a `daily-note`
 routine at 07:10 and the skill `skills/steward/daily-note.md`, from
 `setup/daily-note/`. `bb staging init` does the same in staging.
@@ -525,16 +528,20 @@ you end up with the version from before all of them, never one that
 another of those changes wrote. A new role or a removed one is listed
 with no number: removing a role is for good, since its name is never
 used again, so relay will not do it as an undo, and a removed role
-cannot come back. To turn a suggestion down for good, reply "not 2",
-use the client, or run `relay dismiss 2`. relay records it, drops it
-from every later note, and shows it to the note's writer so it is not
-suggested again. A mailed reply is acted on only when it is verified as
+cannot come back. To say no to an item's offer of help, reply "not 2",
+use the client, or run `relay decline 2`. The item stays, in this note
+and later ones, without that offer. To remove an item for good, reply
+"drop 2", use the client, or run `relay dismiss 2`. relay records it,
+drops it from every later note, and shows it to the note's writer so it
+is not suggested again. "not" on an item with no offer changes nothing:
+relay says the item has no offer and that "drop" removes it. A mailed reply is acted on only when it is verified as
 yours (see "The mailbox and other sources"); one from the client is
 yours already. relay answers once, in the thread, on the channel the
 reply came through: a reply in the client gets its answer in the client,
-and nothing is pushed. A reply that says only "revert" and "not" goes to
-nobody else. One that says more also goes to the note's writer.
-The note then marks each item done. `relay changes` lists the latest
+and nothing is pushed. A reply that says only "revert", "not" and
+"drop" goes to nobody else. One that says more also goes to the note's
+writer. The note then marks each item done, and so does every other
+note that has the same item, whichever note or command did it. `relay changes` lists the latest
 changes, each with its number in a note. A change no note numbered has
 a handle instead, such as `c12`: one past the note's first 40, one made
 since the latest note, a quiet one, or one of your own. `relay revert
@@ -790,6 +797,10 @@ tools, each one a `relay tool <name>` call made as that role:
   shell, a Linux container with no network (see The steward's shell)
 - `files_move`, for a house role granted `:files`: moves and renames
   inside the folders you chose, which you can undo (see Organizing files)
+- `files_moves`, for the same role: its own moves as they stand now,
+  with what you put back
+- `offer_outcome`, for the daily note's writer: what came of an offer
+  of help in the note
 - any external command the operator defines in `relay.edn` and grants
 
 Every memo stays open until its recipient closes it, saying what it did,
@@ -1293,15 +1304,26 @@ a call before it makes any, and if one is refused, none is made.
 
 Each call is a move in the log with a number, recorded before anything
 moves and again after with what moved, a fingerprint of each thing
-moved, and the folders it made. Both carry the session's labels, so you
-can see where a call came from. `relay moves` lists them. `relay undo
-<move>` puts one back exactly, and removes the folders it made once they
-are empty. If anything has changed since (you edited a moved file, moved
-it again, or put something new where it was), undo says what changed and
-touches nothing. A folder it made that now holds something of yours is
-kept. Each call is also in `relay ready`, with what moved where and
-the `relay undo` that puts it back; the client's ready view undoes it
-with a key.
+moved, the folders it made, and the folders it left empty. relay never
+removes a folder a move empties; it tells the role and shows you which.
+Both events carry the session's labels, so you can see where a call
+came from. `relay moves` lists them. `relay undo <move>` puts back each
+move of the call on its own, exactly. A file you changed since (edited,
+moved again, or something new where it was) stays where it is, and undo
+names it, relative to your folder, with why and what to do: an edited
+file says where it came from, so you can move it back yourself and keep
+your edits. A file a later move has touched, at either end, stays until you
+undo that move first. The rest go back. When nothing could go back, nothing changed. A
+file you moved back to where it came from yourself counts as put back.
+`relay undo <move> <file>...` puts back only the files named, as `relay
+moves` shows them. Undo removes the folders moves made once they are
+empty, but only those holding what this undo put back. A folder a move
+made that now holds something of yours is kept, and no later undo
+removes it. The role that made the move gets a memo
+saying what you put back, and `files_moves` shows it its moves as they
+stand. Each call is also in `relay ready`, with what moved where and the
+`relay undo` that puts it back; the client's ready view undoes it with
+a key.
 
 #### What you are shown
 

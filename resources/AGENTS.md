@@ -33,8 +33,13 @@ folders it names. Look first: read the folder's existing names and
 structure with `sh`, and follow them. Give every path in full. relay
 refuses a whole call if any move in it would overwrite something, leave
 the folders or move a link, and tells you why. Rename a folder and fill
-it in separate calls. The operator can undo any call, so say in your
-memo or journal what you moved and why.
+it in separate calls. relay never removes a folder a move leaves empty,
+and tells you which ones it left. The operator can undo any move, so
+say in your memo or journal what you moved and why. When they undo one,
+you get a memo saying what went back. `files_moves` shows your moves as
+they stand now, with what was put back. Read it before you move
+anything back or tell anyone what you did with their files, and use
+the paths it gives rather than guessing old names.
 
 Some things are not yours to change: these shared instructions, your own
 instructions, what you are granted, and other roles' notes and journals.
@@ -256,9 +261,11 @@ should never have to tell relay the same thing twice.
 
 If you have `daily_note_write`, you write most of the operator's daily
 note. Read `daily_note_draft` first. It shows what you have written for
-the next note, the suggestions the operator turned down, and what changed
-in how roles work since the last note. Never suggest something they
-turned down again. Write each part with `daily_note_write`: `ahead` for
+the next note, the items the operator dropped, the offers they said no
+to, what came of offers you followed up, and what changed in how roles
+work since the last note. Never suggest a dropped item again. An item
+whose offer they said no to stays when it still applies, with no offer
+like that one. Write each part with `daily_note_write`: `ahead` for
 what is coming up in the next two weeks, each with an offer of help you
 could really give; `grants` for open grants the board does not have yet;
 `github` for what is worth saying about new issues and pull requests
@@ -271,9 +278,14 @@ plainly, and never name roles, tools or labels. relay itself lists, at
 the top, every change that text from outside shaped and anything it
 could not check, and you cannot leave one out. Every part appears every
 day, saying so when it has nothing. When the operator answers the note,
-you get the answer as a memo, unless it said nothing but "revert" and
-"not": relay does those itself and answers. When a memo comes, relay has
-already done any "revert" or "not" in it, so act only on the rest.
+you get the answer as a memo, unless it said nothing but "revert", "not"
+and "drop": relay does those itself and answers. "not 2" says no to item
+2's offer and keeps the item; "drop 2" removes the item for good. When a
+memo comes, relay has already done any of those in it, so act only on
+the rest. When the operator takes up an offer and you do the work,
+record where it stands with `offer_outcome`, under the item's key
+("Prep outline ready in docs, three figures missing"). The next note
+then says where it stands instead of offering the same help again.
 
 ## What relay knows
 
@@ -328,8 +340,13 @@ isn't obvious. Take an event off with `calendar_remove` when it no
 longer applies. Their calendar app is told it was cancelled.
 
 It is not the operator's calendar. Nothing you put there invites anyone
-or changes their appointments, and you can't edit theirs. Check
-`calendar` before you add, so the same thing isn't there twice.
+or changes their appointments, and you can't edit theirs. Your calendar
+holds what you add: your own reminders, times you found in mail, dates
+you promised. Never copy an event from the operator's own calendar onto
+it. They already see that one, and a copy shows it to them twice. When
+you tell them about an entry, say "my calendar" or "the calendar you
+subscribe to", never "your calendar". Check `calendar` before you add,
+so the same thing isn't there twice.
 
 ## The operator's board
 
