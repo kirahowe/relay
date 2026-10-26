@@ -27,6 +27,7 @@
             [relay.core :as core]
             [relay.dispatch :as dispatch]
             [relay.hub :as hub]
+            [relay.ics :as ics]
             [relay.inbound :as inbound]
             [relay.roster :as roster]
             [relay.websocket :as ws]
@@ -381,6 +382,14 @@
   "How long a client may take to send its request before the upgrade."
   10000)
 
+;; The agent's calendar is served on this listener and no other (I9): it
+;; has the listener's address, which is 127.0.0.1, and its token.
+
+(defn- calendar-feed
+  "The agent's calendar as iCalendar text, from the log as it is now."
+  [{:keys [sys]}]
+  (ics/render {:now ((:clock sys)) :events (core/calendar-feed (inbound/current-state sys))}))
+
 (defn- websocket-connection!
   "Serves one TCP connection to the WebSocket listener: the request, the
   decision (relay.websocket/decide) and, on an upgrade, a hub connection
@@ -395,13 +404,15 @@
             #(when-not (deref upgraded handshake-timeout-ms nil) (shut!)))
     (try
       (.setSoTimeout sock (int handshake-timeout-ms))
-      (let [decision (ws/decide (some-> (ws/read-head in) ws/parse-head) settings)
+      (let [decision (ws/route (some-> (ws/read-head in) ws/parse-head) settings)
             ;; Refused before the upgrade when it has no place: the client
             ;; gets a bare 503, as it would from any full server.
             decision (if (and (:upgrade decision) (>= (count @(:conns eng)) (:max-conns eng)))
                        {:status 503}
                        decision)]
-        (ws/write-frame! out (ws/response-bytes decision))
+        (ws/write-frame! out (if (:calendar decision)
+                               (ws/calendar-response-bytes (calendar-feed eng))
+                               (ws/response-bytes decision)))
         (if-not (:upgrade decision)
           (do (deliver upgraded false) (shut!))
           (do
@@ -586,44 +597,47 @@
 
 (defn- run-service!
   "Listens on `path`, holding `lock`, and on the WebSocket listener when
-  there are settings for it, until SIGTERM or SIGINT."
+  there are settings for it, until SIGTERM or SIGINT. The signal handlers
+  go in before the socket exists, so a client that connects the moment it
+  can, and stops the service, gets a clean stop and not the default
+  action for SIGTERM."
   [sys path ^FileChannel lock ready]
-  (let [_ (when (fs/exists? path {:nofollow-links true}) (fs/delete path))
-        server (doto (ServerSocketChannel/open StandardProtocolFamily/UNIX)
-                 (.bind (UnixDomainSocketAddress/of ^String path)))
-        _ (fs/set-posix-file-permissions path "rw-------")
-        eng (engine sys :service)
-        stop (promise)
-        quit (promise)]
-    (dispatch/reap-lost-wakes! sys)
-    (process! eng (roster-event eng))
-    (watch-log! eng quit)
-    (daemon "relay-hub" (fn [] (run-loop! eng (constantly false)) (deliver quit true)))
-    (daemon "relay-accept"
-            (fn []
-              (loop []
-                (when-let [ch (try (.accept server) (catch Exception _ nil))]
-                  (when-not (add-connection! eng {:in (Channels/newInputStream ^SocketChannel ch)
-                                                  :out (Channels/newOutputStream ^SocketChannel ch)
-                                                  :origin :socket
-                                                  :on-close #(try (.close ^SocketChannel ch) (catch Exception _ nil))})
-                    (binding [*out* *err*] (println "relay serve turned a client away: it has as many as it takes."))
-                    (try (.close ^SocketChannel ch) (catch Exception _ nil)))
-                  (recur)))))
-    (println (str "relay serve: listening on " path))
-    (let [wserver (atom nil)]
-      ;; The token command runs on a thread of its own, once the socket
-      ;; listens, so a slow one holds up only the WebSocket listener.
-      (daemon "relay-websocket-start"
-              (fn []
-                (let [server (binding [*out* *err*] (listen-websocket! eng (websocket-settings (:config sys))))]
-                  (locking wserver
-                    (if (realized? stop)
-                      (some-> ^java.net.ServerSocket server .close)
-                      (reset! wserver server))))))
-      (some-> ready (deliver path))
-      (dispatch/with-signals {"TERM" #(deliver stop :term) "INT" #(deliver stop :int) "HUP" (fn [])}
-        (fn []
+  (let [stop (promise)
+        quit (promise)
+        wserver (atom nil)]
+    (dispatch/with-signals {"TERM" #(deliver stop :term) "INT" #(deliver stop :int) "HUP" (fn [])}
+      (fn []
+        (when (fs/exists? path {:nofollow-links true}) (fs/delete path))
+        (let [server (doto (ServerSocketChannel/open StandardProtocolFamily/UNIX)
+                       (.bind (UnixDomainSocketAddress/of ^String path)))
+              _ (fs/set-posix-file-permissions path "rw-------")
+              eng (engine sys :service)]
+          (dispatch/reap-lost-wakes! sys)
+          (process! eng (roster-event eng))
+          (watch-log! eng quit)
+          (daemon "relay-hub" (fn [] (run-loop! eng (constantly false)) (deliver quit true)))
+          (daemon "relay-accept"
+                  (fn []
+                    (loop []
+                      (when-let [ch (try (.accept server) (catch Exception _ nil))]
+                        (when-not (add-connection! eng {:in (Channels/newInputStream ^SocketChannel ch)
+                                                        :out (Channels/newOutputStream ^SocketChannel ch)
+                                                        :origin :socket
+                                                        :on-close #(try (.close ^SocketChannel ch) (catch Exception _ nil))})
+                          (binding [*out* *err*] (println "relay serve turned a client away: it has as many as it takes."))
+                          (try (.close ^SocketChannel ch) (catch Exception _ nil)))
+                        (recur)))))
+          (println (str "relay serve: listening on " path))
+          ;; The token command runs on a thread of its own, once the socket
+          ;; listens, so a slow one holds up only the WebSocket listener.
+          (daemon "relay-websocket-start"
+                  (fn []
+                    (let [server (binding [*out* *err*] (listen-websocket! eng (websocket-settings (:config sys))))]
+                      (locking wserver
+                        (if (realized? stop)
+                          (some-> ^java.net.ServerSocket server .close)
+                          (reset! wserver server))))))
+          (some-> ready (deliver path))
           @stop
           (.close server)
           (locking wserver (some-> ^java.net.ServerSocket @wserver .close))

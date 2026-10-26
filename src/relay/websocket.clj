@@ -113,6 +113,84 @@
       {:status 400}
       :else {:upgrade (accept-key (one head "sec-websocket-key"))})))
 
+(def calendar-path
+  "The one path besides the upgrade that the listener answers: the agent's
+  calendar feed."
+  "/calendar.ics")
+
+(defn- percent-decode
+  "A query value with its %XX escapes decoded, or nil when it has a bad one.
+  A plus is a plus: a token may hold one."
+  [^String v]
+  (try (java.net.URLDecoder/decode (str/replace v "+" "%2B") "UTF-8")
+       (catch IllegalArgumentException _ nil)))
+
+(defn- split-target
+  "A request target as [path query-string]."
+  [target]
+  (let [i (str/index-of target "?")]
+    (if i [(subs target 0 i) (subs target (inc i))] [target nil])))
+
+(defn calendar-request?
+  "Whether a request head asks for the calendar feed: a GET of exactly
+  calendar-path, whatever its query."
+  [head]
+  (boolean (and head (= "GET" (:method head))
+                (= calendar-path (first (split-target (:target head)))))))
+
+(defn query-token
+  "The token a feed URL carries as `?token=<token>`, or nil when it has
+  none, has it twice or has it badly escaped. A calendar app subscribes to
+  a URL and cannot send a header."
+  [target]
+  (let [[_ q] (split-target target)
+        vals (for [pair (some-> q (str/split #"&")) :when (str/starts-with? pair "token=")]
+               (percent-decode (subs pair 6)))]
+    (when (= 1 (count vals)) (first vals))))
+
+(defn decide-calendar
+  "What the listener does with a request for the calendar feed: {:calendar
+  true} to answer with it, or {:status n}. The order:
+
+    an Origin not allowed              403
+    no token, or not the token         401
+    otherwise                          the feed
+
+  The token is the listener's, the same one an ACP client sends, given as
+  a bearer token or in the URL. Nothing else about the request matters."
+  [head {:keys [token allowed-origins]}]
+  (let [origins (get-in head [:headers "origin"])
+        auth (get-in head [:headers "authorization"])
+        given (if (seq auth)
+                (when (= 1 (count auth)) (bearer (first auth)))
+                (query-token (:target head)))]
+    (cond
+      (and (seq origins)
+           (not (and (= 1 (count origins)) (some #(= (first origins) %) allowed-origins))))
+      {:status 403}
+      (not (token-matches? given token)) {:status 401}
+      :else {:calendar true})))
+
+(defn route
+  "decide, or decide-calendar for a request for the feed."
+  [head settings]
+  (if (calendar-request? head)
+    (decide-calendar head settings)
+    (decide head settings)))
+
+(defn calendar-response-bytes
+  "The bytes of the feed's answer, given its text: 200, never cached,
+  closed after."
+  ^bytes [^String body]
+  (let [b (.getBytes body StandardCharsets/UTF_8)
+        head (.getBytes (str "HTTP/1.1 200 OK\r\nContent-Type: text/calendar; charset=utf-8\r\n"
+                             "Cache-Control: no-store\r\nContent-Length: " (alength b) "\r\nConnection: close\r\n\r\n")
+                        StandardCharsets/US_ASCII)
+        out (byte-array (+ (alength head) (alength b)))]
+    (System/arraycopy head 0 out 0 (alength head))
+    (System/arraycopy b 0 out (alength head) (alength b))
+    out))
+
 (def ^:private reasons {101 "Switching Protocols" 400 "Bad Request" 401 "Unauthorized"
                         403 "Forbidden" 404 "Not Found" 503 "Service Unavailable"})
 

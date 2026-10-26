@@ -14,6 +14,7 @@
             [relay.hub :as hub]
             [relay.hub-test :as ht]
             [relay.inbound :as inbound]
+            [relay.log :as log]
             [relay.serve :as serve]
             [relay.test-support :as support]
             [relay.serve-support :refer [deaf-agent-script *dir* *run-dir* *sys* *socket* data state events wait-for start-service! stop-service! with-service connect! new-session! prompt texts methods-of done!]]))
@@ -280,3 +281,32 @@
       (#'serve/process! eng {:event :tick}))
     (is (= [:conversation/turn-end] @submitted) "tried again")
     (is (nil? (get-in @(:hub eng) [:convs "clerk" :turn-end-due])) "and recorded")))
+
+;; The flake behind the gate failure: stop-service! sent SIGTERM as soon as
+;; the socket accepted, before the service had its handler, so the default
+;; action killed it (exit 143) instead of a clean stop.
+(deftest ^:volley/serial the-service-handles-sigterm-before-its-socket-exists
+  (let [dir (str (fs/create-temp-dir {:prefix "relay-serve-sig"}))
+        sockdir (str (fs/create-temp-dir {:dir "/tmp" :prefix "rs"}))
+        path (str sockdir "/s.sock")
+        existed (atom ::never)]
+    (try
+      (let [data (str dir "/data")
+            _ (log/init! data)
+            _ (spit (str data "/relay.edn") (pr-str {:timezone "UTC" :default-harness :a :notify {:kind :none}
+                                                   :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin "/bin/true"}}}))
+            sys (inbound/system data)]
+        (do
+          (let [lock (java.nio.channels.FileChannel/open (fs/path (str sockdir "/lock"))
+                                                         (into-array java.nio.file.OpenOption
+                                                                     [java.nio.file.StandardOpenOption/CREATE
+                                                                      java.nio.file.StandardOpenOption/WRITE]))
+                real dispatch/with-signals]
+            (with-redefs [dispatch/with-signals
+                          (fn [handlers f]
+                            (reset! existed (fs/exists? path {:nofollow-links true}))
+                            (future (Thread/sleep 200) ((get handlers "TERM")))
+                            (real {} f))]
+              (is (= 0 (#'serve/run-service! sys path lock nil)))))))
+      (is (false? @existed) "the handlers are in place before anything can connect")
+      (finally (fs/delete-tree sockdir) (fs/delete-tree dir)))))
