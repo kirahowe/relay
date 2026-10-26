@@ -211,7 +211,9 @@ your final words in the wake reach no one. So write it for them, plain
 and complete, with the answer to anything they asked in it ("Sorted the
 notes into four folders; the scraps are in unsorted/"). If you tell them
 about the request with `tell_operator` instead, give the memo's number
-as `memo`, and relay will not send the outcome as well. Block it with
+as `memo`, and relay will not send the outcome as well. relay sends
+outcomes when your wake ends, so this holds whether you tell them before
+or after you close the memo. Block it with
 `memo_block` when you cannot: you lack a tool or access, the request
 makes no sense, or it needs a decision that is not yours. Say why and what would unblock you. A blocked memo goes to the steward,
 which will sort it out or ask the operator.

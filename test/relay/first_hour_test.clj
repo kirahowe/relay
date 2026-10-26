@@ -453,33 +453,64 @@
 
 ;; --- what came of the operator's own request
 
+(defn- run-labelled [{:keys [state now] :as w} actor type args labels]
+  (let [[state' events] (core/run-command state {:type type :actor actor :args args :public false :labels labels}
+                                          {:now now :config cfg})]
+    (-> w (assoc :state state') (update :events into events))))
+
+(defn- wake-ended
+  "Ends the role's running wake, as the dispatcher does when its session
+  exits."
+  [w role]
+  (if-let [wake (first (filter #(and (= role (:role %)) (= :running (:status %))) (vals (:wakes (:state w)))))]
+    (run w "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :exit 0 :said "ok"})
+    w))
+
 (deftest what-came-of-the-operators-request-reaches-her-as-a-quiet-reply
   (let [w (-> (seed) (run "operator" :memo/send {:to "steward" :subject "Tidy my notes" :body "Then tell me what you moved."} true))
         id (:id (last-memo w))
         w (-> w (run "dispatcher" :wake/start {:role "steward"})
               (run "steward" :memo/close {:memo id :outcome "Sorted the five notes into folders."}))
+        _ (is (empty? (messages w)) "it waits for the end of the wake")
+        w (wake-ended w "steward")
         [m & more] (messages w)]
     (is (nil? more))
     (is (= ["reply" "low" "Re: Tidy my notes"] [(:kind m) (:urgency m) (:subject m)]))
     (is (= "Sorted the five notes into folders." (text-of m)))
     (is (= "steward" (core/message-author (:state w) m)) "a reply to it goes to the steward")
-    (is (some #(= (str "message:" (:id m)) (:id %)) (ready/ready (:state w) {:limit 100})) "shown in Ready"))
+    (is (some #(= (str "message:" (:id m)) (:id %)) (ready/ready (:state w) {:limit 100})) "shown in Ready")
+    (testing "and the state replayed from the log says the same"
+      (is (= (:messages (:state w)) (:messages (core/replay (:events w)))))))
   (testing "not when the role told her about that request itself"
     (let [w (-> (seed) (run "operator" :memo/send {:to "steward" :subject "Tidy" :body "x"} true))
           id (:id (last-memo w))
           w (-> w (run "dispatcher" :wake/start {:role "steward"})
                 (run "steward" :message/send {:subject "Tidied" :sections [{:items ["Done."]}] :memo id})
-                (run "steward" :memo/close {:memo id :outcome "Done."}))]
+                (run "steward" :memo/close {:memo id :outcome "Done."})
+                (wake-ended "steward"))]
       (is (= ["Tidied"] (map :subject (messages w))))))
+  (testing "nor when it tells her after closing it, later in the same wake"
+    (let [w (-> (seed)
+                (run "operator" :memo/send {:to "steward" :subject "Dentist" :body "Book it."} true)
+                (run "operator" :memo/send {:to "steward" :subject "Gym" :body "Cancel it."} true))
+          [dentist gym] (map :id (take-last 2 (sort-by :id (vals (:memos (:state w))))))
+          w (-> w (run "dispatcher" :wake/start {:role "steward"})
+                (run "steward" :memo/close {:memo dentist :outcome "Booked."})
+                (run "steward" :memo/close {:memo gym :outcome "Cancelled."})
+                (run "steward" :message/send {:subject "Dentist booked, gym cancelled" :sections [{:items ["Both done."]}] :memo dentist})
+                (run "steward" :message/send {:subject "About the gym" :sections [{:items ["Refund in 5 days."]}] :memo gym})
+                (wake-ended "steward"))]
+      (is (= ["Dentist booked, gym cancelled" "About the gym"] (map :subject (messages w))))))
   (testing "a message about one request does not stand for another"
     (let [w (-> (seed)
                 (run "operator" :memo/send {:to "steward" :subject "Dentist" :body "Book it."} true)
                 (run "operator" :memo/send {:to "steward" :subject "Gym" :body "Cancel it."} true))
           [dentist gym] (map :id (take-last 2 (sort-by :id (vals (:memos (:state w))))))
           w (-> w (run "dispatcher" :wake/start {:role "steward"})
-                (run "steward" :message/send {:subject "Dentist booked" :sections [{:items ["Tue 10:00."]}] :memo dentist})
                 (run "steward" :memo/close {:memo dentist :outcome "Booked."})
-                (run "steward" :memo/close {:memo gym :outcome "Gym cancelled; refund in 5 days."}))]
+                (run "steward" :memo/close {:memo gym :outcome "Gym cancelled; refund in 5 days."})
+                (run "steward" :message/send {:subject "Dentist booked" :sections [{:items ["Tue 10:00."]}] :memo dentist})
+                (wake-ended "steward"))]
       (is (= ["Dentist booked" "Re: Gym"] (map :subject (messages w))))
       (is (= "Gym cancelled; refund in 5 days." (text-of (last (messages w)))))))
   (testing "a message about something else does not stand for it"
@@ -487,8 +518,25 @@
           id (:id (last-memo w))
           w (-> w (run "dispatcher" :wake/start {:role "steward"})
                 (run "steward" :message/send {:subject "Printer ink is low" :sections [{:items ["FYI."]}]})
-                (run "steward" :memo/close {:memo id :outcome "Done."}))]
+                (run "steward" :memo/close {:memo id :outcome "Done."})
+                (wake-ended "steward"))]
       (is (= ["Printer ink is low" "Re: Tidy"] (map :subject (messages w))))))
+  (testing "a close outside any wake is told at once"
+    (let [w (-> (seed) (run "operator" :memo/send {:to "steward" :subject "Tidy" :body "x"} true))
+          id (:id (last-memo w))
+          w (run-labelled w "steward" :memo/close {:memo id :outcome "Done."} [])]
+      (is (= ["Re: Tidy"] (map :subject (messages w))))))
+  (testing "in a conversation, at the end of the turn"
+    (let [w (-> (seed) (run "operator" :memo/send {:to "steward" :subject "Tidy" :body "x"} true))
+          id (:id (last-memo w))
+          w (run w "operator" :wake/start {:role "steward" :chat true})
+          chat (:id (first (filter :chat (vals (:wakes (:state w))))))
+          w (-> w (run "operator" :conversation/turn-start {:wake chat :session "sess-1"})
+                (run "steward" :memo/close {:memo id :outcome "Done."}))
+          _ (is (empty? (messages w)))
+          w (run w "dispatcher" :conversation/turn-end {:wake chat :stop-reason "end_turn"})]
+      (is (= ["Re: Tidy"] (map :subject (messages w))))
+      (is (= ["Re: Tidy"] (map :subject (messages (wake-ended w "steward")))) "once")))
   (testing "a message may only be about a memo the role was sent"
     (let [w (-> (seed) (run "operator" :memo/send {:to "scout" :subject "Grants" :body "x"} true))
           id (:id (last-memo w))
@@ -500,7 +548,8 @@
                 (run "steward" :memo/send {:to "steward" :subject "Self" :body "x"}))
           w (run w "steward" :memo/close {:memo (:id (last-memo w)) :outcome "Done."})
           w (-> w (run "operator" :memo/send {:to "steward" :subject "Mine" :body "x"} true))
-          w (run w "operator" :memo/close {:memo (:id (last-memo w)) :outcome "Never mind."})]
+          w (run w "operator" :memo/close {:memo (:id (last-memo w)) :outcome "Never mind."})
+          w (wake-ended w "steward")]
       (is (empty? (messages w))))))
 
 ;; --- how Ready shows a message
@@ -517,11 +566,6 @@
     (is (some #{"  - Pull request by samwise (a hidden character removed)"} out))
     (is (not-any? #(str/includes? % "\\") (map text/visible-line out)) "never escaped twice")))
 
-(defn- run-labelled [{:keys [state now] :as w} actor type args labels]
-  (let [[state' events] (core/run-command state {:type type :actor actor :args args :public false :labels labels}
-                                          {:now now :config cfg})]
-    (-> w (assoc :state state') (update :events into events))))
-
 (deftest the-answer-to-a-request-carries-where-the-request-came-from
   ;; A forwarded mail becomes the operator's memo with an outsider's
   ;; subject; the answer quotes that subject.
@@ -529,7 +573,8 @@
                                    ["contaminated" "mail:dana@example.org"]))
         id (:id (last-memo w))
         w (-> w (run "dispatcher" :wake/start {:role "steward"})
-              (run "steward" :memo/close {:memo id :outcome "Filed it."}))
+              (run "steward" :memo/close {:memo id :outcome "Filed it."})
+              (wake-ended "steward"))
         [m] (messages w)]
     (is (= "Re: Fwd: Click evil.example/x" (:subject m)))
     (is (some #{"contaminated"} (:labels m)))

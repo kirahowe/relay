@@ -1006,10 +1006,13 @@
                                   :attempts 0 :retry-at nil :labels (union labels)
                                   :public (true? public)})))
 
-(defmethod evolve* "memo/closed" [state {:keys [at actor data labels]}]
-  (update-in state [:memos (:memo data)] assoc
-             :status :read :outcome (:outcome data) :closed-at (inst at) :closed-by actor
-             :retry-at nil :outcome-labels (union labels)))
+(defmethod evolve* "memo/closed" [state {:keys [at actor data labels sources]}]
+  (update-in state [:memos (:memo data)]
+             #(cond-> (assoc % :status :read :outcome (:outcome data) :closed-at (inst at) :closed-by actor
+                             :retry-at nil :outcome-labels (union labels))
+                ;; The operator's request closed in a wake: what came of it
+                ;; is told when the wake (or the conversation's turn) ends.
+                (:reply-held data) (assoc :reply-held (:reply-held data) :outcome-sources sources))))
 
 (defmethod evolve* "memo/declassified" [state {:keys [data]}]
   ;; Declassify is gone, and so is what it did to who may read the memo:
@@ -1884,21 +1887,62 @@
   (for [id ids :let [m (memo state id)] :when m]
     (cond-> m (operator-request? state id) (assoc :request? true))))
 
+(defn- tell-request-done
+  "Tells the operator what came of her request `m`, closed with
+  `outcome`: a quiet reply routed like any other. It quotes the
+  request's subject, so it carries the memo's labels with the closer's
+  own."
+  [{:keys [state actor] :as tx} m outcome]
+  (tell tx "request-done" "reply" "low" (str "Re: " (:subject m)) [outcome] :role actor :request (:id m)
+        :labels (memo-labels state m)))
+
+(defn- held-in
+  "The wake that a role's call came from, when it is that role's and
+  running, so what the call would tell the operator can wait for its end."
+  [{:keys [state actor session-wake]}]
+  (let [w (get-in state [:wakes session-wake])]
+    (when (and w (= actor (:role w)) (= :running (:status w))) (:id w))))
+
 (defmethod decide* :memo/close [{:keys [state actor] :as tx} {{:keys [memo outcome]} :args}]
   (let [m (open-memo! tx memo)
-        outcome (require-text outcome "The outcome")]
+        outcome (require-text outcome "The outcome")
+        ;; The operator's own request: what came of it is her answer,
+        ;; unless the role has told her about it, naming it. A public role
+        ;; reports back by memo.
+        request? (and (= operator (:from m)) (not= operator actor) (not (public-actor? tx))
+                      (not (reply-memo? state memo)) (not (told-about? state actor memo)))
+        wake (when request? (held-in tx))]
     (when-not (or (= actor (:to m)) (= operator actor))
       (reject! :forbidden (str "Memo " memo " is not addressed to " actor ".")))
-    (cond-> (emit tx "memo/closed" {:memo memo :outcome outcome})
-      ;; The operator's own request: what came of it is her answer, a
-      ;; quiet reply routed like any other, unless the role has told her
-      ;; about it already, naming it. A public role reports back by memo.
-      (and (= operator (:from m)) (not= operator actor) (not (public-actor? tx))
-           (not (reply-memo? state memo)) (not (told-about? state actor memo)))
-      ;; It quotes the request's subject, so it carries the memo's labels
-      ;; with the closer's own.
-      (tell "request-done" "reply" "low" (str "Re: " (:subject m)) [outcome] :role actor :request memo
-            :labels (memo-labels state m)))))
+    (cond
+      ;; In a wake it waits for the wake's end (tell-held-replies), so a
+      ;; tell_operator later in the same wake that names it is the one
+      ;; message she gets.
+      wake (emit tx "memo/closed" {:memo memo :outcome outcome :reply-held wake})
+      request? (tell-request-done (emit tx "memo/closed" {:memo memo :outcome outcome}) (assoc m :id memo) outcome)
+      :else (emit tx "memo/closed" {:memo memo :outcome outcome}))))
+
+(defn- tell-held-replies
+  "At the end of wake `wake-id`, or of a turn of it, tells the operator
+  what came of each of her requests its role closed in it, as the
+  closer would have at the close, except those a tell_operator call
+  named (told-about?, wherever in the wake it came) and those told
+  already."
+  [{:keys [state] :as tx} wake-id]
+  (let [told (set (keep #(when (= "request-done" (:origin %)) (:request %)) (vals (:messages state))))]
+    (reduce (fn [tx {:keys [id closed-by outcome outcome-labels outcome-sources] :as m}]
+              (if (or (told id) (told-about? (:state tx) closed-by id))
+                tx
+                (-> (assoc tx :actor closed-by :labels (union outcome-labels) :public false)
+                    (cond-> (some? outcome-sources) (assoc :sources outcome-sources)
+                            (nil? outcome-sources) (dissoc :sources))
+                    (tell-request-done (assoc m :id id) outcome)
+                    (assoc :actor (:actor tx) :labels (:labels tx) :public (:public tx))
+                    (cond-> (contains? tx :sources) (assoc :sources (:sources tx))
+                            (not (contains? tx :sources)) (dissoc :sources)))))
+            tx
+            (sort-by :id (filter #(and (= wake-id (:reply-held %)) (= :read (:status %)))
+                                 (map (fn [[id m]] (assoc m :id id)) (:memos state)))))))
 
 (defmethod decide* :memo/block [{:keys [actor] :as tx} {{:keys [memo explanation]} :args}]
   (caller-role! tx)
@@ -2325,8 +2369,9 @@
   "Ends the turn running in a conversation."
   [{:keys [state] :as tx} wake-id stop-reason]
   (let [{:keys [role turns]} (get-in state [:wakes wake-id])]
-    (emit tx "conversation/turn-ended" {:wake wake-id :role role :turn turns
-                                        :stop-reason (if (stop-reasons stop-reason) stop-reason "other")})))
+    (-> (emit tx "conversation/turn-ended" {:wake wake-id :role role :turn turns
+                                            :stop-reason (if (stop-reasons stop-reason) stop-reason "other")})
+        (tell-held-replies wake-id))))
 
 (defn- end-wake [{:keys [state config] :as tx} wake-id {:keys [outcome exit crashed cut-short session sessions said local
                                                               transcript resets-at labels usage cost-usd
@@ -2361,6 +2406,7 @@
                               (wake-cost cost-usd) (assoc :cost-usd (wake-cost cost-usd))
                               tools-error (assoc :tools-error tools-error))
             (:said-labels tx))
+      (tell-held-replies tx wake-id)
       (record-pins tx wake pins)
       ;; Tools that could not be set up are the role's trouble, not its
       ;; harness's: no model was called.

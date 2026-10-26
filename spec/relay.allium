@@ -1707,9 +1707,12 @@ rule CloseMemo {
         memo.closed_at = now
         memo.retry_at = null
     -- The operator's own request, closed by the role it went to: what
-    -- came of it is her answer.
+    -- came of it is her answer. Closed outside a wake it is told now;
+    -- in one, at the end of the wake or the conversation's turn
+    -- (TellHeldReplies).
     if memo.sender = operator and not caller.is_operator and not caller.is_public
-       and not memo.is_reply and not told_about(caller.role, memo):
+       and not memo.is_reply and not told_about(caller.role, memo)
+       and caller.wake = null:
         ensures: Message.created(
             origin: request_done,
             kind: reply,
@@ -1733,6 +1736,33 @@ rule CloseMemo {
         -- says "I did this". It can happen during a wake or in a
         -- conversation, and it stands even if the wake it happened in
         -- later crashes.
+}
+
+rule TellHeldReplies {
+    -- And at the end of each turn of a conversation (EndTurn).
+    when: wake: Wake.status transitions_to ended
+
+    -- Each of the operator's requests its role closed in the wake, that
+    -- no tell_operator call named (told_about, before or after the
+    -- close) and that was not told already.
+    for memo in Memos where memo.reply_held = wake and not told_about(memo.closed_by, memo):
+        ensures: Message.created(
+            origin: request_done,
+            kind: reply,
+            urgency: low,
+            subject: "Re: " + memo.subject,
+            sections: [memo.outcome],
+            told_by: memo.closed_by,
+            created_at: now,
+            deliveries: route(this, now)
+        )
+
+    @guidance
+        -- Holding the outcome to the end is what lets a role that closes
+        -- her requests and then sums them up with tell_operator, naming
+        -- each, reach her once, not once per close and again for the
+        -- summary. The message carries the labels and sources the close
+        -- had.
 }
 
 rule BlockMemo {
