@@ -144,13 +144,11 @@
        "6B2C3D4E\tWork\t2026-10-15\tFile taxes\t-\n"))
 
 (def a-state
-  ;; One report with one finding of two waiting, one open hold.
+  ;; One open hold, one settled.
   {:roles {} :holds {4 {:id 4 :role "hub" :tool "mail" :status :open}
-                     5 {:id 5 :role "hub" :tool "mail" :status :approved}}
-   :reports {12 {:id 12 :role "scout" :findings [{} {}] :status :verified
-                 :verification {:findings [{} {:seen-before true}]}}}})
+                     5 {:id 5 :role "hub" :tool "mail" :status :approved}}})
 
-(def empty-state {:roles {} :holds {} :reports {}})
+(def empty-state {:roles {} :holds {}})
 
 (defn- section [k ran] (brief/tool-section k (brief/source cfg k) ran))
 
@@ -171,7 +169,7 @@
   (let [b (composed a-state {:out cal-out :labels ["contaminated" "private"]} {:out rem-out :labels ["private"]})
         {:keys [title body]} (render/brief b)]
     (is (not (brief/empty-brief? b)))
-    (is (= "Morning brief for 2026-10-17: 3 events, 3 reminders, 1 report, 1 held call" title))
+    (is (= "Morning brief for 2026-10-17: 3 events, 3 reminders, 1 held call" title))
     (is (= ["Calendar: 3"
             "  all day Holiday (Home)"
             "  09:00-09:30 Standup (Work)"
@@ -180,13 +178,11 @@
             "  Buy milk (Groceries)"
             "  Send the draft (Work, due 14:00)"
             "  File taxes (Work, due 2026-10-15)"
-            "Reports waiting for review: 1"
-            "  Report 12 from scout: 1 of 2 findings to review (relay review 12)"
             "Held calls: 1"
             "  Hold 4: hub wants to use mail"]
            (str/split-lines body)))
     (is (= ["contaminated" "private"] (brief/labels b)))
-    (is (= {:calendar 3 :reminders 3 :reports 1 :holds 1} (brief/summary b)))))
+    (is (= {:calendar 3 :reminders 3 :holds 1} (brief/summary b)))))
 
 (deftest a-long-section-is-cut
   (let [out (str/join (for [i (range 12)] (str "E" i "\t2026-10-17 09:00\t2026-10-17 10:00\tMeeting " i "\tWork\t-\n")))
@@ -205,7 +201,7 @@
   (let [b (composed empty-state {:out "" :labels ["contaminated" "private"]} {:out "\n" :labels ["private"]})]
     (is (brief/empty-brief? b))
     (is (= [] (brief/labels b)) "no text from the calendar, so nothing contaminated")
-    (is (= "Calendar: none\nReminders due: none\nReports waiting for review: none\nHeld calls: none"
+    (is (= "Calendar: none\nReminders due: none\nHeld calls: none"
            (:body (render/brief b)))))
   (testing "a tool that is not configured adds nothing worth sending"
     (let [cfg (update cfg :tools dissoc "cal" "rem-read")
@@ -219,7 +215,7 @@
                                (brief/tool-section :reminders (brief/source cfg :reminders) nil))
               {:keys [title body]} (render/brief b)]
           (is (not (brief/empty-brief? b)))
-          (is (= "Morning brief for 2026-10-17: 1 report, 1 held call" title))
+          (is (= "Morning brief for 2026-10-17: 1 held call" title))
           (is (str/starts-with? body (str "Calendar: not configured, relay.edn has no tool cal.\n"
                                           "Reminders due: not configured, relay.edn has no tool rem-read.\n"))))))))
 
@@ -228,7 +224,7 @@
     (let [b (composed empty-state {:error "exited 1"} {:out "" :labels ["private"]})
           {:keys [title body]} (render/brief b)]
       (is (not (brief/empty-brief? b)) "a failure is worth telling, even with nothing else")
-      (is (= "Morning brief for 2026-10-17: calendar unavailable, 0 reminders, 0 reports, 0 held calls" title))
+      (is (= "Morning brief for 2026-10-17: calendar unavailable, 0 reminders, 0 held calls" title))
       (is (str/starts-with? body "Calendar: unavailable, the tool cal failed.\n"))
       (is (= "unavailable" (:calendar (brief/summary b))))))
   (testing "output that is not cal's"
@@ -259,7 +255,7 @@
     (is (not (str/includes? body "https://")))
     (is (str/includes? body "\\u{202e}"))
     (is (str/includes? body "\\u{200b}"))
-    (is (= 5 (count (str/split-lines body))) "one line for the event, as for any other")
+    (is (= 4 (count (str/split-lines body))) "one line for the event, as for any other")
     (testing "and it goes through the log so marked"
       (let [[_ events] (core/run-command core/empty-state
                                           {:type :brief/send :actor core/dispatcher
@@ -367,8 +363,8 @@
      (let [b (composed a-state cal rem)
            {:keys [title body]} (render/brief b)]
        (and (string? title) (not (str/includes? title "\n"))
-            (= 4 (count (filter #(not (str/starts-with? % "  ")) (str/split-lines body))))
-            (<= (count (str/split-lines body)) (+ 4 (* 4 (inc brief/lines-per-section)))))))))
+            (= 3 (count (filter #(not (str/starts-with? % "  ")) (str/split-lines body))))
+            (<= (count (str/split-lines body)) (+ 3 (* 3 (inc brief/lines-per-section)))))))))
 
 ;; --- the record
 
@@ -469,7 +465,7 @@
     (tick! (sys-at cal-out rem-out (at "2026-10-17T07:31")))
     (let [[p & more] (pushed)]
       (is (nil? more))
-      (is (= "[contaminated] Morning brief for 2026-10-17: 3 events, 3 reminders, 0 reports, 0 held calls" (:title p)))
+      (is (= "[contaminated] Morning brief for 2026-10-17: 3 events, 3 reminders, 0 held calls" (:title p)))
       (is (str/includes? (:body p) "09:00-09:30 Standup (Work)"))
       (is (= ["contaminated" "private"] (:labels p))))
     (is (= ["events --from 2026-10-17 --to 2026-10-17"] (str/split-lines (slurp (str *dir* "/cal.args")))))
@@ -483,8 +479,8 @@
       (is (= 2 (count (pushed)))))
     (testing "the log has each brief"
       (let [events (log/read-events (str *dir* "/data"))]
-        (is (= [{:date "2026-10-17" :sent true :sections {:calendar 3 :reminders 3 :reports 0 :holds 0}}
-                {:date "2026-10-18" :sent true :sections {:calendar 3 :reminders 3 :reports 0 :holds 0}}]
+        (is (= [{:date "2026-10-17" :sent true :sections {:calendar 3 :reminders 3 :holds 0}}
+                {:date "2026-10-18" :sent true :sections {:calendar 3 :reminders 3 :holds 0}}]
                (map :data (filter #(= "brief/composed" (:type %)) events))))
         (is (= #{"delivered"} (set (map #(name (:delivery %)) (vals (:notifications (core/replay events)))))))))))
 

@@ -107,16 +107,6 @@
     (let [w (ct/run w "operator" :role/fresh {:role "hub" :expect (core/fresh-expectation (:state w) "hub")})]
       (is (= {"accepted" 1} (:decisions (kind (report w) "fresh")))))))
 
-(deftest report-findings-wait-for-review-one-by-one
-  (let [w (-> (seeded)
-              (#'ct/step [:report "courier" "x" true])
-              (#'ct/step [:verify 0 :found false]))
-        k (kind (report w) "finding")]
-    (is (= 2 (:arose k)) (pr-str (:interruptions (report w))))
-    (let [w (#'ct/step w [:review "operator" 0 "fake" false])]
-      (is (= {:arose 2 :decided 1 :pending 1 :decisions {"rejected as fake" 1}}
-             (select-keys (kind (report w) "finding") [:arose :decided :pending :decisions]))))))
-
 (deftest a-harness-that-needs-the-operator-waits-until-it-runs-again
   (let [w (-> (seeded) (ct/run "operator" :memo/send {:to "hub" :subject "s" :body "b"})
               (#'ct/step [:wake "hub" true "needs-attention" [] false false "t1" "a" "a"]))

@@ -32,8 +32,7 @@
             [relay.harness :as harness]
             [relay.inbound :as inbound]
             [relay.json :as strict]
-            [relay.refs :as refs]
-            [relay.reports :as reports])
+            [relay.refs :as refs])
   (:import (java.time Instant LocalTime)
            (java.time.format DateTimeFormatter)))
 
@@ -659,78 +658,6 @@
            (submit sys actor labels :role/remove args)
            (str "Removed " (:id args) "."))}
 
-   "ledger"
-   {:class :read
-    :grant :ledger
-    :description (str "List the ledger: the findings of research roles that the operator accepted, with"
-                      " their status (new, seen, applied or passed). An entry relay accepted without the"
-                      " operator shows only its kind, deadline and amount; its text is contaminated and"
-                      " withheld unless you accept contamination.")
-    :parameters (obj {:status {:type "string" :enum reports/statuses :description "Only entries with this status."}
-                      :accept_contamination accept})
-    :read (fn [{:keys [state config]} actor {:keys [status accept_contamination]}]
-            ;; A public role has no ledger: it holds the operator's decisions.
-            (when (public-reader? state config actor)
-              (throw (ex-info "You have no tool called ledger." {})))
-            (let [entries (cond->> (core/ledger-entries state) status (filter #(= status (:status %))))]
-              (if (empty? entries)
-                "The ledger has no entries."
-                (show (for [{:keys [title organization url location] :as e} entries
-                            :let [typed (reports/typed-line e)
-                                  full (str typed " " (refs/ref :report (:report e)) "\n  " title " at " organization
-                                            (when location (str ", " location))
-                                            "\n  " url)]]
-                        (item full (core/item-labels e)
-                              (str typed "\n  Its text is contaminated, withheld. Pass accept_contamination to read it.")
-                              [core/private-label]))
-                      "\n" accept_contamination))))}
-
-   "ledger_status"
-   {:class :write
-    :grant :ledger
-    :description "Set a ledger entry's status, as the operator told you: new, seen, applied or passed."
-    :parameters (obj {:entry {:type "integer" :description "The entry's number."}
-                      :status {:type "string" :enum reports/statuses}}
-                     "entry" "status")
-    :run (fn [sys actor labels args]
-           (submit sys actor labels :ledger/set-status args)
-           (str "Entry " (:entry args) " is " (:status args) "."))}
-
-   "reports"
-   {:class :read
-    :grant :reports
-    :description (str "List the findings you reported before, by title and URL, so you can leave out"
-                      " what you have already reported.")
-    :parameters (obj {})
-    :read (fn [{:keys [state config]} actor _]
-            (let [public (public-reader? state config actor)
-                  rs (->> (vals (:reports state))
-                          (filter #(and (= actor (:role %))
-                                        (or (not public) (core/shown-to-public? % (core/item-labels %)))))
-                          (sort-by :id))]
-              (if (empty? rs)
-                "You have not reported anything yet."
-                ;; What it wrote, and nothing of what relay or the operator
-                ;; made of it.
-                (labelled (str/join "\n" (for [r rs f (:findings r)]
-                                           (str "- " (:title f) "  " (reports/canonical-url (:url f))
-                                                " " (refs/ref :report (:id r)))))
-                          (mapcat core/item-labels rs)))))}
-
-   "report_submit"
-   {:class :write
-    :grant :reports
-    :description (str "Submit a report of what you found: a short summary and the findings, each with the"
-                      " page it is on and evidence quoted word for word from pages you fetched. relay"
-                      " checks every quote against its page before the operator reads the report. You"
-                      " are not told how the checks went.")
-    ;; The kinds come from the role's grant (offered).
-    :parameters (reports/input-schema [])
-    :run (fn [sys actor labels args]
-           (let [id (:seq (first (filter #(= "report/submitted" (:type %))
-                                         (submit sys actor labels :report/submit args))))]
-             (str "Report " id " submitted; it will be checked.")))}
-
    "dead_letters_retry"
    {:class :write
     :grant :dead-letter-handler
@@ -967,51 +894,6 @@
           (nil? parsed) (failed "did not print exactly one result envelope" out err)
           :else parsed)))))
 
-(def verifier-output-limit
-  "The most a verifier may print, in bytes. Twenty pages' worth of check
-  output is far less; past this the run is stopped and counts as failed,
-  so a verifier gone wrong cannot fill memory or the log."
-  (* 8 1024 1024))
-
-(defn- read-bounded
-  "Everything on `in`, as bytes, or ::too-long once it passes `limit` bytes."
-  [^java.io.InputStream in limit]
-  (let [out (java.io.ByteArrayOutputStream.)
-        buf (byte-array 65536)]
-    (loop [total 0]
-      (let [n (.read in buf)]
-        (cond (neg? n) (.toByteArray out)
-              (> (+ total n) limit) ::too-long
-              :else (do (.write out buf 0 n) (recur (+ total n))))))))
-
-(defn run-verifier
-  "Runs the :verifier on one check request (relay.reports/check-requests),
-  on the envelope protocol, as a call from a session holding `labels`.
-  Returns {:content the check output parsed as JSON, :labels it reported},
-  or throws saying only that it failed. Its output is read only up to
-  verifier-output-limit; what it prints on stderr is relay's."
-  [{:keys [command timeout-seconds]} labels request call-id]
-  (let [failed (fn [why]
-                 (binding [*out* *err*] (println (str "verifier: " why)) (flush))
-                 (throw (ex-info "The verifier failed." {})))
-        proc (p/process (vec command) {:in (strict/generate {:input request :labels labels :call_id (str call-id)})
-                                       :out :stream :err :inherit :env (harness/base-env {})})
-        out (future (read-bounded (:out proc) verifier-output-limit))
-        timeout-ms (* 1000 (or timeout-seconds config/verifier-timeout-seconds))
-        text (deref out timeout-ms ::timeout)]
-    (when (#{::timeout ::too-long} text)
-      (p/destroy-tree proc)
-      (failed (if (= ::timeout text) "timed out" "printed more than relay reads")))
-    (let [exit (:exit (deref proc 10000 {:exit ::timeout}))
-          parsed (when (= 0 exit) (parse-result text))
-          v (when parsed (strict-json-value (:content parsed)))]
-      (cond
-        (not= 0 exit) (do (p/destroy-tree proc) (failed (str "exited " exit)))
-        (nil? parsed) (failed "did not print exactly one result envelope")
-        (:is-error parsed) (failed "answered with an error")
-        (= ::bad v) (failed "its content is not one JSON value")
-        :else {:content v :labels (:labels parsed)}))))
-
 (defn- external-tool
   "A tool the operator defined in relay.edn: an external command, given the
   call's `args` after its own, or with :protocol :envelope, given the call
@@ -1081,17 +963,10 @@
                    :may-add (config/may-add? config role-id)
                    :dead-letter-handler (or (= role-id (:dead-letter-handler config))
                                             (config/may-add? config role-id))
-                   :reports (some? (config/report-kinds config role-id))
-                   ;; Only once some role writes reports, so there can be a
-                   ;; ledger at all.
-                   :ledger (and (not (config/public? config role-id)) (seq (config/research-roles config)))
                    ;; Cards are private only.
                    :private (not (config/public? config role-id))))]
-    (cond-> (merge (into {} (filter #(holds? (:grant (val %))) builtin))
-                   (into {} (map external-tool (select-keys (:tools config) tools))))
-      ;; report_submit's schema names the kinds this role may report.
-      (holds? :reports) (assoc-in ["report_submit" :parameters]
-                                  (reports/input-schema (config/report-kinds config role-id)))))))
+    (merge (into {} (filter #(holds? (:grant (val %))) builtin))
+           (into {} (map external-tool (select-keys (:tools config) tools)))))))
 
 (defn grants-summary
   "What a role is granted, in a few sentences for its prompt, so it knows
@@ -1109,13 +984,6 @@
                 (conj "Work that other roles could not finish comes to you as dead letters.")
                 (contains? offered "dead_letters_retry")
                 (conj "You can put a role's dead letters back in its inbox with `dead_letters_retry`.")
-                (contains? offered "ledger")
-                (conj (str "The ledger holds the research findings the operator accepted. `ledger` lists them,"
-                           " and `ledger_status` records a status the operator gives you for one."))
-                (contains? offered "report_submit")
-                (conj (str "You report what you find with `report_submit`, as findings of the kinds "
-                           (str/join ", " (config/report-kinds config role-id)) ". `reports` lists what you"
-                           " reported before, so you need not report it again."))
                 (core/public-role? config role-id)
                 (conj (str "You are a public role: you may search and browse the web, so you are shown only what"
                            " is public, and whatever you write is public. The operator's private data never"

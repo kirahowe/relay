@@ -18,7 +18,6 @@
             [relay.notify :as notify]
             [relay.pause :as pause]
             [relay.render :as render]
-            [relay.reports :as reports]
             [relay.review :as review]
             [relay.roster :as roster]
             [relay.serve :as serve]
@@ -76,8 +75,6 @@ Every command needs the data directory, from --data <dir> or from the file
   relay tick [--pause-file <f>]       one dispatcher pass (launchd runs this); does
                                       nothing while the pause file exists, which
                                       bb deploy makes
-  relay verify <report>               check a research report now (the tick does this
-                                      by itself)
   relay facts [<topic>] [--search <s>] [--as-of <t>] [--known-at <t>] [--all]
                                       what relay knows; times as for facts
   relay fact <id>                     every version of a fact
@@ -120,13 +117,6 @@ Every command needs the data directory, from --data <dir> or from the file
   relay trust <kind> <ref>            vouch for contaminated text you have read:
                                       memo <n>, fact <n>, doc <path>, note <role>/<name>,
                                       routine <role>/<name>, role <id> or journal <n>
-  relay review [<report>]             the research reports waiting for you, or go
-                                      through one report's findings: accept each,
-                                      reject it as fake, or set it aside
-  relay trust-level <role> <0|1>      how far to trust a research role's reports: at 1,
-                                      findings nothing flags go to the ledger unread
-  relay ledger                        the findings accepted from research reports
-  relay ledger set <entry> <status>   mark an entry new, seen, applied or passed
   relay week [--since <date>] [--until <date>] [--json]
                                       how often relay asked you for something and how
                                       long it waited, what each role's wakes did and
@@ -139,9 +129,9 @@ Every command needs the data directory, from --data <dir> or from the file
                                       traces to <dir>/traces.otlp.jsonl, offline; they
                                       hold no content
   relay connect <name> <url> [--client-id <id>] [--agentloop <bin>]
-                                      sign relay in to a remote MCP server, choose
-                                      what each of its tools may do, and write
-                                      connections/<name>.edn; list <name> in
+                                      sign relay in to a remote MCP server and write
+                                      connections/<name>.edn with its tools as relay
+                                      proposes them; list <name> in
                                       relay.edn's :connections to load it
   relay mcp-token <name> --url <url>  print an access token for a connection to
                                       that server, renewing it when needed
@@ -149,7 +139,7 @@ Every command needs the data directory, from --data <dir> or from the file
   relay tool --data <dir> --role <r> [--wake <w>] <name>
                                       run a role's tool call (harnesses use this)
 
-approve, deny, fresh, release, declassify, trust, trust-level, review,
+approve, deny, fresh, release, declassify, trust,
 connect and revert show you what they are about on the terminal and ask you to type a code
 back there, so only a person at the terminal can make those decisions.
 
@@ -445,56 +435,6 @@ and --instructions marks the id public too.")
               (result 0 (str "That changes nothing: "
                              (:unchanged (cards/decide (:cards (inbound/current-state sys)) id op)))))))))))
 
-(def ^:private review-answers
-  {"a" "accept" "r" "fake" "n" "not-relevant" "s" nil})
-
-(defn- review!
-  "Goes through a report's waiting findings with the operator on the
-  terminal, one at a time, then asks for the code to record what they
-  decided. Each decision is bound to the digest of the finding as shown."
-  [sys id]
-  (let [state (inbound/current-state sys)
-        zone (config/zone (:config sys))
-        r (core/report state id)
-        pending (when r (core/pending-findings r))]
-    (when-not (seq pending)
-      (fail! (str "Report " id " has nothing waiting for you. relay review lists those that do.")))
-    (let [{:keys [say ask] :as tty} (tty! "review")
-          show (fn [lines] (say (str (str/join "\n" (map text/visible-line lines)) "\n")))
-          _ (show (concat (render/report-header zone r) [""]))
-          decisions (vec (for [i pending
-                               :let [_ (show (concat (render/finding r i) [""]))
-                                     answer (loop []
-                                              (say "[a]ccept / [r]eject as fake / [n]ot relevant / [s]kip: ")
-                                              (let [a (some-> (ask) str/trim str/lower-case)]
-                                                (cond (nil? a) (fail! "The terminal closed. Nothing was decided.")
-                                                      (contains? review-answers a) (review-answers a)
-                                                      :else (recur))))]
-                               :when answer]
-                           {:finding i :decision answer :sha256 (core/finding-digest r i)}))
-          by (group-by :decision decisions)
-          listed (fn [d] (if-let [ds (seq (get by d))] (str/join ", " (map #(inc (:finding %)) ds)) "none"))]
-      (if (empty? decisions)
-        (result 0 "Nothing was decided.")
-        (do (confirm! "record these decisions"
-                      [(str "Report " id ":")
-                       (str "  accept: " (listed "accept"))
-                       (str "  reject as fake: " (listed "fake"))
-                       (str "  not relevant: " (listed "not-relevant"))
-                       (str "  skipped: " (let [s (remove (set (map :finding decisions)) pending)]
-                                            (if (seq s) (str/join ", " (map inc s)) "none")))
-                       ""
-                       "Accepting puts a finding in the ledger as yours: its text no longer counts as an outsider's."]
-                      tty)
-            (let [before (core/waiting-findings (inbound/current-state sys))
-                  _ (submit! sys :report/review {:report id :decisions decisions})
-                  again (core/shown-again before (inbound/current-state sys))]
-              (apply result 0 (str "Recorded " (count decisions) " decision(s) on report " id ".")
-                     (when (seq again)
-                       [(str "Shown again, as they match what you rejected as fake: "
-                             (str/join ", " (for [[r i] again] (str "finding " (inc i) " of report " r)))
-                             ". relay review lists them.")]))))))))
-
 (defn- date-option [opts k]
   (when-let [v (get opts k)]
     (try (java.time.LocalDate/parse v)
@@ -580,12 +520,6 @@ and --instructions marks the id public too.")
                                          :run-dir (:run-dir opts)})))
       "serve" (result (serve/serve! sys {:socket (:socket opts) :run-dir (:run-dir opts)}))
       "tick" (do (dispatch/tick! sys) (result 0))
-      "verify" (let [id (some-> (first more) parse-long)]
-                 (when-not id (fail! "usage: relay verify <report>"))
-                 (let [{r :result :keys [message]} (dispatch/verify! sys id {:by-hand (not (:dispatched opts))})]
-                   (if (= :verified r)
-                     (result 0 (str "Checked report " id "."))
-                     (result 1 (str "Report " id " was not checked: " message)))))
       "facts" (knowledge sys :facts {:topic (first more) :search (:search opts)
                                      :as-of (:as-of opts) :known-at (:known-at opts) :all (:all opts)})
       "fact" (let [[sub a b] more]
@@ -717,43 +651,6 @@ and --instructions marks the id public too.")
                 (submit! sys :label/trust {:kind kind :ref ref :version (:version v)
                                            :sha256 (review/digest t)})
                 (result 0 (str "Trusted " kind " " ref ".")))
-      "trust-level" (let [[role level] more
-                          level (some-> level parse-long)
-                          st (state)]
-                      (when-not (and role (#{0 1} level))
-                        (fail! "usage: relay trust-level <role> <0|1>"))
-                      ;; Refused before the code is asked for: asking for a
-                      ;; code to do nothing would only teach typing codes.
-                      (when-not (core/active-role? st role) (fail! (str "There is no role called " role ".")))
-                      (when-not (config/report-kinds (:config sys) role)
-                        (fail! (str role " writes no reports, so it has no trust level.")))
-                      (when (= level (core/trust-level st role))
-                        (fail! (str role " is at trust level " level " already.")))
-                      (let [{:keys [reports findings accepted fake latest-report]} (core/research-record st role)
-                            digest (core/record-digest st role)]
-                        (confirm! "set the trust level"
-                                  [(str "Set " role "'s trust level to " level ", from " (core/trust-level st role) ".")
-                                   (str "So far: " reports " reports (the latest " latest-report "), " findings
-                                        " findings, " accepted " accepted, " fake " rejected as fake.")
-                                   ""
-                                   (if (= 1 level)
-                                     (str "At 1, a finding nothing flags, and not drawn for the one-in-"
-                                          reports/sample-one-in " sample, goes into the ledger without you reading it."
-                                          " Its kind, deadline and amount show as clean; its text stays contaminated."
-                                          " relay puts it back to 0 by itself if a quote is not on its page, the"
-                                          " verifier refuses a page, or you reject a finding as fake.")
-                                     "At 0, you review every finding not seen before.")])
-                        (submit! sys :role/trust-level {:role role :level level :sha256 digest}))
-                      (result 0 (str role " is at trust level " level ".")))
-      "ledger" (let [[sub entry status] more]
-                 (case sub
-                   nil (lines (render/ledger zone (core/ledger-entries (state))))
-                   "set" (do (submit! sys :ledger/set-status {:entry (some-> entry parse-long) :status status})
-                             (result 0 (str "Entry " entry " is " status ".")))
-                   (fail! "usage: relay ledger [set <entry> <new|seen|applied|passed>]")))
-      "review" (if-let [id (some-> (first more) parse-long)]
-                 (review! sys id)
-                 (lines (render/reports-waiting zone (core/reports-waiting (state)))))
       "week" (let [r (week-report sys opts)]
                (if (:json opts)
                  (result 0 (-> (json/generate-string (week/json-ready r) {:escape-non-ascii true})
@@ -791,10 +688,8 @@ and --instructions marks the id public too.")
                             {:name n :url url :data-dir (str (fs/absolutize dir)) :relay-bin (dispatch/relay-bin)
                              :agentloop (or (:agentloop opts)
                                             (agentloop/agentloop-bin (get-in config [:harnesses (:default-harness config)])))
-                             :classes config/tool-classes :client-id (:client-id opts)
+                             :client-id (:client-id opts)
                              :taken (set (keep (fn [[t spec]] (when-not (= n (:connection spec)) t)) (:tools config)))
-                             :others (into (set (keys tools/builtin))
-                                           (keep (fn [[t spec]] (when-not (= n (:connection spec)) t)) (:tools config)))
                              :say say :ask ask
                              :confirm! (fn [lines] (confirm! "connect" lines tty))
                              :pin! (fn [pins] (submit! sys :tools/pin {:pins pins}))}))))

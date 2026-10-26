@@ -178,27 +178,7 @@
 (def grant-keys
   "What a role can be granted. Anything else is refused, so a typo such as
   :pubic cannot leave a role able to hold private data."
-  #{:tools :may-add :public :reports :quarantine :workbench})
-
-(def kind-pattern
-  "A report kind's name: lower case letters, digits and hyphens."
-  #"[a-z][a-z0-9-]{0,39}")
-
-(defn- check-reports-grant
-  "A :reports grant lets a role write research reports with report_submit.
-  Only a public role may have one: a report is checked and shown to the
-  operator as an outsider's text, which a public role's always is."
-  [role {:keys [reports public]}]
-  (when-not (true? public)
-    (problem! (str "Role " role " has :reports, which only a :public role may have.")))
-  (when-not (and (map? reports) (= #{:kinds} (set (keys reports))))
-    (problem! (str "The :reports grant for " role " in relay.edn is {:kinds [\"job\" \"grant\"]}, naming"
-                   " the kinds of finding it may report, and nothing else.")))
-  (let [kinds (:kinds reports)]
-    (when-not (and (vector? kinds) (seq kinds) (apply distinct? kinds)
-                   (every? #(and (string? %) (re-matches kind-pattern %)) kinds))
-      (problem! (str "The :reports :kinds for " role " in relay.edn must be a vector of distinct names of lower"
-                     " case letters, digits and hyphens, such as [\"job\" \"grant\"].")))))
+  #{:tools :may-add :public :quarantine :workbench})
 
 (defn- check-quarantine-grant
   "A :quarantine grant names tools the role may read through agentloop's
@@ -252,22 +232,6 @@
     (problem! (str "Role " role " has :workbench, and the default harness is a :script harness,"
                    " which has no workbench. A role with the workbench needs agentloop."))))
 
-(defn- check-verifier
-  "The :verifier relay checks reports with: webtool's check, on the
-  envelope protocol. Needed once any role may write reports."
-  [{:keys [verifier grants]}]
-  (when (some? verifier)
-    (when-not (and (map? verifier) (every? #{:command :timeout-seconds} (keys verifier)))
-      (problem! "relay.edn's :verifier is {:command [...] :timeout-seconds n}, and nothing else."))
-    (let [{:keys [command timeout-seconds]} verifier]
-      (when-not (and (vector? command) (seq command) (every? #(and (string? %) (not (str/blank? %))) command))
-        (problem! (str "relay.edn's :verifier needs a :command, such as [\"/path/to/webtool\" \"--config\""
-                       " \"/path/to/webtool.json\" \"check\"].")))
-      (when-not (or (nil? timeout-seconds) (pos-int? timeout-seconds))
-        (problem! "relay.edn's :verifier :timeout-seconds must be a positive whole number."))))
-  (when (and (nil? verifier) (some #(contains? (val %) :reports) (when (map? grants) grants)))
-    (problem! "A role in relay.edn is granted :reports, so relay.edn needs a :verifier to check its reports.")))
-
 (defn- check-grants
   "Checks each role's grants, and what a public role may not have. A public
   role's session never holds private, so it is granted nothing whose
@@ -305,8 +269,6 @@
       (when (= :script (get-in harnesses [default-harness :kind]))
         (problem! (str "Role " role " is :public, and the default harness is a :script harness,"
                        " whose program can claim any labels. A public role needs agentloop."))))
-    (when (contains? g :reports)
-      (check-reports-grant role g))
     (when (contains? g :quarantine)
       (check-quarantine-grant role g tools))
     (when (contains? g :workbench)
@@ -629,7 +591,6 @@
                    " so no role may be granted :tools or :may-add.")))
   (check-mcp config)
   (check-grants config)
-  (check-verifier config)
   (check-budget config)
   (check-brief config)
   (doseq [[role {granted :tools}] grants
@@ -672,12 +633,6 @@
   [config role]
   (true? (:public (grants config role))))
 
-(defn report-kinds
-  "The kinds of finding a role may report (its :reports grant), or nil
-  when it writes no reports."
-  [config role]
-  (get-in (grants config role) [:reports :kinds]))
-
 (defn quarantine-tools
   "The tools a role may read through the quarantined reader (its
   :quarantine grant), or nil."
@@ -709,22 +664,12 @@
       (map? g) {:deny-read (vec (:deny-read g))}
       :else nil)))
 
-(defn research-roles
-  "The roles granted :reports, sorted."
-  [config]
-  (sort (keep (fn [[role g]] (when (contains? g :reports) role)) (:grants config))))
-
 (defn mcp-servers-for
   "The :mcp-servers that the named tools come from, by name: those a
   request for a role granted them must start, and no others."
   [config tool-names]
   (select-keys (:mcp-servers config)
                (keep #(let [t (get-in config [:tools %])] (when (mcp-tool? t) (:server t))) tool-names)))
-
-(def verifier-timeout-seconds
-  "How long one verifier call may run when :verifier does not say. Each
-  call fetches up to twenty pages."
-  600)
 
 (defn retry-delay-seconds
   "The wait after the nth failure: the base, doubled for each failure after

@@ -13,9 +13,7 @@
   campaign service for the fictional Harbour Sound Society, whose drafts
   are an :edit and whose sends are an :act, held for the operator with a
   preview of the stored draft. The service's groups are in
-  campaign-groups.edn. There is also a stand-in
-  :verifier for research reports, which no role writes until a scenario
-  grants it :reports.
+  campaign-groups.edn.
 
   Some places are refused whatever the flags say: in or around ~/Sync,
   ~/.config/relay, ~/Library/Application Support/relay, the live checkouts under ~/code/projects, and the data
@@ -101,14 +99,6 @@
 (defn- staging-tools-command [data-dir repo-root bb-bin tool-name]
   [bb-bin "--classpath" (str (fs/path repo-root "src")) "-m" "relay.staging-tools" tool-name data-dir])
 
-(defn verifier
-  "The :verifier of a staging directory: relay.staging-tools' verify-demo,
-  which checks quotes against the pages in <data>/web and reaches nothing
-  else. No role writes reports until a scenario's :settings grants it
-  :reports."
-  [data-dir repo-root bb-bin]
-  {:command (staging-tools-command data-dir repo-root bb-bin "verify-demo") :timeout-seconds 60})
-
 (defn- stand-in [data-dir repo-root bb-bin [tool-name tool]]
   [tool-name (cond-> (assoc tool :protocol :envelope :command (staging-tools-command data-dir repo-root bb-bin tool-name))
                (:preview tool) (assoc :preview (staging-tools-command data-dir repo-root bb-bin (:preview tool))))])
@@ -120,7 +110,7 @@
 
 (defn settings
   "The relay.edn settings of a staging directory. Pure. The stand-in tools
-  and the verifier run relay.staging-tools from `repo-root` with `bb-bin`."
+  run relay.staging-tools from `repo-root` with `bb-bin`."
   [{:keys [data-dir agentloop-bin repo-root bb-bin]}]
   {:timezone timezone
    :default-harness :agentloop
@@ -139,7 +129,6 @@
                                 :command ["echo" "reminder noted:"]}}
                 (map #(stand-in (str data-dir) (str repo-root) (or bb-bin "bb") %))
                 (sort-by key stand-in-tools))
-   :verifier (verifier (str data-dir) (str repo-root) (or bb-bin "bb"))
    :grants {"hub" {:may-add true}
             "clerk" {:tools ["remind-demo"]}
             ;; A public role: shown only public text, never the operator's

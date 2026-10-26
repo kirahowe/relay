@@ -27,8 +27,6 @@
             [relay.dispatch :as dispatch]
             [relay.inbound :as inbound]
             [relay.log :as log]
-            [relay.report-support :as report-support]
-            [relay.reports :as reports]
             [relay.tools :as tools]
             [relay.workspace :as workspace])
   (:import (java.time Instant)))
@@ -44,10 +42,8 @@
                                                   :description "Fetch a page." :command ["true"]}
                                          "search" {:class :egress :labels ["contaminated"]
                                                    :description "Search the web." :command ["true"]}}
-                                 :verifier {:command ["true"]}
                                  :grants {"hub" {:may-add true :tools ["fetch"]}
-                                          "scout" {:public true :tools ["search"]
-                                                   :reports {:kinds ["job" "grant"]}}}}))
+                                          "scout" {:public true :tools ["search"]}}}))
 
 (def public-role "scout")
 
@@ -148,17 +144,7 @@
     [3 (gen/tuple (gen/return :declassify) gen/nat)]
     ;; Opens a wake of the public role and leaves it running, so its calls
     ;; until a :wake step ends it are a public session's.
-    [3 (gen/tuple (gen/return :start-public) gen/boolean)]
-    ;; Research reports: scout submits one in its public session, relay
-    ;; checks it, the operator reviews it, and at trust level 1 relay
-    ;; accepts the clean findings unread.
-    [5 (gen/tuple (gen/return :report) gen-labels gen/boolean)]
-    [6 (gen/tuple (gen/return :verify) gen/nat (gen/frequency [[4 (gen/return true)] [1 (gen/return false)]])
-                  (gen/vector (gen/frequency [[4 (gen/return false)] [1 (gen/return true)]]) 2))]
-    [8 (gen/tuple (gen/return :review) (gen/elements ["operator" "operator" "hub" "scout"]) gen/nat
-                  (gen/elements ["accept" "fake" "not-relevant"]))]
-    [2 (gen/tuple (gen/return :trust-level) (gen/elements ["operator" "operator" "hub" "scout" "dispatcher"]))]
-    [1 (gen/tuple (gen/return :ledger-status) gen/nat gen-labels (gen/elements reports/statuses))]]))
+    [3 (gen/tuple (gen/return :start-public) gen/boolean)]]))
 
 (defn- step [w [kind & args]]
   (let [s (:state w)]
@@ -361,59 +347,6 @@
         (run w (if (first args) "dispatcher" "operator") [] :wake/start (cond-> {:role public-role}
                                                                           (first args) (assoc :dispatched true))))
 
-      :report
-      (let [[labels two?] args
-            wake (support/calling-wake s public-role)
-            finding (fn [w]
-                      (let [[w title] (mark w labels (content? w public-role))
-                            [w org] (mark w labels (content? w public-role))
-                            [w summary] (mark w labels (content? w public-role))
-                            [w path] (mark w labels (content? w public-role))
-                            [w quote] (mark w labels (content? w public-role))]
-                        [w {:title (str "Job " title) :url (str "https://jobs.example.org/" path)
-                            :organization (str "Example " org) :kind "job" :summary (str "About " summary)
-                            :deadline "2031-01-01"
-                            :evidence [{:url (str "https://jobs.example.org/" path) :quote (str "We need " quote)}]}]))
-            [w f1] (finding w)
-            [w f2] (finding w)
-            [w summary] (mark w labels (content? w public-role))]
-        (if (and wake (:public-session wake))
-          (run w public-role labels :report/submit {:summary (str "Found " summary) :findings (if two? [f1 f2] [f1])})
-          w))
-
-      :verify
-      (let [[n found? sampled] args
-            r (nth-or (sort-by :id (filter #(= :submitted (:status %)) (vals (:reports s)))) n)]
-        (if-not r
-          w
-          (-> w
-              (run "dispatcher" [] :report/verify-start {:report (:id r)})
-              (run "dispatcher" [] :report/verify {:report (:id r) :results (report-support/results r (constantly found?))
-                                                   :sampled (vec (take (count (:findings r)) (concat sampled (repeat false))))}))))
-
-      :review
-      (let [[actor n decision] args
-            r (nth-or (core/reports-waiting s) n)
-            i (first (when r (core/pending-findings r)))
-            w' (if r
-                 (run w actor [] :report/review {:report (:id r) :decisions [{:finding i :decision decision
-                                                                              :sha256 (core/finding-digest r i)}]})
-                 w)]
-        ;; The operator read the finding and vouched for it: wherever its
-        ;; markers turn up from here on, they need not carry contaminated.
-        (if (and r (= "accept" decision) (not= (:state w) (:state w')))
-          (reduce (fn [w m] (update-in w [:markers m :labels] #(vec (remove #{"contaminated"} %))))
-                  w' (markers-in (get-in r [:findings i])))
-          w'))
-
-      :trust-level
-      (run w (first args) [] :role/trust-level {:role public-role :level 1 :sha256 (core/record-digest s public-role)})
-
-      :ledger-status
-      (let [[n labels status] args
-            e (nth-or (core/ledger-entries s) n)]
-        (if e (run w "hub" labels :ledger/set-status {:entry (:id e) :status status}) w))
-
       ;; The operator vouches that a memo to the public role holds nothing
       ;; private, its sender's id as shown included.
       :declassify
@@ -487,8 +420,7 @@
   (let [paths (sort (keys (:docs state)))]
     (for [accept [false true]
           [tool args] (concat [["inbox" {}] ["roles" {}] ["routines" {}] ["facts" {}] ["clock" {:op "now"}]
-                               ["facts" {:all true}] ["journal" {:limit 50}] ["notes" {}] ["docs" {}]
-                               ["ledger" {}] ["reports" {}]]
+                               ["facts" {:all true}] ["journal" {:limit 50}] ["notes" {}] ["docs" {}]]
                               (for [id (sort (keys (:facts state)))] ["fact_history" {:fact id}])
                               (for [p paths] ["doc_get" {:path p}])
                               (for [p paths
@@ -627,42 +559,10 @@
            :when (or (not= (:role wake) (:role h)) (= :open (:status h)))]
        [:decision-to-the-wrong-wake (:id wake) id]))))
 
-(def typed-line-re (reports/typed-line-pattern ["job" "grant"]))
-
-(defn- report-problems
-  "The spec's invariants on reports, the ledger and the trust ladder."
-  [w]
-  (let [s (:state w)]
-    (concat
-     ;; AReviewedEntryIsTheOperators: an entry the operator accepted
-     ;; carries no contaminated.
-     (for [e (core/ledger-entries s) :when (and (:trusted e) (core/contaminated? (:labels e)))]
-       [:reviewed-entry-contaminated (:id e)])
-     ;; AnUnreadEntryStaysContaminated: an entry relay accepted unread
-     ;; keeps its text contaminated.
-     (for [e (core/ledger-entries s) :when (and (not (:trusted e)) (not (core/contaminated? (:labels e))))]
-       [:unread-entry-clean (:id e)])
-     ;; TheTypedLineHoldsNoOutsidersText: only the kind enum, ISO dates,
-     ;; numbers, currency codes and statuses, and no marker.
-     (for [e (core/ledger-entries s)
-           :let [line (reports/typed-line e)]
-           :when (or (not (re-matches typed-line-re line)) (seq (markers-in line)))]
-       [:typed-line line])
-     ;; OnlyTheOperatorReviews, and only the operator raises a level.
-     (for [e (:events w)
-           :when (or (and (= "finding/reviewed" (:type e)) (not= "operator" (:actor e)))
-                     (and (= "role/trust-level" (:type e)) (= 1 (get-in e [:data :level])) (not= "operator" (:actor e)))
-                     (and (= "role/trust-level" (:type e)) (not (#{"operator" "dispatcher"} (:actor e)))))]
-       [:decided-by (:type e) (:actor e)])
-     ;; A report is public, and never private.
-     (for [r (vals (:reports s)) :when (core/private? (:labels r))]
-       [:private-report (:id r)]))))
-
 (defspec every-marker-carries-its-writers-labels-wherever-it-turns-up 150
   (prop/for-all [steps (gen/vector gen-step 1 60)]
     (let [w (reduce step (seed) steps)
-          problems (concat (event-problems w) (read-problems w) (prompt-problems w) (hold-problems w)
-                           (report-problems w))]
+          problems (concat (event-problems w) (read-problems w) (prompt-problems w) (hold-problems w))]
       (or (empty? problems)
           (do (prn (take 3 problems)) false)))))
 

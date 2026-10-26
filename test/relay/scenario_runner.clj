@@ -22,12 +22,10 @@
 
   The operator's terminal confirmations (release, approve, trust) are
   answered by the runner, since a scenario is the operator. Anything else
-  the terminal asks, such as review's choice for each finding, is answered
-  from the step's :tty.
+  the terminal asks is answered from the step's :tty.
 
-  A tick checks each new research report with the staging :verifier, in
-  this process, or as a `relay verify` subprocess it waits for when the
-  step says :spawn :process."
+  A tick runs in this process, or as `relay wake` subprocesses it waits for
+  when the step says :spawn :process."
   (:require [babashka.cli :as cli]
             [babashka.fs :as fs]
             [cheshire.core :as json]
@@ -166,10 +164,7 @@
   [{:keys [dir clock]}]
   (let [woke (atom [])
         sys (inbound/system dir {:clock clock})]
-    (dispatch/tick! sys {:spawn-verify! (fn [sys report]
-                                          (let [r (dispatch/verify! sys report {})]
-                                            (swap! woke conj (str "verify report " report ": " (name (:result r))))))
-                         :spawn! (fn [sys role]
+    (dispatch/tick! sys {:spawn! (fn [sys role]
                                    (let [r (dispatch/wake! sys role {:dispatched true})]
                                      (swap! woke conj (str role ": " (or (:outcome r) (name (:result r)))
                                                            (when (:left-open r) (str ", " (:left-open r) " memo(s) left open"))))))})
@@ -179,8 +174,7 @@
 
 (defn- tick-with-processes!
   "One dispatcher pass exactly as relay tick does it: each wake is a `relay
-  wake` subprocess, and each report check a `relay verify` one, started
-  with the real spawn and the real bin/relay. Waits for them. A process
+  wake` subprocess, started with the real spawn and the real bin/relay. Waits for them. A process
   that cannot start, or exits badly, is a failure."
   [{:keys [dir clock]}]
   (let [sys (inbound/system dir {:clock clock})
@@ -189,9 +183,7 @@
                 (let [process (dispatch/spawn-wake! sys role)]
                   (swap! started conj [(str "relay wake " role) process])
                   process))
-        spawn-verify (fn [sys report]
-                       (swap! started conj [(str "relay verify " report) (dispatch/spawn-verify! sys report)]))
-        roles (dispatch/tick! sys {:spawn! spawn :spawn-verify! spawn-verify})
+        roles (dispatch/tick! sys {:spawn! spawn})
         results (doall (for [[what process] @started]
                          [what (deref process process-wait-ms ::timeout)]))]
     {:lines (vec (for [[what r] results]

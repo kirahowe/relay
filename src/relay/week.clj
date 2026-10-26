@@ -100,11 +100,8 @@
    ["quarantine" "quarantined memos" "relay release"]
    ["declassify" "memos for a public role" "relay declassify"]
    ["fresh" "changed MCP tools" "relay fresh"]
-   ["finding" "report findings to review" "relay review"]
    ["harness" "a harness that needs you" "fix it; it runs again by itself"]
    ["dead-letter" "work given up, sent to you" "relay retry"]])
-
-(def review-names {"accept" "accepted" "fake" "rejected as fake" "not-relevant" "not relevant"})
 
 (defn- arise [acc kind ref role at]
   (if (get-in acc [:open [kind ref]])
@@ -122,26 +119,6 @@
 
 (defn- open-refs [acc kind] (keep (fn [[[k r] _]] (when (= k kind) r)) (:open acc)))
 
-(def ^:private report-events
-  #{"report/verified" "finding/reviewed" "ledger/entry-withdrawn" "ledger/entry-added"})
-
-(defn- findings [acc after {:keys [type data]} at]
-  (if-not (report-events type)
-    acc
-    (let [acc (if (= "finding/reviewed" type)
-                (settle acc "finding" [(:report data) (:finding data)]
-                        (review-names (:decision data) (:decision data)) at)
-                acc)
-          now (core/waiting-findings after)
-          acc (reduce (fn [acc [r _ :as k]]
-                        (arise acc "finding" k (get-in after [:reports r :role]) at))
-                      acc (sort (remove (:waiting acc #{}) now)))
-          ;; One that stopped waiting with no review: nothing does this
-          ;; now, but a count must not leave it pending for ever.
-          acc (reduce #(settle %1 "finding" %2 "no longer waiting" at)
-                      acc (filter #(not (now %)) (open-refs acc "finding")))]
-      (assoc acc :waiting now))))
-
 (defn- wake-of
   "The wake a role's own event is taken to come from, by its id, from the
   walk's own record: the wake it is working in, else its open
@@ -158,73 +135,71 @@
   [acc [before after {:keys [seq type actor data] :as event}]]
   (let [at (core/inst (:at event))
         memo-to #(get-in after [:memos % :to])]
-    (-> (case type
-          "wake/started" (-> acc (assoc-in [:running (:role data) (if (:chat data) :chat :wake)] seq)
-                             (assoc-in [:wakes seq :start] seq))
-          "wake/ended" (let [{:keys [role chat]} (get-in after [:wakes (:wake data)])]
-                         (-> acc (update-in [:running role] dissoc (if chat :chat :wake))
-                             (assoc-in [:wakes (:wake data) :tools-unavailable] (some? (:tools-error data)))))
-          "hold/opened" (arise acc "hold" seq (:role data) at)
-          "hold/resolved" (settle acc "hold" (:hold data)
-                                  (cond (= "allow" (:verdict data)) "approved"
-                                        (= core/operator actor) "denied"
-                                        :else "dropped by relay")
-                                  at)
-          "permission/asked" (arise acc "permission" seq (:role data) at)
-          "permission/answered"
-          (let [asked (->> (vals (:permissions before))
-                           (filter #(and (= (:wake data) (:wake %)) (= (:call data) (:call %)) (nil? (:outcome %))))
-                           (sort-by :id) last)]
-            (cond-> acc
-              asked (settle "permission" (:id asked)
-                            (if (= "relay" (:by data)) "refused by relay" (str (:outcome data))) at)))
-          "notification/created"
-          (let [acc (update acc :notifications conj
-                            {:kind (:kind data) :at at
-                             :from (when (= "memo-for-operator" (:kind data))
-                                     (get-in after [:memos (:memo data) :from]))})]
-            (case (:kind data)
-              "memo-quarantined" (arise acc "quarantine" (:memo data) (:role data) at)
-              "memo-awaiting-declassification" (arise acc "declassify" (:memo data) (:role data) at)
-              "harness-needs-attention" (arise acc "harness" (:harness data) nil at)
-              "work-abandoned" (arise acc "dead-letter" (:dead-letter data) (:role data) at)
-              acc))
-          "memo/released" (settle acc "quarantine" (:memo data) "released" at)
-          "memo/declassified" (settle acc "declassify" (:memo data) "declassified" at)
-          "memo/closed" (let [m (:memo data)
-                              w (wake-of acc (memo-to m))]
-                          (cond-> (-> acc (settle "quarantine" m "closed unreleased" at)
-                                      (settle "declassify" m "closed undeclassified" at))
-                            (some #{m} (get-in after [:wakes w :memos])) (bump w :closed)))
-          "memo/dead-lettered" (let [m (:memo data)
-                                     w (wake-of acc (memo-to m))]
-                                 (cond-> (-> acc (settle "quarantine" m "dead-lettered" at)
-                                             (settle "declassify" m "dead-lettered" at))
-                                   (and (= "blocked" (:reason data)) (some #{m} (get-in after [:wakes w :memos])))
-                                   (bump w :blocked)
-                                   (= "never-closed" (:reason data)) (bump (:wake data) :dead-lettered)))
-          "memo/attempt-failed" (bump acc (:wake data) :left-open)
-          ("memo/requeued" "memo/superseded")
-          (reduce (fn [acc letter]
-                    (if (= (:memo data) (get-in after [:dead-letters letter :memo]))
-                      (settle acc "dead-letter" letter (if (= "memo/requeued" type) "retried" "superseded") at)
-                      acc))
-                  acc (open-refs acc "dead-letter"))
-          "harness/recovered" (settle acc "harness" (:harness data) "recovered" at)
-          "role/tools-unavailable" (if (and (:fresh data) (not (get-in before [:roles (:role data) :tools-unavailable :fresh])))
-                                     (arise acc "fresh" (:role data) (:role data) at)
-                                     acc)
-          "hold/session-ended" (if (:fresh data) (settle acc "fresh" (:role data) "accepted" at) acc)
-          "journal/written" (let [w (wake-of acc (:owner data))]
-                              (cond-> acc
-                                (and w (= actor (:owner data))) (assoc-in [:wakes w :journal] true)))
-          "memo/sent" (let [w (wake-of acc actor)]
-                        (cond-> acc (and w (= core/operator (:to data))) (bump w :operator-memos)))
-          "label/trusted" (update acc :actions conj {:action "trust" :at at})
-          "role/trust-level" (cond-> acc (= core/operator actor) (update :actions conj {:action "trust-level" :at at}))
-          "wake/flagged" (update acc :actions conj {:action "flag" :at at})
-          acc)
-        (findings after event at))))
+    (case type
+      "wake/started" (-> acc (assoc-in [:running (:role data) (if (:chat data) :chat :wake)] seq)
+                         (assoc-in [:wakes seq :start] seq))
+      "wake/ended" (let [{:keys [role chat]} (get-in after [:wakes (:wake data)])]
+                     (-> acc (update-in [:running role] dissoc (if chat :chat :wake))
+                         (assoc-in [:wakes (:wake data) :tools-unavailable] (some? (:tools-error data)))))
+      "hold/opened" (arise acc "hold" seq (:role data) at)
+      "hold/resolved" (settle acc "hold" (:hold data)
+                              (cond (= "allow" (:verdict data)) "approved"
+                                    (= core/operator actor) "denied"
+                                    :else "dropped by relay")
+                              at)
+      "permission/asked" (arise acc "permission" seq (:role data) at)
+      "permission/answered"
+      (let [asked (->> (vals (:permissions before))
+                       (filter #(and (= (:wake data) (:wake %)) (= (:call data) (:call %)) (nil? (:outcome %))))
+                       (sort-by :id) last)]
+        (cond-> acc
+          asked (settle "permission" (:id asked)
+                        (if (= "relay" (:by data)) "refused by relay" (str (:outcome data))) at)))
+      "notification/created"
+      (let [acc (update acc :notifications conj
+                        {:kind (:kind data) :at at
+                         :from (when (= "memo-for-operator" (:kind data))
+                                 (get-in after [:memos (:memo data) :from]))})]
+        (case (:kind data)
+          "memo-quarantined" (arise acc "quarantine" (:memo data) (:role data) at)
+          "memo-awaiting-declassification" (arise acc "declassify" (:memo data) (:role data) at)
+          "harness-needs-attention" (arise acc "harness" (:harness data) nil at)
+          "work-abandoned" (arise acc "dead-letter" (:dead-letter data) (:role data) at)
+          acc))
+      "memo/released" (settle acc "quarantine" (:memo data) "released" at)
+      "memo/declassified" (settle acc "declassify" (:memo data) "declassified" at)
+      "memo/closed" (let [m (:memo data)
+                          w (wake-of acc (memo-to m))]
+                      (cond-> (-> acc (settle "quarantine" m "closed unreleased" at)
+                                  (settle "declassify" m "closed undeclassified" at))
+                        (some #{m} (get-in after [:wakes w :memos])) (bump w :closed)))
+      "memo/dead-lettered" (let [m (:memo data)
+                                 w (wake-of acc (memo-to m))]
+                             (cond-> (-> acc (settle "quarantine" m "dead-lettered" at)
+                                         (settle "declassify" m "dead-lettered" at))
+                               (and (= "blocked" (:reason data)) (some #{m} (get-in after [:wakes w :memos])))
+                               (bump w :blocked)
+                               (= "never-closed" (:reason data)) (bump (:wake data) :dead-lettered)))
+      "memo/attempt-failed" (bump acc (:wake data) :left-open)
+      ("memo/requeued" "memo/superseded")
+      (reduce (fn [acc letter]
+                (if (= (:memo data) (get-in after [:dead-letters letter :memo]))
+                  (settle acc "dead-letter" letter (if (= "memo/requeued" type) "retried" "superseded") at)
+                  acc))
+              acc (open-refs acc "dead-letter"))
+      "harness/recovered" (settle acc "harness" (:harness data) "recovered" at)
+      "role/tools-unavailable" (if (and (:fresh data) (not (get-in before [:roles (:role data) :tools-unavailable :fresh])))
+                                 (arise acc "fresh" (:role data) (:role data) at)
+                                 acc)
+      "hold/session-ended" (if (:fresh data) (settle acc "fresh" (:role data) "accepted" at) acc)
+      "journal/written" (let [w (wake-of acc (:owner data))]
+                          (cond-> acc
+                            (and w (= actor (:owner data))) (assoc-in [:wakes w :journal] true)))
+      "memo/sent" (let [w (wake-of acc actor)]
+                    (cond-> acc (and w (= core/operator (:to data))) (bump w :operator-memos)))
+      "label/trusted" (update acc :actions conj {:action "trust" :at at})
+      "wake/flagged" (update acc :actions conj {:action "flag" :at at})
+      acc)))
 
 (defn- replay-states
   "[before after event] for each event, folded as core/replay folds them."
@@ -240,8 +215,7 @@
   and the final state."
   [events]
   (let [triples (replay-states events)
-        acc (reduce step {:records [] :open {} :running {} :wakes {} :notifications [] :actions []
-                          :waiting #{}}
+        acc (reduce step {:records [] :open {} :running {} :wakes {} :notifications [] :actions []}
                     triples)]
     (assoc acc :state (if-let [t (last triples)] (second t) core/empty-state))))
 

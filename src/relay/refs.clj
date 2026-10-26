@@ -1,6 +1,6 @@
 (ns relay.refs
   "References to things relay knows: `[[kind:id]]`, where kind is one of
-  fact, doc, note, memo, journal, rem, file, web, shown, report and card. A role
+  fact, doc, note, memo, journal, rem, file, web, shown and card. A role
   puts a ref after every claim drawn from relay's knowledge or from a
   source, and relay's read tools print one beside each item they show.
   Pure.
@@ -13,7 +13,6 @@
     [[note:hub/venues]]          a note, as <role>/<name>
     [[memo:7]]                   a memo, by number
     [[journal:31]]               a journal entry, by number
-    [[report:5]]                 a research report, by number
     [[card:1840]]                a card on the operator's board, by number
     [[shown:2026-10-18/call-9]]  something the operator was shown
     [[rem:<id>]]                 a reminder in the operator's list
@@ -28,7 +27,7 @@
 
 (def kinds
   "Every kind a ref can have, in the order the design lists them."
-  [:fact :doc :note :memo :journal :rem :file :web :shown :report :card])
+  [:fact :doc :note :memo :journal :rem :file :web :shown :card])
 
 (def ^:private kind-names (set (map name kinds)))
 
@@ -124,9 +123,6 @@
                  {:status :ok :title (str "Journal entry " n " of " (:owner e)) :text (:text e)
                   :labels (core/item-labels e)}
                  {:status :missing})
-      :report (if-let [r (core/report state n)]
-                {:status :ok :title (str "Report " n " by " (:role r)) :text (:summary r) :labels (core/item-labels r)}
-                {:status :missing})
       :card (if-let [c (core/card state n)]
               {:status :ok :title (str "Card " n ": " (get-in c [:title :text])) :text (cards/text-form c)
                :labels (core/card-labels c)}

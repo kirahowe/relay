@@ -1,7 +1,7 @@
 (ns relay.brief
   "The morning brief: one notification a day, at the time `:brief {:at
   \"07:30\"}` in relay.edn names, with today's calendar, the reminders due
-  today, the reports waiting for review and the held calls. relay composes
+  today and the held calls. relay composes
   it itself; no role is woken. Pure: the config, the state, the time and
   what the cal and rem tools printed come in as arguments. relay.dispatch
   runs the tools and sends it, and relay.render/brief makes its text.
@@ -216,10 +216,6 @@
                :else (str ", due " due))
          ")")))
 
-(defn- report-line [{:keys [id role findings] :as r}]
-  (str "Report " id " from " role ": " (count (core/pending-findings r)) " of " (count findings)
-       " findings to review (relay review " id ")"))
-
 (defn- hold-line [{:keys [id role tool]}]
   (str "Hold " id ": " role " wants to use " tool))
 
@@ -235,7 +231,7 @@
      :labels (if (seq items) (core/union labels) [])}))
 
 (defn compose
-  "The brief for `date`: its four sections, in order, from the calendar
+  "The brief for `date`: its three sections, in order, from the calendar
   and reminders sections (tool-section) and the state. Each section is
   {:key :status ...}; one with items has :count, :lines and :labels, the
   labels of the text it shows."
@@ -245,12 +241,10 @@
                         (listed (:items sec) #(line-of date %) (:more sec) (:labels sec))
                         sec)
                       :key k))
-        reports (core/reports-waiting state)
         holds (core/open-holds state)]
     {:date date
      :sections [(tool :calendar calendar event-line)
                 (tool :reminders reminders reminder-line)
-                (assoc (listed reports report-line 0 (core/ids-labels state (map :role reports))) :key :reports)
                 (assoc (listed holds hold-line 0 (core/ids-labels state (map :role holds))) :key :holds)]}))
 
 (defn empty-brief?

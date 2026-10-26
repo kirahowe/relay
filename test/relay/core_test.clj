@@ -8,9 +8,7 @@
             [relay.config :as config]
             [relay.core :as core]
             [relay.test-support :as support]
-            [relay.dispatch :as dispatch]
-            [relay.report-support :as report-support]
-            [relay.reports :as reports])
+            [relay.dispatch :as dispatch])
   (:import (java.time Instant)))
 
 (def t0 (Instant/parse "2026-10-14T12:00:00Z"))
@@ -23,14 +21,13 @@
                                  :runaway-wakes 6
                                  ;; courier is public: memos to it from anyone
                                  ;; but itself wait for the operator.
-                                 :verifier {:command ["true"]}
                                  ;; Two MCP tools, granted to nobody: relay
                                  ;; keeps their accepted definitions all the same.
                                  :mcp-servers {"srv" {:command ["srv"]}}
                                  :tools {"t1" {:protocol :mcp-stdio :server "srv" :tool "one" :class :read :labels []}
                                          "t2" {:protocol :mcp-stdio :server "srv" :tool "two" :class :read :labels []}}
                                  :grants {"hub" {:may-add true}
-                                          "courier" {:public true :reports {:kinds ["job"]}}}}))
+                                          "courier" {:public true}}}))
 
 ;; --- a small driver: a world is a state, a clock and the events so far
 
@@ -684,18 +681,7 @@
     [3 (gen/tuple (gen/return :declassify) (gen/elements ["operator" "operator" "hub" "courier" "dispatcher"]) gen/nat)]
     [2 (gen/tuple (gen/return :send-public) (gen/elements (conj role-pool "operator")))]
     [2 (gen/tuple (gen/return :doc) (gen/elements actors) (gen/elements ["a.md" "dir/b.md"])
-                  (gen/elements ["one" "two" nil]))]
-    ;; Research reports, from courier, a public role granted :reports.
-    [3 (gen/tuple (gen/return :report) (gen/elements (into ["courier" "courier"] actors)) (gen/elements ["a" "b" "c"]) gen/boolean)]
-    [4 (gen/tuple (gen/return :verify) gen/nat (gen/elements [:found :found :found :missing :refused :fail :lost])
-                  (gen/frequency [[4 (gen/return false)] [1 (gen/return true)]]))]
-    [6 (gen/tuple (gen/return :review) (gen/elements (into ["operator" "operator" "operator"] actors)) gen/nat
-                  (gen/elements ["accept" "accept" "fake" "not-relevant" "maybe"])
-                  (gen/frequency [[5 (gen/return false)] [1 (gen/return true)]]))]
-    [4 (gen/tuple (gen/return :trust-level) (gen/elements (into ["operator" "operator" "operator"] actors)) (gen/elements [0 1 1 1 2])
-                  (gen/frequency [[6 (gen/return false)] [1 (gen/return true)]]))]
-    [1 (gen/tuple (gen/return :ledger-status) (gen/elements actors) gen/nat
-                  (gen/elements ["new" "seen" "applied" "passed" "won"]))]]))
+                  (gen/elements ["one" "two" nil]))]]))
 
 (defn- nth-or [coll n] (when (seq coll) (nth coll (mod n (count coll)))))
 
@@ -796,54 +782,6 @@
              (if content
                (run w actor :doc/put {:path path :content content})
                (run w actor :doc/remove {:path path})))
-      :report (let [[actor page two?] args
-                    ;; Mostly new pages, so not everything is seen before.
-                    page (if (= "a" page) page (str page (count (:events w))))
-                    f (fn [p] {:title (str "Job " p) :url (str "https://jobs.example.org/" p) :organization "Example"
-                               :kind "job" :summary "s" :deadline "2031-01-01"
-                               :evidence [{:url (str "https://jobs.example.org/" p) :quote "q"}]})]
-                (if (and (= "courier" actor) (not (core/working-wake (:state w) actor)))
-                  ;; In a wake of its own, as a role's calls are made.
-                  (let [w (-> w (run "operator" :memo/send {:to actor :subject "go" :body "b"} true)
-                              (run "dispatcher" :wake/start {:role actor}))
-                        wake (core/working-wake (:state w) actor)]
-                    ;; A role waiting on relay fresh is not woken, so it
-                    ;; submits nothing.
-                    (if-not wake
-                      (dissoc w :rejected)
-                      (-> (run w actor :report/submit {:summary "s" :findings (if two? [(f page) (f (str page "2"))] [(f page)])})
-                          (run "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :said "ok"}))))
-                  (run w actor :report/submit {:summary "s" :findings (if two? [(f page) (f (str page "2"))] [(f page)])})))
-      :verify (let [[n how sampled?] args
-                    r (nth-or (vec (sort-by :id (filter #(#{:submitted :failed} (:status %)) (vals (:reports (:state w))))))
-                              n)]
-                (if-not r
-                  w
-                  (let [w (run w "dispatcher" :report/verify-start {:report (:id r) :by-hand true})
-                        results (case how
-                                  :missing (report-support/results r (constantly false))
-                                  :refused (mapv #(assoc % :fetched false :error "refused: private address")
-                                                 (report-support/results r))
-                                  (report-support/results r))]
-                    (case how
-                      :fail (run w "dispatcher" :report/verify-fail {:report (:id r) :error "boom"})
-                      :lost (run w "dispatcher" :tick {:lost-wakes [] :lost-verifications [(:id r)]})
-                      (run w "dispatcher" :report/verify {:report (:id r) :results results
-                                                          :sampled (vec (repeat (count (:findings r)) sampled?))})))))
-      :review (let [[actor n decision stale?] args
-                    r (nth-or (core/reports-waiting (:state w)) n)
-                    i (first (when r (core/pending-findings r)))]
-                (if r
-                  (run w actor :report/review {:report (:id r)
-                                               :decisions [{:finding i :decision decision
-                                                            :sha256 (if stale? "stale" (core/finding-digest r i))}]})
-                  w))
-      :trust-level (let [[actor level stale?] args]
-                     (run w actor :role/trust-level {:role "courier" :level level
-                                                     :sha256 (if stale? "stale" (core/record-digest (:state w) "courier"))}))
-      :ledger-status (let [[actor n status] args
-                           e (nth-or (core/ledger-entries (:state w)) n)]
-                       (run w actor :ledger/set-status {:entry (:id e) :status status}))
       :burst (let [[r n] args]
                (reduce (fn [w _]
                          (let [w (-> (run w "operator" :memo/send {:to r :subject "burst" :body "b"})
@@ -1053,76 +991,6 @@
       (when (core/private? (:labels e)) (fail! [:public-event-private (:seq e)])))
     (doseq [e batch :when (= "memo/attempt-failed" (:type e))]
       (when (get-in s [:wakes (get-in e [:data :wake]) :chat]) (fail! [:chat-counted e])))
-    ;; OnlyTheOperatorReviews, and only from what they were shown.
-    (doseq [e batch :when (and (= "finding/reviewed" (:type e)) (not= (:state before) s))
-            :let [r (core/report (:state before) (get-in e [:data :report]))]]
-      (when-not (and (= "operator" (:actor e))
-                     (some #{(get-in e [:data :finding])} (core/pending-findings r))
-                     (= (get-in e [:data :sha256]) (core/finding-digest r (get-in e [:data :finding]))))
-        (fail! [:reviewed-wrongly e])))
-    ;; OnlyTheOperatorRaisesATrustLevel; relay only ever lowers one.
-    (doseq [e batch :when (= "role/trust-level" (:type e))]
-      (when-not (or (= "operator" (:actor e)) (and (= "dispatcher" (:actor e)) (zero? (get-in e [:data :level]))))
-        (fail! [:trust-level-by (:actor e) (:data e)])))
-    ;; A report that quotes what its page does not say, or cites a page the
-    ;; guard refused, leaves its role at level 0 with nothing accepted
-    ;; unread; and nothing is accepted unread at level 0, or flagged.
-    (doseq [e batch :when (= "report/verified" (:type e))
-            :let [id (get-in e [:data :report])
-                  role (:role (core/report s id))
-                  auto (filter #(and (= "ledger/entry-added" (:type %)) (= id (get-in % [:data :report]))) batch)]]
-      (when (reports/demotion-reason (:data e))
-        (when (or (not= 0 (core/trust-level s role)) (seq auto)) (fail! [:not-demoted id])))
-      (when (and (seq auto) (not= 1 (get-in e [:data :level]))) (fail! [:accepted-unread-at-level-0 id]))
-      (doseq [a auto
-              :let [i (get-in a [:data :finding])]]
-        (when (or (not (reports/unread-allowed? (:data e))) (seq (get-in e [:data :findings i :flags]))
-                  (get-in e [:data :findings i :seen-before]) (get-in e [:data :sampled i]))
-          (fail! [:accepted-unread-wrongly id i]))))
-    ;; Each finding is in the ledger at most once, only when accepted, and
-    ;; an entry the operator accepted is clean while one relay accepted
-    ;; unread is contaminated.
-    (doseq [[k es] (group-by (juxt :report :finding) (vals (:ledger s)))]
-      (when (> (count es) 1) (fail! [:entered-twice k])))
-    (doseq [{:keys [report finding trusted labels] :as entry} (vals (:ledger s))
-            :let [f (get-in s [:reports report :verification :findings finding])]]
-      (when-not (= "accept" (:decision f)) (fail! [:entry-not-accepted entry]))
-      (when-not (= (boolean trusted) (not (:auto f))) (fail! [:entry-trust entry]))
-      (when (= (boolean trusted) (core/contaminated? labels)) (fail! [:entry-labels entry]))
-      (when-not (re-matches (reports/typed-line-pattern ["job"]) (reports/typed-line entry))
-        (fail! [:typed-line entry])))
-    ;; A fake finding takes its report's unread entries back to review.
-    (doseq [e batch :when (and (= "finding/reviewed" (:type e)) (= "fake" (get-in e [:data :decision]))
-                               (not= (:state before) s))
-            :let [r (core/report s (get-in e [:data :report]))]]
-      (when (some :auto (get-in r [:verification :findings])) (fail! [:unread-kept-after-fake (:id r)])))
-    ;; A finding stays hidden as seen before only behind the finding its
-    ;; :seen-as names, which has its URL, is shown and is not rejected as
-    ;; fake: waiting, accepted or set aside (relay#27, relay#28). A ledger
-    ;; entry names the finding that made it, withdrawn or not.
-    (doseq [id (keys (:reports s))
-            :let [r (core/report s id)]
-            :when (= :verified (:status r))
-            [i f] (map-indexed vector (get-in r [:verification :findings]))
-            :when (:seen-before f)
-            :let [{:keys [kind entry report finding]} (:seen-as f)
-                  [tid ti] (case kind
-                             ("pending" "not-relevant") [report finding]
-                             "earlier" [id finding]
-                             "ledger" (some-> (or (get-in s [:ledger entry]) (get-in s [:withdrawn entry]))
-                                              ((juxt :report :finding)))
-                             nil)
-                  t (when tid (get-in (core/report s tid) [:verification :findings ti]))]]
-      (when-not (and t (not= [tid ti] [id i]) (not (:seen-before t)) (not= "fake" (:decision t))
-                     (= (:canonical-url t) (:canonical-url f)))
-        (fail! [:hidden-behind-the-wrong-finding [id i] (:seen-as f)])))
-    ;; OnlyTheOperatorRaisesATrustLevel, and only on the record they saw.
-    (doseq [e batch :when (and (= "role/trust-level" (:type e)) (= 1 (get-in e [:data :level])) (not= (:state before) s))]
-      (when-not (= (get-in e [:data :sha256]) (core/record-digest (:state before) (get-in e [:data :role])))
-        (fail! [:trust-level-unseen-record e])))
-    ;; NoSessionOfAPublicRoleHoldsPrivate, for what it reports.
-    (doseq [r (vals (:reports s))]
-      (when (or (core/private? (:labels r)) (not (:public r))) (fail! [:report-not-public (:id r)])))
     ;; Every memo to the operator notifies, once.
     (doseq [e batch :when (and (= "memo/sent" (:type e)) (= "operator" (get-in e [:data :to])))]
       (when-not (= 1 (count (filter #(and (= "notification/created" (:type %))
@@ -1167,46 +1035,14 @@
 (defn- json-round-trip [events]
   (mapv #(json/parse-string (json/generate-string %) true) events))
 
-(deftest the-hidden-finding-invariant-follows-seen-as
-  ;; relay#28: the invariant once checked by URL, so a finding hidden behind
-  ;; the wrong finding passed whenever another shown one had its URL.
-  (let [start (-> (world)
-                  (run "operator" :role/add {:id "courier" :instructions "c"} true)
-                  (step [:report "courier" "seed" false])
-                  (step [:verify 0 :found false])
-                  (step [:review "operator" 0 "accept" false]))
-        w (reduce #(step (dissoc %1 :problem) %2) start
-                  [[:report "courier" "a" false] [:verify 0 :found false]
-                   [:report "courier" "a" false] [:verify 0 :found false]])
-        [seed a b] (sort (keys (:reports (:state w))))
-        hidden? #(some (fn [p] (= :hidden-behind-the-wrong-finding (first p))) %)]
-    (is (= {:kind "pending" :report a :finding 0} (get-in (:state w) [:reports b :verification :findings 0 :seen-as])))
-    (testing "behind the finding it names, waiting or accepted, it holds"
-      (is (not (hidden? (check-step w w))))
-      (let [w' (step w [:review "operator" 0 "accept" false])]
-        (is (not (hidden? (check-step w w'))))
-        (testing "and pointed at another finding it fails, though one with its URL is shown"
-          (let [wrong (assoc-in w' [:state :reports b :verification :findings 0 :seen-as]
-                                {:kind "pending" :report seed :finding 0})]
-            (is (hidden? (check-step w' wrong)))))))
-    (testing "with the relay#27 view switched off, a match rejected as fake fails it"
-      (let [w' (step w [:review "operator" 0 "fake" false])]
-        (is (not (hidden? (check-step w w'))))
-        (with-redefs [core/report (fn [state id] (get-in state [:reports id]))]
-          (is (hidden? (check-step w w'))))))))
-
 (defspec the-rules-hold-under-any-sequence-of-commands 1000
   (prop/for-all [steps (gen/vector gen-step 1 80)]
     (let [start (-> (world)
                     (run "operator" :role/add {:id "hub" :instructions "c"})
                     (run "operator" :role/add {:id "clerk" :instructions "c"})
-                    ;; Most runs have the research role from the start.
-                    ;; with one finding already accepted, so its domain is known.
+                    ;; Most runs have the public role from the start.
                     (cond-> (not= :advance (ffirst steps))
-                      (-> (run "operator" :role/add {:id "courier" :instructions "c"} true)
-                          (step [:report "courier" "seed" false])
-                          (step [:verify 0 :found false])
-                          (step [:review "operator" 0 "accept" false]))))
+                      (run "operator" :role/add {:id "courier" :instructions "c"} true)))
           [final problems] (reduce (fn [[w problems] s]
                                      (let [w (dissoc w :problem)
                                            w' (step w s)]

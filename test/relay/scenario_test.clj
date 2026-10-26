@@ -120,10 +120,10 @@
     (is (seq (scenario/problems (assoc ok :reader {:text "x"}))))
     (is (empty? (scenario/problems (assoc ok :reader [{:text "x"}]))))
     (testing ":tty goes with :run, as strings"
-      (is (empty? (scenario/problems (assoc ok :steps [{:run ["review" "1"] :tty ["a" "n"]}]))))
+      (is (empty? (scenario/problems (assoc ok :steps [{:run ["release" "1"] :tty ["y" "n"]}]))))
       (is (seq (scenario/problems (assoc ok :steps [{:tick 1 :tty ["a"]}]))))
-      (is (seq (scenario/problems (assoc ok :steps [{:run ["review" "1"] :tty "a"}]))))
-      (is (seq (scenario/problems (assoc ok :steps [{:run ["review" "1"] :tty [:a]}])))))))
+      (is (seq (scenario/problems (assoc ok :steps [{:run ["release" "1"] :tty "y"}]))))
+      (is (seq (scenario/problems (assoc ok :steps [{:run ["release" "1"] :tty [:y]}])))))))
 
 ;; --- whole scenarios
 

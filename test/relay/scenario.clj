@@ -17,7 +17,7 @@
     {:run [\"memo\" \"hub\" \"-s\" \"Subject\" \"-m\" \"Body\"]  ; a relay command, as the operator
      :stdin \"text\"                                         ; optional
      :exit 0}                                               ; expected exit code, default 0
-    {:run [\"review\" \"1\"] :tty [\"a\" \"n\"]}  ; what the operator types at the terminal,
+    {:run [\"release\" \"1\"] :tty [\"y\"]}    ; what the operator types at the terminal,
                                          ; in order, beyond the codes the runner types
     {:tick 3}                  ; relay's dispatcher pass, three times; wakes run to the end
     {:tick 1 :spawn :process}  ; the same, but each wake is started the way relay tick
@@ -38,7 +38,7 @@
   among them.
 
   A run argument may be {:memo-id pattern}, replaced by the id of the first
-  memo that matches, or {:report-id pattern}, the same for reports.
+  memo that matches, or {:fact-id pattern}, the same for facts.
 
   Each reply in :model is the model's answer to one request from that role:
 
@@ -68,9 +68,6 @@
     :tool-call   one per call in any wake's transcript: :role :wake :n (its
                  place in the run) :name :input :verdict (agentloop's: allow,
                  deny or hold) :error :result. Held calls count.
-    :report      one per research report, as relay keeps it, with its
-                 :verification once checked
-    :ledger      one per ledger entry
     :citation    one per ref (relay.refs) in a memo to the operator, or in
                  the outcome the hub gave when closing a memo from the
                  operator, as
@@ -108,13 +105,10 @@
               staging relay.edn: only :grants, and in them only :tools,
               naming tools relay.staging defines, :quarantine, naming
               stand-in tools the role reads through read_quarantined
-              (relay checks they are :read and in its :tools), and
-              :reports {:kinds [...]}, which relay accepts only for a public role such as
-              the scout. A role's :tools, :quarantine and :reports replace its staging
-              ones."
+              (relay checks they are :read and in its :tools). A role's
+              :tools and :quarantine replace its staging ones."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
-            [relay.config :as config]
             [relay.mock-anthropic :as mock]
             [relay.core :as core]
             [relay.refs :as refs]
@@ -173,7 +167,7 @@
     :else (= pattern value)))
 
 (def kinds #{:memo :hold :wake :role :routine :dead-letter :notification :event :sent
-             :fact :journal :note :doc :tool-call :report :ledger :citation})
+             :fact :journal :note :doc :tool-call :citation})
 
 ;; --- the newer kinds, from the state and the wakes' transcripts
 
@@ -278,8 +272,6 @@
     :routine (sort-by (juxt :owner :name) (mapcat vals (vals (:routines state))))
     :dead-letter (sort-by :id (vals (:dead-letters state)))
     :notification (sort-by :id (vals (:notifications state)))
-    :report (sort-by :id (vals (:reports state)))
-    :ledger (sort-by :id (vals (:ledger state)))
     :citation (citation-items world)
     :event events
     :sent sent))
@@ -323,15 +315,9 @@
   [state pattern]
   (:id (first (filter #(match? pattern %) (fact-items {:state state})))))
 
-(defn report-id
-  "The id of the first report matching `pattern`, or nil."
-  [state pattern]
-  (:id (first (filter #(match? pattern %) (sort-by :id (vals (:reports state)))))))
-
 (defn resolve-refs
   "`x` with each {:memo-id pattern} replaced by that memo's id, each
-  {:fact-id pattern} by that fact's and each {:report-id pattern} by that
-  report's. Throws when nothing matches."
+  {:fact-id pattern} by that fact's. Throws when nothing matches."
   [state x]
   (walk/postwalk
    (fn [form]
@@ -342,9 +328,6 @@
        (and (map? form) (= [:fact-id] (keys form)))
        (or (fact-id state (:fact-id form))
            (throw (ex-info (str "No fact matches " (pr-str (:fact-id form)) ".") {:pattern (:fact-id form)})))
-       (and (map? form) (= [:report-id] (keys form)))
-       (or (report-id state (:report-id form))
-           (throw (ex-info (str "No report matches " (pr-str (:report-id form)) ".") {:pattern (:report-id form)})))
        :else form))
    x))
 
@@ -391,7 +374,7 @@
   only the data directory."
   #{"status" "inbox" "memo" "close" "roles" "add" "update" "remove" "routines" "routine" "unroutine"
     "retry" "wake" "facts" "fact" "notes" "journal" "docs" "doc" "put" "log" "holds"
-    "approve" "deny" "release" "trust" "declassify" "review"})
+    "approve" "deny" "release" "trust" "declassify"})
 
 (defn path-option?
   "Whether a command-line argument picks a path: the data directory, the
@@ -415,10 +398,6 @@
   (when clock
     (.toInstant (.atZone (LocalDateTime/parse clock) ^ZoneId zone))))
 
-(defn- kinds-ok? [kinds]
-  (and (vector? kinds) (seq kinds) (apply distinct? kinds)
-       (every? #(and (string? %) (re-matches config/kind-pattern %)) kinds)))
-
 (defn settings-problems
   "What is wrong with a scenario's :settings."
   [settings]
@@ -428,20 +407,15 @@
       (nil? settings) []
       (not (map? settings)) [":settings is a map."]
       (not= #{:grants} (set (keys settings))) [":settings may hold only :grants."]
-      (not (map? (:grants settings))) [":settings :grants maps a role id to {:tools [...] :quarantine [...] :reports {:kinds [...]}}."]
+      (not (map? (:grants settings))) [":settings :grants maps a role id to {:tools [...] :quarantine [...]}."]
       :else
       (vec (for [[role grant] (:grants settings)
                  problem [(when-not (string? role) (str "A role in :settings :grants is a string, not " (pr-str role) "."))
-                          (when-not (and (map? grant) (seq grant) (every? #{:tools :reports :quarantine} (keys grant))
+                          (when-not (and (map? grant) (seq grant) (every? #{:tools :quarantine} (keys grant))
                                          (or (not (contains? grant :tools)) (vector? (:tools grant)))
                                          (or (not (contains? grant :quarantine)) (vector? (:quarantine grant))))
-                            (str "The grant for " role " in :settings is {:tools [...] :quarantine [...]"
-                                 " :reports {:kinds [...]}}, any of them, nothing else."))
-                          (when (and (map? grant) (contains? grant :reports)
-                                     (not (and (map? (:reports grant)) (= #{:kinds} (set (keys (:reports grant))))
-                                               (kinds-ok? (:kinds (:reports grant))))))
-                            (str "The :reports grant for " role " in :settings is {:kinds [...]}, a vector of distinct"
-                                 " names of lower case letters, digits and hyphens, such as [\"grant\"]."))
+                            (str "The grant for " role " in :settings is {:tools [...] :quarantine [...]}"
+                                 ", any of them, nothing else."))
                           (when-let [bad (seq (remove allowed (when (map? grant) (:quarantine grant))))]
                             (str "The grant for " role " names " (str/join ", " bad) " in :quarantine; :settings may"
                                  " grant the reader only over " (str/join ", " (sort allowed)) "."))
@@ -457,7 +431,6 @@
   (reduce (fn [s [role grant]]
             (cond-> s
               (contains? grant :tools) (assoc-in [:grants role :tools] (:tools grant))
-              (contains? grant :reports) (assoc-in [:grants role :reports] (:reports grant))
               (contains? grant :quarantine) (assoc-in [:grants role :quarantine] (:quarantine grant))))
           settings grants))
 

@@ -21,7 +21,6 @@
             [relay.prompt :as prompt]
             [relay.refs :as refs]
             [relay.render :as render]
-            [relay.reports :as reports]
             [relay.review :as review]
             [relay.tools :as tools]
             [relay.workspace :as workspace])
@@ -53,64 +52,6 @@
   (vec (for [{:keys [id pid pid-start status]} (vals (:wakes state))
              :when (and (= :running status) (not (alive? pid pid-start)))]
          id)))
-
-(defn lost-verifications
-  "Reports being checked whose process has gone, each with that process,
-  so a check started since is not taken for it."
-  [state]
-  (vec (for [{:keys [id verifying]} (vals (:reports state))
-             :when (and verifying (not (alive? (:pid verifying) (:pid-start verifying))))]
-         {:report id :pid (:pid verifying) :pid-start (:pid-start verifying)})))
-
-;; --- checking a report
-
-(defn draw-sample
-  "For each of `n` findings, whether it is drawn for the operator to review
-  at trust level 1: one in reports/sample-one-in, from SecureRandom."
-  [n]
-  (let [rng (java.security.SecureRandom.)]
-    (vec (repeatedly n #(zero? (.nextInt rng (int reports/sample-one-in)))))))
-
-(defn verify!
-  "Checks a report in this process: records that it started, runs the
-  :verifier on every check the report needs, draws the sample, and
-  records what came back, or that it failed. Flags are worked out by
-  relay.core from what is recorded. `run-check` and `draw` stand in for
-  the verifier and the random draw in tests. Returns {:result ...}."
-  [{:keys [config] :as sys} report-id {:keys [by-hand run-check draw]
-                                       :or {draw draw-sample
-                                            run-check (fn [sys r request i]
-                                                        (tools/run-verifier (:verifier (:config sys)) (:labels r) request
-                                                                            (str "report-" (:id r) "-" i)))}}]
-  (let [me (current-process)
-        started (try (inbound/submit! sys {:type :report/verify-start :actor core/dispatcher
-                                           :args (merge {:report report-id :by-hand (boolean by-hand)} me)})
-                     (catch clojure.lang.ExceptionInfo e
-                       (if-let [reason (core/rejection e)]
-                         {:result reason :message (ex-message e)}
-                         (throw e))))]
-    (if (map? started)
-      started
-      (let [r (core/report (inbound/current-state sys) report-id)
-            fail! (fn [why]
-                    (inbound/submit! sys {:type :report/verify-fail :actor core/dispatcher
-                                          :args (merge {:report report-id :error why} me)})
-                    {:result :failed :message why})]
-        (try
-          (let [answers (mapv (fn [i request]
-                                (let [{:keys [content labels]} (run-check sys r request i)]
-                                  {:items (or (reports/parse-check-items request content)
-                                              (throw (ex-info "The verifier's answer does not match what was asked." {})))
-                                   :labels labels}))
-                              (range) (reports/check-requests r))]
-            (inbound/submit! sys {:type :report/verify :actor core/dispatcher
-                                  :args (merge {:report report-id :results (vec (mapcat :items answers))
-                                                :labels (vec (distinct (mapcat :labels answers)))
-                                                :sampled (draw (count (:findings r)))}
-                                               me)})
-            {:result :verified :report report-id})
-          (catch Exception e
-            (fail! (or (ex-message e) (str (class e))))))))))
 
 ;; --- one wake
 
@@ -1091,29 +1032,20 @@
   (p/process [(relay-bin) "wake" role-id "--dispatched" "--data" (str (fs/absolutize data-dir))]
              {:in "" :out :discard :err :discard}))
 
-(defn spawn-verify!
-  "Starts checking a report in its own process and does not wait for it."
-  [{:keys [data-dir]} report-id]
-  (p/process [(relay-bin) "verify" (str report-id) "--dispatched" "--data" (str (fs/absolutize data-dir))]
-             {:in "" :out :discard :err :discard}))
-
 (defn tick!
-  "One pass: end wakes and report checks whose process has gone, fire due
+  "One pass: end wakes whose process has gone, fire due
   routines, report what needs reporting, push notifications left
-  stranded, then start a wake for every role with work waiting and a
-  check of every report waiting for one, and send the morning brief when
+  stranded, then start a wake for every role with work waiting, and send the morning brief when
   it is due. Returns the roles woken."
   ([sys] (tick! sys {}))
-  ([{:keys [config] :as sys} {:keys [spawn! spawn-verify!] :or {spawn! spawn-wake! spawn-verify! spawn-verify!}}]
+  ([{:keys [config] :as sys} {:keys [spawn!] :or {spawn! spawn-wake!}}]
    (let [state (inbound/current-state sys)]
      (inbound/submit! sys {:type :tick :actor core/dispatcher
-                           :args {:lost-wakes (lost-wakes state)
-                                  :lost-verifications (lost-verifications state)}}))
+                           :args {:lost-wakes (lost-wakes state)}}))
    (let [state (inbound/current-state sys)
          t (now sys state)]
      (doseq [n (core/notifications-to-push state t (.minus ^Instant t stale-after))]
        (inbound/deliver! sys {:seq (:id n) :data n}))
-     (doseq [r (core/reports-to-verify state config t)] (spawn-verify! sys r))
      (let [roles (core/roles-to-wake state config t)]
        (doseq [r roles] (spawn! sys r))
        ;; Last, since it waits on cal and rem. A failure leaves the day's

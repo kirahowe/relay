@@ -17,7 +17,6 @@
             [relay.cards :as cards]
             [relay.config :as config]
             [relay.json :as strict]
-            [relay.reports :as reports]
             [relay.review :as review]
             [relay.schedule :as schedule]
             [relay.search :as search]
@@ -72,7 +71,7 @@
 (def empty-state
   {:roles {} :memos {} :routines {} :wakes {} :dead-letters {} :harnesses {}
    :notifications {} :guards {} :facts {} :notes {} :journals {} :docs {} :holds {}
-   :reports {} :ledger {} :trust-levels {} :cards {}
+   :cards {}
    ;; Every label any event has carried, which bounds what a session that
    ;; could read anything in relay may have seen.
    :seen-labels []
@@ -830,10 +829,21 @@
 
 (defmulti evolve* (fn [_state event] (:type event)))
 
-(defmethod evolve* :default [_ event]
-  (throw (ex-info (str "This version of relay does not know event type " (:type event)
+(def removed-event-kinds
+  "Events older versions of relay wrote for machinery that no longer
+  exists: research reports and their verification, the ledger, and trust
+  levels. The log is append-only, so they stay in old logs; they fold to
+  nothing. Their labels still count as seen."
+  #{"report/submitted" "report/verify-started" "report/verify-failed" "report/verified"
+    "finding/reviewed" "ledger/entry-added" "ledger/entry-withdrawn" "ledger/status-set"
+    "role/trust-level"})
+
+(defmethod evolve* :default [state event]
+  (when-not (removed-event-kinds (:type event))
+    (throw (ex-info (str "This version of relay does not know event type " (:type event)
                        " (event " (:seq event) "). Upgrade relay before reading this log.")
                   {:event event})))
+  state)
 
 (def legacy-labels
   "What anything a role or the dispatcher wrote before relay kept labels
@@ -854,8 +864,7 @@
   :public when their writer was public (decide sets it, never a role's
   input), and the item keeps it."
   #{"memo/sent" "routine/written" "fact/added" "fact/superseded" "fact/corrected"
-    "note/written" "journal/written" "doc/put" "doc/removed" "role/added" "role/updated"
-    "report/submitted"})
+    "note/written" "journal/written" "doc/put" "doc/removed" "role/added" "role/updated"})
 
 (defn evolve [state {:keys [seq at] :as event}]
   (when-not (= seq (:next-seq state))
@@ -864,7 +873,8 @@
   (let [{:keys [labels] :as event} (with-legacy-labels state event)]
   ;; A public item never carries private: decide refuses what would make
   ;; one, so this can only be a bug, and nothing is folded past it.
-  (when (and (:public event) (or (private? labels) (not (public-item-events (:type event)))))
+  (when (and (:public event) (not (removed-event-kinds (:type event)))
+             (or (private? labels) (not (public-item-events (:type event)))))
     (throw (ex-info (str "Event " seq " is public and carries private, or is not an item a public role"
                          " may read. relay refuses to read it.")
                     {:event event})))
@@ -2801,9 +2811,7 @@
   before relay could record the end."
   "The conversation's client went away without letting relay record the end.")
 
-(declare verify-failed)
-
-(defmethod decide* :tick [{:keys [state] :as tx} {{:keys [lost-wakes lost-verifications]} :args}]
+(defmethod decide* :tick [tx {{:keys [lost-wakes]} :args}]
   (dispatcher-only! tx)
   (as-> tx tx
     ;; A wake whose runner process is gone ended without saying how. It
@@ -2820,14 +2828,6 @@
                   :else (end-wake tx id {:outcome "ran" :crashed true
                                          :said "The process running this wake disappeared."}))))
             tx (sort lost-wakes))
-    ;; A verify process that is gone failed, and is tried again later:
-    ;; only the very process the tick found gone, by pid and start time.
-    (reduce (fn [tx {id :report :keys [pid pid-start]}]
-              (let [v (get-in (:state tx) [:reports id :verifying])]
-                (if (and v (= pid (:pid v)) (= pid-start (:pid-start v)))
-                  (verify-failed tx id "The process checking it disappeared.")
-                  tx)))
-            tx (sort-by :report (filter map? lost-verifications)))
     (fire-routines tx)
     (trip-guards tx)
     (report-unwakeable tx)
@@ -3270,463 +3270,3 @@
         :else (emit tx "doc/put" {:path path :content content
                                   :shown {:call (str call) :title (str/trim title)
                                           :sources (mapv #(select-keys % [:title :ref]) sources)}})))))
-
-;; research reports
-;;
-;; A public role granted :reports writes what it found as a report: a
-;; summary and findings in a strict schema (relay.reports/parse-report).
-;; The tick has each new report checked by the verifier in a process of
-;; its own (relay verify), which records what came back; flags are worked
-;; out from it here. The role is never told how its report fared, so it
-;; cannot learn to pass the checks. The operator reviews each finding not
-;; seen before and accepts it into the ledger or rejects it.
-
-(defn- matched-decision
-  "What the operator decided, as it stands now, on the finding that a
-  finding hidden as seen before matched: through the ledger entry it
-  made, even once that entry is withdrawn. Nil while it waits."
-  [state r {:keys [kind entry report finding]}]
-  (let [[id i] (case kind
-                 ("pending" "not-relevant") [report finding]
-                 "earlier" [(:id r) finding]
-                 "ledger" ((juxt :report :finding) (or (get-in state [:ledger entry]) (get-in state [:withdrawn entry])))
-                 nil)]
-    (get-in state [:reports id :verification :findings i :decision])))
-
-(defn- as-it-stands
-  "A report as it stands now. Whether a finding stays hidden as seen
-  before is worked out from the current state, not fixed when it was
-  checked: once what it matched is rejected as fake, it waits for the
-  operator, flagged, as one checked after the rejection would. One that
-  matched a finding waiting for review, since decided, carries that
-  decision in :seen-as, so the header can say how it went."
-  [state r]
-  (if-not (get-in r [:verification :findings])
-    r
-    (update-in r [:verification :findings]
-               (fn [fs]
-                 (mapv (fn [f]
-                         (let [d (when (:seen-before f) (matched-decision state r (:seen-as f)))]
-                           (cond
-                             (= "fake" d)
-                             (-> (dissoc f :seen-as)
-                                 (assoc :seen-before false)
-                                 (update :flags #(vec (distinct (conj (vec %) {:kind "rejected-as-fake-before"
-                                                                               :url (:canonical-url f)})))))
-                             (and d (= "pending" (get-in f [:seen-as :kind])))
-                             (assoc-in f [:seen-as :decision] d)
-                             :else f)))
-                       fs)))))
-
-(defn report [state id] (some->> (get-in state [:reports id]) (as-it-stands state)))
-
-(defn- reports-now [state] (map #(as-it-stands state %) (vals (:reports state))))
-
-(defmethod evolve* "report/submitted" [state {:keys [seq at data labels public]}]
-  (assoc-in state [:reports seq] {:id seq :role (:role data) :summary (:summary data)
-                                  :findings (vec (:findings data)) :submitted-at (inst at)
-                                  :labels (union labels) :public (true? public)
-                                  :status :submitted :attempts 0 :retry-at nil}))
-
-(defmethod decide* :report/submit [{:keys [config actor] :as tx} {:keys [args]}]
-  (caller-role! tx)
-  (let [kinds (config/report-kinds config actor)]
-    (when-not (and kinds (public-actor? tx))
-      (reject! :forbidden (str actor " may not submit reports.")))
-    ;; Only from a session that began public, so the report is public: it
-    ;; holds an outsider's text and nothing of the operator's.
-    (when-not (:public tx)
-      (reject! :forbidden (str "This session began before " actor " was public, so it cannot submit a report."
-                               " The next wake can.")))
-    (let [{:keys [report problem]} (reports/parse-report kinds args)]
-      (when problem (reject! :invalid problem))
-      (emit tx "report/submitted" (assoc report :role actor)))))
-
-(defn verifying?
-  "Whether a report's verify process has started and not finished."
-  [r]
-  (some? (:verifying r)))
-
-(defn reports-to-verify
-  "The reports the tick has checked now: submitted, not being checked,
-  and not waiting out a retry delay. None without a :verifier."
-  [state config ^Instant now]
-  (if-not (:verifier config)
-    []
-    (->> (vals (:reports state))
-         (filter #(and (= :submitted (:status %)) (not (verifying? %))
-                       (not (some-> ^Instant (:retry-at %) (.isAfter now)))))
-         (map :id) sort vec)))
-
-(defn ledger-entries [state] (vec (sort-by :id (vals (:ledger state)))))
-
-(defn known-findings
-  "What relay already knows of findings, for flags (relay.reports/verify):
-  the registrable domains of ledger entries; the canonical URLs that hide
-  a finding as seen before, each with what it matched: a ledger entry, a
-  finding waiting for review, or one the operator judged not relevant;
-  and those of findings rejected as fake, which are shown again, flagged.
-  Report `except`'s own findings are left out."
-  [state except]
-  (let [entries (sort-by :id (vals (:ledger state)))
-        findings (for [r (sort-by :id (reports-now state))
-                       :when (and (not= except (:id r)) (= :verified (:status r)))
-                       [i f] (map-indexed vector (get-in r [:verification :findings]))]
-                   [(:id r) i f])
-        by (fn [kind pred] (into {} (for [[r i f] (reverse findings) :when (pred f)]
-                                      [(:canonical-url f) {:kind kind :report r :finding i}])))]
-    {:domains (set (keep :domain entries))
-     ;; A ledger entry wins over a waiting finding, and that over one set
-     ;; aside, when one URL matches several.
-     :seen (merge (by "not-relevant" #(= "not-relevant" (:decision %)))
-                  (by "pending" #(and (not (:seen-before %)) (nil? (:decision %))))
-                  (into {} (for [e (reverse entries)] [(:url e) {:kind "ledger" :entry (:id e)}])))
-     :fake (set (for [[_ _ f] findings :when (= "fake" (:decision f))] (:canonical-url f)))}))
-
-(defn verification-labels
-  "What a report's verification carries: the report's labels, and
-  contaminated, since what the verifier says comes from pages."
-  [r]
-  (union (:labels r) [contaminated-label]))
-
-(defn pending-findings
-  "The findings of a verified report, as `report` gives it, that wait for
-  the operator: not seen before and not yet decided, as their indexes."
-  [r]
-  (if-not (= :verified (:status r))
-    []
-    (vec (keep-indexed (fn [i f] (when-not (or (:seen-before f) (:decision f)) i))
-                       (get-in r [:verification :findings])))))
-
-(defmethod evolve* "report/verify-started" [state {:keys [at data]}]
-  (assoc-in state [:reports (:report data) :verifying] {:pid (:pid data) :pid-start (:pid-start data)
-                                                        :started-at (inst at)}))
-
-(defmethod evolve* "report/verify-failed" [state {:keys [data]}]
-  (update-in state [:reports (:report data)]
-             #(-> (dissoc % :verifying)
-                  (assoc :attempts (:attempt data) :retry-at (inst (:retry-at data)) :error (:error data)
-                         :status (if (:retry-at data) :submitted :failed)))))
-
-(defmethod evolve* "report/verified" [state {:keys [at data labels]}]
-  (update-in state [:reports (:report data)]
-             #(-> (dissoc % :verifying :retry-at)
-                  (assoc :status :verified :verified-at (inst at)
-                         :verification {:flags (vec (:flags data)) :findings (vec (:findings data))
-                                        :urls (vec (:urls data)) :sampled (vec (:sampled data))
-                                        :labels (union labels)}))))
-
-(defn- report! [state id]
-  (or (report state id) (reject! :not-found (str "There is no report " id "."))))
-
-(defmethod decide* :report/verify-start [{:keys [state config now] :as tx} {{id :report :keys [pid pid-start by-hand]} :args}]
-  (dispatcher-only! tx)
-  (let [r (report! state id)]
-    (when-not (:verifier config) (reject! :invalid "relay.edn has no :verifier to check reports with."))
-    (when (verifying? r) (reject! :busy (str "Report " id " is being checked now.")))
-    (when-not (or (= :submitted (:status r)) (and by-hand (= :failed (:status r))))
-      (reject! :invalid (str "Report " id " is " (name (:status r)) ", so there is nothing to check.")))
-    (when (and (not by-hand) (some-> ^Instant (:retry-at r) (.isAfter now)))
-      (reject! :invalid (str "Report " id " is next checked at " (:retry-at r) ".")))
-    (emit tx "report/verify-started" {:report id :pid pid :pid-start pid-start})))
-
-(declare trust-level demote auto-accept)
-
-(defn- verification-notice
-  "The one notification for a verified report: counts and what to run,
-  never any of its text."
-  [state id]
-  (let [r (report state id)
-        fs (get-in r [:verification :findings])
-        pending (pending-findings r)]
-    (str "Report " id " from " (:role r) ": " (count fs) " findings, "
-         (count (filter #(seq (:flags %)) fs)) " flagged, " (count (filter :seen-before fs)) " seen before."
-         (when-let [auto (seq (filter :auto fs))] (str " " (count auto) " went into the ledger unread."))
-         (when (seq pending) (str " relay review " id)))))
-
-(defn- checking!
-  "Refuses news of a check from any process but the one checking the
-  report now, by pid and start time, so a process from an earlier try, or
-  a tick that saw an earlier one gone, cannot speak for this one."
-  [r pid pid-start]
-  (let [v (:verifying r)]
-    (when-not (and v (= pid (:pid v)) (= pid-start (:pid-start v)))
-      (reject! :invalid (str "Report " (:id r) " is not being checked by that process.")))))
-
-(defmethod decide* :report/verify [{:keys [state config now] :as tx} {{id :report :keys [results sampled labels pid pid-start]} :args}]
-  (dispatcher-only! tx)
-  (let [r (report! state id)
-        asked (mapcat :items (reports/check-requests r))]
-    (checking! r pid pid-start)
-    (when-not (and (or (nil? labels) (sequential? labels)) (every? label-names labels))
-      (reject! :invalid "The verifier's labels must be labels relay knows."))
-    (when-not (and (sequential? results) (= (count asked) (count results)) (every? map? results))
-      (reject! :invalid (str "The verifier's results do not match report " id "'s checks.")))
-    (when-not (and (sequential? sampled) (= (count (:findings r)) (count sampled)) (every? boolean? sampled))
-      (reject! :invalid "The sample must say for every finding whether it was drawn."))
-    (let [checked (reports/checked-urls r results)
-          today (LocalDate/ofInstant now (config/zone config))
-          v (reports/verify r checked (known-findings state id) today)
-          tx (as-> tx tx
-               (emit tx "report/verified" {:report id :flags (:flags v) :findings (:findings v)
-                                           :urls (mapv #(dissoc % :quotes) checked) :sampled (vec sampled)
-                                           :level (trust-level state (:role r))}
-                     ;; With whatever the verifier said its answers carry.
-                     (union (verification-labels r) labels))
-               ;; Lowered first, so a report that lowers the level has
-               ;; nothing accepted unread.
-               (if-let [why (reports/demotion-reason v)]
-                 (demote tx (:role r) (str "in report " id " " why))
-                 tx)
-               (auto-accept tx id))]
-      (notify tx "report-verified" (str "Report " id " from " (:role r) " was checked")
-              (verification-notice (:state tx) id)
-              :role (:role r) :report id :labels (id-labels state (:role r))))))
-
-(defn- verify-failed
-  "Records that checking a report failed. It is tried again after a wait
-  that grows, like a memo's, until :max-attempts; the operator is told the
-  first time and when relay gives up."
-  [{:keys [state config now] :as tx} id error]
-  (let [r (report state id)
-        attempt (inc (or (:attempts r) 0))
-        retry-at (when (< attempt (:max-attempts config))
-                   (str (.plusSeconds ^Instant now (config/retry-delay-seconds config attempt))))
-        tx (emit tx "report/verify-failed" {:report id :error (str error) :attempt attempt :retry-at retry-at}
-                 ;; The verifier's own words may come from a page.
-                 (verification-labels r))]
-    (cond
-      (nil? retry-at)
-      (notify tx "report-verify-failed" (str "relay gave up checking report " id)
-              (str "Checking report " id " from " (:role r) " failed " attempt " times. relay verify " id
-                   " tries again; relay log shows why it failed.")
-              :role (:role r) :report id :labels (id-labels state (:role r)))
-      (= 1 attempt)
-      (notify tx "report-verify-failed" (str "relay could not check report " id)
-              (str "Checking report " id " from " (:role r) " failed. relay tries again later by itself;"
-                   " relay log shows why it failed.")
-              :role (:role r) :report id :labels (id-labels state (:role r)))
-      :else tx)))
-
-(defmethod decide* :report/verify-fail [{:keys [state] :as tx} {{id :report :keys [error pid pid-start]} :args}]
-  (dispatcher-only! tx)
-  (let [r (report! state id)]
-    (checking! r pid pid-start)
-    (verify-failed tx id error)))
-
-;; reviewing reports
-
-(def review-decisions
-  "What the operator says of a finding: accept it into the ledger, reject it
-  as fake (made up, or a trap), or set it aside as not relevant."
-  #{"accept" "fake" "not-relevant"})
-
-(defn finding-digest
-  "The digest of a finding exactly as the operator is shown it, its
-  fields and flags (relay.reports/finding-digest-text), which deciding
-  on it is bound to. `r` is the report as `report` gives it."
-  [r i]
-  (sha256 (reports/finding-digest-text (get-in r [:findings i]) (get-in r [:verification :findings i]))))
-
-(defn reports-waiting
-  "Verified reports with findings waiting for the operator, oldest first."
-  [state]
-  (->> (reports-now state) (filter #(seq (pending-findings %))) (sort-by :id) vec))
-
-(defn waiting-findings
-  "Every finding waiting for the operator, as [report finding]."
-  [state]
-  (set (for [r (reports-waiting state), i (pending-findings r)] [(:id r) i])))
-
-(defn shown-again
-  "The findings waiting in `state` that were not among `before`
-  (waiting-findings) and are flagged as matching one rejected as fake:
-  those a fake decision brought back from hiding, in order."
-  [before state]
-  (vec (sort (for [[id i :as k] (waiting-findings state)
-                   :when (and (not (before k))
-                              (some #(= "rejected-as-fake-before" (:kind %))
-                                    (get-in (report state id) [:verification :findings i :flags])))]
-               k))))
-
-(defmethod evolve* "finding/reviewed" [state {:keys [at actor data]}]
-  (update-in state [:reports (:report data) :verification :findings (:finding data)] assoc
-             :decision (:decision data) :decided-by actor :decided-at (inst at)))
-
-(defmethod evolve* "ledger/entry-added" [state {:keys [seq at data labels]}]
-  (let [{:keys [report finding auto]} data]
-    (-> state
-        (assoc-in [:ledger seq] (merge (select-keys data [:role :kind :title :organization :url :domain
-                                                          :deadline :amount :location :report :finding])
-                                       {:id seq :status "new" :trusted (not auto) :added-at (inst at)
-                                        :labels (union labels)}))
-        (update-in [:reports report :verification :findings finding]
-                   #(cond-> (assoc % :entry seq) auto (assoc :decision "accept" :auto true))))))
-
-(declare demote withdraw-unread)
-
-(defn ledger-entry-data
-  "A ledger entry for a finding: its typed values and text, with the
-  canonical URL and domain the verifier found."
-  [r i]
-  (let [f (get-in r [:findings i])
-        v (get-in r [:verification :findings i])]
-    (cond-> (merge (select-keys f [:kind :title :organization :deadline :amount :location])
-                   {:role (:role r) :url (:canonical-url v) :domain (:domain v) :report (:id r) :finding i})
-      true (->> (remove (comp nil? val)) (into {})))))
-
-(defmethod decide* :report/review [{:keys [state] :as tx} {{id :report :keys [decisions]} :args}]
-  ;; A person at the terminal reads each finding and says what it is.
-  (operator-only! tx "reviews a report")
-  (let [r (report! state id)
-        pending (set (pending-findings r))]
-    (when-not (= :verified (:status r)) (reject! :invalid (str "Report " id " has not been checked yet.")))
-    (when-not (and (sequential? decisions) (seq decisions)) (reject! :invalid "Nothing was decided."))
-    (when-not (apply distinct? (map :finding decisions))
-      (reject! :invalid "Each finding is decided once."))
-    (doseq [{i :finding :keys [decision]} decisions]
-      (when-not (pending i) (reject! :invalid (str "Finding " (if (integer? i) (inc i) i) " of report " id " is not waiting.")))
-      (when-not (review-decisions decision)
-        (reject! :invalid (str "A finding is accepted, rejected as fake or not relevant, not " (pr-str decision) "."))))
-    ;; The operator decides on what they were shown, and only that.
-    (when-not (every? #(= (:sha256 %) (finding-digest r (:finding %))) decisions)
-      (reject! :conflict (str "Report " id " changed since you read it. Nothing was decided; look again.")))
-    (let [fake (sort (keep #(when (= "fake" (:decision %)) (inc (:finding %))) decisions))]
-      (cond-> (reduce (fn [tx {i :finding :keys [decision sha256]}]
-                        (cond-> (emit tx "finding/reviewed" {:report id :finding i :decision decision :sha256 sha256})
-                          ;; Read and vouched for: the entry is the operator's, so
-                          ;; its text is not contaminated. Reading it adds
-                          ;; private, as reading anything relay keeps does.
-                          (= "accept" decision) (emit "ledger/entry-added" (ledger-entry-data r i))))
-                      tx (sort-by :finding decisions))
-        ;; A report with one fake finding is not trusted for the others:
-        ;; those relay accepted unread go back to the operator.
-        (seq fake) (withdraw-unread id)
-        (seq fake) (demote (:role r) (str "you rejected finding " (str/join ", " fake) " of report " id " as fake"))))))
-
-;; the ledger
-
-(defn ledger-entry [state id] (get-in state [:ledger id]))
-
-(defmethod evolve* "ledger/status-set" [state {:keys [data]}]
-  (assoc-in state [:ledger (:entry data) :status] (:status data)))
-
-(defmethod decide* :ledger/set-status [{:keys [state actor] :as tx} {{:keys [entry status]} :args}]
-  ;; The ledger holds what the operator decided, which a public role is
-  ;; never shown, let alone told to change.
-  (when (public-actor? tx)
-    (reject! :forbidden (str actor " is a public role, and a public role has no ledger.")))
-  (when-not (ledger-entry state entry) (reject! :not-found (str "There is no ledger entry " entry ".")))
-  (when-not (some #{status} reports/statuses)
-    (reject! :invalid (str "A ledger entry's status is one of " (str/join ", " reports/statuses) ".")))
-  (if (= status (:status (ledger-entry state entry)))
-    tx
-    (emit tx "ledger/status-set" {:entry entry :status status})))
-
-;; the trust ladder
-;;
-;; Every research role starts at trust level 0, where the operator reads
-;; every finding. At level 1 a finding nothing flags, and not drawn for
-;; the sample, goes into the ledger unread: its typed values are clean,
-;; its text stays contaminated. Only the operator raises a level. relay
-;; lowers it by itself, the safe direction, when a report quotes what its
-;; page does not say, cites a page the verifier's guard refused, or has a
-;; finding the operator rejects as fake.
-
-(def trust-levels #{0 1})
-
-(defn trust-level [state role] (get-in state [:trust-levels role :level] 0))
-
-(defmethod evolve* "role/trust-level" [state {:keys [at actor data]}]
-  (assoc-in state [:trust-levels (:role data)] {:level (:level data) :why (:why data) :at (inst at) :by actor}))
-
-(declare research-record)
-
-(defn record-digest
-  "The digest of a research role's record as relay trust-level shows it,
-  which setting the level is bound to."
-  [state role]
-  (sha256 (pr-str (research-record state role))))
-
-(defmethod decide* :role/trust-level [{:keys [state config] :as tx} {{:keys [role level] digest :sha256} :args}]
-  (operator-only! tx "sets a role's trust level")
-  (active-role! state role)
-  (when-not (config/report-kinds config role)
-    (reject! :invalid (str role " writes no reports, so it has no trust level.")))
-  (when-not (trust-levels level) (reject! :invalid "A trust level is 0 or 1."))
-  (when (= level (trust-level state role))
-    (reject! :invalid (str role " is at trust level " level " already.")))
-  ;; The operator decides on the record they were shown: a report checked
-  ;; or reviewed meanwhile changes nothing.
-  (when-not (= digest (record-digest state role))
-    (reject! :conflict (str role "'s record changed since you read it. Nothing was changed; look again.")))
-  (emit tx "role/trust-level" {:role role :level level :why "the operator set it" :sha256 digest}))
-
-(defn- demote
-  "Takes a role back to trust level 0, saying why, and tells the operator.
-  Nothing when it is at 0 already."
-  [{:keys [state] :as tx} role why]
-  (if (zero? (trust-level state role))
-    tx
-    (-> tx
-        (emit "role/trust-level" {:role role :level 0 :why why})
-        (notify "trust-level-lowered" (str role " is back at trust level 0")
-                (str "Because " why ", you review every finding of " role " again. relay trust-level " role
-                     " 1 raises it once you are satisfied.")
-                :role role :labels (id-labels state role)))))
-
-(defn auto-accept
-  "At trust level 1, the findings of a just verified report that go into the
-  ledger unread (relay.reports/auto-acceptable?): each an entry whose text
-  keeps the verification's labels, so it stays contaminated."
-  [{:keys [state] :as tx} id]
-  (let [r (report state id)
-        {:keys [findings sampled] :as v} (:verification r)]
-    (if-not (= 1 (trust-level state (:role r)))
-      tx
-      (reduce (fn [tx i]
-                (if (reports/auto-acceptable? v (nth findings i) (nth sampled i))
-                  (emit tx "ledger/entry-added" (assoc (ledger-entry-data r i) :auto true)
-                        (get-in r [:verification :labels]))
-                  tx))
-              tx (range (count findings))))))
-
-(defn research-record
-  "How a research role's reports have fared: how many reports and
-  findings, how many findings each kind of flag was raised on, and what
-  became of them, up to its latest report."
-  [state role]
-  (let [rs (filter #(= role (:role %)) (reports-now state))
-        vs (mapcat #(get-in % [:verification :findings]) rs)]
-    {:level (trust-level state role)
-     :latest-report (apply max 0 (map :id rs))
-     :verified (count (filter #(= :verified (:status %)) rs))
-     :since (get-in state [:trust-levels role])
-     :reports (count rs)
-     :findings (reduce + (map (comp count :findings) rs))
-     :flags (into (sorted-map) (frequencies (mapcat #(distinct (map :kind (:flags %))) vs)))
-     :accepted (count (filter #(= "accept" (:decision %)) vs))
-     :unread (count (filter :auto vs))
-     :fake (count (filter #(= "fake" (:decision %)) vs))
-     :not-relevant (count (filter #(= "not-relevant" (:decision %)) vs))
-     :seen-before (count (filter :seen-before vs))}))
-
-(defmethod evolve* "ledger/entry-withdrawn" [state {:keys [data]}]
-  (let [{:keys [entry report finding]} data]
-    (-> state
-        (update :ledger dissoc entry)
-        ;; Where it came from, for the findings it hid (as-it-stands).
-        (assoc-in [:withdrawn entry] {:report report :finding finding})
-        (update-in [:reports report :verification :findings finding] dissoc :decision :auto :entry))))
-
-(defn withdraw-unread
-  "Takes the entries relay accepted unread from a report out of the
-  ledger, so their findings wait for the operator again. The log keeps
-  them."
-  [{:keys [state] :as tx} id]
-  (reduce (fn [tx [i f]]
-            (if (and (:auto f) (:entry f))
-              (emit tx "ledger/entry-withdrawn" {:entry (:entry f) :report id :finding i
-                                                 :why "a finding of its report was rejected as fake"})
-              tx))
-          tx (map-indexed vector (get-in (report state id) [:verification :findings]))))
