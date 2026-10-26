@@ -3,7 +3,7 @@
   decides everything. For the operator to run, never an agent:
 
     bb deploy   [--relay <dir>] [--agentloop <dir>] [--relay-tui <dir>]
-                [--bookmark main] [--record <file>] [--data <dir>]
+                [--webtool <dir>] [--bookmark main] [--record <file>] [--data <dir>]
                 [--paused-externally]
     bb rollback [same flags]
 
@@ -27,7 +27,10 @@
   Then it pauses relay (relay.pause), so `relay tick` starts nothing, waits
   until no wake or tick is running, writes the record, and moves each
   checkout's empty working copy onto its commit with `jj new <commit>`,
-  building agentloop and relay-tui with `make build`, and runs the live
+  building agentloop, relay-tui and webtool with `make build`. When the
+  live relay.edn has :house, it then builds the steward's image with
+  `relay house build`, after checking that Apple container's system is
+  running (it says how to start it, and does not). Last it runs the live
   `relay status`. Each checkout is looked at again just before it is moved,
   and left alone if anything about it changed since the plan or jj cannot
   read it. A write that lands between that look and the move is found
@@ -287,7 +290,8 @@
 (defn- defaults [home]
   {:paths {:relay (str home "/code/projects/relay")
            :agentloop (str home "/code/projects/agentloop")
-           :relay-tui (str home "/code/projects/relay-tui")}
+           :relay-tui (str home "/code/projects/relay-tui")
+           :webtool (str home "/code/projects/webtool")}
    :record (str home "/Library/Application Support/relay/deploys.edn")
    :pause-file (pause/default-file home)
    :bookmark "main"
@@ -323,14 +327,14 @@
            :status-cmd (or (:status-cmd opts) (default-status-cmd (canon (:pause-file o)))))))
 
 (defn- preflight!
-  "Everything that can be checked before any work: that the three checkouts
-  are three places, where the record goes and that it can be written, and
+  "Everything that can be checked before any work: that the four checkouts
+  are four places, where the record goes and that it can be written, and
   which data directory to watch, which must be a relay data directory. A
   refusal says how to lift a pause that is already there."
   [{:keys [record sync paths data home pause-file] :as o}]
   (let [refuse! (fn [problem] (throw (usage-error (flow/refusal-text [problem] pause-file (pause/reason pause-file)))))]
     (when-not (= (count deploy/repo-keys) (count (set (vals paths))))
-      (refuse! (str "relay, agentloop and relay-tui must be three different directories; got "
+      (refuse! (str "relay, agentloop, relay-tui and webtool must be four different directories; got "
                     (str/join ", " (for [r deploy/repo-keys] (str (name r) " " (get paths r)))) ".")))
     (when-let [p (deploy/record-path-problem {:path record :sync sync :repo-paths (vals paths)})]
       (refuse! p))
@@ -347,6 +351,15 @@
                         "Without the real one a deploy cannot tell whether a wake is running.")))
         (assoc o :data data)))))
 
+(defn house-commands
+  "What the deploy runs for the steward's shell, from the relay.edn in
+  `data` (relay.deploy/house-commands). A relay.edn that cannot be read
+  gives nil: the final relay status says what is wrong with it."
+  [relay-path data]
+  (let [settings (try ((requiring-resolve 'relay.config/read-settings) (slurp (str (fs/path data "relay.edn"))))
+                      (catch Exception _ nil))]
+    (deploy/house-commands settings relay-path data)))
+
 (defn- flow-options
   "What relay.deploy-flow/start needs, read once the lock is held."
   [kind {:keys [paths clock data pause-file record status-cmd] :as o} opts]
@@ -360,7 +373,9 @@
             :paused-externally (boolean (:paused-externally opts))
             :current-supports? (fs/exists? (fs/path (:relay paths) "src" "relay" "pause.clj"))
             :inherited (pause/reason pause-file)}
-           (when (= :rollback kind) {:records (read-records record)}))))
+           (if (= :rollback kind)
+             {:records (read-records record)}
+             {:house-cmds (house-commands (:relay paths) data)}))))
 
 ;; --- the commands
 
@@ -381,7 +396,7 @@
       (throw (usage-error (str "Another bb deploy or rollback is running; it holds " file "."))))))
 
 (defn deploy!
-  "Deploys the bookmark. Options: :paths {:relay :agentloop :relay-tui}, :record,
+  "Deploys the bookmark. Options: :paths {:relay :agentloop :relay-tui :webtool}, :record,
   :bookmark, :data (the live data directory, read for running wakes),
   :from (the working copy it is run from, default the current directory),
   :paused-externally (ticks are stopped some other way), and for tests
@@ -399,7 +414,7 @@
 
 ;; --- bb tasks
 
-(def ^:private spec {:coerce {:relay :string :agentloop :string :relay-tui :string
+(def ^:private spec {:coerce {:relay :string :agentloop :string :relay-tui :string :webtool :string
                               :bookmark :string :record :string :data :string
                               :paused-externally :boolean}})
 
@@ -410,7 +425,7 @@
       (:record o) (assoc :record (:record o))
       (:data o) (assoc :data (:data o))
       (:paused-externally o) (assoc :paused-externally true)
-      (seq (select-keys o [:relay :agentloop :relay-tui])) (assoc :paths (select-keys o [:relay :agentloop :relay-tui])))))
+      (seq (select-keys o deploy/repo-keys)) (assoc :paths (select-keys o deploy/repo-keys)))))
 
 (defn- run-command [f args]
   (try (f (options args))

@@ -39,7 +39,7 @@
                        (gen/frequency [[9 (gen/return true)] [1 (gen/return false)]])
                        (gen/frequency [[9 (gen/return true)] [1 (gen/return false)]]))))
 
-(def world (gen/fmap #(zipmap deploy/repo-keys %) (gen/vector observation 3)))
+(def world (gen/fmap #(zipmap deploy/repo-keys %) (gen/vector observation (count deploy/repo-keys))))
 
 (deftest a-deploy-moves-only-empty-single-parent-checkouts-and-only-when-all-can-move
   (let [r (tc/quick-check
@@ -58,12 +58,12 @@
 
 (deftest a-checkout-already-on-main-does-not-move
   (let [o (checkout c2)
-        {:keys [steps]} (deploy/plan-deploy {:observed {:relay o :agentloop o :relay-tui o} :bookmark "main"})]
+        {:keys [steps]} (deploy/plan-deploy {:observed {:relay o :agentloop o :relay-tui o :webtool o} :bookmark "main"})]
     (is (every? (comp false? :moves?) steps))))
 
 (deftest problems-say-which-checkout-and-why
   (let [ok (checkout c1)
-        problems #(:problems (deploy/plan-deploy {:observed (merge {:relay ok :agentloop ok :relay-tui ok} %) :bookmark "main"}))]
+        problems #(:problems (deploy/plan-deploy {:observed (merge {:relay ok :agentloop ok :relay-tui ok :webtool ok} %) :bookmark "main"}))]
     (is (str/includes? (first (problems {:agentloop (assoc-in ok [:wc :empty?] false)})) "agentloop: its working copy has changes"))
     (is (str/includes? (first (problems {:relay-tui {:path "/gone" :exists? false}})) "does not exist"))
     (is (str/includes? (first (problems {:relay (assoc ok :jj? false)})) "not a jj repository"))
@@ -125,7 +125,12 @@
     (testing "a deploy that stopped partway left some on the new commit and some on the old"
       (let [mixed (assoc (observed c2) :agentloop (checkout c1))
             {:keys [steps]} (plan mixed nil)]
-        (is (= [false true true] (map :moves? steps)))))))
+        (is (= [false true true true] (map :moves? steps)))))
+    (testing "a record from before webtool was deployed leaves webtool alone"
+      (let [old (update record :repos dissoc :webtool)
+            {:keys [steps problems]} (deploy/plan-rollback {:observed (observed c2) :record old :paths paths})]
+        (is (nil? problems))
+        (is (= [:agentloop :relay-tui :relay] (map :repo steps)))))))
 
 (deftest records-round-trip-and-the-last-line-of-an-id-wins
   (let [r (tc/quick-check
@@ -239,10 +244,10 @@
               (deploy/make-record {:id id :kind :deploy :at id :status status
                                    :repos (zipmap deploy/repo-keys
                                                   (map (fn [st] {:path "/x" :previous c2 :target c2 :state st}) states))}))]
-    (is (true? (deploy/undoable? (rec "a" :failed [:built :building :pending]))))
-    (is (false? (deploy/undoable? (rec "b" :failed [:pending :pending :pending]))) "refused at its first look")
-    (is (false? (deploy/undoable? (rec "c" :ok [:built :built :kept]))) "finished and rebuilt in place")
-    (is (false? (deploy/undoable? (rec "d" :failed [:kept :kept :kept]))))))
+    (is (true? (deploy/undoable? (rec "a" :failed [:built :building :pending :pending]))))
+    (is (false? (deploy/undoable? (rec "b" :failed [:pending :pending :pending :pending]))) "refused at its first look")
+    (is (false? (deploy/undoable? (rec "c" :ok [:built :built :built :kept]))) "finished and rebuilt in place")
+    (is (false? (deploy/undoable? (rec "d" :failed [:kept :kept :kept :kept]))))))
 
 (deftest a-run-killed-during-a-rebuild-that-moves-nothing-is-undone-first
   (let [d1 {:id "deploy 1" :kind :deploy :at "t1" :status :ok
@@ -286,3 +291,15 @@
       (is (some? (:record (deploy/rollback-source [good (rec "d3" :failed :building)] true))))
       (is (some? (:record (deploy/rollback-source [good (assoc (rec "r1" :failed :pending :inherited true) :kind :rollback)] true)))))))
 
+
+(deftest the-house-commands-come-from-relay-edn
+  (let [cmds #(deploy/house-commands % "/r" "/d")]
+    (is (nil? (cmds {:timezone "UTC"})) "no :house, nothing to build")
+    (is (nil? (cmds nil)) "relay.edn that could not be read: status says why")
+    (is (= {:check ["container" "system" "status"] :build ["/r/bin/relay" "house" "build" "--data" "/d"]}
+           (cmds {:house {:image "relay-shell"}})))
+    (testing "Apple container named by its path is still checked"
+      (is (= ["/opt/bin/container" "system" "status"] (:check (cmds {:house {:runner ["/opt/bin/container"]}})))))
+    (testing "another runner has no system to check"
+      (is (nil? (:check (cmds {:house {:runner ["docker"]}}))))
+      (is (some? (:build (cmds {:house {:runner ["podman"]}})))))))

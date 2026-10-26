@@ -135,6 +135,10 @@ undo, the agent's own calendar, the ready view and replies.
    container system start       # bb test runs a live test against the running container
    ```
 
+   `bb deploy` now moves and builds webtool too, so its live checkout
+   (`~/code/projects/webtool`) needs an empty working copy on a single
+   commit, as relay's, agentloop's and relay-tui's do.
+
 ## The deploy
 
 `bb deploy` as usual. Its last step is `relay status` against your live
@@ -157,16 +161,18 @@ window for the rest:
 5. One-time steps, still paused:
 
    ```sh
-   relay house build                       # the steward's shell image; needs the network
-   make -C ~/code/projects/webtool build   # bb deploy does not touch webtool
+   relay house build            # the steward's shell image; needs the network
    security add-generic-password -a "$USER" -s relay-brave -w   # the Brave Search key, if not there yet
    ```
 
-   webtool needs its new build: the fetch rule relies on it reporting a
-   redirect instead of following it. Move its checkout to its `main`
-   first. Its `webtool.json` names the key command:
+   `bb deploy` builds the image itself when the live `relay.edn` has
+   `:house`, but this first time the live file is still the old one, so
+   build it by hand now. Later deploys do it for you. webtool was moved
+   to its `main` and built by the deploy; the fetch rule relies on that
+   build reporting a redirect instead of following it. Its `webtool.json`
+   names the key command:
    `"search": {"backend": "brave", "api_key_command": ["security", "find-generic-password", "-s", "relay-brave", "-w"]}`.
-   agentloop and relay-tui were built by the deploy.
+   agentloop, relay-tui and webtool were built by the deploy.
 
    Before you change hub, save the log as it is. If you roll back later,
    it holds hub's old title and instructions:
@@ -175,14 +181,11 @@ window for the rest:
    relay --data <live data> log --json > ~/relay-log-before-house.jsonl
    ```
 
-   Give hub the new text, and make its text public so the scout can
-   answer it. A role whose id was written in private cannot send a memo
-   to a public role at all. Public text may go out in a web search, so
-   keep anything private in hub's notes and facts, not its
-   instructions:
+   Give hub the new text. It stays private: hub may write to the scout
+   all the same, and the scout learns only hub's id, so it can answer:
 
    ```sh
-   relay update hub --public --title "<hub's title>" --instructions < setup/steward.md
+   relay update hub --title "<hub's title>" --instructions < setup/steward.md
    ```
 
    Add a scout, and the daily note's skill and routine for hub. The
@@ -223,25 +226,27 @@ window for the rest:
 Neither blocks the deploy: until then messages reach you by push and in
 relay-tui, and you reply from the ready view or with `relay reply`.
 
-## What `bb deploy` does not do
+## What `bb deploy` does and does not do
 
-`bb deploy` moves and builds relay, agentloop and relay-tui
-(`relay.deploy/builds` builds only agentloop and relay-tui) and runs
-`bb test` and `relay status`. It does not start Apple's container
-service, build the steward's image (`relay house build`), move or build
-webtool, or restart `relay serve`. Steps 3, 5 and 6 cover those by hand.
+`bb deploy` moves relay, agentloop, relay-tui and webtool, builds
+agentloop, relay-tui and webtool with `make build`, and runs `bb test`
+before and `relay status` after. When the live `relay.edn` has `:house`
+it also builds the steward's image with `relay house build`. It checks
+`container system status` first, and if Apple's container system is
+not running it says so and how to start it, without starting it. It
+does not restart `relay serve`. Steps 3, 5 and 6 cover the rest by
+hand.
 
 ## Rolling back
 
-`bb rollback` moves relay, agentloop and relay-tui back and rebuilds
-them, as before. Put `~/relay.edn.old` back in place first. The old
+`bb rollback` moves relay, agentloop, relay-tui and webtool back and
+rebuilds them. It does not rebuild the steward's image. Put `~/relay.edn.old` back in place first. The old
 relay requires `:notify` and does not know `:messages`, and the
 rollback ends with `relay status`, which fails on the new file and
 leaves relay paused.
 
-webtool is not rolled back. It stays on its new `main`. The old
-`:verifier` runs webtool's `check` command, and that command is still
-on webtool's `main`, so the old relay works with it.
+webtool goes back with the rest, to where the deploy found it, so the
+old `:verifier` gets the webtool it ran with.
 
 A rollback only works before the new relay has written to the log. The
 old relay stops on any event kind it does not know ("This version of

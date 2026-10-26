@@ -178,7 +178,7 @@
 (defn- check-commands
   "The builds and tests to run in the check workspaces, in order."
   [{:keys [o] :as run}]
-  (concat (for [r [:agentloop :relay-tui]]
+  (concat (for [r (filter deploy/builds deploy/repo-keys)]
             {:say (str "Building " (name r) " at " (deploy/short-id {:commit (commit-of run r)}) " in a fresh workspace")
              :dir (check-dir run r) :cmd (deploy/builds r) :what (str (name r) " would not build")})
           (for [cmd (:test-cmds o)]
@@ -223,10 +223,32 @@
 
 (defn- step-of [run] (first (:to-apply run)))
 
+(defn- run-status [run]
+  (emit (assoc run :running-status? true) :say {:text "Running relay status"} :status-said))
+
+(defn- house-retry [{:keys [o]}]
+  (str "Then run " (str/join " " (get-in o [:house-cmds :build])) " to build it."))
+
+(defn- build-image [run]
+  (emit run :say {:text "Building the steward's image"} :image-said))
+
+(defn- house-step
+  "After the checkouts are built, a deploy for a relay.edn with :house
+  builds the steward's image. It checks first that Apple container's
+  system is running, and when it is not says how to start it rather than
+  starting it. Neither stops the deploy: the code is in place, and relay
+  status says when the shell has no image."
+  [{:keys [o kind] :as run}]
+  (let [{:keys [check build]} (:house-cmds o)]
+    (cond
+      (or (not= :deploy kind) (nil? build)) (run-status run)
+      check (emit run :run {:dir (get-in o [:paths :relay]) :cmd check} :system-checked)
+      :else (build-image run))))
+
 (defn- next-step [run]
   (if-let [{:keys [path]} (step-of run)]
     (emit run :observe {:path path :bookmark nil} :looked)
-    (emit (assoc run :running-status? true) :say {:text "Running relay status"} :status-said)))
+    (house-step run)))
 
 (defn- fail [run text] (assoc run :failure text))
 
@@ -505,6 +527,28 @@
     (end-under-pause (fail run (str "Unexpected error: " thrown)))
     (next-step run)))
 
+(defmethod handle :system-checked [run r]
+  (if (ok? r)
+    (build-image run)
+    (emit run :say {:text (str "The container system is not running, so the steward's image was not built."
+                               " Start it with `container system start`. " (house-retry run))}
+          :image-done)))
+
+(defmethod handle :image-said [{:keys [o] :as run} _]
+  (emit run :run {:dir (get-in o [:paths :relay]) :cmd (get-in o [:house-cmds :build])} :image-built))
+
+(defmethod handle :image-built [run r]
+  (if (ok? r)
+    (run-status run)
+    (emit run :say {:text (str "The steward's image did not build"
+                               (if (:thrown r)
+                                 (str ": " (:thrown r))
+                                 (str " (exit " (:exit r) "): " (tail (str (:err r) "\n" (:out r)) 8)))
+                               "\n" (house-retry run))}
+          :image-done)))
+
+(defmethod handle :image-done [run _] (run-status run))
+
 (defmethod handle :status-said [{:keys [o] :as run} _]
   (emit run :run {:dir (get-in o [:paths :relay]) :cmd (:status-cmd o)} :status))
 
@@ -565,13 +609,14 @@
   "A run of `kind` (:deploy or :rollback), waiting on its first effect.
   `o` is what the shell settled and read before the run:
 
-    :paths {:relay :agentloop :relay-tui}  :bookmark  :from (deploy)
+    :paths {:relay :agentloop :relay-tui :webtool}  :bookmark  :from (deploy)
     :record  :pause-file  :data  :at (the time, as text)
     :test-cmds  :status-cmd (a command)  :check-dir  :suffix
     :poll-ms  :settle-ms  :quiet-timeout-ms  :paused-externally
     :current-supports? (the relay checkout has the pause file now)
     :inherited (the pause file's reason, read once the lock is held)
-    :records (rollback: the record file's records)"
+    :records (rollback: the record file's records)
+    :house-cmds (deploy: relay.deploy/house-commands, nil without :house)"
   [kind o]
   (let [run {:kind kind :o o :notice? (some? (:inherited o))}]
     (case kind

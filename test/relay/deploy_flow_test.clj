@@ -16,7 +16,7 @@
 
 (defn- commit [id] {:commit id :change (str "ch" (subs id 0 6))})
 
-(def paths {:agentloop "/w/agentloop" :relay-tui "/w/relay-tui" :relay "/w/relay"})
+(def paths {:agentloop "/w/agentloop" :relay-tui "/w/relay-tui" :webtool "/w/webtool" :relay "/w/relay"})
 
 (defn- wc [n] {:commit (str "e" n (apply str (repeat 38 "0"))) :change (str "wc" n) :empty? true :conflict? false})
 
@@ -116,6 +116,7 @@
 (defn- run-of? [repo-path cmd] #(and (= :run (:op %)) (= repo-path (:dir %)) (= cmd (:cmd %))))
 (def build-relay-tui (run-of? "/w/relay-tui" ["make" "build"]))
 (def build-agentloop (run-of? "/w/agentloop" ["make" "build"]))
+(def build-webtool (run-of? "/w/webtool" ["make" "build"]))
 (defn- edit [w r] (update-in w [:repos r :wc] assoc :commit three :empty? false))
 
 ;; --- deploying and rolling back
@@ -127,9 +128,11 @@
       (is (on? w two))
       (is (some #{["/w/agentloop" ["make" "build"]]} (:runs w)))
       (is (some #{["/w/relay-tui" ["make" "build"]]} (:runs w)))
+      (is (some #{["/w/webtool" ["make" "build"]]} (:runs w)))
       (is (not-any? #(= "/w/relay" (first %)) (filter #(= ["make" "build"] (second %)) (:runs w)))))
     (testing "the planned commits were built and tested in check workspaces first"
       (is (some #{["/tmp/check/relay" ["bb" "test"]]} (:runs w)))
+      (is (some #{["/tmp/check/webtool" ["make" "build"]]} (:runs w)) "webtool is built from the planned commit too")
       (is (< (index-of w #(= :workspace-add (:op %))) (index-of w #(= :confirm (:op %))) (first-move w)))
       (is (empty? (:workspaces w)) "and the check workspaces are gone"))
     (testing "relay was paused before anything moved and runs again after status"
@@ -218,7 +221,7 @@
   (let [w (:world (deploy (world)))
         {:keys [outcome] w :world} (rollback (assoc w :on (on-op build-relay-tui (fn [w _] [{:exit 2 :out "" :err "build broke"} w]))))]
     (is (str/includes? (text outcome) "ROLLBACK FAILED"))
-    (is (= [one one two] (map #(parent w %) deploy/repo-keys)) "agentloop and relay-tui went back, relay has not yet")
+    (is (= [one one two two] (map #(parent w %) deploy/repo-keys)) "agentloop and relay-tui went back, webtool and relay have not yet")
     (is (some? (:paused w)))
     (let [{:keys [outcome] w :world} (rollback (dissoc w :on))]
       (is (:ok outcome))
@@ -299,6 +302,61 @@
 
 ;; --- builds and status
 
+(def house-cmds {:check ["container" "system" "status"] :build ["/w/relay/bin/relay" "house" "build" "--data" "/w/data"]})
+(def checks-container #(and (= :run (:op %)) (= (:check house-cmds) (:cmd %))))
+(def builds-image #(and (= :run (:op %)) (= (:build house-cmds) (:cmd %))))
+(def runs-status #(and (= :run (:op %)) (= ["relay" "status"] (:cmd %))))
+
+(deftest a-house-deploy-builds-the-stewards-image-after-the-checkouts-and-before-status
+  (let [{:keys [outcome] w :world} (deploy (world) :house-cmds house-cmds)]
+    (is (:ok outcome))
+    (is (< (index-of w build-relay-tui) (index-of w build-webtool)) "webtool moves and builds after relay-tui")
+    (is (< (index-of w build-webtool) (index-of w checks-container) (index-of w builds-image) (index-of w runs-status))
+        "the container system is checked, then the image built, then status runs")
+    (is (some #{"Building the steward's image"} (:said w)))
+    (is (= "/w/relay" (:dir (nth (:effects w) (index-of w builds-image)))))))
+
+(deftest without-a-house-section-no-image-is-built
+  (let [{:keys [outcome] w :world} (deploy (world))]
+    (is (:ok outcome))
+    (is (nil? (index-of w checks-container)))
+    (is (nil? (index-of w builds-image)))))
+
+(deftest a-runner-other-than-container-builds-without-the-system-check
+  (let [{w :world} (deploy (world) :house-cmds (assoc house-cmds :check nil))]
+    (is (nil? (index-of w checks-container)))
+    (is (some? (index-of w builds-image)))))
+
+(deftest a-stopped-container-system-is-reported-and-not-started
+  (let [stopped (assoc (world) :on (on-op checks-container (fn [w _] [{:exit 1 :out "" :err "apiserver is not running"} w])))
+        {:keys [outcome] w :world} (deploy stopped :house-cmds house-cmds)]
+    (is (:ok outcome) "the checkouts are deployed; only the image waits")
+    (is (nil? (index-of w builds-image)) "no image is built without the system")
+    (is (not-any? #(= ["container" "system" "start"] (:cmd %)) (:effects w)) "and it is not started for her")
+    (let [said (str/join "\n" (:said w))]
+      (is (str/includes? said "The container system is not running"))
+      (is (str/includes? said "container system start"))
+      (is (str/includes? said "/w/relay/bin/relay house build --data /w/data")))
+    (is (some? (index-of w runs-status)) "status still runs")
+    (is (nil? (:paused w)))))
+
+(deftest an-image-build-that-fails-says-how-to-try-again
+  (let [broken (assoc (world) :on (on-op builds-image (fn [w _] [{:exit 2 :out "" :err "no space left"} w])))
+        {:keys [outcome] w :world} (deploy broken :house-cmds house-cmds)
+        said (str/join "\n" (:said w))]
+    (is (:ok outcome))
+    (is (str/includes? said "The steward's image did not build"))
+    (is (str/includes? said "no space left"))
+    (is (str/includes? said "/w/relay/bin/relay house build --data /w/data"))
+    (is (some? (index-of w runs-status)))))
+
+(deftest a-rollback-does-not-build-the-image
+  (let [w (:world (deploy (world) :house-cmds house-cmds))
+        n (count (filter builds-image (:effects w)))
+        {:keys [outcome] w :world} (rollback w :house-cmds house-cmds)]
+    (is (:ok outcome))
+    (is (= n (count (filter builds-image (:effects w)))))))
+
 (deftest a-rebuild-that-fails-without-a-move-keeps-relay-paused
   (let [w (:world (deploy (world)))
         {:keys [outcome] w :world} (deploy (assoc w :on (on-op build-relay-tui (fn [w _] [{:exit 2 :out "" :err "build broke"} w]))))]
@@ -312,7 +370,7 @@
         {:keys [outcome] w :world} (deploy (status-fails w))]
     (is (str/includes? (text outcome) "relay status failed"))
     (is (some? (:paused w)) "artifacts were rebuilt, so relay stays paused")
-    (is (= {:agentloop :built :relay-tui :built :relay :kept} (update-vals (:repos (latest w)) :state)))))
+    (is (= {:agentloop :built :relay-tui :built :webtool :built :relay :kept} (update-vals (:repos (latest w)) :state)))))
 
 (deftest a-failed-rebuild-that-moved-nothing-can-be-recovered-when-it-is-the-first-deploy
   ;; Everything is already on main, so the first deploy moves nothing.
@@ -522,7 +580,7 @@
   (let [w (world)
         {w :world} (interrupt (flow/start :deploy (opts w)) w
                               (fn [e _] (and (= :workspace-add (:op e)) (= "/w/relay-tui" (:path e)))))]
-    (is (= #{"deploy-check-agentloop-1" "deploy-check-relay-tui-1" "deploy-check-relay-1"}
+    (is (= #{"deploy-check-agentloop-1" "deploy-check-relay-tui-1" "deploy-check-webtool-1" "deploy-check-relay-1"}
            (set (map :name (filter #(= :workspace-forget (:op %)) (:effects w)))))
         "forgotten by name, whether or not it was noted as made")))
 

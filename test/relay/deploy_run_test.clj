@@ -56,7 +56,7 @@
 ;; --- a place to run in
 
 (defn- with-base
-  "Runs (f w) with a temporary directory: plain directories for the three
+  "Runs (f w) with a temporary directory: plain directories for the four
   checkouts, a staging data directory, and where the record and pause go."
   [f]
   (let [base (str (fs/create-temp-dir {:prefix "relay-deploy-run-test"}))
@@ -127,6 +127,7 @@
             (is (= 1 (count (workspaces d))) "the check workspace is gone"))
           (is (fs/exists? (str (:agentloop repos) "/built")))
           (is (fs/exists? (str (:relay-tui repos) "/built")))
+          (is (fs/exists? (str (:webtool repos) "/built")))
           (is (not (fs/exists? (str (:relay repos) "/built"))))
           (is (= :ok (:status rec)))
           (is (= rec (last (deploy/read-records (slurp record)))))
@@ -153,7 +154,7 @@
           (is (str/includes? (refused (str base "/no-log")) "not a relay data directory"))
           (is (str/includes? (threw #(run/rollback! (opts w :data ""))) "--data is empty"))))
       (is (str/includes? (threw #(run/deploy! (opts w :paths (assoc repos :relay-tui (:agentloop repos)))))
-                         "three different directories"))
+                         "four different directories"))
       (testing "the record file"
         (fs/create-dirs (str base "/a-directory"))
         (is (str/includes? (threw #(run/deploy! (opts w :record (str base "/a-directory")))) "cannot be written"))
@@ -304,3 +305,16 @@
     (is (str/includes? (:failed out) "relay is not paused"))
     (is (nil? (:paused @world)) "the pause it made is lifted")
     (is (= :failed (:status (last (:records @world)))) "and the record is closed")))
+
+(deftest the-house-commands-are-read-from-the-live-relay-edn
+  (with-base
+    (fn [{:keys [base data]}]
+      (let [edn (str data "/relay.edn")
+            original (slurp edn)]
+        (is (nil? (run/house-commands "/r" data)) "the staging relay.edn has no :house")
+        (spit edn (str (subs original 0 (str/last-index-of original "}")) " :house {:image \"x\"}}"))
+        (is (= {:check ["container" "system" "status"] :build ["/r/bin/relay" "house" "build" "--data" data]}
+               (run/house-commands "/r" data)))
+        (spit edn "{:house")
+        (is (nil? (run/house-commands "/r" data)) "unreadable: relay status says why")
+        (is (nil? (run/house-commands "/r" (str base "/nowhere"))))))))

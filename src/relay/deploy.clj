@@ -20,14 +20,28 @@
 
 (def repo-keys
   "The checkouts, in the order a deploy moves them: what relay runs on
-  first, relay last. A rollback goes the other way."
-  [:agentloop :relay-tui :relay])
+  first, relay last. A rollback moves them in the same order."
+  [:agentloop :relay-tui :webtool :relay])
 
 (def builds
   "How each checkout is built after it moves. relay is a script and needs
-  none."
+  none; webtool is the scouts' web tool."
   {:agentloop ["make" "build"]
-   :relay-tui ["make" "build"]})
+   :relay-tui ["make" "build"]
+   :webtool ["make" "build"]})
+
+(defn house-commands
+  "What a deploy runs after the builds for the steward's shell, from
+  relay.edn's settings (nil when they could not be read): {:check
+  :build}, or nil when there is no :house. :check asks Apple container
+  whether its system is running, and is nil for another runner, which has
+  none; :build is `relay house build` against the data directory. Pure."
+  [settings relay-path data]
+  (when (and (map? settings) (contains? settings :house))
+    (let [runner (get-in settings [:house :runner])
+          prog (if (and (vector? runner) (string? (first runner))) (first runner) "container")]
+      {:check (when (= "container" (last (str/split prog #"/"))) [prog "system" "status"])
+       :build [(str relay-path "/bin/relay") "house" "build" "--data" data]})))
 
 ;; --- reading what jj says
 
@@ -196,7 +210,10 @@
   or rollback that stopped partway). Pure; the result is that of
   plan-deploy."
   [{:keys [observed record paths]}]
+  ;; A checkout the record does not name (webtool, in a record from before
+  ;; it was deployed) was not touched by that deploy and is left alone.
   (let [recorded (fn [r k] (get-in record [:repos r k]))
+        repos (filter #(contains? (:repos record) %) repo-keys)
         problems
         (vec (mapcat
               (fn [r]
@@ -214,10 +231,10 @@
                               " did not leave it on (it found it on " (short-id (recorded r :previous))
                               (when (recorded r :new) (str " and moved it to " (short-id (recorded r :new))))
                               "). Something else moved it; not rolling back over that.")]))))
-              repo-keys))]
+              repos))]
     (if (seq problems)
       {:problems problems}
-      {:steps (vec (for [r repo-keys
+      {:steps (vec (for [r repos
                          :let [{:keys [path] :as o} (get observed r)
                                previous (recorded r :previous)]]
                      {:repo r :path path :observed o :from (ids (sole-parent o)) :to previous
