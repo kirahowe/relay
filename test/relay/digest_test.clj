@@ -244,7 +244,7 @@
     (is (= (str "1. Changed the how-to \"grants\" (2 lines added), shaped by a mail from"
                 " eve@example.net. Reply \"revert 1\" to undo it.")
            (:text (first (:items (first (:sections note)))))))
-    (is (= "2. Interview with Maple Co, Thu 29 Oct 10:00 Want prep notes?"
+    (is (= "2. Interview with Maple Co, Thu 29 Oct 10:00. Want prep notes?"
            (:text (first (:items (second (:sections note)))))))
     (is (= ["contaminated" "private"] (:labels (first (:items (second (:sections note))))))
         "a role's text keeps its provenance, which each channel shows")
@@ -277,18 +277,58 @@
 
 (deftest a-reply-says-what-to-do
   (is (= [{:op "revert" :n 1}] (digest/reply-acts "revert 1" numbered)))
-  (is (= [{:op "revert" :n 1} {:op "dismiss" :n 3}] (digest/reply-acts "Undo 1.\nnot 3\n\nThanks!" numbered)))
-  (is (= [{:op "dismiss" :n 2} {:op "dismiss" :n 3}] (digest/reply-acts "dismiss 2 and 3" numbered)))
-  (is (= [{:op "dismiss" :n 2} {:op "dismiss" :n 3}] (digest/reply-acts "not #2, 3" numbered)))
+  (is (= [{:op "revert" :n 1} {:op "decline" :n 3}] (digest/reply-acts "Undo 1.\nnot 3\n\nThanks!" numbered))
+      "not says no to the offer only")
+  (is (= [{:op "dismiss" :n 2} {:op "dismiss" :n 3}] (digest/reply-acts "drop 2 and 3" numbered))
+      "drop removes the item")
+  (is (= [{:op "decline" :n 2} {:op "decline" :n 3}] (digest/reply-acts "not #2, 3" numbered)))
   (is (= [] (digest/reply-acts "Please revert the change about grants" numbered)) "left to the role to read")
   (is (= [] (digest/reply-acts "not this one" numbered)) "two suggestions: which one is not clear")
-  (is (= [{:op "dismiss" :n 2}] (digest/reply-acts "Not this one." [{:n 1 :op "revert"} {:n 2 :op "dismiss"}])))
+  (is (= [{:op "decline" :n 2}] (digest/reply-acts "Not this one." [{:n 1 :op "revert"} {:n 2 :op "dismiss"}])))
   (quick 200
          (prop/for-all [n (gen/choose 1 999)
-                        w (gen/elements ["revert" "Revert" "undo" "not" "dismiss" "drop" "skip"])
+                        w (gen/elements ["revert" "Revert" "undo" "not" "No" "dismiss" "drop" "Drop" "skip" "remove"])
                         pad (gen/elements ["" " " "  "])]
-           (= [{:op (if (#{"revert" "Revert" "undo"} w) "revert" "dismiss") :n n}]
+           (= [{:op (case (str/lower-case w)
+                      ("revert" "undo") "revert"
+                      ("not" "no") "decline"
+                      "dismiss")
+                :n n}]
               (digest/reply-acts (str pad w " " n pad) numbered)))))
+
+(deftest an-offer-follows-its-item-after-a-full-stop
+  (is (= "Interview, Thu 11:00. Want prep notes?" (digest/with-offer "Interview, Thu 11:00" "Want prep notes?")))
+  (is (= "Is the hall booked? Want me to ask?" (digest/with-offer "Is the hall booked?" "Want me to ask?")))
+  (is (= "Dentist, Fri" (digest/with-offer "Dentist, Fri" nil)))
+  (quick 200
+         (prop/for-all [text (gen/not-empty gen/string-alphanumeric)
+                        offer (gen/not-empty gen/string-alphanumeric)]
+           (let [s (digest/with-offer text offer)]
+             (and (str/starts-with? s text) (str/ends-with? s offer)
+                  (re-find #"[.!?:;,] $" (subs s 0 (- (count s) (count offer)))))))))
+
+(deftest a-declined-offer-leaves-the-item
+  (let [written {"ahead" {:items [{:text "Interview with Riverbend, Thu 29 Oct 11:00" :offer "Want prep notes?" :key "riverbend"}
+                                  {:text "Dentist, Fri" :key "dentist"}]
+                          :labels []}}
+        note (fn [declined dismissed]
+               (digest/compose {:date (day "2026-10-27") :changes [] :since 0 :written written
+                                :dismissed dismissed :declined declined}))
+        texts (fn [n] (map :text (mapcat :items (:sections n))))]
+    (is (= ["1. Interview with Riverbend, Thu 29 Oct 11:00. Want prep notes?" "2. Dentist, Fri"
+            "Nothing on grants since the last note." "Nothing new."
+            "Reply \"not N\" to say no to an offer; the item stays. Reply \"drop N\" to remove an item for good."]
+           (texts (note #{} #{}))))
+    (is (= "Want prep notes?" (:offer (first (:numbered (note #{} #{}))))) "the number knows its offer")
+    (testing "declined, the item stays without its offer"
+      (let [n (note #{"ahead/riverbend"} #{})]
+        (is (= ["1. Interview with Riverbend, Thu 29 Oct 11:00" "2. Dentist, Fri"
+                "Nothing on grants since the last note." "Nothing new."
+                "Reply \"drop N\" to remove an item for good."]
+               (texts n)))
+        (is (nil? (:offer (first (:numbered n)))))))
+    (testing "dropped, it is gone"
+      (is (= ["1. Dentist, Fri" "Nothing on grants since the last note." "Nothing new." "Reply \"drop N\" to remove an item for good."] (texts (note #{} #{"ahead/riverbend"})))))))
 
 (deftest a-reply-of-only-acts-needs-nobody-to-read-it
   (is (digest/only-acts? "revert 1" numbered))

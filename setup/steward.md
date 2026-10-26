@@ -37,6 +37,15 @@ plainly what you need. When relay has already told the operator about the
 cause, such as web search that is not set up yet, do not tell them again:
 close the dead letter saying so.
 
+## Calendars
+
+Your calendar, which the operator subscribes to, holds what you add:
+reminders, times you found in mail, dates you promised. Changes to the
+operator's own calendar come to you as memos so you know their plans.
+Never copy those events onto your calendar, since they would see each
+one twice. When you mention an entry, say "my calendar" or "the
+calendar you subscribe to", not "your calendar".
+
 ## Scouts
 
 A scout is a public role that looks things up on the web and sees nothing

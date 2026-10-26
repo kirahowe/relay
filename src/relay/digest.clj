@@ -21,9 +21,11 @@
   when it has nothing, so the note always reads the same way.
 
   The note numbers what the operator can act on: a change to undo
-  (\"revert 1\") and a suggestion to drop (\"not 2\"). The numbers are
-  kept on the message, so a reply, the command line and the client all
-  act on the same item.
+  (\"revert 1\"), an offer of help to turn down (\"not 2\", which keeps
+  the item and drops only its offer, then and in later notes) and an
+  item to remove for good (\"drop 2\"). The numbers are kept on the
+  message, so a reply, the command line and the client all act on the
+  same item.
 
   A day's note is due once its time has come that day, in the
   operator's zone, until one is recorded for that day, as the morning
@@ -80,6 +82,28 @@
   "Whether the operator turned down a suggestion like this one."
   [dismissed part item]
   (boolean (some #(contains? dismissed %) (item-keys part item))))
+
+(defn declined?
+  "Whether the operator turned down the offer of an item like this one."
+  [declined part item]
+  (dismissed? declined part item))
+
+(defn with-offer
+  "An item's text with its offer after it, a full stop between them when
+  the text does not end in one already."
+  [text offer]
+  (cond
+    (str/blank? offer) text
+    (re-find #"[.!?:;,]$" (str/trimr text)) (str (str/trimr text) " " offer)
+    :else (str (str/trimr text) ". " offer)))
+
+(defn outcome-problem
+  "What is wrong with an offer's outcome a role records, or nil."
+  [key outcome]
+  (cond
+    (not (and (string? key) (not (str/blank? key)))) "key is the key the item had in the daily note."
+    (not (and (string? outcome) (not (str/blank? outcome)))) "outcome says what came of the offer, in one line."
+    (> (cp-count outcome) offer-limit) (str "An outcome is at most " offer-limit " characters.")))
 
 (defn part-problem
   "What is wrong with a part a role writes, or nil."
@@ -285,18 +309,33 @@
     "changed" (str "Put the " (thing c) " back as it was.")
     "removed" (str "Brought back the " (thing c) ".")))
 
+(defn- quoted [text labels]
+  (let [t (str text)
+        t (if (> (count t) 120) (str (subs t 0 119) "…") t)
+        t (if (outside? labels) (text/defang t) t)]
+    (str "\"" (str/trim (messages/squeeze-line t)) "\"")))
+
+(defn- stop
+  "The full stop after quoted text `q`, unless the quote already ends a
+  sentence."
+  [q]
+  (when-not (re-find #"[.!?]\"$" q) "."))
+
 (defn dropped-line
   "What dropping a suggestion did, naming it. Its text came from a session
   with `labels`; when that session read outside text, a domain in it
   must not become a link."
   ([text] (dropped-line text []))
   ([text labels]
-   (let [t (str text)
-         t (if (> (count t) 120) (str (subs t 0 119) "…") t)
-         t (if (outside? labels) (text/defang t) t)]
-     (let [t (str/trim (messages/squeeze-line t))]
-       ;; A suggestion that ends a sentence is not given a second stop.
-       (str "Dropped \"" t "\"" (when-not (re-find #"[.!?]$" t) ".") " It will not be suggested again.")))))
+   (let [q (quoted text labels)]
+     (str "Dropped " q (stop q) " It will not be suggested again."))))
+
+(defn declined-line
+  "What turning down an item's offer did, naming both: the item stays."
+  [text offer labels]
+  (let [t (quoted text labels)]
+    (str "No to " (quoted offer labels) " for " t (stop t)
+         " It will not be offered again, and the item stays in the note.")))
 
 (defn flagged
   "The changes to check: those after event `since` that a role (never
@@ -374,19 +413,20 @@
   sections when there is nothing to say. `changes` are the recorded
   changes to how roles work, `since` the event of the last note,
   `written` the parts written since, {part {:items :labels}}, `dismissed`
-  the keys of suggestions the operator turned down, `github` the new
-  items people opened since the last note ({:repo :number :kind :title
-  :user}), with `github?` whether any GitHub source is watched,
-  `problems` what relay could not check, one line each, and
+  the keys of suggestions the operator dropped, `declined` those whose
+  offers she turned down (such an item is shown without its offer),
+  `github` the new items people opened since the last note ({:repo
+  :number :kind :title :user}), with `github?` whether any GitHub source
+  is watched, `problems` what relay could not check, one line each, and
   `grant-search` what relay knows of the grant search (grant-search-states,
   nil when relay.edn names none).
   :numbered is what each number in the note stands for:
   {:n :op \"revert\" :change seq :text} or {:n :op \"dismiss\" :part
-  :keys :text}. The number is the only one the operator is shown for an
+  :keys :text :offer}, :offer only when the item showed one. The number is the only one the operator is shown for an
   item: a reply, the client and `relay revert` all take it. A flagged
   change that cannot be undone (revert-refusal) is listed with the
   reason and gets no number."
-  [{:keys [^LocalDate date changes since written dismissed github github? problems grant-search]}]
+  [{:keys [^LocalDate date changes since written dismissed declined github github? problems grant-search]}]
   (let [flags (flagged changes since)
         n (atom 0)
         numbered (atom [])
@@ -412,12 +452,15 @@
         (fn [part]
           (let [{:keys [items labels]} (get written part)
                 items (cond->> items (dismissable part) (remove #(dismissed? dismissed part %)))]
-            (vec (for [{:keys [text offer] :as it} items]
+            (vec (for [{:keys [text offer] :as it} items
+                       :let [offer (when-not (and (dismissable part) (declined? (or declined #{}) part it)) offer)]]
                    (if (dismissable part)
-                     (let [k (number! {:op "dismiss" :part part :keys (item-keys part it) :text text :labels (vec labels)})]
-                       {:text (str k ". " text (when offer (str " " offer)))
+                     (let [k (number! (cond-> {:op "dismiss" :part part :keys (item-keys part it) :text text
+                                               :labels (vec labels)}
+                                        offer (assoc :offer offer)))]
+                       {:text (str k ". " (with-offer text offer))
                         :labels labels :action {:op "dismiss" :n k}})
-                     {:text (str text (when offer (str " " offer))) :labels labels})))))
+                     {:text (with-offer text offer) :labels labels})))))
         ahead (part-items "ahead")
         grants (part-items "grants")
         github-said (part-items "github")
@@ -442,8 +485,10 @@
                          (or github? (seq github-said)) [(section "github" (part-headings "github") github-said)])
                        [(section "learned" (part-headings "learned") learned)]))
         dismiss? (some #(= "dismiss" (:op %)) @numbered)
+        offers? (some #(and (= "dismiss" (:op %)) (:offer %)) @numbered)
         sections (cond-> sections
-                   dismiss? (conj {:items [{:text "Reply \"not N\" to drop a suggestion. It will not come back."}]}))]
+                   dismiss? (conj {:items [{:text (str (when offers? "Reply \"not N\" to say no to an offer; the item stays. ")
+                                                       "Reply \"drop N\" to remove an item for good.")}]}))]
     {:subject (str "Daily note for " (.format date-format date)
                    (when (seq flags) (str ": " (plural (count flags) "change") " to check")))
      :sections (when something? sections)
@@ -453,18 +498,20 @@
 ;; --- what the operator says back
 
 (def ^:private act-words
-  {"revert" "revert" "undo" "revert" "not" "dismiss" "dismiss" "dismiss" "drop" "dismiss" "skip" "dismiss"})
+  {"revert" "revert" "undo" "revert" "not" "decline" "no" "decline"
+   "dismiss" "dismiss" "drop" "dismiss" "skip" "dismiss" "remove" "dismiss"})
 
 (defn reply-acts
-  "What a reply to a note asks for, as [{:op \"revert\"|\"dismiss\" :n}],
-  in order: lines such as \"revert 1\", \"undo 1 and 3\", \"not 2\",
-  \"dismiss 2, 4\". A reply that is only \"not this one\" (or \"not
-  this\") turns down the one suggestion when the note has exactly one.
-  Anything else is left to whoever reads the reply."
+  "What a reply to a note asks for, as [{:op \"revert\"|\"decline\"|
+  \"dismiss\" :n}], in order: lines such as \"revert 1\", \"undo 1 and
+  3\", \"not 2\" (no to its offer; the item stays), \"drop 2, 4\" (the
+  items go for good). A reply that is only \"not this one\" (or \"not
+  this\") turns down the one suggestion's offer when the note has exactly
+  one. Anything else is left to whoever reads the reply."
   [text numbered]
   (let [lines (map str/trim (str/split-lines (str text)))
         acts (vec (for [l lines
-                        :let [[_ w nums] (re-matches #"(?i)(revert|undo|not|dismiss|drop|skip)\s+#?(\d+(?:\s*(?:,|and|&)\s*#?\d+)*)\s*[.!]?" l)]
+                        :let [[_ w nums] (re-matches #"(?i)(revert|undo|not|no|dismiss|drop|skip|remove)\s+#?(\d+(?:\s*(?:,|and|&)\s*#?\d+)*)\s*[.!]?" l)]
                         :when w
                         num (re-seq #"\d+" nums)
                         :let [k (parse-long num)]
@@ -475,7 +522,7 @@
       (seq acts) (vec (distinct acts))
       (and (re-matches #"(?i)\s*not\s+this(\s+one)?\s*[.!]?\s*" (str/join " " (remove str/blank? lines)))
            (= 1 (count dismissals)))
-      [{:op "dismiss" :n (:n (first dismissals))}]
+      [{:op "decline" :n (:n (first dismissals))}]
       :else [])))
 
 (defn only-acts?

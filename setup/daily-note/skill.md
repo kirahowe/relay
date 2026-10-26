@@ -4,9 +4,10 @@ Use when: the daily-note routine runs, or you are about to write any part of the
 
 The daily note is one calm, short message a day. relay adds changes shaped by outside
 text at the top by itself; you write the rest with daily_note_write, one part at a time.
-Start with daily_note_draft: it shows what you wrote so far, the suggestions the
-operator turned down (never suggest those again), and the changes to how roles work
-since the last note.
+Start with daily_note_draft: it shows what you wrote so far, the items the operator
+dropped (never suggest those again), the offers they said no to (keep the item, without
+an offer like it), what came of offers you followed up, and the changes to how roles
+work since the last note.
 
 ## ahead: the next two weeks
 
@@ -19,7 +20,13 @@ Look at what is coming up in the next 14 days, using the clock tool for dates:
 Give one item per thing, soonest first, with its day and time in the text, and an offer
 of help you could really do: "Interview with Maple Co, Thu 29 Oct 10:00" with the offer
 "Want prep notes?". Give each a key that names the thing and stays the same every day,
-such as maple-interview, so a suggestion the operator turned down stays down.
+such as maple-interview, so an item the operator dropped stays dropped. List every
+event of the next 14 days, not only those you can help with; leave the offer out when
+there is nothing to offer. When daily_note_draft shows an outcome for a key, say where
+it stands in place of the offer: "Prep outline ready, three figures missing".
+
+When the operator says yes to an offer and you do the work, record where it stands
+with offer_outcome under the item's key, so tomorrow's note knows.
 
 ## grants
 

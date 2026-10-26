@@ -103,7 +103,7 @@
     (is (= "digest" (:kind m)))
     (is (= "Daily note for Monday 26 October: 1 change to check" (:subject m)))
     (is (str/includes? (note-text m) "1. New how-to \"grants\" (1 line added), shaped by a mail from eve@example.net. It says: \"Grants\". Reply \"revert 1\" to undo it."))
-    (is (str/includes? (note-text m) "2. Interview, Thu 10:00 Prep notes?"))
+    (is (str/includes? (note-text m) "2. Interview, Thu 10:00. Prep notes?"))
     (is (not (re-find #"relay revert|change:" (note-text m))) "one number per item, and no command for a phone")
     (is (not (str/includes? (note-text m) "venues")) "a quiet change is the writer's to describe")
     (is (not (str/includes? (note-text m) "rules")) "the operator's own change is not news to them")
@@ -472,7 +472,11 @@
   (is (= {:command {:type :digest/act :actor "operator" :labels [] :public false :args {:message 7 :n 2}}}
          (workspace/messages-act-command {"message" 7 "item" 2})))
   (is (:error (workspace/messages-act-command {"message" 7})))
-  (is (:error (workspace/messages-act-command {"message" 7 "item" 2 "op" "revert"})))
+  (is (= {:message 7 :n 2 :op "decline"}
+         (get-in (workspace/messages-act-command {"message" 7 "item" 2 "op" "decline"}) [:command :args]))
+      "the client can say no to an offer alone")
+  (is (:error (workspace/messages-act-command {"message" 7 "item" 2 "op" "maybe"})))
+  (is (:error (workspace/messages-act-command {"message" 7 "item" 2 "why" "x"})))
   (let [w (with-note)
         m (note w)
         {:keys [command]} (workspace/messages-act-command {"message" (:id m) "item" 1})
@@ -495,7 +499,7 @@
 (deftest a-verified-reply-undoes-and-drops-what-it-names
   (let [w (-> (with-note) (advance 600))
         m (note w)
-        w (ok (reply w "r1" operator-address "revert 1\r\nnot 3" verified))
+        w (ok (reply w "r1" operator-address "revert 1\r\ndrop 3" verified))
         st (:state w)]
     (is (:removed (core/doc-version st "skills/steward/grants.md" {})))
     (is (contains? (:dismissed st) "ahead/dentist"))
@@ -518,7 +522,7 @@
     (testing "a second reply says what was done already, and changes nothing"
       (let [w (ok (reply (advance w 60) "r2" operator-address "revert 1" verified))
             told (last (sort-by :id (vals (:messages (:state w)))))]
-        (is (= ["1: Item 1 was reverted already."] (mapcat #(map :text (:items %)) (:sections told))))))))
+        (is (= ["1: Item 1 was undone already."] (mapcat #(map :text (:items %)) (:sections told))))))))
 
 (deftest a-reply-from-the-client-acts-like-a-mailed-one
   (let [w (-> (with-note) (advance 600))
@@ -527,7 +531,7 @@
                             (workspace/ready-items (:state w) {})))]
     (is (some? item) "the note is in the ready view")
     (is (= (:id m) (get item "replyTo")) "and can be answered from it")
-    (let [w (ok (run w "operator" :message/reply {:in-reply-to (:id m) :text "revert 1\nnot 3"}))
+    (let [w (ok (run w "operator" :message/reply {:in-reply-to (:id m) :text "revert 1\ndrop 3"}))
           st (:state w)]
       (is (:removed (core/doc-version st "skills/steward/grants.md" {})))
       (is (contains? (:dismissed st) "ahead/dentist"))
@@ -591,7 +595,7 @@
                 (compose "2026-10-26") ok
                 (advance 600))
           m (note w)
-          w (ok (reply w "r1" operator-address "not 1" verified))
+          w (ok (reply w "r1" operator-address "drop 1" verified))
           told (last (sort-by :id (vals (:messages (:state w)))))]
       (is (= (:id m) (:in-reply-to told)) "the answer is the one relay told")
       ;; No line is stamped (U1b): relay's own answer carries no "Drew on",
@@ -749,3 +753,101 @@
       (is (str/includes? (try (config/resolve-config (assoc-in settings [:daily-note :grants] "grant search")) ""
                               (catch clojure.lang.ExceptionInfo e (ex-message e)))
                          "owner/name")))))
+
+;; --- an offer turned down, an item dropped, and what came of an offer (U1e)
+
+(deftest not-says-no-to-the-offer-and-keeps-the-item
+  (let [w (-> (with-note) (advance 600))
+        m (note w)
+        w (ok (run w "operator" :message/reply {:in-reply-to (:id m) :text "not 2"}))
+        st (:state w)
+        told (last (sort-by :id (vals (:messages st))))]
+    (is (= "declined" (get-in (core/message st (:id m)) [:acted 2])))
+    (is (contains? (:declined st) "ahead/interview"))
+    (is (not (contains? (:dismissed st) "ahead/interview")) "the item is not dropped")
+    (is (= ["2: No to \"Prep notes?\" for \"Interview, Thu 10:00\". It will not be offered again, and the item stays in the note."]
+           (mapcat #(map :text (:items %)) (:sections told)))
+        "the answer names the offer and the item")
+    (testing "the note shows it, in the ready view and to a client"
+      (let [item (first (filter #(= (str "message:" (:id m)) (get % "id")) (workspace/ready-items st {})))]
+        (is (some #(str/ends-with? % "Prep notes? (offer declined)") (get item "lines")))
+        (is (= "declined" (get (first (filter #(= 2 (get % "n")) (get item "acts"))) "done")))
+        (is (true? (get (first (filter #(= 2 (get % "n")) (get item "acts"))) "offer")))))
+    (testing "the writer is told, and the next note keeps the item without the offer"
+      (let [{:keys [content]} ((get-in tools/builtin ["daily_note_draft" :read]) {:state st :config cfg :now (:now w)} "steward" {})]
+        (is (str/includes? content "said no to these offers"))
+        (is (str/includes? content "Interview, Thu 10:00: Prep notes?")))
+      (let [w (-> w (advance 86400)
+                  (run "steward" :digest/write-part {:part "ahead" :items [{:text "Interview, Thu 10:00" :offer "Prep notes?" :key "interview"}]}
+                       ["private"])
+                  ok
+                  (compose "2026-10-27") ok)]
+        (is (str/includes? (note-text (note w)) "1. Interview, Thu 10:00\n"))
+        (is (not (str/includes? (note-text (note w)) "Prep notes?")))))
+    (testing "drop still removes it after a no"
+      (let [w (ok (run w "operator" :digest/act {:message (:id m) :n 2 :op "dismiss"}))]
+        (is (= "dismissed" (get-in (core/message (:state w) (:id m)) [:acted 2])))
+        (is (contains? (:dismissed (:state w)) "ahead/interview"))))
+    (testing "a second no is refused plainly"
+      (is (= :invalid (:rejected (run w "operator" :digest/act {:message (:id m) :n 2 :op "decline"})))))))
+
+(deftest not-on-an-item-with-no-offer-changes-nothing
+  ;; A casual no must not drop a reminder for good: only drop does.
+  (let [w (-> (with-note) (advance 600))
+        m (note w)
+        n (:n (first (filter #(str/includes? (str (:text %)) "Dentist") (:numbered m))))
+        _ (is (nil? (:offer (first (filter #(= n (:n %)) (:numbered m))))))
+        w (ok (run w "operator" :message/reply {:in-reply-to (:id m) :text (str "not " n)}))
+        st (:state w)
+        told (last (sort-by :id (vals (:messages st))))]
+    (is (= [(str n ": Item " n " has no offer to turn down. Reply \"drop " n "\" to remove it.")]
+           (mapcat #(map :text (:items %)) (:sections told))))
+    (is (nil? (get-in (core/message st (:id m)) [:acted n])))
+    (is (not (contains? (:dismissed st) "ahead/dentist")))
+    (is (not (contains? (:declined st) "ahead/dentist")))
+    (testing "relay decline and the client's decline are refused the same way"
+      (let [r (run w "operator" :digest/act {:message (:id m) :n n :op "decline"})]
+        (is (= :invalid (:rejected r)))))
+    (testing "a later item with the same key is kept"
+      (let [w (-> w (advance 86400)
+                  (run "steward" :digest/write-part {:part "ahead" :items [{:text "Dentist, Fri 27 Nov" :key "dentist"}]}
+                       ["private"])
+                  ok
+                  (compose "2026-10-27") ok)]
+        (is (str/includes? (note-text (note w)) "Dentist, Fri 27 Nov"))))))
+
+(deftest done-in-one-note-reads-as-done-in-every-note-that-numbered-it
+  (let [w (with-note)
+        first-note (note w)
+        w (-> w (advance 86400)
+              (run "steward" :digest/write-part {:part "ahead" :items [{:text "Dentist, Fri" :key "dentist"}]} ["private"])
+              ok
+              (compose "2026-10-27") ok)
+        second-note (note w)
+        _ (is (not= (:id first-note) (:id second-note)))
+        lines-of (fn [st m] (get (first (filter #(= (str "message:" (:id m)) (get % "id")) (workspace/ready-items st {})))
+                                 "lines"))
+        rev-before (:rev (core/message (:state w) (:id second-note)))
+        ;; Undone from the older note, and dropped from the newer one.
+        w (ok (run w "operator" :digest/act {:message (:id first-note) :n 1}))
+        w (ok (run w "operator" :digest/act {:message (:id second-note) :n (:n (first (:numbered second-note)))}))
+        st (:state w)]
+    (is (some #(str/ends-with? % "Reply \"revert 1\" to undo it. (undone)") (lines-of st first-note)))
+    (is (some #(str/ends-with? % "Dentist, Fri (dropped)") (lines-of st first-note))
+        "dropped from the newer note, so done in the older one too")
+    (is (some #(str/ends-with? % "(dropped)") (lines-of st second-note)))
+    (is (= "dismissed" (get-in (core/note-acted st (core/message st (:id first-note))) [3])))
+    (is (> (:rev (core/message st (:id second-note))) rev-before) "a client is sent the newer note again")
+    (testing "and one done already is refused from any note"
+      (is (= :invalid (:rejected (run w "operator" :digest/act {:message (:id first-note) :n 3})))))))
+
+(deftest the-writer-records-what-came-of-an-offer
+  (let [w (with-note)
+        w (ok (run w "steward" :offer/outcome {:key "Interview" :outcome "Prep outline ready in docs, three figures missing"}
+                   ["private"]))
+        {:keys [content labels]} ((get-in tools/builtin ["daily_note_draft" :read]) {:state (:state w) :config cfg :now (:now w)} "steward" {})]
+    (is (str/includes? content "interview: Prep outline ready in docs, three figures missing"))
+    (is (some #{"private"} labels))
+    (is (= :forbidden (:rejected (run w "clerk" :offer/outcome {:key "x" :outcome "y"}))) "only the note's writer")
+    (is (:rejected (run w "steward" :offer/outcome {:key "x" :outcome ""})))
+    (is (:rejected (run w "steward" :offer/outcome {:key "x" :outcome (apply str (repeat 201 "a"))})))))
