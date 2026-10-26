@@ -398,10 +398,13 @@ value with the lines to tell you.
 relay keeps the operator's things in the house. A role that is not
 public, a house role, may read everything relay keeps, including text
 an outsider wrote, but it has no way to send anything out: relay grants
-it no `egress` tool, and refuses a memo from it to a public role. A
-public role, a scout, may reach the web, but it is never shown anything
-private. relay and agentloop enforce both rules. Neither depends on the
-model behaving.
+it no `egress` tool. A public role, a scout, may reach the web, but it is
+never shown anything private. A house role may ask a scout for help, and
+its memo goes as written, so the scout sees only what the house role
+chose to put in it. A scout may fetch only an address that an earlier
+web result in the same session showed it, so it cannot put what it was
+told into a URL of its own. relay and agentloop enforce these rules.
+None depends on the model behaving.
 
 Each tool has a class, which says what a call to it can do:
 
@@ -583,10 +586,38 @@ that zone: the zone is not kept from it, so it may go out in a search.
 on `relay wake --note` marks what the operator writes as public: it may
 leave this machine in a web search. A memo, routine, note, journal entry
 or wake note for a public role is refused without it. A memo to a public
-role from a house role is refused with a plain reason, since it could
-carry the operator's private things to the web. A memo of that kind from an older log, which
-relay used to hold for the operator, stays unseen by the public role
-until the operator closes it.
+role from a house role is public as written: nobody signs it off, and
+the house role is told that what it wrote went out. It keeps the rest of
+its provenance, so a request shaped by a mail stays marked as from
+outside. A role whose own id was written in private cannot send one,
+since the scout would see its name. A private memo of that kind from an
+older log stays unseen by the public role until the operator closes it.
+A memo a public role sends is always marked as from outside, even from a
+session that has not read the web yet. A public role may answer any role
+that sent it a memo it was shown.
+
+A public role's `egress` calls follow the fetch rule. relay checks each
+one before it runs: a `url` argument, and in any other argument (a search
+query included) everything from a `scheme://` to the end of that
+argument, must appear character for character in an earlier result of
+an `egress` tool in the same session. Nothing may follow an address in a
+query, since a tool may echo the query back and the echo would make the
+longer address fetchable. A wake that resumes an interrupted session keeps what that
+session was shown. Results of relay's own tools and of other tools do
+not count, so an address the steward wrote in a memo cannot be fetched
+until the web shows it too. webtool never follows a redirect: it reports
+the new address, and fetching it is a new call that relay checks the same
+way. relay keeps each `egress` result for this in
+`<data>/runs/<role>/<wake>/shown/`. Since relay must see and read each
+call, an `egress` tool is an `:envelope` tool with its `:parameters`
+listed: relay.edn refuses one of an MCP server, one run as a command
+given the model's arguments, and one whose parameters it does not know.
+Each parameter is `url`, a number or a yes-or-no value, or free text
+named in the tool's `:queries`, such as `:queries ["query"]`. relay can
+hold a scout to what it was shown only in a `url` argument, so list a
+parameter in `:queries` only when its text goes to a provider you trust
+as you trust the model provider (a web search), never to one that
+publishes what it is given.
 
 relay refuses any tool result for a public role that carries `private`,
 and tells agentloop to refuse one too (`forbid_labels`), so a public
@@ -1303,7 +1334,15 @@ empty. `--force` empties a directory only if an earlier `staging init` made
 it. The staging `relay.edn` routes every message to a push channel with
 `:via :file`, which appends each push to `notifications.log` in the
 directory and reaches nobody. Its
-roles are the hub, the clerk and the scout, a public role. It also defines stand-in tools that no role holds until
+roles are the hub, the clerk and the scout, a public role. The scout has
+webtool's search and fetch, from the webtool built beside this checkout,
+with a `webtool.json` in the directory that keeps page snapshots there
+and reads the Brave key from the keychain as `relay-brave`. Its routine
+`grant-search` runs daily at 07:00: it looks for grants for the Harbour
+Sound Society, a made-up community choir, and sends what it found to the
+hub, whose text is public so that the scout can reach it. Scenarios and
+evals make their staging data without the scout's web and routine, so no
+run of theirs reaches the real web. It also defines stand-in tools that no role holds until
 a scenario grants them, among them a mailing service for a made-up concert
 society: `campaign-draft-demo` (edit) keeps every version of a draft in
 `campaigns.edn`. It only drafts; nothing in staging can send.
@@ -1441,8 +1480,9 @@ outsider's text and assumes it obeys perfectly, then checks that:
 
 - a house role that is shown an outsider's text, by any route (a memo, a
   block explanation, a dead letter, a doc), has no way to send the
-  operator's things out: it has no egress tool, and its memo to the
-  public scout is refused
+  operator's things out: it has no egress tool, and when its memo to the
+  public scout carries them, the scout cannot fetch an address that holds
+  them
 - the scout, which can post, is never shown anything private
 - what the operator pastes, in a memo or as an ACP resource, is trusted,
   and relay never asks an ACP client for permission

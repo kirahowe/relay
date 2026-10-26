@@ -561,9 +561,9 @@ entity Memo {
     -- black box: whether a set of labels holds contaminated.
     is_contaminated: has_contaminated(labels)
     -- A memo to a public role that is not public, or carries private,
-    -- is never shown to it. relay refuses to send one now
-    -- (RefuseAHouseMemoToAPublicRole), so only an older log holds one,
-    -- and it waits, unseen, until the operator closes it.
+    -- is never shown to it. A house role's memo to it is public as
+    -- written now (SendAHouseMemoToAPublicRole), so only an older log
+    -- holds one, and it waits, unseen, until the operator closes it.
     is_hidden: not is_for_operator and recipient.is_public
         and (not public or has_private(labels))
     is_waiting: status = unread and not is_backing_off and not is_hidden
@@ -1213,22 +1213,61 @@ rule SendMemo {
         -- are trimmed and must not be blank.
 }
 
-rule RefuseAHouseMemoToAPublicRole {
+rule SendAHouseMemoToAPublicRole {
     when: MemoSendRequested(caller, recipient, subject, body)
 
     requires: not caller.is_operator
+    requires: caller.kind = role
+    requires: not caller.is_public
     requires: recipient.is_public
-    requires: not session_is_public(caller)   -- black box: the calling session began public
+    requires: not has_private(caller.id_labels)
 
-    ensures: Rejected(MemoSendRequested)
+    ensures: Memo.created(
+        sender: caller,
+        recipient: recipient,
+        subject: subject,
+        body: body,
+        sent_at: now,
+        status: unread,
+        attempts: 0,
+        public: true,
+        labels: without_private(session_labels(caller))
+    )
 
     @guidance
-        -- A house role's session may hold the operator's private
-        -- things, and a public role works on the open web, so the memo
-        -- could carry them out. relay refuses it and says so plainly:
-        -- "<to> works on the open web, and a memo from <role> could
-        -- carry your private things to it, so it was not sent." The
-        -- operator writes to a public role herself, with --public.
+        -- Decision 6: a house role's request to a scout goes as written,
+        -- with no sign-off. The role chose what to put in it, and is
+        -- told that it went out as written. It keeps its other labels,
+        -- so a request shaped by a mail is still from outside. A role
+        -- whose id was written in private cannot send one, since the
+        -- scout would be shown its name: "<to> works on the open web
+        -- and is never shown a name written in private, as <role>'s
+        -- was, so the memo was not sent." A private memo to a public
+        -- role from an older log stays unseen by it.
+}
+
+rule SendAPublicRoleMemo {
+    when: MemoSendRequested(caller, recipient, subject, body)
+
+    requires: caller.is_public
+    requires: recipient = operator or role_text_public(recipient)
+        or exists memo in Memos where memo.recipient = caller and memo.sender = recipient
+            and shown_to_public(memo)
+
+    ensures: Memo.created(
+        sender: caller,
+        recipient: recipient,
+        subject: subject,
+        body: body,
+        sent_at: now,
+        status: unread,
+        attempts: 0,
+        labels: session_labels(caller) + {contaminated}
+    )
+
+    @guidance
+        -- What a scout sends is from the web, even from a session that
+        -- has read nothing yet. It may answer a role that wrote to it.
 }
 
 rule SendMemoToOperator {
@@ -1327,7 +1366,8 @@ rule RefuseWhatAPublicRoleMayNotHold {
         -- AGENTS.md; a wake of it whose own text the operator did not
         -- write, or whose prompts would hold private; a doc it would
         -- write over that it cannot see; and a memo to it from a house
-        -- role (RefuseAHouseMemoToAPublicRole).
+        -- role whose own id was written in private
+        -- (SendAHouseMemoToAPublicRole).
         -- Its reads show only public items, the roles whose text the
         -- operator wrote, and docs whose path was chosen in public, and
         -- leave out everything else without a trace: a fact, doc or memo it cannot see does
@@ -3293,8 +3333,9 @@ invariant PastesAreSanitized {
 
 invariant NoWayOutOfTheHouse {
     -- No role that is not public is granted an egress tool, so nothing
-    -- a house role reads can leave by one, and no memo goes from a house
-    -- role's session to a public role.
+    -- a house role reads can leave by one. A memo from a house role to a
+    -- public role is public as written (SendAHouseMemoToAPublicRole), and
+    -- what the public role does with it is held by ScoutsFetchOnlyWhatTheyWereShown.
     for role in Roles where not is_public:
         role.offered_tools.all(t => t.class != egress)
     for memo in Memos where recipient != null and recipient.is_public and sender.kind = role:
@@ -3303,6 +3344,26 @@ invariant NoWayOutOfTheHouse {
     -- so what it is given goes into the operator's own account there.
     for role in Roles where not is_public:
         role.offered_tools.all(t => not t.is_remote_mcp or t.class in {read, edit})
+}
+
+invariant ScoutsFetchOnlyWhatTheyWereShown {
+    -- I4. relay runs every egress call itself. The settings refuse an
+    -- egress tool of an MCP server, which agentloop would call itself,
+    -- and any egress tool that is not an envelope tool whose parameters
+    -- are a url, numbers, yes-or-no values and the free text the
+    -- operator names in its queries. relay runs a call only when its url
+    -- argument, and in every other string the text from its first
+    -- scheme:// to its end, appears verbatim in an earlier result of an
+    -- egress tool in the same session, the sessions a resumed wake
+    -- carries on included. That text in a query holds no space and no
+    -- character a tool would escape, so a tool's echo of the query adds
+    -- no address the session was not shown. Results of relay's own tools
+    -- and of other tools do not count. Any other call is refused before
+    -- it runs, with fixed text that quotes nothing of it. A redirect is
+    -- reported, never followed, so its target is a new call under the
+    -- same rule.
+    for call in EgressCalls where call.ran:
+        call.addresses.all(a => exists r in egress_results_before(call.session, call) where contains(r.text, a))
 }
 
 invariant StewardShell {

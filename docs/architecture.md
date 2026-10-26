@@ -366,12 +366,45 @@ as web search. Four layers keep private out:
 Public roles have no calendar and no board: `calendar`, `cards` and the
 other private-only tools are not offered to them.
 
+A house role asks a scout for help with a memo, which is public as
+written: the scout sees only what the house role chose to put in it. The
+scout's reply is marked as from the web. What keeps that text from
+leaving in a URL the scout builds is the fetch rule (O1, I4), which
+`relay.shown` enforces in relay's tool command before an `egress` call
+runs:
+
+```mermaid
+flowchart LR
+    model["scout's model"] -->|"egress call"| tool["relay tool"]
+    tool --> check{"every address in it<br/>shown by an earlier<br/>egress result?"}
+    check -->|"no"| refuse["refused, fixed text,<br/>the tool never runs"]
+    check -->|"yes"| run["webtool search or fetch"]
+    run -->|"result"| record["kept under<br/>runs/role/wake/shown/"]
+    record -->|"result"| model
+```
+
+relay keeps its own record of what the web showed the session, rather
+than reading agentloop's session store, because relay sees each result
+before the model does, and because only `egress` results may count: the
+text of a memo from the steward comes through relay's own tools and must
+never make an address fetchable. A wake that resumes an interrupted
+session reads the record of the wakes it resumes. relay.edn refuses an
+`egress` tool of an MCP server, since agentloop would call it without
+relay seeing the call, and an `egress` tool that is not an `:envelope`
+tool with its parameters listed: relay checks a `url` argument, and
+other free text only goes to a service named in the tool's `:queries`,
+such as the search provider. An address in a query must come at its end,
+exactly as shown, since webtool echoes the query back. webtool reports a
+redirect instead of following it, so its target is a new call under the
+same rule.
+
 ## Where each invariant is enforced
 
 | | Invariant | Enforced in | Tested in |
 |---|---|---|---|
 | I1 | No way out of the house | `config` refuses egress on a house role | `house_test` (steward shell and remote MCP arrive in B3) |
 | I3 | Scouts see nothing private | `core` item filters, `tools/policy`, agentloop `forbid_labels` | `house_test`, `public_roles_test`, `labels_test` |
+| I4 | Scouts fetch only what they were shown | `shown/refusal` in `tools/call!` before any `egress` call runs; `config` refuses an `egress` tool that is not an envelope tool with known parameters; webtool never follows a redirect | `shown_test` (property), `scout_test`, `public_roles_e2e_test` |
 | I5 | Trust follows the hand that brought it in | `core/entry-labels` | `house_test` |
 | I7 | Nothing the steward does destroys | The log is append-only; tools only add versions | `log_test`, `knowledge_test` |
 | I8 | Every old log still folds | `core/removed-event-kinds` | `removed_events_test` |
@@ -388,13 +421,13 @@ flowchart LR
         log[("Log and state")]
         roles["Roles and tools"]
         calf["Calendar feed"]
+        scout["Scouts<br/>fetch only URLs they were shown"]
     end
 
     subgraph planned["Planned"]
         direction TB
         shell["B3 steward shell<br/>container, --network none,<br/>files mounted read-only"]
         msgs["B4 messages to Kira<br/>one data model, channels:<br/>email, push, client"]
-        scout["B6 scouts<br/>fetch only URLs they were shown"]
         sanit["B7 sanitized pastes"]
         mbox["B8 mailbox and ingestors<br/>mail, GitHub, ICS in;<br/>replies verified as Kira's"]
         files["B9 files_move with undo"]
@@ -403,7 +436,6 @@ flowchart LR
 
     roles -.-> shell
     roles -.-> msgs
-    roles -.-> scout
     mbox -.-> roles
     sanit -.-> roles
     roles -.-> files

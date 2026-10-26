@@ -130,7 +130,11 @@
   ;; The web, for the scout: webtool's ask (see webtool's README) searches
   ;; with Brave Search and reads the top results, at most 5. It is :egress
   ;; because the query goes out to Brave, so only a public role may have
-  ;; it. webtool.json names the Brave key's command:
+  ;; it. An :egress tool is an :envelope tool whose parameters relay
+  ;; knows: relay checks a `url` against what the scout's session was
+  ;; shown, and :queries lists the free text that goes only to a service
+  ;; you trust as you trust the model provider, here the search query.
+  ;; webtool.json names the Brave key's command:
   ;;   "search": {"backend": "brave",
   ;;              "api_key_command": ["security" "find-generic-password" "-s" "relay-brave" "-w"]}
   ;; Store the key with
@@ -139,6 +143,7 @@
          :labels ["contaminated"]
          :protocol :envelope
          :timeout-seconds 150
+         :queries ["query"]
          :description "Search the web and read the top results."
          :parameters {:type "object"
                       :properties {:query {:type "string" :description "What to search for, up to 400 characters."}
@@ -179,12 +184,15 @@
  ;; "web-search" {:class :egress
  ;;               :labels ["contaminated"]
  ;;               :protocol :envelope
+ ;;               :queries ["query"]
  ;;               :description "Search the web."
+ ;;               :parameters {:type "object" :properties {:query {:type "string"}} :required ["query"]}
  ;;               :command ["/path/to/web-search"]}
  ;; "web-fetch" {:class :egress
  ;;              :labels ["contaminated"]
  ;;              :protocol :envelope
  ;;              :description "Fetch a page."
+ ;;              :parameters {:type "object" :properties {:url {:type "string"}} :required ["url"]}
  ;;              :command ["/path/to/web-fetch"]}
 
  ;; A tool can also come from an MCP server that agentloop runs over stdio.
