@@ -19,6 +19,7 @@
             [relay.messages :as messages]
             [relay.moves :as moves]
             [relay.pause :as pause]
+            [relay.ready :as ready]
             [relay.render :as render]
             [relay.roster :as roster]
             [relay.serve :as serve]
@@ -38,6 +39,10 @@ Every command needs the data directory, from --data <dir> or from the file
   relay init                          make the data directory, asking for its settings
   relay status                        roles, open work, harnesses, recent wakes
   relay inbox                         memos waiting for the operator
+  relay ready                         what is ready for you: what you were told,
+                                      drafts, calendar entries, findings
+  relay reply <message> -m <text>     answer a message from relay ready; the role
+                                      that told you is woken with your answer
   relay memo <to> -s <subject>        send a memo; body from -m or stdin
   relay close <memo> -m <outcome>     close a memo
   relay roles                         the registry, and what each role is doing
@@ -435,6 +440,12 @@ id public too.")
       "status" (lines (render/status (state) zone ((:clock sys)) (:config sys) (pause/recovery-lines (pause-file opts))))
       "inbox" (lines (render/inbox zone (core/unread-memos (state) core/operator)
                                    {:from-web? #(config/public? (:config sys) %)}))
+      "ready" (lines (render/ready (mapv ready/wire (ready/ready (state))) zone))
+      "reply" (let [[id] more
+                    text (or (:message opts) (stdin-text))]
+                (when-not (some-> id parse-long) (fail! "usage: relay reply <message> -m <text>"))
+                (submit! sys :message/reply {:in-reply-to (parse-long id) :text text})
+                (result 0 (str "Sent your reply to message " id ".")))
       "memo" (let [[to] more
                    body (or (:message opts) (stdin-text))]
                (when-not to (fail! "usage: relay memo <to> -s <subject> [-m <body>]"))

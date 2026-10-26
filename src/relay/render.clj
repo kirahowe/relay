@@ -304,6 +304,72 @@
     ["The board is empty."]
     (vec (rest (mapcat #(cons "" (card %)) cs)))))
 
+;; --- what is ready (relay ready)
+
+(def ready-width
+  "The widest line relay ready writes: a phone-width terminal."
+  60)
+
+(defn wrap
+  "`s` as lines of at most `width` characters, broken at spaces. A word
+  longer than the width is cut."
+  [s width]
+  (let [words (mapcat #(map (partial apply str) (partition-all width %))
+                      (remove str/blank? (str/split (str s) #"\s+")))]
+    (loop [words words line nil out []]
+      (if-let [w (first words)]
+        (cond
+          (nil? line) (recur (rest words) w out)
+          (<= (+ (count line) 1 (count w)) width) (recur (rest words) (str line " " w) out)
+          :else (recur words nil (conj out line)))
+        (if line (conj out line) out)))))
+
+(def ^:private ready-lines-each
+  "How many lines of an item's body relay ready shows."
+  4)
+
+(defn- ready-kind [{:strs [kind message card]} ]
+  (case kind
+    "message" (str "Message " message)
+    "draft" "Draft"
+    "event" "Calendar"
+    "finding" (str "Board, card " card)
+    "move" "Moved"
+    (str/capitalize kind)))
+
+(defn- ready-when [^String iso zone]
+  (when iso
+    (.format (.atZone (Instant/parse iso) ^ZoneId zone) (DateTimeFormatter/ofPattern "EEE d MMM HH:mm"))))
+
+(defn ready
+  "What is ready, from the wire items (relay.ready/wire), as lines of at
+  most ready-width characters. Each item is a heading at the left edge and
+  its text indented two spaces, so text that came from elsewhere never
+  starts a line of the screen's own."
+  [items zone]
+  (if (empty? items)
+    ["Nothing is ready."]
+    (let [indent "  "
+          body (fn [lines] (->> lines
+                                (mapcat #(str/split-lines (str %)))
+                                (remove str/blank?)
+                                (mapcat #(wrap % (- ready-width 2)))
+                                (take ready-lines-each)
+                                (map #(str indent %))))]
+      (vec (rest (mapcat
+                  (fn [{:strs [title lines from replies start] :as it}]
+                    (concat [""]
+                            (map-indexed (fn [i l] (if (zero? i) l (str indent l)))
+                                         (wrap (str (ready-kind it) ": " title) (- ready-width 2)))
+                            (when start [(str indent (ready-when start zone))])
+                            (body lines)
+                            (when from [(str indent from)])
+                            (for [r (take-last 1 replies)]
+                              (str indent "You replied: " (let [t (get r "text")] (if (> (count t) 30) (str (subs t 0 29) "…") t))))
+                            (when (and (get it "replyTo") (empty? replies))
+                              [(str indent "Reply: relay reply " (get it "replyTo") " -m \"...\"")])))
+                  items))))))
+
 ;; --- eval runs (bb eval)
 
 (defn- money [x] (if x (format "$%.4f" (double x)) "?"))

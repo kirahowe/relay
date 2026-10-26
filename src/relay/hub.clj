@@ -82,6 +82,7 @@
             [relay.acp :as acp]
             [relay.core :as core]
             [relay.json :as strict]
+            [relay.ready :as ready]
             [relay.roster :as roster]
             [relay.text :as text]
             [relay.workspace :as workspace]))
@@ -269,6 +270,38 @@
       (nil? state) (refuse h rid -32000 "relay has not read its messages yet. Try again.")
       :else (-> h (assoc-in [:conns cid :messages] (workspace/log-rev state))
                 (answer rid (workspace/messages-answer state (params-of msg)))))))
+
+(def ^:private ready-limit 60)
+
+(defn- ready-changes
+  "Sends each connection subscribed to the ready view what differs from
+  what it was last sent."
+  [h]
+  (let [state (:state h)]
+    (reduce (fn [h [cid c]]
+              (if-let [params (when (and state (:ready c)) (workspace/ready-changed state (:ready c) (or (:ready-limit c) ready-limit)))]
+                (-> h (update-in [:conns cid :ready] #(ready/apply-changed % params))
+                    (write cid (workspace/notification-line "_relay/ready/changed" params)))
+                h))
+            h (sort-by key (:conns h)))))
+
+(defn- ready-request [h rid msg]
+  (let [cid (:conn (record h rid))
+        state (:state h)
+        why (workspace/ready-params-error (params-of msg))]
+    (cond
+      why (refuse h rid -32602 why)
+      (nil? state) (refuse h rid -32000 "relay has not read what is ready yet. Try again.")
+      :else (let [answer* (workspace/ready-answer state (params-of msg))]
+              (-> h (assoc-in [:conns cid :ready] (ready/by-id (get answer* "items")))
+                  (assoc-in [:conns cid :ready-limit] (or (get (params-of msg) "limit") ready-limit))
+                  (answer rid answer*))))))
+
+(defn- reply-request [h rid msg]
+  (let [{:keys [command error]} (workspace/reply-command (params-of msg))]
+    (if error
+      (refuse h rid -32602 error)
+      (submit h command {:kind :reply :rid rid}))))
 
 (defn- cards-request [h rid msg]
   (let [cid (:conn (record h rid))
@@ -768,6 +801,8 @@
       "_relay/cards" (cards-request h rid msg)
       "_relay/cards/op" (card-op h rid msg)
       "_relay/messages" (messages-request h rid msg)
+      "_relay/ready" (ready-request h rid msg)
+      "_relay/reply" (reply-request h rid msg)
       (cond
         (workspace/methods method) (forward h rid msg)
         (str/starts-with? method "_relay/") (refuse h rid -32601 (str "relay has no method " method "."))
@@ -981,6 +1016,7 @@
               (assoc h :roster (vec (:roster e)) :state (or (:state e) (:state h)))
               (board-changes h)
               (messages-changes h)
+              (ready-changes h)
               (retry-turn-ends h)
               (reduce (fn [h role] (-> h (assoc-in [:convs role :blocked] false) (pump role)))
                       h (sort (keys (:convs h)))))

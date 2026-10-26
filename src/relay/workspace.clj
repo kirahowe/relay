@@ -11,6 +11,10 @@
     _relay/messages  what relay told the operator, newest first (relay.
                      channels/wire); the first call subscribes the client
                      to _relay/messages/changed notifications
+    _relay/ready     everything ready for the operator (relay.ready); the
+                     first call subscribes the client to
+                     _relay/ready/changed notifications
+    _relay/reply     answer a message, as the operator
 
   relay answers them itself, and agentloop never sees them: the board's in
   relay.hub, which knows what each client was sent, the rest in each
@@ -22,7 +26,8 @@
             [relay.cards :as cards]
             [relay.channels :as channels]
             [relay.core :as core]
-            [relay.json :as strict]))
+            [relay.json :as strict]
+            [relay.ready :as ready]))
 
 ;; --- what a conversation has learned
 
@@ -322,3 +327,48 @@
   [state rev]
   (when-let [ms (seq (filter #(> (:rev %) rev) (sort-by :id (vals (:messages state)))))]
     {"rev" (log-rev state) "messages" (mapv channels/wire ms)}))
+
+;; --- ready: what relay prepared and told the operator (relay.ready)
+;;
+;; A subscriber's record is the wire items it was last sent, by id. What
+;; differs from it is new, changed or gone.
+
+(defn ready-params-error
+  "Why relay refuses a _relay/ready request's params, or nil. It takes
+  limit, how many of the newest items to send, and nothing else."
+  [params]
+  (let [unknown (sort (remove #{"limit"} (keys params)))
+        limit (get params "limit")]
+    (cond
+      (seq unknown) (str "_relay/ready has no parameter " (str/join ", " unknown) ". It takes limit.")
+      (and (contains? params "limit") (not (and (integer? limit) (<= 1 limit 500))))
+      "_relay/ready takes a limit from 1 to 500.")))
+
+(defn ready-items
+  "The wire items a _relay/ready answer holds, for params."
+  [state params]
+  (get (ready/answer state (log-rev state) {:limit (or (get params "limit") ready/default-limit)}) "items"))
+
+(defn ready-answer
+  "The _relay/ready answer."
+  [state params]
+  {"rev" (log-rev state) "items" (ready-items state params)})
+
+(defn ready-changed
+  "The _relay/ready/changed params for a subscriber last sent `sent` (wire
+  items by id), or nil when the view is as it was sent."
+  [state sent limit]
+  (ready/changed (log-rev state) sent (ready-items state {"limit" limit})))
+
+(defn reply-command
+  "What a _relay/reply asks for, as the :message/reply command relay
+  submits, or {:error why}. It is the operator's, with no labels."
+  [params]
+  (let [unknown (sort (remove #{"inReplyTo" "text"} (keys params)))
+        {:strs [inReplyTo text]} params]
+    (cond
+      (seq unknown) {:error (str "_relay/reply has no parameter " (str/join ", " unknown) ". It takes inReplyTo and text.")}
+      (not (integer? inReplyTo)) {:error "_relay/reply needs inReplyTo, the number of the message."}
+      (not (string? text)) {:error "_relay/reply needs text."}
+      :else {:command {:type :message/reply :actor core/operator :labels [] :public false
+                       :args {:in-reply-to inReplyTo :text text}}})))
