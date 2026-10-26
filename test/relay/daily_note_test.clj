@@ -664,6 +664,13 @@
       (let [w (ok (run w "dispatcher" :ingest/record {:source "repos" :cursor cursor
                                                       :items [(issue 1 7 :version "2026-10-26T11:00:00Z")]}))]
         (is (= [7 8] (map :number (:github-news (:state w)))))))
+    (testing "with :github-login, the operator's own items are not news"
+      (let [cfg (config/resolve-config (-> settings (dissoc :daily-note) (assoc-in [:ingest "repos" :github-login] "Alice")))
+            [state] (core/run-command (:state (seed)) {:type :ingest/record :actor "dispatcher" :labels []
+                                                       :args {:source "repos" :cursor cursor
+                                                              :items [(issue 1 7) (issue 2 8 :user "bob")]}}
+                                      {:now (:now (seed)) :config cfg})]
+        (is (= [8] (map :number (:github-news state))))))
     (is (= "New issue in Owner/Repo"
            (-> (seed)
                (run "dispatcher" :ingest/record {:source "repos" :cursor cursor :items [(issue 1 7)]})

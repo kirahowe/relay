@@ -423,8 +423,11 @@
       (problem! (str where " is an MCP tool, so its name must be 1 to 64 letters, digits, - or _.")))
     (when-let [extra (seq (remove mcp-tool-keys (keys spec)))]
       (problem! (str where " is an MCP tool and cannot have " (str/join ", " (map pr-str (sort-by str extra)))
-                     ". Its server gives its description and parameters, agentloop runs it, and the"
-                     " harness's :tool-timeout-seconds bounds a call.")))
+                     "."
+                     (if-let [guess (some #(did-you-mean % (remove #{:pin :connection} mcp-tool-keys)) (sort-by str extra))]
+                       (str " Did you mean " guess "?")
+                       (str " Its server gives its description and parameters, agentloop runs it, and the"
+                            " harness's :tool-timeout-seconds bounds a call.")))))
     (when-not (contains? servers server)
       (problem! (str where " needs :server, naming one of :mcp-servers"
                      (when (some? server) (str "; there is no MCP server " (pr-str server))) ".")))
@@ -534,6 +537,21 @@
   so there is nothing to hold, consent to or preview."
   #{:always-hold :consent :preview})
 
+(def plain-tool-keys
+  "What a tool relay runs itself (not an MCP server's) may give."
+  #{:class :labels :description :command :protocol :parameters :queries :timeout-seconds})
+
+(defn unknown-tool-key-problem
+  "Why a tool's setting `k` cannot be used, as a sentence, with the key
+  it is most likely a typo of among `known`, or else the keys a tool
+  takes. Pure."
+  [tool-name k known]
+  (let [guess (did-you-mean k known)]
+    (str "Tool " tool-name " in relay.edn has " (pr-str k) ", which a tool does not take."
+         (if guess
+           (str " Did you mean " guess "?")
+           (str " A tool takes " (str/join ", " (map pr-str (sort known))) ".")))))
+
 (defn validate
   "Returns the config, or throws describing the first problem found."
   [{:keys [tools grants max-attempts] client :client :as config}]
@@ -552,6 +570,12 @@
       (problem! (str "Tool " tool-name " in relay.edn has " (str/join " and " (map pr-str gone))
                      ", which relay no longer has: no call waits for you. Remove "
                      (if (next gone) "them." "it."))))
+    ;; A misspelled key is refused, so :comand cannot leave a tool with
+    ;; no command, or :timeout-secs with the default. MCP keys on a plain
+    ;; tool are told apart in check-mcp.
+    (when-not (mcp-tool? tool)
+      (when-let [k (first (sort-by str (remove (into plain-tool-keys mcp-tool-keys) (keys tool))))]
+        (problem! (unknown-tool-key-problem tool-name k plain-tool-keys))))
     (when (= :act class)
       (problem! (str "Tool " tool-name " has :class :act, which relay no longer has: relay never acts as you."
                      " Make it a drafting tool with :class :edit, or remove it.")))
@@ -659,7 +683,7 @@
 (defn role-name-problems
   "Sentences for the operator about settings that name the steward by an
   id no active role has, while other roles exist: :dead-letter-handler,
-  and :serve :websocket :default-role. Each says the likely fix. Without
+  :serve :websocket :default-role and :daily-note :role. Each says the likely fix. Without
   this, an install whose main role has another id (one made before the
   default was steward) would quietly send dead letters to the operator,
   tell every role a wrong name and route phone conversations nowhere.
@@ -673,7 +697,8 @@
                     ", but there is no role " v ", so " what "."
                     (when guess (str " Your main role looks like " guess ": set " fix " " (pr-str guess) "."))))
         handler (:dead-letter-handler config)
-        ws (get-in config [:serve :websocket])]
+        ws (get-in config [:serve :websocket])
+        note-role (get-in config [:daily-note :role])]
     (when (seq ids)
       (cond-> []
         (not (ids handler))
@@ -681,7 +706,9 @@
                     "work another role cannot finish has no role to go to" ":dead-letter-handler"))
         (and ws (not (ids (:default-role ws))))
         (conj (said ":serve :websocket :default-role" (:default-role ws) (:default-role websocket-defaults)
-                    "a phone conversation that names no role has no one to talk to" ":default-role"))))))
+                    "a phone conversation that names no role has no one to talk to" ":default-role"))
+        (and note-role (not (ids note-role)))
+        (conj (said ":daily-note :role" note-role nil "nobody writes the daily note" ":role"))))))
 
 (defn load-config [data-dir]
   (let [file (fs/path data-dir "relay.edn")]

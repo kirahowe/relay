@@ -654,7 +654,14 @@
         (is (= :removed (:status (core/routine (:state w) "clerk" "r"))))
         (is (= 1 (count (memos-to w "hub"))))
         (testing "and a removed role can no longer act"
-          (is (= :forbidden (:rejected (run w "clerk" :memo/send {:to "hub" :subject "s" :body "b"})))))))))
+          (is (= :forbidden (:rejected (run w "clerk" :memo/send {:to "hub" :subject "s" :body "b"})))))
+        (testing "nobody is told to retry a role that is gone"
+          (let [m (first (messages-with w "work-abandoned"))
+                report (first (memos-to w "hub"))]
+            (is (some? m) "the operator asked, so the operator is told")
+            (is (not (str/includes? (pr-str (:sections m)) "relay retry")))
+            (is (not (str/includes? (:body report) "relay retry")))
+            (is (str/includes? (:body report) "removed"))))))))
 
 ;; --- the model: random sequences of everything anyone can do
 

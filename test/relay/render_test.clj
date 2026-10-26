@@ -230,6 +230,30 @@
     (is (some #{"      open  [2] Your calendar: 2 new"} lines) "the subject names the source, so it is not said again")
     (is (not-any? #(str/includes? % "(from") lines) (pr-str lines))))
 
+(deftest only-a-subject-relay-built-and-shown-whole-names-its-source
+  (let [state (-> core/empty-state (cmd :role/add {:id "steward" :title "Steward" :instructions "x"}))
+        send (fn [state labels subject]
+               (first (core/run-command state {:type :memo/send :actor core/operator :labels labels
+                                               :args {:to "steward" :subject subject :body "b"}}
+                                        {:now t0 :config cfg})))
+        lines-after (fn [state n]
+                      (let [lines (vec (render/status state utc t0))
+                            i (first (keep-indexed (fn [i l] (when (str/starts-with? l (str "      open  [" n "] ")) i)) lines))]
+                        (take-while #(str/starts-with? % "            ") (drop (inc i) lines))))]
+    (testing "a subject an outsider wrote that happens to hold the source's name does not hide it"
+      (let [st (send state ["contaminated" "search:web"] "Found web grants for the choir")]
+        (is (= ["            from a web search"] (lines-after st 2)))))
+    (testing "relay's own subject for a mail names it"
+      (let [st (send state ["contaminated" "mail:eve@example.net"] "Mail from eve@example.net: Venue")]
+        (is (empty? (lines-after st 2)))))
+    (testing "the same words not at the start, as an outsider could write them, do not"
+      (let [st (send state ["contaminated" "mail:eve@example.net"] "Re: Mail from eve@example.net: Venue")]
+        (is (seq (lines-after st 2)))))
+    (testing "a name cut off at the end of the line is not shown, so it is said below"
+      (let [addr (str (apply str (repeat 50 "a")) "@example.net")
+            st (send state ["contaminated" (str "mail:" addr)] (str "Mail from " addr ": Venue"))]
+        (is (seq (lines-after st 2)))))))
+
 (deftest a-status-memo-line-fits-a-phone-and-says-its-source-below
   ;; Regression (U1b review): open-memo lines ran to 130 columns.
   (let [subject (str "Holiday hours for the office and the hall, and what the page said about the "

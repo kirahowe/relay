@@ -120,14 +120,14 @@
 
 (def source-keys
   {:pop3 #{:kind :url :user :credentials-command :authserv-id :to :every-minutes :timeout-seconds}
-   :github #{:kind :repos :credentials-command :api-url :to :every-minutes :timeout-seconds}
+   :github #{:kind :repos :credentials-command :api-url :github-login :to :every-minutes :timeout-seconds}
    :ics #{:kind :url :to :every-minutes :timeout-seconds}})
 
 (defn source-problem
   "What is wrong with one source's settings, or nil. `public?` says
   whether a role is public: a public role is never sent what came in,
   since a mail can hold the operator's private things."
-  [source-name {:keys [kind url user credentials-command authserv-id to every-minutes timeout-seconds repos api-url] :as src} public?]
+  [source-name {:keys [kind url user credentials-command authserv-id to every-minutes timeout-seconds repos api-url github-login] :as src} public?]
   (let [where (str "The source " (pr-str source-name) " in relay.edn's :ingest")]
     (cond
       (not (and (string? source-name) (re-matches #"[a-z][a-z0-9-]{0,39}" source-name)))
@@ -168,7 +168,9 @@
         (not= (count repos) (count (distinct (map str/lower-case repos))))
         (str where " lists a repository twice in :repos.")
         (and (some? api-url) (url-problem api-url "https" "http"))
-        (str where " has an :api-url that cannot be used: " (url-problem api-url "https" "http") "."))
+        (str where " has an :api-url that cannot be used: " (url-problem api-url "https" "http") ".")
+        (and (some? github-login) (not (and (string? github-login) (re-matches #"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})" github-login))))
+        (str where " has a :github-login that is not a GitHub login, such as \"octocat\"."))
 
       (= :ics kind)
       (when (url-problem url "https" "http")
@@ -382,6 +384,14 @@
   whose login is not a bot's."
   [{:keys [user user-type]}]
   (boolean (and (= "User" user-type) (not (str/blank? user)) (not (str/ends-with? (str user) "[bot]")))))
+
+(defn news?
+  "Whether a new GitHub item is news for the operator: opened by a person
+  (person?), and not by the operator herself, the source's optional
+  :github-login, in any case. Pure."
+  [{:keys [github-login]} it]
+  (and (person? it)
+       (not (and github-login (= (str/lower-case github-login) (str/lower-case (str (:user it))))))))
 
 (defn github-memo
   "The memo for what is new in one repository: {:subject :body :labels}.

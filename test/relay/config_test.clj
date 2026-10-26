@@ -87,6 +87,36 @@
   (testing "a malformed setting is left for validation to refuse as written"
     (is (= {:house {:mounts "~/x"}} (config/expand-paths {:house {:mounts "~/x"}} "/h")))))
 
+(deftest a-misspelled-tool-setting-is-refused-with-the-likely-key
+  (is (= "Tool notes in relay.edn has :comand, which a tool does not take. Did you mean :command?"
+         (problem (assoc complete :tools {"notes" {:class :read :labels [] :comand ["true"]}}))))
+  (is (str/includes? (problem (assoc complete :tools {"notes" {:class :read :labels [] :command ["true"]
+                                                              :timeout-secs 5}}))
+                     "Did you mean :timeout-seconds?"))
+  (testing "nothing close: the keys a tool takes"
+    (is (str/includes? (problem (assoc complete :tools {"notes" {:class :read :labels [] :command ["true"] :xyzzy 1}}))
+                       "A tool takes :class, :command")))
+  (testing "an MCP tool's misspelling is guessed too"
+    (is (str/includes? (problem (assoc complete
+                                       :mcp-servers {"files" {:command ["files-mcp"]}}
+                                       :tools {"read" {:protocol :mcp-stdio :server "files" :tool "read"
+                                                       :class :read :labels [] :digets "x"}}))
+                       "Did you mean :digest?")))
+  (testing "an MCP key on a plain tool still says what it is for"
+    (is (str/includes? (problem (assoc complete :tools {"notes" {:class :read :labels [] :command ["true"] :server "x"}}))
+                       "only a tool with :protocol :mcp-stdio or :mcp-http takes"))))
+
+(defspec every-tool-key-one-typo-away-is-refused-with-a-guess 200
+  (prop/for-all [k (gen/elements (sort (filter #(> (count (name %)) 6) config/plain-tool-keys)))
+                 i gen/nat
+                 c (gen/elements "qxz")]
+    (let [s (name k)
+          i (mod i (count s))
+          typo (keyword (str (subs s 0 i) c (subs s (inc i))))
+          why (problem (assoc complete :tools {"t" {:class :read :labels [] :command ["true"] typo 1}}))]
+      (or (contains? (into config/plain-tool-keys config/mcp-tool-keys) typo)
+          (and (some? why) (str/includes? why "Did you mean"))))))
+
 ;; --- the main role's name
 
 (deftest a-setting-that-names-no-role-is-said-with-the-likely-fix
@@ -105,6 +135,13 @@
       (is (empty? (config/role-name-problems (config/resolve-config (assoc complete :dead-letter-handler "hub"))
                                              ["hub"])))
       (is (empty? (config/role-name-problems (config/resolve-config complete) ["steward" "scout"]))))
+    (testing "the daily note's writer"
+      (let [cfg (config/resolve-config (assoc complete :grants {"hub" {:may-add true}} :dead-letter-handler "hub"
+                                              :daily-note {:at "07:30" :role "steward"}))]
+        (is (= [(str "relay.edn's :daily-note :role is \"steward\", but there is no role steward, so nobody"
+                     " writes the daily note. Your main role looks like hub: set :role \"hub\".")]
+               (config/role-name-problems cfg ["hub"])))
+        (is (empty? (config/role-name-problems cfg ["hub" "steward"])))))
     (testing "with no likely main role, no guess"
       (is (not (str/includes? (first (config/role-name-problems (config/resolve-config (assoc complete :grants {"s" {:public true}}))
                                                                 ["s"]))

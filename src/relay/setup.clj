@@ -264,6 +264,20 @@
     web? (conj {:type :role/add :public true
                 :args {:id "scout" :title "Scout" :reports-to "steward" :instructions scout}})))
 
+(defn starter-lines
+  "What relay init says over an existing relay.edn when the log has no
+  roles: the commands that add what starter-commands adds, from the texts
+  under `root`'s setup/, run against `data` when it was given (else the
+  default data directory). With the web, a scout too. Pure."
+  [root web? data]
+  (let [relay (str "relay" (when data (str " --data " data)))
+        file #(str root "/setup/" %)]
+    (cond-> ["Your log has no roles yet. To add the steward relay sets up, with its daily note:"
+             (str "  " relay " add steward --title Steward < " (file "steward.md"))
+             (str "  " relay " put skills/steward/daily-note.md < " (file "daily-note/skill.md"))
+             (str "  " relay " routine steward daily-note --schedule \"daily 07:10\" < " (file "daily-note/routine.md"))]
+      web? (conj (str "  " relay " add scout --public --title Scout --reports-to steward < " (file "scout.md"))))))
+
 (defn repo-root
   "The relay checkout this code runs from, or nil."
   []

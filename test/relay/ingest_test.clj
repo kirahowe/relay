@@ -81,6 +81,8 @@
     (is (re-find #"does not take" (problem {:kind :ics :url "https://c.example.org/c.ics" :to "steward" :repos []})))
     (is (re-find #"owner/repo" (problem {:kind :github :repos ["just-a-name"] :to "steward"})))
     (is (re-find #"twice" (problem {:kind :github :repos ["a/b" "A/B"] :to "steward"})))
+    (is (nil? (problem {:kind :github :repos ["a/b"] :to "steward" :github-login "kira-h"})))
+    (is (re-find #":github-login" (problem {:kind :github :repos ["a/b"] :to "steward" :github-login "not a login"})))
     (let [p (problem {:kind :ics :url "http://calendar.example.org/private-token-123/basic.ics" :to "steward"})]
       (is (re-find #"https" p))
       (is (not (str/includes? p "private-token-123")) "a calendar's URL is a secret, so it is never quoted")))
@@ -571,8 +573,34 @@
     (is (:problem (env ["contaminated" "mail:eve\u200b@example.net"])) "a zero-width character")))
 
 
+(deftest the-operator-s-own-items-are-not-news
+  (let [src {:kind :github :repos ["a/b"] :to "steward" :github-login "Kira-H"}]
+    (is (ingest/news? src {:user "alice" :user-type "User"}))
+    (is (not (ingest/news? src {:user "kira-h" :user-type "User"})) "her own login, in any case")
+    (is (not (ingest/news? src {:user "dependabot[bot]" :user-type "Bot"})))
+    (is (ingest/news? (dissoc src :github-login) {:user "kira-h" :user-type "User"}) "without the setting, anyone's")))
+
 (deftest a-person-is-a-user-account-that-is-not-a-bot
   (is (ingest/person? {:user "alice" :user-type "User"}))
   (is (not (ingest/person? {:user "dependabot[bot]" :user-type "Bot"})))
   (is (not (ingest/person? {:user "renovate[bot]" :user-type "User"})))
   (is (not (ingest/person? {:user "alice" :user-type ""})) "a type GitHub did not give is not taken for a person"))
+
+(deftest relay-s-own-subjects-start-with-the-words-status-trusts
+  ;; relay status leaves out "from ..." under a memo whose subject starts
+  ;; with relay's own title for its source (provenance/subject-prefix), so
+  ;; the two must not drift apart.
+  (let [prefixed? (fn [{:keys [subject labels]}]
+                    (let [src (first (remove #{"contaminated"} labels))]
+                      (str/starts-with? (str/lower-case subject)
+                                        (str/lower-case (relay.provenance/subject-prefix src)))))]
+    (is (prefixed? (ingest/github-memo "Owner/Repo" [{:kind "issue" :number 1 :user "a" :title "t" :url "u" :body ""}] [])))
+    (is (prefixed? (ingest/calendar-memo "calendar" [] ["v1 Dentist"] (ZoneId/of "UTC"))))
+    (is (prefixed? (ingest/calendar-memo "work" [] ["v1 Dentist"] (ZoneId/of "UTC"))))
+    (let [memo-from (fn [from]
+                      (let [msg (mailbox/parse (mail (str "From: " from) "Subject: Venue" "Message-ID: <q@x.example>"))
+                            verdict (mailbox/verdict msg {:operator "kira@example.org" :authserv-id "mx.example.org" :domain "example.org"})]
+                        (ingest/mail-memo msg verdict nil {})))]
+      (is (prefixed? (memo-from "Eve <Eve@Example.net>")))
+      (testing "a forgery in the operator's name always has its source said in full"
+        (is (nil? (relay.provenance/subject-prefix ingest/unverified-operator-label)))))))

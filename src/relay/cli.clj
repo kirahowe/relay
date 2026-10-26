@@ -274,14 +274,24 @@ id public too.")
 (defn- init!
   "Makes a data directory, asking for its settings when it has none, and
   adds the roles relay sets up when the log has none. An existing
-  relay.edn is checked, never rewritten."
-  [dir]
+  relay.edn is checked, never rewritten; with no roles in the log, init
+  then says how to add them (`explicit?`: --data was given, so the
+  commands name it)."
+  [dir explicit?]
   (let [file (str (fs/path dir "relay.edn"))
         ready (fn [& more]
                 (log/init! dir)
                 (apply result 0 (str "relay data directory ready at " (fs/absolutize dir)) more))]
     (cond
-      (fs/exists? file) (do (config/load-config dir) (ready))
+      ;; Over its own settings, the operator adds the roles: with none in
+      ;; the log yet, init says how.
+      (fs/exists? file)
+      (let [config (config/load-config dir)]
+        (log/init! dir)
+        (apply ready (when (empty? (:roles (inbound/current-state (inbound/system dir))))
+                       (setup/starter-lines (or (setup/repo-root) "<relay>")
+                                            (boolean (some #(true? (:public %)) (vals (:grants config))))
+                                            (when explicit? (str (fs/absolutize dir)))))))
       (not (System/console))
       (fail! "relay init asks for settings, so run it in a terminal. Or write"
              file "yourself, from setup/relay.example.edn.")
@@ -616,6 +626,17 @@ id public too.")
         (result 0 (ws/calendar-url "<your Mac's tailnet name>" port token)
                 "relay could not find this Mac's tailnet name: put it in, or run relay calendar url --host <name>.")))))
 
+(defn- shell-notices
+  "What relay status says about the steward's shell: a line when it has
+  no image (relay.shell/image-notice). The runner is asked only when a
+  role is granted the shell."
+  [sys]
+  (let [config (:config sys)]
+    (when (shell/image-check? config)
+      (let [present (try (shell/image-present? (shell/context (:data-dir sys) config))
+                         (catch Exception e {:error (or (ex-message e) (str (class e)))}))]
+        (some-> (shell/image-notice config present) vector)))))
+
 (def ^:private ready-shown
   "How many of the newest items relay ready shows without --all."
   10)
@@ -628,7 +649,8 @@ id public too.")
         state #(inbound/current-state sys)
         lines (fn [ls] {:exit 0 :out ls})]
     (case cmd
-      "status" (lines (render/status (state) zone ((:clock sys)) (:config sys) (pause/recovery-lines (pause-file opts))))
+      "status" (lines (render/status (state) zone ((:clock sys)) (:config sys) (pause/recovery-lines (pause-file opts))
+                                     (shell-notices sys)))
       "inbox" (lines (let [st (state)] (render/inbox st zone (core/unread-memos st core/operator))))
       "ready" (let [all (ready/ready (state) {:limit Integer/MAX_VALUE})
                     shown (if (:all opts) all (take ready-shown all))
@@ -942,7 +964,7 @@ id public too.")
       (let [dir (data-dir opts)
             reports (atom [])
             result (case cmd
-                     "init" (init! dir)
+                     "init" (init! dir (not (str/blank? (:data opts))))
                      ;; Needs only the connection file and the keychain, so a
                      ;; relay.edn broken elsewhere does not stop a server's token.
                      "mcp-token" (result 0 (connect/token! dir (first more) (:url opts)))

@@ -4,7 +4,10 @@
             [clojure.edn :as edn]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [relay.cli :as cli]
             [relay.config :as config]
+            [relay.inbound :as inbound]
+            [relay.log :as log]
             [relay.setup :as setup]))
 
 (defn- scripted
@@ -212,3 +215,25 @@
   (is (not (setup/command-works? ["false"])))
   (is (not (setup/command-works? ["true"])) "printing nothing is no key")
   (is (not (setup/command-works? ["/nonexistent/command"]))))
+
+(deftest init-over-a-relay-edn-and-no-roles-says-how-to-add-them
+  (is (= ["Your log has no roles yet. To add the steward relay sets up, with its daily note:"
+          "  relay add steward --title Steward < /r/setup/steward.md"
+          "  relay put skills/steward/daily-note.md < /r/setup/daily-note/skill.md"
+          "  relay routine steward daily-note --schedule \"daily 07:10\" < /r/setup/daily-note/routine.md"]
+         (setup/starter-lines "/r" false nil)))
+  (let [lines (setup/starter-lines "/r" true "/d")]
+    (is (every? #(str/includes? % "relay --data /d ") (rest lines)) "the data directory it was given")
+    (is (some #(str/includes? % "relay --data /d add scout --public --title Scout --reports-to steward < /r/setup/scout.md") lines)
+        "with the web, a scout too"))
+  (let [dir (str (fs/create-temp-dir {:prefix "relay-init-existing"}))]
+    (try
+      (log/init! dir)
+      (spit (str dir "/relay.edn") (pr-str {:timezone "UTC" :default-harness :agentloop
+                                            :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"]}}}))
+      (let [out (:out (cli/execute ["--data" dir "init"]))]
+        (is (str/starts-with? (first out) "relay data directory ready at"))
+        (is (some #(str/includes? % (str "relay --data " dir " add steward")) out)))
+      (inbound/submit! (inbound/system dir) {:type :role/add :actor "operator" :args {:id "hub" :instructions "x"}})
+      (is (= 1 (count (:out (cli/execute ["--data" dir "init"])))) "once there is a role, nothing to add")
+      (finally (fs/delete-tree dir)))))

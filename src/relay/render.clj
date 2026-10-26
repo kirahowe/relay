@@ -75,40 +75,43 @@
 (def ^:private source-indent "            ")
 
 (defn- names-source?
-  "Whether a memo's subject already names where it came from: each
-  source's own name (the repository, the calendar, the sender) is in it."
-  [subject srcs]
-  (let [subj (str/lower-case (str subject))]
-    (every? (fn [l] (let [[_ what] (str/split l #":" 2)]
-                      (and what (str/includes? subj (str/lower-case what)))))
-            srcs)))
+  "Whether a memo's subject, as the status line shows it (`shown`, cut to
+  fit), already names where it came from: it has one source, and starts
+  with the words relay itself titles that source's memos with
+  (provenance/subject-prefix), shown whole. What an outsider wrote later
+  in a subject never counts."
+  [shown srcs]
+  (let [prefix (when (= 1 (count srcs)) (provenance/subject-prefix (first srcs)))]
+    (boolean (and prefix
+                  (str/starts-with? (str/lower-case (str shown)) (str/lower-case prefix))))))
 
 (defn- memo-source-lines
   "The lines after a status line for a memo: where its text came from,
-  when an outsider wrote any of it and its subject does not already say
-  so, on lines of their own below it, indented and wrapped to fit."
-  [state {:keys [id labels subject]}]
+  when an outsider wrote any of it and the subject as shown (`shown`)
+  does not already say so, on lines of their own below it, indented and
+  wrapped to fit."
+  [state {:keys [id labels]} shown]
   (let [srcs (core/sources-of state id labels)]
-    (when-let [s (and (not (names-source? subject srcs)) (provenance/summary srcs))]
+    (when-let [s (and (not (names-source? shown srcs)) (provenance/summary srcs))]
       (map #(str source-indent %) (wrap (str "from " s) (- status-width (count source-indent)))))))
 
-(defn- memo-line
-  "A status line for a memo: `head` then its subject, cut to fit, then
-  `tail`."
+(defn- cut-subject
+  "A memo's subject as a status line shows it after `head` and before
+  `tail`: cut to fit."
   [head subject tail]
   (let [room (max 20 (- status-width (count head) (count tail)))
-        subject (str subject)
-        subject (if (> (count subject) room) (str (subs subject 0 (dec room)) "…") subject)]
-    (str head subject tail)))
+        subject (str subject)]
+    (if (> (count subject) room) (str (subs subject 0 (dec room)) "…") subject)))
 
 (defn- open-memo [state zone {:keys [id subject attempts retry-at labels] :as m}]
-  (map #(text/for-operator labels %)
-       (cons (memo-line (format "      open  [%d] " id) subject
-                        (cond-> ""
-                          (pos? attempts) (str " (" attempts " failed attempts")
-                          (and (pos? attempts) retry-at) (str ", next " (local retry-at zone))
-                          (pos? attempts) (str ")")))
-             (memo-source-lines state m))))
+  (let [head (format "      open  [%d] " id)
+        tail (cond-> ""
+               (pos? attempts) (str " (" attempts " failed attempts")
+               (and (pos? attempts) retry-at) (str ", next " (local retry-at zone))
+               (pos? attempts) (str ")"))
+        shown (cut-subject head subject tail)]
+    (map #(text/for-operator labels %)
+         (cons (str head shown tail) (memo-source-lines state m shown)))))
 
 (defn- role-line-labels [state id]
   (core/union (core/role-labels state id) (core/id-labels state (:reports-to (core/role state id)))))
@@ -143,9 +146,10 @@
                                                            (recipe-mark state version labels))))
        (mapcat #(map (fn [l] (text/for-operator id-ls l)) (open-memo state zone %)) (core/unread-memos state id))
        (mapcat (fn [{memo-id :id :keys [subject labels] :as m}]
-                 (map #(text/for-operator (core/union labels id-ls) %)
-                      (cons (memo-line (format "      dead  [%d] " memo-id) subject "")
-                            (memo-source-lines state m))))
+                 (let [head (format "      dead  [%d] " memo-id)
+                       shown (cut-subject head subject "")]
+                   (map #(text/for-operator (core/union labels id-ls) %)
+                        (cons (str head shown) (memo-source-lines state m shown)))))
                dead)
        ;; Retrying cannot help while its tools are out, so it is only
        ;; offered once they are back.
@@ -194,8 +198,10 @@
   "Roles with their routines and open work, harnesses, the operator's
   inbox, what the roles spent this week and the weeks before, and the
   latest wakes, as of `now`. `paused` is the lines to show
-  when relay is paused (relay.pause/recovery-lines), or nil."
-  [state zone ^Instant now & [config paused]]
+  when relay is paused (relay.pause/recovery-lines), or nil, and
+  `notices` lines about the house from its edges, such as a shell with no
+  image."
+  [state zone ^Instant now & [config paused notices]]
   (concat
    (when paused
      (concat paused [""]))
@@ -226,6 +232,7 @@
    ;; A setting naming the steward by an id no role has, said plainly.
    (mapcat (fn [line] ["" line])
            (when config (config/role-name-problems config (core/active-role-ids state))))
+   (mapcat (fn [line] ["" line]) notices)
    ["" (format "Your inbox: %d open%s" (count (core/unread-memos state core/operator))
                (if (seq (core/unread-memos state core/operator)) " (relay inbox shows them)" ""))]
    (for [id (core/active-role-ids state)

@@ -111,6 +111,24 @@
         "files" (str "your files in " (text/without-hidden what))
         "something from outside"))))
 
+(defn subject-prefix
+  "How relay.ingest begins the subject of a memo it writes for a source,
+  such as \"GitHub owner/repo: \" or \"Mail from eve@example.org: \", or
+  nil for a source whose memos relay does not title (the web). A subject
+  that starts with it names its source in relay's own words, not an
+  outsider's. A mail that says it is from the operator and is not
+  verified has none: where it came from is always said in full. Pure."
+  [l]
+  (when (and (source? l) (not= contaminated l))
+    (let [[kind what] (str/split l #":" 2)]
+      (case kind
+        "mail" (cond (= "unverified-operator" what) nil
+                     (= "unknown" what) "Mail from an unknown sender: "
+                     :else (str "Mail from " what ": "))
+        "github" (str "GitHub " what ": ")
+        "ics" (let [w (phrase l)] (str (str/upper-case (subs w 0 1)) (subs w 1) ": "))
+        nil))))
+
 (defn phrases
   "The sources in plain words, distinct, in order: \"something from
   outside\" only when nothing says more."

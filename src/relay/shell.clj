@@ -521,6 +521,23 @@
 (defn image-present? [{:keys [house names]}]
   (zero? (:exit (run-runner! (image-inspect-argv house names) {:ms 30000 :limit 4096}))))
 
+(defn image-check?
+  "Whether relay status should look for the shell's image: relay.edn has
+  :house and grants some role the shell. Pure."
+  [config]
+  (boolean (and (contains? config :house) (some #(true? (:shell %)) (vals (:grants config))))))
+
+(defn image-notice
+  "The one line relay status shows when the shell has no image, or nil.
+  `present` is what looking found: true, false, or {:error text} when
+  relay could not ask. Pure."
+  [config present]
+  (when (image-check? config)
+    (cond
+      (map? present) (str "relay could not look for the shell's image: " (:error present) ".")
+      (not present) (str "The shell has no image, so the steward cannot use it. relay house build makes it"
+                         " (if Apple's container system is not running, container system start first)."))))
+
 (defn up!
   "Makes sure the container runs with the current settings. Returns
   :running when it already did, :started when relay started it. A

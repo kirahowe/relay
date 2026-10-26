@@ -479,6 +479,33 @@
       (is (= ["The shell was not running, and it has no image."] (:out (relay "remove")))))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"usage: relay house" (relay "sideways")))))
 
+(deftest relay-status-says-once-when-the-shell-has-no-image
+  (let [sys (data! {})
+        status #(:out (cli/execute ["--data" (:data-dir sys) "status"]))
+        said? (fn [out] (filter #(str/includes? % "relay house build") out))]
+    (is (empty? (said? (status))) "the image is there")
+    (fs/delete (str *dir* "/runner/image"))
+    (let [lines (said? (status))]
+      (is (= 1 (count lines)))
+      (is (str/includes? (first lines) "The shell has no image"))
+      (is (str/includes? (first lines) "container system start")))
+    (testing "without a role granted the shell, there is nothing to say"
+      (spit (str (:data-dir sys) "/relay.edn")
+            (pr-str (assoc base :house {:runner [(str *dir* "/fake-container")]} :grants {"scout" {:public true :tools ["web"]}})))
+      (clear-calls!)
+      (is (empty? (said? (status))))
+      (is (empty? (calls)) "and the runner is not asked"))))
+
+(deftest the-image-notice-is-a-pure-decision
+  (let [cfg {:house {} :grants {"hub" {:shell true}}}]
+    (is (nil? (shell/image-notice cfg true)))
+    (is (re-find #"no image" (shell/image-notice cfg false)))
+    (is (re-find #"could not look for the shell's image: no container" (shell/image-notice cfg {:error "no container"})))
+    (is (nil? (shell/image-notice (dissoc cfg :house) false)))
+    (is (nil? (shell/image-notice (assoc cfg :grants {"hub" {}}) false)))
+    (is (false? (shell/image-check? (assoc cfg :grants {"hub" {}}))))
+    (is (true? (shell/image-check? cfg)))))
+
 (deftest remove-keeps-an-image-relay-edn-names
   ;; The image is the operator's, perhaps built by hand or shared with
   ;; another data directory, so removing this one's shell leaves it be.
