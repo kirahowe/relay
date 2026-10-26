@@ -282,16 +282,58 @@
     (hidden? cp) :invisible
     :else nil))
 
+(def ^:private pictographic-ranges
+  "Unicode's Extended_Pictographic, near enough: the code points emoji
+  sequences are made of. The JVM relay runs on has no table for it.
+  The enclosed and squared Latin letters and the regional indicators
+  are left out, as Unicode leaves them out, so a joiner between two
+  of them is removed."
+  [[0x00A9 0x00A9] [0x00AE 0x00AE] [0x203C 0x203C] [0x2049 0x2049] [0x2122 0x2122] [0x2139 0x2139]
+   [0x2194 0x2199] [0x21A9 0x21AA] [0x231A 0x231B] [0x2328 0x2328] [0x2388 0x2388] [0x23CF 0x23CF]
+   [0x23E9 0x23F3] [0x23F8 0x23FA] [0x24C2 0x24C2] [0x25AA 0x25AB] [0x25B6 0x25B6] [0x25C0 0x25C0]
+   [0x25FB 0x25FE] [0x2600 0x27BF] [0x2934 0x2935] [0x2B05 0x2B07] [0x2B1B 0x2B1C] [0x2B50 0x2B50]
+   [0x2B55 0x2B55] [0x3030 0x3030] [0x303D 0x303D] [0x3297 0x3297] [0x3299 0x3299]
+   [0x1F000 0x1F0FF] [0x1F10D 0x1F10F] [0x1F12F 0x1F12F] [0x1F16C 0x1F171] [0x1F17E 0x1F17F]
+   [0x1F18E 0x1F18E] [0x1F191 0x1F19A] [0x1F1AD 0x1F1E5] [0x1F201 0x1FAFF] [0x1FC00 0x1FFFD]])
+
+(defn pictographic?
+  "Whether a code point is an emoji, or part of one such as a skin tone,
+  that a zero-width joiner or a variation selector may follow."
+  [^long cp]
+  (boolean (some (fn [[lo hi]] (<= lo cp hi)) pictographic-ranges)))
+
+(defn- emoji-glue?
+  "Whether `cp`, a zero-width joiner or variation selector, holds an
+  emoji sequence together, so sanitize keeps it: a joiner between an
+  emoji (or its selector) and the next emoji, as in a family; a selector
+  right after an emoji, or after a keycap's digit before the keycap.
+  `prev` is the code point kept before it, `next` the one after it in
+  the input. Anywhere else they are hidden, and removed."
+  [cp prev next]
+  (boolean
+   (case (long cp)
+     0x200D (and prev next (pictographic? next) (or (pictographic? prev) (#{0xFE0F 0xFE0E} prev)))
+     (0xFE0F 0xFE0E) (and prev (or (pictographic? prev)
+                                   (and (#{0x23 0x2A} prev) (= 0x20E3 next))
+                                   (and (<= 0x30 prev 0x39) (= 0x20E3 next))))
+     false)))
+
 (defn- strip
-  "[text counts]: s without what strip-kind removes, and how many of each."
+  "[text counts]: s without what strip-kind removes, and how many of each.
+  A joiner or selector inside an emoji sequence stays (emoji-glue?)."
   [^String s]
   (let [sb (StringBuilder.)
-        counts (volatile! {})]
-    (doseq [cp (iterator-seq (.iterator (.codePoints s)))]
-      (case (strip-kind cp)
-        nil (.appendCodePoint sb (int cp))
-        :separator (do (.append sb \newline) (vswap! counts update :separator (fnil inc 0)))
-        (vswap! counts update (strip-kind cp) (fnil inc 0))))
+        counts (volatile! {})
+        v (vec (iterator-seq (.iterator (.codePoints s))))]
+    (loop [i 0 prev nil]
+      (when (< i (count v))
+        (let [cp (v i)
+              kind (strip-kind cp)
+              kind (if (and (= :invisible kind) (emoji-glue? cp prev (get v (inc i)))) nil kind)]
+          (case kind
+            nil (do (.appendCodePoint sb (int cp)) (recur (inc i) cp))
+            :separator (do (.append sb \newline) (vswap! counts update :separator (fnil inc 0)) (recur (inc i) 10))
+            (do (vswap! counts update kind (fnil inc 0)) (recur (inc i) prev))))))
     [(str sb) @counts]))
 
 (def ^:private cjk #{"Han" "Hiragana" "Katakana" "Hangul"})
@@ -364,7 +406,8 @@
 
 (defn sanitize
   "A pasted string, cleaned: invisible, bidi-control, tag, control and
-  private-use characters removed (tab, newline and carriage return stay;
+  private-use characters removed (a zero-width joiner or variation
+  selector inside an emoji sequence stays, so a family emoji is one) (tab, newline and carriage return stay;
   U+0085, U+2028 and U+2029 become a newline), then NFC, until nothing
   changes, so sanitize is idempotent. Printable ASCII is never touched.
   Returns {:text cleaned :report r}, r saying what was removed by kind,
@@ -413,7 +456,7 @@
            :else (str "The word \"" (clip word) "\" mixes " (str/join " and " scripts)
                       " letters, so it may not be what it looks like.")))
        (when (> (count mixed) 3)
-         [(str (- (count mixed) 3) " more words mix letters from different alphabets.")]))))))
+         [(str (- (count mixed) 3) " more words may not be what they look like.")]))))))
 
 (defn sanitize-input
   "The one function every operator entry point calls: a string, or any
