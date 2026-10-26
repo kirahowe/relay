@@ -3072,7 +3072,14 @@ rule RecordRecipeChange {
 
     @guidance
         -- Folded from the event and the state before it, so it can always
-        -- be rebuilt from the log.
+        -- be rebuilt from the log. peek is the first substantive line the
+        -- change adds: not a heading or a skill's "Use when:" line,
+        -- unless it adds nothing else.
+        -- A listing of routines or skills (relay routines, relay status,
+        -- relay docs) ends the line of one whose latest version has
+        -- sources with a short mark of what kind of thing they were:
+        -- "(from a web page)", "(from a mail and a web page)", or
+        -- "(from outside)" for more kinds or none known.
 }
 
 rule WriteNotePart {

@@ -234,8 +234,9 @@ Open the dashboard with `relay` in this terminal (`relay --open <role>`
 puts a role in focus), or from an ACP
 client with `relay acp <role>`. `relay status` shows roles, open work,
 harnesses, this week's spend and recent wakes. `relay help` lists the
-everyday commands in lines that fit a phone, and `relay help all` lists
-every command.
+everyday commands in lines that fit a phone, `relay help all` lists
+every command, and `relay <command> --help` shows one, without reading
+any settings.
 
 ## Upgrading
 
@@ -1191,7 +1192,11 @@ something that is yours. Labels still bound everything the session may
 have seen. A role's message ends with one line naming its sources
 ("Drew on: the web page office-holidays.html; a mail from
 dana@example.org"). Subjects, your own replies and relay's own alerts
-carry none, and no line of text is stamped.
+carry none, and no line of text is stamped. A routine or skill whose
+latest version came from such a wake ends its line in `relay routines`,
+`relay status` and `relay docs` with a short mark of what kind of thing
+shaped it, such as "(from a web page)". In `relay status` a memo's
+source goes on the line below it, unless its subject already names it.
 
 What the operator writes or pastes is hers, and relay trusts it: a memo
 on the command line, a line in a conversation, and a page she pastes or
