@@ -91,6 +91,9 @@
 (def empty-state
   {:roles {} :memos {} :routines {} :wakes {} :dead-letters {} :harnesses {}
    :messages {} :guards {} :facts {} :notes {} :journals {} :docs {} :cards {} :calendar {}
+   ;; Calls to files_move, by the seq of their files/moving event: what
+   ;; each moved, and what has been undone (relay.files).
+   :moves {}
    ;; Every label any event has carried, which bounds what a session that
    ;; could read anything in relay may have seen.
    :seen-labels []
@@ -1087,6 +1090,22 @@
                                             (assoc (select-keys old [:title :start :end :location :description])
                                                    :why (:why data)
                                                    :start (some-> (:start old) str) :end (some-> (:end old) str))))))
+
+(defmethod evolve* "files/moving" [state {:keys [seq at actor labels data]}]
+  (assoc-in state [:moves seq] {:id seq :actor actor :at (inst at) :labels (union labels)
+                                :moves (:moves data) :status :moving :done [] :undone [] :removed []}))
+
+(defmethod evolve* "files/moved" [state {:keys [at labels data]}]
+  (update-in state [:moves (:call data)]
+             #(-> % (assoc :status :moved :done (vec (:done data)) :stopped (:stopped data)
+                           :finished-at (inst at))
+                  (update :labels union labels))))
+
+(defmethod evolve* "files/undone" [state {:keys [at data]}]
+  (update-in state [:moves (:call data)]
+             #(-> % (update :undone (comp vec sort distinct concat) (:steps data))
+                  (update :removed into (:removed data))
+                  (assoc :undone-at (inst at) :undo-stopped (:stopped data)))))
 
 (defmethod evolve* "note/written" [state {:keys [seq at data labels public]}]
   (let [{:keys [owner name text]} data]
@@ -2447,6 +2466,76 @@
   (let [cur (calendar-live! state event)]
     (emit tx "calendar/removed" (cond-> {:event event} (not (blank? why)) (assoc :why (str/trim why)))
           (:labels cur))))
+
+;; files_move (relay.files). relay's own code moves the files on the
+;; host; these record what it is about to do, what it did, and what the
+;; operator undid. The paths are the operator's, so every event carries
+;; private.
+
+(defn move-call
+  "A files_move call by the seq of its files/moving event, or nil."
+  [state id]
+  (get-in state [:moves id]))
+
+(defn move-calls
+  "Every files_move call, oldest first."
+  [state]
+  (vals (into (sorted-map) (:moves state))))
+
+(defn move-steps-left
+  "The done steps of a move call that are not undone yet, by index."
+  [call]
+  (let [undone (set (:undone call))]
+    (vec (remove #(undone (:index %)) (:done call)))))
+
+(def max-moves-per-call 100)
+
+(defn- move-path? [p] (and (string? p) (str/starts-with? p "/") (<= (count p) 4096)))
+
+(defmethod decide* :files/start [{:keys [config actor] :as tx} {{:keys [moves]} :args}]
+  (when (#{operator dispatcher} actor)
+    (reject! :forbidden "Only a role granted folders to organize moves files."))
+  (when (or (public-actor? tx) (empty? (:files (config/grants config actor))))
+    (reject! :forbidden (str actor " may not move files.")))
+  (when-not (and (vector? moves) (<= 1 (count moves) max-moves-per-call)
+                 (every? #(and (map? %) (move-path? (:from %)) (move-path? (:to %))) moves))
+    (reject! :invalid (str "A call moves 1 to " max-moves-per-call " files, each from and to a full path.")))
+  (emit tx "files/moving" {:moves (mapv #(select-keys % [:from :to]) moves)} [private-label]))
+
+(defn- fingerprint? [f]
+  (and (map? f) (#{"file" "dir"} (:kind f))))
+
+(defmethod decide* :files/finish [{:keys [state actor] :as tx} {{:keys [call done stopped]} :args}]
+  (let [c (move-call state call)]
+    (when-not (and c (= actor (:actor c)))
+      (reject! :not-found (str "There is no move " call " by " actor ".")))
+    (when-not (= :moving (:status c))
+      (reject! :invalid (str "Move " call " is already recorded.")))
+    (when-not (and (vector? done)
+                   (every? #(and (map? %) (nat-int? (:index %)) (< (:index %) (count (:moves c)))
+                                 (fingerprint? (:fingerprint %))
+                                 (vector? (:created %)) (every? move-path? (:created %)))
+                           done)
+                   (apply < -1 (map :index done))
+                   (or (nil? stopped) (string? stopped)))
+      (reject! :invalid (str "What move " call " did is not well formed.")))
+    (emit tx "files/moved" (cond-> {:call call :done done} stopped (assoc :stopped stopped))
+          (:labels c))))
+
+(defmethod decide* :files/undo [{:keys [state actor] :as tx} {{:keys [call steps removed stopped]} :args}]
+  (when-not (= operator actor)
+    (reject! :forbidden "Only the operator undoes a move."))
+  (let [c (move-call state call)
+        left (set (map :index (move-steps-left c)))]
+    (when-not c (reject! :not-found (str "There is no move " call ".")))
+    (when-not (= :moved (:status c))
+      (reject! :invalid (str "Move " call " never finished, so relay cannot undo it.")))
+    (when-not (and (vector? steps) (every? left steps) (apply distinct? -1 steps)
+                   (vector? removed) (every? move-path? removed)
+                   (or (nil? stopped) (string? stopped)))
+      (reject! :invalid (str "What undoing move " call " did is not well formed.")))
+    (emit tx "files/undone" (cond-> {:call call :steps steps :removed removed} stopped (assoc :stopped stopped))
+          (:labels c))))
 
 (def ^:private note-name-pattern #"[a-z0-9][a-z0-9-]{0,47}")
 

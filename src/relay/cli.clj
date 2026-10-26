@@ -13,8 +13,10 @@
             [relay.export :as export]
             [relay.harness.agentloop :as agentloop]
             [relay.inbound :as inbound]
+            [relay.files :as files]
             [relay.log :as log]
             [relay.messages :as messages]
+            [relay.moves :as moves]
             [relay.pause :as pause]
             [relay.render :as render]
             [relay.roster :as roster]
@@ -120,6 +122,10 @@ Every command needs the data directory, from --data <dir> or from the file
   relay mcp-token <name> --url <url>  print an access token for a connection to
                                       that server, renewing it when needed
                                       (agentloop runs this)
+  relay moves                         the files roles moved, each call with its number
+  relay undo <move>                   put back what one call moved, when nothing has
+                                      changed since; otherwise say what changed and
+                                      touch nothing
   relay house build|up|down|status    the steward's shell, from relay.edn's :house:
                                       build its image (this needs the network),
                                       start it, remove it, or say how it is (the
@@ -540,6 +546,11 @@ id public too.")
                         problems))
       "tool" (run-tool sys (:role opts) (first more) (:wake opts))
       "house" (house! sys more)
+      "moves" (lines (files/calls-lines (core/move-calls (state)) zone))
+      "undo" (let [id (some-> (first more) parse-long)]
+               (when-not id (fail! "usage: relay undo <move>, a number from relay moves"))
+               (let [{:keys [ok refused]} (moves/undo! sys id)]
+                 (if ok (lines ok) (apply result 1 refused))))
       "connect" (let [[n url] more
                       config (:config sys)]
                   (when-not (and n url)

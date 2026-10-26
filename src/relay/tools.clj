@@ -33,8 +33,10 @@
             [relay.core :as core]
             [relay.harness :as harness]
             [relay.inbound :as inbound]
+            [relay.files :as files]
             [relay.json :as strict]
             [relay.messages :as messages]
+            [relay.moves :as moves]
             [relay.refs :as refs]
             [relay.shell :as shell])
   (:import (java.time Instant LocalTime)
@@ -937,9 +939,31 @@
    :run (fn [sys _ session-labels {:keys [command]}]
           (shell/sh! (shell/context (:data-dir sys) (:config sys)) session-labels command))})
 
+(defn files-tool
+  "`files_move`, for a role granted :files: moves and renames inside the
+  folders it may organize, carried out by relay on the host (relay.moves).
+  Class edit: only the operator sees what changed, and undoes it with
+  relay undo."
+  [roots]
+  {:class :edit
+   :acp-kind "move"
+   :description (files/tool-description roots)
+   :parameters (obj {:moves {:type "array"
+                             :description "The moves, in order: each {\"from\": full path, \"to\": full path}."
+                             :items {:type "object"
+                                     :properties {:from text :to text}
+                                     :required ["from" "to"]
+                                     :additionalProperties false}}}
+                    "moves")
+   :run (fn [sys actor labels {:keys [moves]}]
+          (when-not (every? #(and (map? %) (= #{:from :to} (set (keys %)))) moves)
+            (throw (ex-info "Each move is {\"from\": ..., \"to\": ...}, and nothing else." {})))
+          (moves/move-files! sys actor labels (vec moves) {:session-wake *wake*}))})
+
 (defn offered
   "The tools a role is offered, by name: relay's own, less those that need a
-  grant it lacks, plus `sh` for a role granted :shell, plus the external
+  grant it lacks, plus `sh` for a role granted :shell and `files_move` for
+  one granted :files, plus the external
   tools it is granted. None at all for a role on a :script harness."
   [config role-id & [{:keys [script?]}]]
   (if script?
@@ -957,6 +981,9 @@
            (when (and (:shell (config/grants config role-id)) (:house config)
                       (not (config/public? config role-id)))
              {"sh" (shell-tool config)})
+           (when-let [roots (and (not (config/public? config role-id))
+                                 (seq (:files (config/grants config role-id))))]
+             {"files_move" (files-tool (vec roots))})
            (into {} (map external-tool (select-keys (:tools config) tools)))))))
 
 (defn grants-summary
