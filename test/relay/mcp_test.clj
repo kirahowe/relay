@@ -27,7 +27,6 @@
   {:timezone "UTC"
    :default-harness :agentloop
    :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent/agentloop"}}
-   :notify {:kind :none}
    :mcp-servers {"files" {:command ["/usr/local/bin/files-mcp" "--token-file" "{credentials_file}"]
                           :credentials-command ["cat" "/secret/files-token"]}
                  "search" {:command ["/usr/local/bin/search-mcp"] :send-labels true}}
@@ -154,7 +153,6 @@
           granted (vec (keep-indexed (fn [i n] (when (nth grant-picks i false) n)) all))]
       (cond-> {:timezone "UTC" :default-harness :agentloop
                :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}}
-               :notify {:kind :none}
                :mcp-servers servers
                :tools (assoc mcp-tools "plain" {:class :read :labels [] :description "d" :command ["true"]})
                :grants {"r" {:tools granted}}}
@@ -273,7 +271,7 @@
   (run w "dispatcher" :wake/end (merge {:wake (:id (support/calling-wake (:state w) "hub")) :exit 0} args) now))
 
 (defn- notifications [w kind]
-  (filter #(= kind (:kind %)) (vals (:notifications (:state w)))))
+  (filter #(= kind (:origin %)) (vals (:messages (:state w)))))
 
 (defn- setup []
   (-> (world)
@@ -297,8 +295,8 @@
     (testing "the operator is told once, plainly"
       (let [[n & more] (notifications w "tool-changed")]
         (is (empty? more))
-        (is (str/includes? (:body n) "relay uses the new"))
-        (is (not (re-find #"(?i)relay fresh|label|hold" (:body n))))
+        (is (str/includes? (support/message-text n) "relay uses the new"))
+        (is (not (re-find #"(?i)relay fresh|label|hold" (support/message-text n))))
         (is (= ["private"] (:labels n)) "with the session's labels")))
     (testing "the memo is not counted as a failed attempt: only the cut-short wake counted"
       (is (= 1 (:attempts (first (core/unread-memos (:state w) "hub"))))))
@@ -364,9 +362,9 @@
         retry (get-in (:state w) [:roles "hub" :tools-unavailable :retry-at])
         n (first (notifications w "tools-unavailable"))]
     (is (= (.plusSeconds t0 60) retry) "after the first retry delay")
-    (is (str/includes? (:body n) "did not start: boom"))
-    (is (str/includes? (:body n) "relay wake hub"))
-    (is (not (re-find #"(?i)relay fresh|label|hold" (:body n))))
+    (is (str/includes? (support/message-text n) "did not start: boom"))
+    (is (str/includes? (support/message-text n) "relay wake hub"))
+    (is (not (re-find #"(?i)relay fresh|label|hold" (support/message-text n))))
     (is (= [] (core/roles-to-wake (:state w) (:config w) t0)))
     (is (= ["hub"] (core/roles-to-wake (:state w) (:config w) retry)))
     (let [w (start w retry)
@@ -387,7 +385,7 @@
                     :tools-error {:server "files" :tool "file_write" :pinned digest :got got
                                   :message "not the one the request pins"}} t0))
         n (first (notifications w "tools-unavailable"))]
-    (is (str/includes? (:body n) (str "set :digest to " got)))
+    (is (str/includes? (support/message-text n) (str "set :digest to " got)))
     (is (some? (get-in (:state w) [:roles "hub" :tools-unavailable :retry-at])) "tried again after a wait")))
 
 (deftest an-outcome-without-tools-error-still-pauses-the-harness

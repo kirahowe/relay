@@ -8,6 +8,9 @@
                      the first call subscribes the client to
                      _relay/cards/changed notifications
     _relay/cards/op  change a card, as the operator
+    _relay/messages  what relay told the operator, newest first (relay.
+                     channels/wire); the first call subscribes the client
+                     to _relay/messages/changed notifications
 
   relay answers them itself, and agentloop never sees them: the board's in
   relay.hub, which knows what each client was sent, the rest in each
@@ -17,6 +20,7 @@
   (:require [clojure.string :as str]
             [relay.acp :as acp]
             [relay.cards :as cards]
+            [relay.channels :as channels]
             [relay.core :as core]
             [relay.json :as strict]))
 
@@ -280,3 +284,41 @@
   now, and whether the op changed it."
   [state card-id changed?]
   {"card" (card-wire (core/card state card-id)) "changed" (boolean changed?)})
+
+;; --- messages: the client channel (relay.messages)
+;;
+;; Every message relay tells the operator is the client's to show, as it
+;; was sent and whatever became of its other deliveries. A subscriber's
+;; record is the log's rev when it was last sent messages; a message
+;; whose rev is past it is new or changed.
+
+(def default-messages-limit 100)
+(def max-messages-limit 500)
+
+(defn messages-params-error
+  "Why relay refuses a _relay/messages request's params, or nil. It
+  takes `limit`, how many of the newest to send, and nothing else."
+  [params]
+  (let [unknown (sort (remove #{"limit"} (keys params)))
+        limit (get params "limit")]
+    (cond
+      (seq unknown) (str "_relay/messages has no parameter " (str/join ", " unknown) ". It takes limit.")
+      (and (contains? params "limit") (not (and (integer? limit) (<= 1 limit max-messages-limit))))
+      (str "_relay/messages takes a limit from 1 to " max-messages-limit "."))))
+
+(defn messages-answer
+  "The _relay/messages answer: the newest messages as wire forms, newest
+  first, and the log's rev."
+  [state params]
+  {"rev" (log-rev state)
+   "messages" (->> (vals (:messages state)) (sort-by :id >)
+                   (take (or (get params "limit") default-messages-limit))
+                   (mapv channels/wire))})
+
+(defn messages-changed
+  "The _relay/messages/changed params for a subscriber last sent the
+  messages as of `rev`: every message made or changed since, oldest
+  first. Nil when there is none."
+  [state rev]
+  (when-let [ms (seq (filter #(> (:rev %) rev) (sort-by :id (vals (:messages state)))))]
+    {"rev" (log-rev state) "messages" (mapv channels/wire ms)}))

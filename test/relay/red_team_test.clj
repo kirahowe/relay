@@ -14,7 +14,6 @@
                :default-harness :agentloop
                :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent/agentloop"}
                            :bot {:kind :script :command ["true"]}}
-               :notify {:kind :none}
                :tools {"post" {:class :edit :labels [] :description "Post." :command ["true"]}}
                :grants {"clerk" {:tools ["post"]}}})
 

@@ -57,10 +57,10 @@
         w (reduce (fn [w i] (ct/run w "clerk" :memo/send {:to "operator" :subject (str "s" i) :body "b"})) w (range 3))
         wake (support/calling-wake (:state w) "clerk")
         w (-> w (ct/advance 86400) (ct/run "dispatcher" :wake/end {:wake (:id wake) :outcome "ran" :said "" :cost-usd 0.5}))
-        {:keys [notifications roles health]} (report w)]
-    (is (= {"clerk" 3} (:memos-by-role notifications)))
-    (is (= 3 (get-in notifications [:per-kind "memo-for-operator"])))
-    (is (= {"2026-10-14" 3} (:per-day notifications)))
+        {:keys [messages roles health]} (report w)]
+    (is (= {"clerk" 3} (:memos-by-role messages)))
+    (is (= 3 (get-in messages [:per-kind "memo-for-operator"])))
+    (is (= {"2026-10-14" 3} (:per-day messages)))
     (testing "the wake left its memo open and wrote no journal entry"
       (is (= [{:id (:id wake) :role "clerk" :role-labels [] :chat false :started-at (:started-at wake)
                :failed ["no-journal-entry" "memos-left-open" "many-operator-memos"]}]
@@ -153,7 +153,7 @@
   (let [lines (render/week-report (report (-> (seeded) (ct/run "operator" :memo/send {:to "hub" :subject "s" :body "b"})
                                                (#'ct/step [:wake "hub" true "needs-attention" [] false false "t1" "a" "a"])))
                                   zone)]
-    (doseq [h ["Interruptions: each time relay needed you" "Notifications: 1" "Wakes by role"
+    (doseq [h ["Interruptions: each time relay needed you" "Messages to you: 1" "Wakes by role"
                "Health checks: wakes that look wrong" "Flags"]]
       (is (some #{h} lines) h))
     (is (some #(str/starts-with? % "    harness ") lines) "what still waits")
@@ -189,7 +189,7 @@
       (and (every? #(= (:arose %) (+ (:decided %) (:pending %))) ks)
            (every? #(= (:decided %) (reduce + (vals (:decisions %)))) ks)
            (every? #(= (:pending %) (get pending (:kind %) 0)) ks)
-           (= (get-in r [:notifications :total]) (count (filter #(= "notification/created" (:type %)) (:events w))))
+           (= (get-in r [:messages :total]) (count (filter #(= "message/created" (:type %)) (:events w))))
            (every? #(or (nil? (:median-seconds %)) (<= 0 (:median-seconds %) (:max-seconds %))) ks)))))
 
 (defspec a-window-that-covers-the-log-gives-the-whole-report 40
@@ -209,8 +209,8 @@
           b (report w {:from mid :until until})
           arose (fn [r] (into {} (map (juxt :kind :arose) (get-in r [:interruptions :kinds]))))]
       (and (= (arose whole) (merge-with + (arose a) (arose b)))
-           (= (get-in whole [:notifications :total])
-              (+ (get-in a [:notifications :total]) (get-in b [:notifications :total])))
+           (= (get-in whole [:messages :total])
+              (+ (get-in a [:messages :total]) (get-in b [:messages :total])))
            (= (count (:flags whole)) (+ (count (:flags a)) (count (:flags b))))
            (= (reduce + (map :wakes (:roles whole)))
               (+ (reduce + (map :wakes (:roles a))) (reduce + (map :wakes (:roles b)))))))))

@@ -81,7 +81,7 @@
               (is (not (some #{"session/request_permission"} (methods-of a))))
               (is (not (some #{"session/request_permission"} (methods-of b)))))
             (testing "nor was the operator told to answer one"
-              (is (not-any? #(re-find #"permission" (str (:kind %))) (vals (:notifications (state)))))))
+              (is (not-any? #(re-find #"permission" (str (:origin %))) (vals (:messages (state)))))))
           (finally (done! a b)))))))
 
 (deftest a-prompt-queues-behind-a-dispatched-wake
@@ -293,7 +293,7 @@
     (try
       (let [data (str dir "/data")
             _ (log/init! data)
-            _ (spit (str data "/relay.edn") (pr-str {:timezone "UTC" :default-harness :a :notify {:kind :none}
+            _ (spit (str data "/relay.edn") (pr-str {:timezone "UTC" :default-harness :a
                                                    :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin "/bin/true"}}}))
             sys (inbound/system data)]
         (do
@@ -310,3 +310,44 @@
               (is (= 0 (#'serve/run-service! sys path lock nil)))))))
       (is (false? @existed) "the handlers are in place before anything can connect")
       (finally (fs/delete-tree sockdir) (fs/delete-tree dir)))))
+
+(deftest ^:volley/serial serve-handles-sigterm-before-anyone-can-connect
+  ;; Found in the gate: a SIGTERM that came as the socket first listened
+  ;; killed the service with 143, its handler not yet installed. In this
+  ;; process, so the handler can be looked at: once the socket is bound,
+  ;; SIGTERM is the service's.
+  (let [dir (str (fs/create-temp-dir {:prefix "relay-serve-term"}))
+        sockdir (str (fs/create-temp-dir {:dir "/tmp" :prefix "rst"}))
+        data (str dir "/data")
+        term (sun.misc.Signal. "TERM")
+        probe (reify sun.misc.SignalHandler (handle [_ _]))
+        ;; The handler now, put back at once. Signal/handle wraps what it
+        ;; returns afresh each time, so handlers are compared by name.
+        current (fn [] (let [h (sun.misc.Signal/handle term probe)] (sun.misc.Signal/handle term h) h))
+        before (current)]
+    (try
+      (relay.log/init! data)
+      (spit (str data "/relay.edn") (pr-str {:timezone "UTC" :default-harness :a
+                                              :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin "/bin/false"}}}))
+      (let [sys (inbound/system data)
+            listening (promise)
+            go-on (promise)
+            reap dispatch/reap-lost-wakes!
+            relays? (fn [h] (not= (str before) (str h)))]
+        ;; The service stops just after it binds its socket, where a
+        ;; client could already connect, until the handler is looked at.
+        (with-redefs [dispatch/reap-lost-wakes! (fn [s] (deliver listening true) @go-on (reap s))]
+          (let [run (future (serve/serve! sys {:socket (str sockdir "/s.sock") :run-dir (str sockdir "/run")}))]
+            (is (not= :timeout (deref listening 30000 :timeout)) "the service binds its socket")
+            (is (relays? (current)) "SIGTERM is the service's once its socket is bound")
+            (deliver go-on true)
+            ;; Stop it as SIGTERM would, once its handler is there: never
+            ;; the JVM's own, which would end this process.
+            (let [h (some #(when (relays? %) %) (repeatedly 200 #(do (Thread/sleep 50) (current))))]
+              (when h (.handle ^sun.misc.SignalHandler h term)))
+            (is (= 0 (deref run 30000 :timeout)))
+            (is (= (str before) (str (current))) "and gives it back when it stops"))))
+      (finally
+        (sun.misc.Signal/handle term before)
+        (fs/delete-tree dir)
+        (fs/delete-tree sockdir)))))

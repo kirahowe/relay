@@ -405,7 +405,6 @@
     (spit (str data "/relay.edn")
           (pr-str {:timezone "UTC" :default-harness :a
                    :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}}
-                   :notify {:kind :none}
                    :tools {"search" {:class :egress :labels ["contaminated"] :description "Search." :command ["true"]}}
                    :grants {"scout" {:public true :tools ["search"]}}}))
     (try
@@ -518,8 +517,7 @@
     (try
       (fs/create-dirs data)
       (spit (str data "/relay.edn") (pr-str {:timezone "UTC" :default-harness :x
-                                             :harnesses {:x {:kind :script :command ["true"]}}
-                                             :notify {:kind :none}}))
+                                             :harnesses {:x {:kind :script :command ["true"]}}}))
       (log/init! data)
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^usage: relay card add <kind> --title"
                             ((requiring-resolve 'relay.cli/execute) ["--data" data "card" "add"])))
@@ -533,8 +531,7 @@
     (try
       (fs/create-dirs data)
       (spit (str data "/relay.edn") (pr-str {:timezone "UTC" :default-harness :x
-                                             :harnesses {:x {:kind :script :command ["true"]}}
-                                             :notify {:kind :none}}))
+                                             :harnesses {:x {:kind :script :command ["true"]}}}))
       (log/init! data)
       (run "card" "add" "checklist" "--title" "Errands" "--item" "milk")
       (let [id (:id (first (core/board (inbound/current-state (inbound/system data {})) false)))]

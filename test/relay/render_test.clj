@@ -17,8 +17,7 @@
 
 (def utc (ZoneId/of "UTC"))
 (def t0 (Instant/parse "2026-10-15T12:00:00Z"))
-(def cfg (config/resolve-config {:timezone "UTC" :default-harness :x :harnesses {:x {:kind :script}}
-                                 :notify {:kind :none}}))
+(def cfg (config/resolve-config {:timezone "UTC" :default-harness :x :harnesses {:x {:kind :script}}}))
 
 (defn- cmd [state type args]
   (first (core/run-command state {:type type :actor core/operator :args args} {:now t0 :config cfg})))
@@ -163,8 +162,7 @@
     (try
       (fs/create-dirs data)
       (spit (str data "/relay.edn") (pr-str {:timezone "UTC" :default-harness :x
-                                             :harnesses {:x {:kind :script :command ["true"]}}
-                                             :notify {:kind :none}}))
+                                             :harnesses {:x {:kind :script :command ["true"]}}}))
       (log/init! data)
       (let [printed (with-out-str
                       (is (= {:exit 0 :out ["Nothing waiting."]} (cli/execute ["--data" data "inbox"])))

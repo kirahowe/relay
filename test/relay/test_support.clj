@@ -71,6 +71,12 @@
   (when-not (System/getProperty "relay.bin")
     (System/setProperty "relay.bin" relay-bin)))
 
+(defn message-text
+  "A message's items as plain text, a blank line between them: what it
+  says, before any channel renders it."
+  [msg]
+  (str/join "\n\n" (map :text (mapcat :items (:sections msg)))))
+
 (defn calling-wake
   "The wake a test takes a role's call to come from, as relay's tool
   command names it: the role's working wake, else its open conversation."

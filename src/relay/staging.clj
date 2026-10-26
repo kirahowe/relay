@@ -92,8 +92,9 @@
                            :effort "low"
                            :bin agentloop-bin
                            :api-key-command (setup/key-command "anthropic")}}
-   ;; Reaches nobody: notifications are appended to a file in the directory.
-   :notify {:kind :file :path (str (fs/path data-dir "notifications.log"))}
+   ;; Reaches nobody: every message is pushed to a file in the directory.
+   :messages {:channels {"phone" {:kind :push :via :file :path (str (fs/path data-dir "notifications.log"))}}
+              :routes [{:channels ["phone"]}]}
    :wake-timeout-minutes 5
    :tools (into {"remind-demo" {:class :edit
                                 :labels []
@@ -111,7 +112,7 @@
   "relay.edn's text for `settings`."
   [settings]
   (str ";; Artificial settings for staging data, written by `bb staging init`.\n"
-       ";; Nothing here reaches the operator: notifications go to a file.\n"
+       ";; Nothing here reaches the operator: messages go to a file.\n"
        (with-out-str (pprint/pprint (assoc settings :format log/format-version)))))
 
 (def clerk-instructions

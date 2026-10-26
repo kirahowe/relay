@@ -136,12 +136,15 @@
       "wake/ended" (let [{:keys [role chat]} (get-in after [:wakes (:wake data)])]
                      (-> acc (update-in [:running role] dissoc (if chat :chat :wake))
                          (assoc-in [:wakes (:wake data) :tools-unavailable] (some? (:tools-error data)))))
-      "notification/created"
-      (let [acc (update acc :notifications conj
-                        {:kind (:kind data) :at at
-                         :from (when (= "memo-for-operator" (:kind data))
+      ("message/created" "notification/created")
+      ;; What relay told the operator; an older relay called it a
+      ;; notification, with its origin as :kind.
+      (let [origin (if (= "message/created" type) (:origin data) (:kind data))
+            acc (update acc :messages conj
+                        {:kind origin :at at
+                         :from (when (= "memo-for-operator" origin)
                                  (get-in after [:memos (:memo data) :from]))})]
-        (case (:kind data)
+        (case origin
           "harness-needs-attention" (arise acc "harness" (:harness data) nil at)
           "work-abandoned" (arise acc "dead-letter" (:dead-letter data) (:role data) at)
           acc))
@@ -179,11 +182,11 @@
 
 (defn walk-log
   "Everything the report needs from the log, in one pass: the
-  interruptions, notifications and operator actions, what each wake did,
+  interruptions, messages to the operator and operator actions, what each wake did,
   and the final state."
   [events]
   (let [triples (replay-states events)
-        acc (reduce step {:records [] :open {} :running {} :wakes {} :notifications [] :actions []}
+        acc (reduce step {:records [] :open {} :running {} :wakes {} :messages [] :actions []}
                     triples)]
     (assoc acc :state (if-let [t (last triples)] (second t) core/empty-state))))
 
@@ -209,10 +212,11 @@
     {:kinds (vec (for [[kind] interruption-kinds] (kind-summary kind (get by-kind kind) win as-of)))
      :pending (vec (sort-by (juxt :arose-at :kind) (map #(select-keys % [:kind :ref :role :arose-at]) pending)))}))
 
-(defn notifications
-  "The notifications sent in the window: in all, per day in `zone`, per
-  kind, and the memos to the operator per role that sent them."
-  [{ns :notifications} win ^ZoneId zone]
+(defn messages
+  "The messages relay told the operator in the window: in all, per day in
+  `zone`, per origin, and the memos to the operator per role that sent
+  them."
+  [{ns :messages} win ^ZoneId zone]
   (let [ours (filter #(in-window? win (:at %)) ns)]
     {:total (count ours)
      :per-day (into (sorted-map) (frequencies (map #(str (LocalDate/ofInstant (:at %) zone)) ours)))
@@ -308,7 +312,7 @@
      :zone (str zone)
      :interruptions (interruptions walked win as-of)
      :actions (into (sorted-map) (frequencies (map :action (filter #(in-window? win (:at %)) (:actions walked)))))
-     :notifications (notifications walked win zone)
+     :messages (messages walked win zone)
      :roles (vec (for [[role rs] (sort-by key (group-by :role rows))] (role-summary role rs)))
      :health (vec (for [r rows :let [failed (failed-checks r)] :when (seq failed)]
                     (assoc (select-keys r [:id :role :role-labels :chat :started-at]) :failed failed)))

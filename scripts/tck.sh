@@ -79,7 +79,7 @@ cat >"$data/relay.edn" <<EDN
                          :model "mock"
                          :api-key-command ["printf" "mock-key"]
                          :retry {:retries 0}}}
- :notify {:kind :none}}
+ }
 EDN
 bin/relay init --data "$data" >/dev/null
 echo "You are under test." | bin/relay add clerk --title Clerk --data "$data" >/dev/null

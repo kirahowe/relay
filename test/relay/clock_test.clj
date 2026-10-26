@@ -422,8 +422,7 @@
 
 (def cfg (config/resolve-config {:timezone "America/Halifax"
                                  :default-harness :agentloop
-                                 :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"]}}
-                                 :notify {:kind :none}}))
+                                 :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"]}}}))
 
 (defn- with-sys [f]
   (let [dir (str (fs/create-temp-dir {:prefix "relay-clock-test"}))
@@ -431,8 +430,7 @@
     (log/init! data)
     (spit (str data "/relay.edn")
           (pr-str {:timezone "America/Halifax" :default-harness :a
-                   :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}}
-                   :notify {:kind :none}}))
+                   :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}}}))
     (let [sys (assoc (inbound/system data) :clock (constantly now))]
       (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "clerk" :title "C" :instructions "x"}})
       (try (f sys) (finally (fs/delete-tree dir))))))

@@ -5,13 +5,16 @@
   appended in one step under the log's lock, so two writers can never both
   act on a state that one of them has already changed.
 
-  A system is a map of :data-dir, :config and :clock. Notifications that a
-  command produces are pushed after the append, since the log, not the push,
-  is what records them."
-  (:require [relay.config :as config]
+  A system is a map of :data-dir, :config and :clock. Messages to the
+  operator that a command produces are delivered after the append, since
+  the log, not the delivery, is what records them."
+  (:require [relay.channels :as channels]
+            [relay.config :as config]
             [relay.core :as core]
             [relay.log :as log]
-            [relay.notify :as notify])
+            [relay.mail :as mail]
+            [relay.messages :as messages]
+            [relay.push :as push])
   (:import (java.time Instant)))
 
 (defn system
@@ -42,25 +45,46 @@
 (declare deliver!)
 
 (defn submit!
-  "Decides and appends a command, then pushes any notifications it produced.
-  Returns the events appended. Throws a rejection (see core/rejection) when
-  the command cannot be carried out, having written nothing."
+  "Decides and appends a command, then delivers any message it produced
+  to the channels its route makes due at once. Returns the events
+  appended. Throws a rejection (see core/rejection) when the command
+  cannot be carried out, having written nothing."
   [sys command]
   (let [events (submit-quietly! sys command)]
-    (doseq [e events :when (= "notification/created" (:type e))]
-      (deliver! sys e))
+    (doseq [{:keys [seq at data] :as e} events
+            :when (= "message/created" (:type e))
+            ch (messages/immediate data (Instant/parse at))]
+      (deliver! sys ch [seq]))
     events))
 
+(defn send!
+  "Sends rendered messages through one channel's edge. Throws when it
+  could not."
+  [channel msgs parent]
+  (case (:kind channel)
+    :email (mail/send! channel (channels/email channel msgs parent))
+    :push (push/push! channel (channels/push channel msgs))))
+
 (defn deliver!
-  "Pushes one notification and records how it went. A failed push is
-  recorded and otherwise dropped: the thing it announced is in the log."
-  [{:keys [config] :as sys} {:keys [seq data labels]}]
-  (let [result (try (notify/push! (:notify config) (assoc data :labels (or labels (:labels data))))
-                    {:ok true}
-                    (catch Exception e {:error (or (ex-message e) (str (class e)))}))]
-    (try
-      (submit-quietly! sys {:type (if (:ok result) :notification/delivered :notification/failed)
-                            :actor core/dispatcher
-                            :args {:notification seq :error (:error result)}})
-      (catch Exception _ nil))
+  "Delivers messages, by id, through one configured channel, as one, and
+  records how it went. A failed delivery is recorded and tried again by
+  the tick: the message itself is in the log, and the client shows it
+  whatever happens here."
+  [{:keys [config] :as sys} channel-name ids]
+  (let [state (current-state sys)
+        msgs (keep #(core/message state %) ids)
+        channel (get-in config [:messages :channels channel-name])
+        result (cond
+                 (empty? msgs) nil
+                 (nil? channel) {:error (str "relay.edn no longer has the channel " channel-name ".") :final true}
+                 :else (try (send! channel msgs #(core/message state %))
+                            {:ok true}
+                            (catch Exception e {:error (or (ex-message e) (str (class e)))})))]
+    (when result
+      (try
+        (submit-quietly! sys {:type (if (:ok result) :message/delivered :message/failed)
+                              :actor core/dispatcher
+                              :args {:channel channel-name :messages (mapv :id msgs)
+                                     :error (:error result) :final (:final result)}})
+        (catch Exception _ nil)))
     result))

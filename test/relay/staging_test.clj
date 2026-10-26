@@ -72,8 +72,9 @@
         (testing "the settings are the ones staging promises"
           (let [c (config/load-config made)]
             (is (= "America/Halifax" (:timezone c)))
-            (is (= :file (get-in c [:notify :kind])))
-            (is (str/starts-with? (get-in c [:notify :path]) made))
+            (is (= {:kind :push :via :file} (select-keys (get-in c [:messages :channels "phone"]) [:kind :via])))
+            (is (str/starts-with? (get-in c [:messages :channels "phone" :path]) made))
+            (is (= [{:channels ["phone"]}] (get-in c [:messages :routes])) "every message goes to the file")
             (is (= ["security" "find-generic-password" "-s" "relay-anthropic" "-w"]
                    (get-in c [:harnesses :agentloop :api-key-command])))
             (is (str/ends-with? (get-in c [:harnesses :agentloop :bin]) "/agentloop/bin/agentloop"))

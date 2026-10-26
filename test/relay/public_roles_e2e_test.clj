@@ -28,8 +28,7 @@
                      :parameters {:type "object" :properties {:question {:type "string"}}}}
            "lookup" {:class :read :labels [] :protocol :envelope :description "Look something up."
                      :command [fixture "private"] :parameters {:type "object"}}}
-   :grants {"scout" {:public true :tools ["search" "lookup"]}}
-   :notify {:kind :none}})
+   :grants {"scout" {:public true :tools ["search" "lookup"]}}})
 
 (defn- with-world [responder f]
   (let [dir (str (fs/create-temp-dir {:prefix "relay-public-e2e"}))
@@ -101,7 +100,7 @@
             (is (not-any? #(str/includes? % "SECRET-FROM-THE-TOOL") bodies) "nor a result carrying private")
             (is (some #(str/includes? % "This result was refused") bodies)))
           (testing "the operator is told of the refused result"
-            (let [kinds (set (map :kind (vals (:notifications state))))]
+            (let [kinds (set (map :origin (vals (:messages state))))]
               (is (contains? kinds "result-refused")))))))))
 
 (def private-tool
@@ -138,5 +137,5 @@
             (is (= [] (:labels report)) "the session never took the label")
             (is (not-any? #(str/includes? (json/generate-string (:body %)) "SECRET-FROM-AGENTLOOP") @(:requests mock)))
             (inbound/submit! sys {:type :wake/end :actor "dispatcher" :args (dispatch/wake-end-args wake-id report)})
-            (is (some #(and (= "result-refused" (:kind %)) (str/includes? (:body %) "lookup returned your private things"))
-                      (vals (:notifications (inbound/current-state sys)))))))))))
+            (is (some #(and (= "result-refused" (:origin %)) (str/includes? (support/message-text %) "lookup returned your private things"))
+                      (vals (:messages (inbound/current-state sys)))))))))))

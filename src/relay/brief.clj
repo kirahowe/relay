@@ -1,5 +1,5 @@
 (ns relay.brief
-  "The morning brief: one notification a day, at the time `:brief {:at
+  "The morning brief: one digest message a day, at the time `:brief {:at
   \"07:30\"}` in relay.edn names, with today's calendar, the reminders due
   today and the held calls. relay composes
   it itself; no role is woken. Pure: the config, the state, the time and
@@ -110,8 +110,8 @@
   "A field as cal and rem printed it (tools/shared/Escape.swift), back as
   the text it was: \\\\ is a backslash, \\t, \\n and \\r are themselves,
   and \\u{XXXX} is that code point. Nil when a backslash starts anything
-  else, which their escaper never prints. The push makes the text
-  visible again, once (relay.notify); decoding here keeps it from being
+  else, which their escaper never prints. Each channel makes the text
+  visible again, once (relay.channels); decoding here keeps it from being
   escaped twice."
   [s]
   (let [s (str s) n (count s) sb (StringBuilder.)]

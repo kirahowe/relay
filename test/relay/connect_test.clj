@@ -164,7 +164,6 @@
 (def settings
   {:timezone "UTC" :default-harness :agentloop
    :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent/agentloop"}}
-   :notify {:kind :none}
    :connections ["mail"]
    :tools {"fetch" {:class :read :labels ["contaminated"] :description "Fetch." :command ["true"]}}
    :grants {"hub" {:tools ["mail_send" "mail_list"]}}})

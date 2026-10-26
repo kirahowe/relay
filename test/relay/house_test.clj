@@ -26,7 +26,6 @@
 (def settings {:timezone "UTC"
                :default-harness :agentloop
                :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent/agentloop"}}
-               :notify {:kind :none}
                :tools {"draft" {:class :edit :labels [] :description "Save a draft." :command ["true"]}
                        "web" {:class :egress :labels ["contaminated"] :description "Search." :command ["true"]}}
                :grants {"hub" {:may-add true :tools ["draft"]} "scout" {:public true :tools ["web"]}}})
@@ -166,18 +165,18 @@
         w (mcp-run w "dispatcher" :wake/end {:wake wake :outcome "needs-attention" :session "s1" :said "changed"
                                              :tools-error {:tool "t1" :pinned digest-a :got digest-b
                                                            :message "The definition changed."}})
-        ns (filter #(= "notification/created" (:type %)) (:last w))]
+        ns (filter #(= "message/created" (:type %)) (:last w))]
     (is (= digest-b (core/tool-pin (:state w) "t1")) "the new definition is pinned")
     (is (nil? (:interrupted-wake (core/role (:state w) "hub"))) "the next wake starts a fresh session")
     (is (not (core/waiting-on-tools? (:state w) "hub" (:now w))) "and nothing waits for the operator")
-    (is (= ["tool-changed"] (map #(get-in % [:data :kind]) ns)))
-    (is (not (re-find #"(?i)relay fresh|label|hold" (str (get-in (first ns) [:data :body])))))
+    (is (= ["tool-changed"] (map #(get-in % [:data :origin]) ns)))
+    (is (not (re-find #"(?i)relay fresh|label|hold|role|tool" (support/message-text (:data (first ns))))))
     (testing "a second session stopped by the same change takes it quietly"
       (let [w (mcp-run w "dispatcher" :wake/start {:role "hub"})
             wake (:id (core/working-wake (:state w) "hub"))
             w (mcp-run w "dispatcher" :wake/end {:wake wake :outcome "needs-attention" :session "s2" :said "changed"
                                                  :tools-error {:tool "t1" :pinned digest-a :got digest-b :message "m"}})]
-        (is (empty? (filter #(= "notification/created" (:type %)) (:last w))))))))
+        (is (empty? (filter #(= "message/created" (:type %)) (:last w))))))))
 
 ;; --- I3: scouts see nothing private
 
@@ -417,8 +416,8 @@
     (log/init! data)
     (spit notify (str "#!/bin/sh\necho \"$1\" >> " told "\n"))
     (fs/set-posix-file-permissions notify "rwxr-xr-x")
-    ;; Broken everywhere but :notify.
-    (spit (str data "/relay.edn") (pr-str {:timezone "Nowhere/At_All" :notify {:kind :command :command [notify]}}))
+    ;; Broken everywhere but :messages.
+    (spit (str data "/relay.edn") (pr-str {:timezone "Nowhere/At_All" :messages {:channels {"phone" {:kind :push :via :command :command [notify]}} :routes [{:channels ["phone"]}]}}))
     (dotimes [_ 2]
       (is (thrown? clojure.lang.ExceptionInfo (relay data "tick"))))
     (is (= ["relay has stopped: relay.edn cannot be used"] (str/split-lines (slurp told))) "told once, not every tick")

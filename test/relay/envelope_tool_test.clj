@@ -25,8 +25,7 @@
     (log/init! data)
     (spit (str data "/relay.edn")
           (pr-str {:timezone "UTC" :default-harness :a
-                   :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}}
-                   :notify {:kind :none} :tools tools :grants {"clerk" {:tools (vec (keys tools))}}}))
+                   :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}} :tools tools :grants {"clerk" {:tools (vec (keys tools))}}}))
     (let [sys (inbound/system data)]
       (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "clerk" :title "C" :instructions "x"}})
       (try (f sys) (finally (fs/delete-tree dir))))))
@@ -73,8 +72,7 @@
         (is (str/includes? (str err) "mail: could not start: Cannot run program"))))))
 
 (deftest envelope-settings-are-checked
-  (let [base {:timezone "UTC" :default-harness :a :harnesses {:a {:kind :agentloop :api-key-command ["true"]}}
-              :notify {:kind :none}}
+  (let [base {:timezone "UTC" :default-harness :a :harnesses {:a {:kind :agentloop :api-key-command ["true"]}}}
         problem #(try (config/resolve-config (assoc base :tools {"t" %})) nil
                       (catch clojure.lang.ExceptionInfo e (ex-message e)))]
     (is (nil? (problem (tool "echo"))))

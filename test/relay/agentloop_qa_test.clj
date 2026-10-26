@@ -129,8 +129,7 @@
       (log/init! (str dir "/data"))
       (spit (str dir "/data/relay.edn")
             (pr-str {:format 1 :timezone "UTC" :default-harness :agentloop
-                     :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"]}}
-                     :notify {:kind :none}}))
+                     :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"]}}}))
       (let [sys (inbound/system (str dir "/data"))
             submit! #(inbound/submit! sys %)
             _ (submit! {:type :role/add :actor "operator"
@@ -213,8 +212,7 @@
            "post" {:class :edit :labels [] :description "Save a line as a draft in the operator's account."
                    :command ["sh" "-c" (str "echo \"$*\" >> " (ledger "posted.txt")) "sh"]}}
    :grants {"clerk" {:tools ["printenv" "ledger" "slow-ledger" "ledger-clerk" "boom" "fetch" "post" "mail"]}
-            "auditor" {:tools ["ledger-auditor"]}}
-   :notify {:kind :none}})
+            "auditor" {:tools ["ledger-auditor"]}}})
 
 (defn- write-config! [harness-settings]
   (spit (str *dir* "/data/relay.edn") (pr-str (config harness-settings))))
@@ -368,7 +366,7 @@
           (is (zero? (:attempts (memo id))))
           (is (= "needs-attention" (get-in (state) [:harnesses "agentloop" :condition])))
           (dispatch/wake! *sys* "clerk" {})
-          (is (= 1 (count (filter #(= "notification/created" (:type %)) (events))))
+          (is (= 1 (count (filter #(= "message/created" (:type %)) (events))))
               "one notification, not one per failed wake"))))))
 
 (deftest a-failing-tool-reaches-the-model-as-an-error-result

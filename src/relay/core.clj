@@ -16,11 +16,12 @@
             [relay.cards :as cards]
             [relay.config :as config]
             [relay.ics :as ics]
+            [relay.messages :as messages]
             [relay.schedule :as schedule]
             [relay.search :as search]
             [relay.skills :as skills]
             [relay.spend :as spend])
-  (:import (java.time Duration Instant LocalDate LocalDateTime)
+  (:import (java.time Duration Instant LocalDate LocalDateTime ZoneId)
            (java.time.format DateTimeFormatter)))
 
 (def operator "operator")
@@ -89,7 +90,7 @@
 
 (def empty-state
   {:roles {} :memos {} :routines {} :wakes {} :dead-letters {} :harnesses {}
-   :notifications {} :guards {} :facts {} :notes {} :journals {} :docs {} :cards {} :calendar {}
+   :messages {} :guards {} :facts {} :notes {} :journals {} :docs {} :cards {} :calendar {}
    ;; Every label any event has carried, which bounds what a session that
    ;; could read anything in relay may have seen.
    :seen-labels []
@@ -977,29 +978,59 @@
 (defmethod evolve* "harness/recovered" [state {:keys [data]}]
   (assoc-in state [:harnesses (:harness data)] {:condition "available" :failed-tries 0}))
 
-(defmethod evolve* "notification/created" [state {:keys [seq at data labels]}]
-  (let [{:keys [kind harness role]} data]
-    (cond-> (assoc-in state [:notifications seq] (assoc data :id seq :created-at (inst at)
-                                                        :delivery :pending :labels (union labels)))
-      (#{"harness-needs-attention" "harness-unreachable"} kind)
-      (assoc-in [:harnesses harness :operator-told] true)
-      (= "runaway-guard-tripped" kind)
-      (assoc-in [:guards role] (inst at))
-      (= "public-role-cannot-run" kind)
-      (assoc-in [:unwakeable-told role] (:reason data))
-      (= "public-role-can-run" kind)
-      (update :unwakeable-told dissoc role)
-      ;; The highest share of the weekly budget told for each week.
-      (= "budget-reached" kind)
-      (update-in [:budget-told (:week data)] (fnil max 0) (:percent data)))))
+(defn- told
+  "What relay remembers it told the operator, from a message's :origin,
+  so it is told once."
+  [state {:keys [origin harness role week percent reason]} at]
+  (cond-> state
+    (#{"harness-needs-attention" "harness-unreachable"} origin)
+    (assoc-in [:harnesses harness :operator-told] true)
+    (= "runaway-guard-tripped" origin)
+    (assoc-in [:guards role] (inst at))
+    (= "public-role-cannot-run" origin)
+    (assoc-in [:unwakeable-told role] reason)
+    (= "public-role-can-run" origin)
+    (update :unwakeable-told dissoc role)
+    ;; The highest share of the weekly budget told for each week.
+    (= "budget-reached" origin)
+    (update-in [:budget-told week] (fnil max 0) percent)))
 
-(defmethod evolve* "notification/delivered" [state {:keys [data]}]
-  (assoc-in state [:notifications (:notification data) :delivery] :delivered))
+(defn- add-message [state {:keys [seq at labels]} data]
+  (let [parent (get-in state [:messages (:in-reply-to data)])]
+    (-> state
+        (assoc-in [:messages seq]
+                  (-> (dissoc data :route)
+                      (assoc :id seq :created-at (inst at) :rev seq :labels (union labels)
+                             :thread (or (:thread parent) seq)
+                             :deliveries (messages/deliveries (:route data)))))
+        (told data at))))
 
-(defmethod evolve* "notification/failed" [state {:keys [data]}]
-  (update-in state [:notifications (:notification data)] assoc
-             :delivery :failed :error (:error data)
-             :attempts (:attempt data) :retry-at (inst (:retry-at data))))
+(defmethod evolve* "message/created" [state {:keys [data] :as event}]
+  (add-message state event data))
+
+;; What an older relay recorded: a notification, pushed then. It folds
+;; into the message it would be now, with nothing left to deliver.
+(defmethod evolve* "notification/created" [state {:keys [data] :as event}]
+  (add-message state event (messages/from-notification data)))
+
+(defmethod evolve* "notification/delivered" [state _] state)
+(defmethod evolve* "notification/failed" [state _] state)
+
+(defn- delivery [state {:keys [seq data]} f]
+  (reduce (fn [state id]
+            (if (get-in state [:messages id :deliveries (:channel data)])
+              (-> state
+                  (update-in [:messages id :deliveries (:channel data)] f)
+                  (assoc-in [:messages id :rev] seq))
+              state))
+          state (:messages data)))
+
+(defmethod evolve* "message/delivered" [state event]
+  (delivery state event #(-> % (assoc :status :delivered) (dissoc :retry-at :error))))
+
+(defmethod evolve* "message/failed" [state {:keys [data] :as event}]
+  (delivery state event #(assoc % :status :failed :error (:error data) :attempts (:attempt data)
+                                :retry-at (inst (:retry-at data)))))
 
 (defn- fact-version [{:keys [seq at actor labels public]} change {:keys [topic text valid-from valid-to]}]
   {:seq seq :recorded-at (inst at) :actor actor :change change :labels (union labels) :public (true? public)
@@ -1141,9 +1172,24 @@
 
 (defn usable-id? [id] (config/role-id? id))
 
-(defn- notify [tx kind title body & {:as about}]
-  (emit tx "notification/created" (merge {:kind kind :title title :body body} (dissoc about :labels))
-        (:labels about)))
+(defn- tell
+  "Tells the operator something: a message (relay.messages), routed by
+  relay.edn's :messages at the time of the transaction. `origin` says
+  what relay was telling, for relay's own records only; the operator
+  never sees it. `items` are the message's paragraphs, or `sections`
+  when it has more than one. `about` adds what the state remembers it
+  told, and :labels, those of text the message copies."
+  [{:keys [config now] :as tx} origin kind urgency subject items & {:as about}]
+  (let [sections (or (:sections about) [{:items (vec (remove #(blank? (if (map? %) (:text %) %)) items))}])
+        ;; Made to fit: what relay quotes has no limit, and a message
+        ;; that threw here would undo the transaction telling it.
+        msg (messages/message (messages/fit {:kind kind :urgency urgency :subject subject
+                                             :sections sections :in-reply-to (:in-reply-to about)}))
+        zone (some-> (:timezone config) ZoneId/of)]
+    (emit tx "message/created"
+          (merge (dissoc about :labels :sections :in-reply-to) {:origin origin}
+                 (messages/routed (or (:messages config) messages/default-settings) zone msg now))
+          (:labels about))))
 
 (defn- quote-block [s] (str "> " (str/replace (str s) "\n" "\n> ")))
 
@@ -1168,12 +1214,14 @@
                                    routine (assoc :routine routine))
                   copied)]
      (if (= operator to)
-       (notify tx "memo-for-operator" subject body :memo (last-id tx) :labels copied)
+       (tell tx "memo-for-operator" "note" "normal" subject
+             [{:text body :refs [(str "[[memo:" (last-id tx) "]]")]}]
+             :memo (last-id tx) :labels copied)
        tx))))
 
 (defn- escalate
   "Passes a fresh dead letter on: as a memo to the dead letter handler, or as
-  a notification to the operator when the memo was the handler's own or
+  a message to the operator when the memo was the handler's own or
   there is no handler."
   [{:keys [state config] :as tx} letter-id]
   (let [letter (get-in state [:dead-letters letter-id])
@@ -1190,7 +1238,14 @@
       (with-public tx false
         #(send-memo % {:from dispatcher :to handler :subject (str "Dead letter: " title) :body report}
                     copied))
-      (notify tx "work-abandoned" title report :role to :dead-letter letter-id :labels copied))))
+      (tell tx "work-abandoned" "alert" "normal" (str "Could not finish \"" subject "\"")
+            [(case (:reason letter)
+               "blocked" (str "It stopped, saying:\n\n" (quote-block (:explanation letter)))
+               "never-closed" (str "It was tried " (:attempts letter) " times and never finished.")
+               "recipient-removed" "Whoever was doing it was removed before it was done.")
+             (str "What was asked:\n\n" (quote-block (:body m)))
+             (str "To try again, run relay retry " to ".")]
+            :role to :dead-letter letter-id :labels copied))))
 
 (defn- dead-letter
   "Dead-letters a memo. `copied` is the labels of the text in `more`, such
@@ -1583,10 +1638,10 @@
             told? (:operator-told h)]
         (cond
           (and (= "needs-attention" outcome) (not told?))
-          (notify tx "harness-needs-attention" (str harness " needs you before relay can work")
-                  (str "It said:\n\n" said "\n\nEvery role on it waits, and nothing has been "
-                       "dropped. Work carries on by itself once it runs again.")
-                  :harness harness :labels (:said-labels tx))
+          (tell tx "harness-needs-attention" "alert" "high" "relay needs you before it can work"
+                [(str "The model service said:\n\n" (quote-block said))
+                 "Work waits, and nothing has been dropped. It carries on by itself once the service runs again."]
+                :harness harness :labels (:said-labels tx))
           :else tx)))))
 
 (defn- tell-refusals
@@ -1600,15 +1655,14 @@
         forbidden (when (sequential? forbidden) (filterv label-names forbidden))]
     (cond-> tx
       (seq forbidden)
-      (notify "session-forbidden" (str role "'s session did not start")
-              (str "It had seen your private things, which " role " works without, so it did not run."
-                   " Its next wake starts a fresh session.")
-              :role role :labels (id-labels state role))
+      (tell "session-forbidden" "alert" "normal" "Some web work did not start"
+            ["It would have carried your private things to the web, so it did not run. It starts afresh next time."]
+            :role role :labels (id-labels state role))
       (seq tools)
-      (notify "result-refused" (str "Something was kept from " role)
-              (str (str/join ", " tools) " returned your private things, which " role
-                   " works without, so it was not shown " (if (next refused) "them." "it."))
-              :role role :labels (id-labels state role)))))
+      (tell "result-refused" "alert" "low" "Something private was kept off the web"
+            [(str (str/join ", " tools) " returned your private things during web work, so "
+                  (if (next refused) "they were" "it was") " held back.")]
+            :role role :labels (id-labels state role)))))
 
 (defn wake-usage
   "Token counts as a wake records them, {:input :output :cache-read
@@ -1638,14 +1692,14 @@
           usd #(format "$%.2f" (double %))]
       (if-not percent
         tx
-        (notify tx "budget-reached"
-                (if (= 100 percent)
-                  "relay has spent its weekly budget"
-                  (str "relay has spent " percent "% of its weekly budget"))
-                (str "The roles have spent " (usd cost-usd) " this week, from Monday " week
-                     ", against a weekly budget of " (usd budget) ". Nothing is stopped or slowed;"
-                     " relay status shows spend per role.")
-                :week (str week) :percent percent)))
+        (tell tx "budget-reached" "alert" "normal"
+              (if (= 100 percent)
+                "relay has spent its weekly budget"
+                (str "relay has spent " percent "% of its weekly budget"))
+              [(str "relay has spent " (usd cost-usd) " this week, from Monday " week
+                    ", against a weekly budget of " (usd budget) ". Nothing is stopped or slowed;"
+                    " relay status shows where it went.")]
+              :week (str week) :percent percent)))
     tx))
 
 (defn role-wrote-in-wake?
@@ -1746,23 +1800,23 @@
       takes-new
       (-> tx
           (emit "tool/pinned" {:tool tool :digest got :role role})
-          (notify "tool-changed" (str tool " changed")
-                  (str "The server behind " tool " now describes it differently, and relay uses the new"
-                       " version from now on. " role " starts a fresh session with it at its next wake.")
-                  :role role :labels (:said-labels tx)))
+          (tell "tool-changed" "note" "normal" (str tool " changed")
+                [(str "The service behind " tool " now describes it differently, and relay uses the new"
+                      " version from now on.")]
+                :role role :labels (:said-labels tx)))
 
       :else
       (let [tx (back-off tx)]
         (if before
           tx
-          (notify tx "tools-unavailable" (str role "'s tools could not be set up")
-                  (str "agentloop said:\n\n" message "\n\n"
-                       (if (and changed config-pin)
-                         (str "The definition no longer matches the :digest relay.edn gives " tool "."
-                              " Check the change. To take it, set :digest to " got ".")
-                         (str "Nothing ran and nothing is dropped. relay tries " role " again after a wait"
-                              " that doubles each time; `relay wake " role "` tries at once.")))
-                  :role role :labels (:said-labels tx)))))))
+          (tell tx "tools-unavailable" "alert" "normal" "Some work could not start: a connection failed"
+                [(str "It said:\n\n" (quote-block message))
+                 (if (and changed config-pin)
+                   (str "What " tool " says it does no longer matches the :digest in relay.edn."
+                        " Check the change. To take it, set :digest to " got ".")
+                   (str "Nothing ran and nothing is dropped. relay tries again after a wait"
+                        " that doubles each time; relay wake " role " tries at once."))]
+                :role role :labels (:said-labels tx)))))))
 
 (defn- tell-shown
   "Tells the operator what a wake showed them, by path only: a display's
@@ -1772,11 +1826,13 @@
   (let [paths (when (sequential? shown) (vec (distinct (filter #(and (string? %) (shown-path? %)) shown))))]
     (if (or (empty? paths) (:chat wake))
       tx
-      (notify tx "shown" (str (:role wake) " showed you " (count paths) (if (= 1 (count paths)) " thing" " things"))
-              (str "While it worked, " (:role wake) " showed you what it found. Read "
-                   (if (= 1 (count paths)) "it" "them") " with relay doc:\n\n"
-                   (str/join "\n" (map #(str "relay doc " %) paths)))
-              :role (:role wake)))))
+      (tell tx "shown" "note" "normal" (str "I found " (count paths) (if (= 1 (count paths)) " thing" " things") " for you")
+            nil
+            :sections [{:items [(str "Read " (if (= 1 (count paths)) "it" "them") " with relay doc:")]}
+                       {:list true :items (vec (for [p paths]
+                                                 {:text (str "relay doc " p)
+                                                  :refs [(str "[[shown:" (subs p (count "shown/")) "]]")]}))}]
+            :role (:role wake)))))
 
 (def stop-reasons
   "How a conversation's turn can end: ACP's stop reasons, \"error\" when
@@ -1851,9 +1907,9 @@
   ;; tool, never what it returned.
   (caller-role! tx)
   (when-not (public-actor? tx) (reject! :forbidden "Only a public role's results are refused."))
-  (notify tx "result-refused" (str "Something was kept from " actor)
-          (str tool " returned your private things, which " actor " works without, so it was not shown it.")
-          :role actor :labels (id-labels state actor)))
+  (tell tx "result-refused" "alert" "low" "Something private was kept off the web"
+        [(str tool " returned your private things during web work, so it was held back.")]
+        :role actor :labels (id-labels state actor)))
 
 (defmethod decide* :conversation/turn-unrecorded [{:keys [state] :as tx} {{:keys [wake]} :args}]
   ;; relay serve could not record the end of a conversation's turn, so the
@@ -1861,10 +1917,10 @@
   (dispatcher-only! tx)
   (let [{:keys [role chat]} (get-in state [:wakes wake])]
     (if chat
-      (notify tx "turn-unrecorded" (str "relay could not record the end of " role "'s turn")
-              (str "relay keeps trying. Until it can, " role " stays busy: no wake of it and no other turn"
-                   " starts. A full disk or a log relay cannot write to would do this.")
-              :role role :wake wake :labels (id-labels state role))
+      (tell tx "turn-unrecorded" "alert" "normal" "relay could not record the end of a conversation"
+            ["relay keeps trying. Until it can, that conversation stays busy and nothing else starts in it."
+             "A full disk, or a log relay cannot write to, would do this."]
+            :role role :wake wake :labels (id-labels state role))
       tx)))
 
 (defmethod decide* :conversation/line-dropped [{:keys [state] :as tx} {{:keys [wake size]} :args}]
@@ -1872,9 +1928,9 @@
   (let [role (get-in state [:wakes wake :role])]
     (-> tx
         (emit "conversation/line-dropped" {:wake wake :role role :size size})
-        (notify "conversation-line-dropped" (str "relay dropped a message from " role "'s agent")
-                (str "A line of " size " bytes was too long to check, so its client never saw it.")
-                :role role :labels (id-labels state role)))))
+        (tell "conversation-line-dropped" "alert" "low" "relay dropped part of a conversation"
+              [(str "A line of " size " bytes was too long to check, so it never reached your screen.")]
+              :role role :labels (id-labels state role)))))
 
 (def ^:private session-pattern
   "An ACP session id as relay keeps it: agentloop's are UUIDs."
@@ -1985,11 +2041,11 @@
                        (not (busy? state id))
                        (running-away? state id config now)
                        (or (nil? reported) (not (after? (.plus ^Instant reported window) now))))
-                (notify tx "runaway-guard-tripped" (str id " was stopped by the runaway guard")
-                        (str "It has been woken more often in the last "
-                             (:runaway-window-minutes config) " minutes than ordinary use "
-                             "explains. Its work is waiting and nothing was dropped.")
-                        :role id :labels (id-labels state id))
+                (tell tx "runaway-guard-tripped" "alert" "high" "relay paused work that kept restarting"
+                      [(str "It started more often in the last " (:runaway-window-minutes config)
+                            " minutes than ordinary use explains. The work is waiting and nothing was dropped;"
+                            " relay status shows where.")]
+                      :role id :labels (id-labels state id))
                 tx)))
           tx (active-role-ids state)))
 
@@ -2002,13 +2058,13 @@
                   told (get-in (:state tx) [:unwakeable-told id])]
               (cond
                 (and why (not= why told))
-                (notify tx "public-role-cannot-run" (str id " cannot run as a public role")
-                        (str "It is not woken until this is put right: " why)
-                        :role id :reason why :labels (id-labels state id))
+                (tell tx "public-role-cannot-run" "alert" "normal" (str "Web work by " id " is stopped")
+                      [(str "It waits until this is put right: " why)]
+                      :role id :reason why :labels (id-labels state id))
                 ;; Put right, so a later breakage is told again.
                 (and told (not why))
-                (notify tx "public-role-can-run" (str id " can run as a public role again")
-                        "It is woken as usual from now on." :role id :labels (id-labels state id))
+                (tell tx "public-role-can-run" "note" "low" (str "Web work by " id " runs again")
+                      ["It carries on as usual from now on."] :role id :labels (id-labels state id))
                 :else tx)))
           tx (active-role-ids state)))
 
@@ -2020,10 +2076,10 @@
                      (not (after? (.plus ^Instant (:down-since h)
                                          (Duration/ofMinutes (:outage-patience-minutes config)))
                                   now)))
-              (notify tx "harness-unreachable"
-                      (str harness " has been unreachable since " (:down-since h))
-                      "Every role on it waits, and nothing has been dropped. Work carries on by itself once it is back."
-                      :harness harness)
+              (tell tx "harness-unreachable" "alert" "high"
+                    (str "The model service has been unreachable since " (:down-since h))
+                    ["Work waits, and nothing has been dropped. It carries on by itself once the service is back."]
+                    :harness harness)
               tx))
           tx (sort-by key (:harnesses state))))
 
@@ -2054,38 +2110,60 @@
     (report-unwakeable tx)
     (report-outages tx)))
 
-;; notifications
+;; messages to the operator (relay.messages)
 
-(defmethod decide* :notification/delivered [{:keys [state] :as tx} {{:keys [notification]} :args}]
+(defn message
+  "A message relay told the operator, by id, or nil."
+  [state id]
+  (get-in state [:messages id]))
+
+(defn- deliveries! [{:keys [state]} channel ids]
+  (when-not (and (string? channel) (sequential? ids) (seq ids)
+                 (every? #(get-in state [:messages % :deliveries channel]) ids))
+    (reject! :not-found "No such delivery.")))
+
+(defmethod decide* :message/delivered [tx {{:keys [channel messages]} :args}]
   (dispatcher-only! tx)
-  (when-not (get-in state [:notifications notification]) (reject! :not-found "No such notification."))
-  (emit tx "notification/delivered" {:notification notification}))
+  (deliveries! tx channel messages)
+  (emit tx "message/delivered" {:channel channel :messages (vec messages)}))
 
-(def notification-attempts
-  "How many times a notification is pushed before relay gives up on it."
-  8)
-
-(defmethod decide* :notification/failed [{:keys [state config now] :as tx} {{:keys [notification error]} :args}]
+(defmethod decide* :message/failed [{:keys [state config now] :as tx} {{:keys [channel messages error final]} :args}]
   (dispatcher-only! tx)
-  (let [n (get-in state [:notifications notification])]
-    (when-not n (reject! :not-found "No such notification."))
-    ;; A failed push is tried again after a wait that doubles, a few times.
-    (let [attempt (inc (or (:attempts n) 0))]
-      (emit tx "notification/failed"
-            {:notification notification :error (str error) :attempt attempt
-             :retry-at (when (< attempt notification-attempts)
-                         (str (.plusSeconds ^Instant now (config/retry-delay-seconds config attempt))))}))))
+  (deliveries! tx channel messages)
+  ;; A failed delivery is tried again after a wait that doubles, a few
+  ;; times; one whose channel is gone from relay.edn is not.
+  (let [attempt (inc (apply max (map #(or (get-in state [:messages % :deliveries channel :attempts]) 0) messages)))]
+    (emit tx "message/failed"
+          {:channel channel :messages (vec messages) :error (str error) :attempt attempt
+           :retry-at (when (and (not final) (< attempt messages/attempts))
+                       (str (.plusSeconds ^Instant now (config/retry-delay-seconds config attempt))))})))
 
-(defn notifications-to-push
-  "Notifications the tick pushes: pending ones whose own process stopped
-  before pushing them, and failed ones whose retry is due."
+(defn messages-due
+  "The deliveries the tick makes (relay.messages/due-now)."
   [state ^Instant now ^Instant stale-before]
-  (->> (vals (:notifications state))
-       (filter #(case (:delivery %)
-                  :pending (.isBefore ^Instant (:created-at %) stale-before)
-                  :failed (some-> ^Instant (:retry-at %) (.isAfter now) not)
-                  false))
-       (sort-by :id)))
+  (messages/due-now (vals (:messages state)) now stale-before))
+
+(defmethod decide* :message/send [{:keys [state actor] :as tx} {{:keys [subject sections urgency in-reply-to]} :args}]
+  ;; tell_operator: a role tells the operator something. It gives the
+  ;; content and how urgent it is; relay.edn alone says where it goes.
+  (caller-role! tx)
+  (when (public-actor? tx)
+    (reject! :forbidden "Web work reports back by memo, not to the operator directly."))
+  (let [urgency (or urgency "normal")
+        parent (when (some? in-reply-to)
+                 (or (message state in-reply-to) (reject! :not-found (str "There is no message " in-reply-to "."))))]
+    (when-not (some #{urgency} messages/urgencies)
+      (reject! (str "urgency is one of " (str/join ", " messages/urgencies) ".")))
+    (when (str/includes? (str subject) "\n") (reject! "A message's subject is one line."))
+    (when-not (and (sequential? sections) (every? map? sections)
+                   (every? #(and (sequential? (:items %)) (every? (fn [i] (or (string? i) (map? i))) (:items %))) sections))
+      (reject! "A message is sections of items."))
+    (let [kind (if parent "reply" "note")
+          draft (try (messages/message {:kind kind :urgency urgency :subject subject :sections sections
+                                        :in-reply-to in-reply-to})
+                     (catch clojure.lang.ExceptionInfo e (reject! (ex-message e))))]
+      (tell tx "told" kind urgency (:subject draft) nil :sections (:sections draft) :in-reply-to in-reply-to
+            :role actor))))
 
 ;; the morning brief (relay.brief composes it)
 
@@ -2097,7 +2175,7 @@
 (defmethod evolve* "brief/composed" [state {:keys [data]}]
   (assoc state :brief-date (:date data)))
 
-(defmethod decide* :brief/send [{:keys [state] :as tx} {{:keys [date title body labels sections]} :args}]
+(defmethod decide* :brief/send [{:keys [state] :as tx} {{:keys [date title parts labels sections]} :args}]
   ;; Recorded once a day under the log's lock, so two ticks cannot both
   ;; send one, and a restart sends none twice. A brief with nothing to say
   ;; is recorded with no title, and nothing is pushed.
@@ -2107,7 +2185,7 @@
     (when (some-> (brief-date state) (.isBefore d) not)
       (reject! :invalid (str "The brief for " d " was already composed.")))
     (cond-> (emit tx "brief/composed" {:date (str d) :sent (some? title) :sections sections})
-      title (notify "brief" title body :date (str d) :labels labels))))
+      title (tell "brief" "digest" "normal" title nil :sections parts :date (str d) :labels labels))))
 
 ;; knowledge
 

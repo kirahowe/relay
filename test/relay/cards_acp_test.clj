@@ -43,8 +43,7 @@
     (log/init! data)
     (spit (str data "/relay.edn")
           (pr-str {:timezone "UTC" :default-harness :a
-                   :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin agent}}
-                   :notify {:kind :none}}))
+                   :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin agent}}}))
     (try
       (let [sys (inbound/system data)]
         (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "clerk" :title "Clerk" :instructions "x"}})

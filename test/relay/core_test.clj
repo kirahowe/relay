@@ -7,6 +7,7 @@
             [clojure.test.check.properties :as prop]
             [relay.config :as config]
             [relay.core :as core]
+            [relay.messages :as messages]
             [relay.test-support :as support]
             [relay.dispatch :as dispatch])
   (:import (java.time Instant)))
@@ -16,7 +17,6 @@
 (def cfg (config/resolve-config {:timezone "America/Toronto"
                                  :default-harness :agentloop
                                  :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"]}}
-                                 :notify {:kind :none}
                                  :max-attempts 3
                                  :runaway-wakes 6
                                  ;; courier is public: memos to it from the
@@ -75,7 +75,7 @@
 
 (declare json-round-trip)
 
-(defn- notifications [w] (map :kind (sort-by :id (vals (:notifications (:state w))))))
+(defn- notifications [w] (map :origin (sort-by :id (vals (:messages (:state w))))))
 
 ;; --- examples
 
@@ -148,7 +148,7 @@
               (run "operator" :memo/send {:to "clerk" :subject "Quiet" :body "b"})
               (run "clerk" :memo/send {:to "operator" :subject "Approve the filing?" :body "Yes or no."}))]
     (is (= ["memo-for-operator"] (notifications w)))
-    (is (= "Approve the filing?" (:title (first (vals (:notifications (:state w)))))))))
+    (is (= "Approve the filing?" (:subject (first (vals (:messages (:state w)))))))))
 
 (deftest a-clean-run-that-closes-nothing-is-a-failed-attempt
   (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "File" :body "b"}))
@@ -286,6 +286,61 @@
               (wake "clerk" {:outcome "limited"}))]
     (is (= (.plusSeconds t0 900) (core/paused-until (:state w) "agentloop" (:now w))))))
 
+(defn- messages-with [w origin]
+  (filter #(= origin (:origin %)) (vals (:messages (:state w)))))
+
+(defn- fits? [m]
+  (nil? (messages/problem m)))
+
+(deftest relay-tells-the-operator-whatever-the-text
+  ;; Found in review: relay's own messages threw on long text, and a
+  ;; dead letter that threw in :tick stopped every later tick.
+  (let [long-text (apply str (repeat 4500 "x"))
+        huge (apply str (repeat 5000 "y"))]
+    (testing "a role's long memo to the operator still makes a message"
+      (let [w (-> (seed) (run "dispatcher" :wake/start {:role "clerk"})
+                  (run "clerk" :memo/send {:to "operator" :subject "Long" :body huge}))
+            [m] (messages-with w "memo-for-operator")]
+        (is (nil? (:rejected w)))
+        (is (fits? m))
+        (is (= huge (:body (core/memo (:state w) (:memo m)))) "the memo itself is kept whole")))
+    (testing "a long memo the hub blocks still tells the operator"
+      (let [w (-> (seed) (run "operator" :memo/send {:to "hub" :subject "Do it" :body long-text}))
+            w (run w "hub" :memo/block {:memo (last-memo-id w) :explanation huge})]
+        (is (nil? (:rejected w)))
+        (is (every? fits? (messages-with w "work-abandoned")))
+        (is (= 1 (count (messages-with w "work-abandoned"))))))
+    (testing "a long memo never closed is dead-lettered by a wake's end, and by the tick"
+      (let [w (-> (seed) (run "operator" :memo/send {:to "hub" :subject "Do it" :body long-text}))
+            w (-> w (wake "hub" {}) (wake "hub" {}))
+            w (run w "dispatcher" :wake/start {:role "hub"})
+            lost (:id (support/calling-wake (:state w) "hub"))
+            w (run w "dispatcher" :tick {:lost-wakes [lost]})]
+        (is (nil? (:rejected w)))
+        (is (= 1 (count (messages-with w "work-abandoned"))))
+        (is (every? fits? (messages-with w "work-abandoned")))
+        (testing "and the next tick runs"
+          (is (nil? (:rejected (run (advance w 60) "dispatcher" :tick {})))))))
+    (testing "a long word from the model service still tells the operator"
+      (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "File" :body "b"})
+                  (run "dispatcher" :wake/start {:role "clerk"}))
+            id (:id (support/calling-wake (:state w) "clerk"))
+            w (run w "dispatcher" :wake/end {:wake id :outcome "needs-attention" :said huge})]
+        (is (nil? (:rejected w)))
+        (is (every? fits? (messages-with w "harness-needs-attention")))
+        (is (= 1 (count (messages-with w "harness-needs-attention"))))))
+    (testing "a wake that shows sixty things still tells the operator, and says how many more"
+      (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "Look" :body "b"})
+                  (run "dispatcher" :wake/start {:role "clerk"}))
+            id (:id (support/calling-wake (:state w) "clerk"))
+            paths (vec (for [i (range 60)] (str "shown/2026-10-14/" i)))
+            w (run w "dispatcher" :wake/end {:wake id :outcome "ran" :shown paths})
+            [m] (messages-with w "shown")
+            items (mapcat :items (:sections m))]
+        (is (nil? (:rejected w)))
+        (is (fits? m))
+        (is (some #(str/includes? (:text %) "11 more") items))))))
+
 (deftest a-harness-that-needs-a-person-says-so-once
   (let [w (-> (seed) (run "operator" :memo/send {:to "clerk" :subject "File" :body "b"}))
         w (reduce (fn [w _] (-> w (wake "clerk" {:outcome "needs-attention"}) (advance 4000)))
@@ -350,9 +405,11 @@
                     (advance 86400))))
             (seed) costs)))
 
+(defn- body [msg] (str/join "\n\n" (map :text (mapcat :items (:sections msg)))))
+
 (defn- budget-warnings [w]
-  (for [n (sort-by :id (vals (:notifications (:state w))))
-        :when (= "budget-reached" (:kind n))]
+  (for [n (sort-by :id (vals (:messages (:state w))))
+        :when (= "budget-reached" (:origin n))]
     [(:week n) (:percent n)]))
 
 (deftest a-weekly-budget-warns-once-at-80-and-once-at-100-percent
@@ -364,10 +421,11 @@
         (is (= [["2026-10-12" 80] ["2026-10-12" 100]] (budget-warnings w)))
         (is (every? #(= :ended (:status %)) (vals (:wakes (:state w)))))))
     (testing "the warnings say the week's total and the budget"
-      (let [[n] (filter #(= "budget-reached" (:kind %)) (vals (:notifications (:state (spend-world budget [12])))))]
-        (is (= "relay has spent 80% of its weekly budget" (:title n)))
-        (is (str/includes? (:body n) "$12.00 this week, from Monday 2026-10-12"))
-        (is (str/includes? (:body n) "weekly budget of $15.00"))))
+      (let [[n] (filter #(= "budget-reached" (:origin %)) (vals (:messages (:state (spend-world budget [12])))))]
+        (is (= "relay has spent 80% of its weekly budget" (:subject n)))
+        (is (str/includes? (body n) "$12.00 this week, from Monday 2026-10-12"))
+        (is (str/includes? (body n) "weekly budget of $15.00"))
+        (is (= ["alert" "normal"] [(:kind n) (:urgency n)]))))
     (testing "a wake that passes both at once tells only 100"
       (is (= [["2026-10-12" 100]] (budget-warnings (spend-world budget [20 1 1])))))
     (testing "a new week starts over"
@@ -612,6 +670,7 @@
    [[3 (gen/tuple (gen/return :advance) (gen/elements [1 30 60 600 3600 7200 86400]))]
     [5 (gen/tuple (gen/return :send) (gen/elements actors) (gen/elements (conj role-pool "operator")))]
     [4 (gen/tuple (gen/return :close) (gen/elements actors) gen/nat)]
+    [2 (gen/tuple (gen/return :tell) (gen/elements actors) (gen/elements ["low" "normal" "high" nil "now"]))]
     [2 (gen/tuple (gen/return :block) (gen/elements role-pool) gen/nat)]
     [3 (gen/tuple (gen/return :retry) (gen/elements (into ["operator" "operator" "hub"] actors))
                   (gen/elements role-pool))]
@@ -674,6 +733,8 @@
               (run w from :memo/send {:to to :subject (str "s" (count ids)) :body "b"}))
       :send-public (run w "operator" :memo/send {:to (first args) :subject (str "s" (count ids)) :body "b"} true)
       :close (let [[actor n] args] (run w actor :memo/close {:memo (nth-or ids n) :outcome "done"}))
+      :tell (let [[actor urgency] args]
+              (run w actor :message/send (cond-> {:subject "s" :sections [{:items ["x"]}]} urgency (assoc :urgency urgency))))
       :block (let [[actor n] args] (run w actor :memo/block {:memo (nth-or ids n) :explanation "can't"}))
       :retry (let [[actor r] args] (run w actor :memo/retry {:role r}))
       :add (let [[actor id] args] (run w actor :role/add {:id id :instructions "c"} (= "operator" actor)))
@@ -886,8 +947,8 @@
     (let [letters (count (filter #(= "memo/dead-lettered" (:type %)) batch))
           passed (count (filter #(or (and (= "memo/sent" (:type %)) (= "dispatcher" (get-in % [:data :from]))
                                           (str/starts-with? (get-in % [:data :subject]) "Dead letter"))
-                                     (and (= "notification/created" (:type %))
-                                          (= "work-abandoned" (get-in % [:data :kind]))))
+                                     (and (= "message/created" (:type %))
+                                          (= "work-abandoned" (get-in % [:data :origin]))))
                                 batch))]
       (when (not= letters passed) (fail! [:escalation letters passed])))
     ;; A harness failure counts against no memo.
@@ -926,7 +987,7 @@
           (when-not (some #(and (= "role/tools-unavailable" (:type %)) (= role (get-in % [:data :role]))) batch)
             (fail! [:tool-changed-again-without-backoff tool]))
           (when-not (or (= "operator" (:actor e))
-                        (some #(and (= "notification/created" (:type %)) (= "tool-changed" (get-in % [:data :kind]))) batch))
+                        (some #(and (= "message/created" (:type %)) (= "tool-changed" (get-in % [:data :origin]))) batch))
             (fail! [:tool-changed-untold tool])))))
     ;; A memo from the house never reaches a public role.
     (doseq [e batch :when (and (= "memo/sent" (:type e)) (= "courier" (get-in e [:data :to]))
@@ -944,9 +1005,18 @@
       (when (core/private? (:labels e)) (fail! [:public-event-private (:seq e)])))
     (doseq [e batch :when (= "memo/attempt-failed" (:type e))]
       (when (get-in s [:wakes (get-in e [:data :wake]) :chat]) (fail! [:chat-counted e])))
+    ;; Every message is whole, and only a house role tells the operator
+    ;; anything itself.
+    (doseq [e batch :when (= "message/created" (:type e))
+            :let [{:keys [kind urgency subject origin]} (:data e)]]
+      (when-not (and (messages/kinds kind) (some #{urgency} messages/urgencies) (not (str/blank? subject)))
+        (fail! [:message-not-whole (:seq e)]))
+      (when (and (= "told" origin) (not (and (core/active-role? (:state before) (:actor e))
+                                             (not (core/public-role? cfg (:actor e))))))
+        (fail! [:told-by-not-a-house-role (:seq e)])))
     ;; Every memo to the operator notifies, once.
     (doseq [e batch :when (and (= "memo/sent" (:type e)) (= "operator" (get-in e [:data :to])))]
-      (when-not (= 1 (count (filter #(and (= "notification/created" (:type %))
+      (when-not (= 1 (count (filter #(and (= "message/created" (:type %))
                                           (= (:seq e) (get-in % [:data :memo])))
                                     batch)))
         (fail! [:operator-not-notified e])))

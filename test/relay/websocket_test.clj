@@ -179,8 +179,7 @@
 ;; --- settings
 
 (def complete {:timezone "UTC" :default-harness :agentloop
-               :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"]}}
-               :notify {:kind :none}})
+               :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"]}}})
 
 (deftest the-websocket-settings-are-checked
   (testing "no :serve, or no :websocket in it, is no listener"

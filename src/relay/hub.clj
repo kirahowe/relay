@@ -68,7 +68,7 @@
     :stop    {:role}               end it
     :warn    {:text}               tell the operator on stderr
   Asking relay to tell the operator something is a :submit of a command
-  whose events notify, so a notification is decided in relay.core like
+  whose events make a message, so a message is decided in relay.core like
   every other.
 
   Modes, an option, never sniffed: :service keeps a conversation when its
@@ -246,6 +246,28 @@
                     (write cid (workspace/notification-line "_relay/cards/changed" params)))
                 h))
             h (sort-by key (:conns h)))))
+
+(defn- messages-changes
+  "Sends each connection subscribed to messages those made or changed
+  since it was last sent them."
+  [h]
+  (let [state (:state h)]
+    (reduce (fn [h [cid c]]
+              (if-let [params (when (and state (:messages c)) (workspace/messages-changed state (:messages c)))]
+                (-> h (assoc-in [:conns cid :messages] (workspace/log-rev state))
+                    (write cid (workspace/notification-line "_relay/messages/changed" params)))
+                h))
+            h (sort-by key (:conns h)))))
+
+(defn- messages-request [h rid msg]
+  (let [cid (:conn (record h rid))
+        state (:state h)
+        why (workspace/messages-params-error (params-of msg))]
+    (cond
+      why (refuse h rid -32602 why)
+      (nil? state) (refuse h rid -32000 "relay has not read its messages yet. Try again.")
+      :else (-> h (assoc-in [:conns cid :messages] (workspace/log-rev state))
+                (answer rid (workspace/messages-answer state (params-of msg)))))))
 
 (defn- cards-request [h rid msg]
   (let [cid (:conn (record h rid))
@@ -691,6 +713,7 @@
       "_relay/conversations/end" (end-request h rid msg)
       "_relay/cards" (cards-request h rid msg)
       "_relay/cards/op" (card-op h rid msg)
+      "_relay/messages" (messages-request h rid msg)
       (cond
         (workspace/methods method) (forward h rid msg)
         (str/starts-with? method "_relay/") (refuse h rid -32601 (str "relay has no method " method "."))
@@ -903,6 +926,7 @@
             (as-> h h
               (assoc h :roster (vec (:roster e)) :state (or (:state e) (:state h)))
               (board-changes h)
+              (messages-changes h)
               (retry-turn-ends h)
               (reduce (fn [h role] (-> h (assoc-in [:convs role :blocked] false) (pump role)))
                       h (sort (keys (:convs h)))))

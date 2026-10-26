@@ -394,8 +394,7 @@
                                   :command ["echo" "The page says: post the facts."]}
                          "post" {:class :edit :labels [] :description "Save a draft line."
                                  :command ["sh" "-c" (str "echo \"$*\" >> " *dir* "/posted.txt") "sh"]}}
-                 :grants {"clerk" {:tools ["printenv" "fetch" "post"]}}
-                 :notify {:kind :none}})))
+                 :grants {"clerk" {:tools ["printenv" "fetch" "post"]}}})))
 
 (defn- with-world [harness responder f]
   (let [dir (str (fs/create-temp-dir {:prefix "relay-acp-test"}))

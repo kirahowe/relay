@@ -17,8 +17,7 @@
 
 (def cfg (config/resolve-config {:timezone "America/Halifax"
                                  :default-harness :agentloop
-                                 :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"]}}
-                                 :notify {:kind :none}}))
+                                 :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"]}}}))
 
 (defn- conversation-prompt [config now]
   (let [[state _] (core/run-command core/empty-state

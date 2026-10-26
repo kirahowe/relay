@@ -14,7 +14,7 @@
             [relay.harness.agentloop :as agentloop]
             [relay.inbound :as inbound]
             [relay.log :as log]
-            [relay.notify :as notify]
+            [relay.messages :as messages]
             [relay.pause :as pause]
             [relay.render :as render]
             [relay.roster :as roster]
@@ -545,18 +545,26 @@ id public too.")
 
 (defn- report-broken-settings!
   "When the tick cannot load relay.edn, nothing else runs, so it says so:
-  on stderr, which launchd keeps, and once per distinct problem through
-  :notify, if that section alone is sound. Best effort: it never throws."
+  on stderr, which launchd keeps, and once per distinct problem as an
+  alert through the channels :messages routes one to, if that section
+  alone is sound. The log may be what is wrong, so the alert is not
+  recorded there. Best effort: it never throws."
   [dir problem]
   (binding [*out* *err*] (println (str "relay tick: relay.edn cannot be used: " problem)))
   (try
     (let [marker (fs/path dir ".settings-problem")
-          notify-settings (:notify (edn/read-string (slurp (str (fs/path dir "relay.edn")))))]
+          raw (edn/read-string (slurp (str (fs/path dir "relay.edn"))))
+          settings (or (:messages raw) messages/default-settings)]
       (when-not (and (fs/exists? marker) (= problem (slurp (str marker))))
-        (config/check-notify notify-settings)
-        (notify/push! notify-settings {:title "relay has stopped: relay.edn cannot be used"
-                                       :body (str problem "\n\nNo role is woken until it is fixed.")
-                                       :labels []})
+        (config/check-messages settings)
+        (let [now (java.time.Instant/now)
+              msg (assoc (messages/message {:kind "alert" :urgency "high"
+                                            :subject "relay has stopped: relay.edn cannot be used"
+                                            :sections [{:items [problem "Nothing runs until it is fixed."]}]})
+                         :id 0 :created-at now :labels [])]
+          ;; High urgency: quiet hours do not hold it, and no zone is needed.
+          (doseq [{:keys [channel]} (messages/route settings nil msg now)]
+            (inbound/send! (get-in settings [:channels channel]) [msg] (constantly nil))))
         (spit (str marker) problem)))
     (catch Exception e
       (binding [*out* *err*] (println (str "relay tick: could not tell the operator: " (ex-message e)))))))

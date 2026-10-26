@@ -18,7 +18,8 @@
             [relay.dispatch :as dispatch]
             [relay.harness :as harness]
             [relay.inbound :as inbound]
-            [relay.log :as log])
+            [relay.log :as log]
+            [relay.messages :as messages])
   (:import (java.time Instant)))
 
 (def relay-bin (str (fs/absolutize "bin/relay")))
@@ -54,7 +55,8 @@
         (pr-str (merge {:timezone "UTC"
                         :default-harness :fake
                         :harnesses {:fake {:kind :script :command [(str *dir* "/harness")]}}
-                        :notify {:kind :command :command [(str *dir* "/notify")]}
+                        :messages {:channels {"phone" {:kind :push :via :command :command [(str *dir* "/notify")]}}
+                                   :routes [{:channels ["phone"]}]}
                         :max-attempts 2
                         :grants {}}
                        extra))))
@@ -97,6 +99,10 @@
 (defn- notifications []
   (let [f (str *dir* "/notifications")]
     (if (fs/exists? f) (str/split-lines (slurp f)) [])))
+(defn- statuses
+  "Each message's delivery status on the phone channel, in order."
+  []
+  (map #(get-in % [:deliveries "phone" :status]) (sort-by :id (vals (:messages (state))))))
 (defn- memo! [to subject]
   (:seq (first (inbound/submit! *sys* {:type :memo/send :actor "operator"
                                        :args {:to to :subject subject :body "Body."}}))))
@@ -163,7 +169,7 @@
   (plan! (report! {:outcome "needs-attention" :said "Not logged in"}) 1)
   (dispatch/wake! *sys* "clerk" {})
   (dispatch/wake! *sys* "clerk" {})
-  (is (= ["fake needs you before relay can work"] (notifications))))
+  (is (= ["relay needs you before it can work"] (notifications))))
 
 (deftest a-run-past-its-deadline-is-stopped-and-counts-as-a-crash
   (write-config! {:wake-timeout-minutes 0.03})
@@ -192,10 +198,10 @@
 (deftest memos-to-the-operator-notify-and-a-failed-push-is-recorded
   (memo! "operator" "Approve the filing?")
   (is (= ["Approve the filing?"] (notifications)))
-  (is (= [:delivered] (map :delivery (vals (:notifications (state))))))
+  (is (= [:delivered] (statuses)))
   (script! (str *dir* "/notify") "exit 3")
   (memo! "operator" "Another")
-  (is (= #{:delivered :failed} (set (map :delivery (vals (:notifications (state)))))))
+  (is (= [:delivered :failed] (statuses)))
   (testing "the memo is in the log either way"
     (is (= 2 (count (core/unread-memos (state) "operator")))))
   (testing "a failed push is tried again by the tick, after a wait"
@@ -205,7 +211,7 @@
       (is (= ["Approve the filing?"] (notifications)) "not before the wait")
       (dispatch/tick! (later 120) {:spawn! (fn [& _])})
       (is (= ["Approve the filing?" "Another"] (notifications)))
-      (is (= #{:delivered} (set (map :delivery (vals (:notifications (state))))))))))
+      (is (= [:delivered :delivered] (statuses))))))
 
 (deftest a-push-that-keeps-failing-is-given-up-on
   (script! (str *dir* "/notify") "exit 3")
@@ -215,9 +221,9 @@
     (dotimes [_ 12]
       (swap! secs + 7200)
       (dispatch/tick! sys {:spawn! (fn [& _])}))
-    (let [[n] (vals (:notifications (state)))]
-      (is (= core/notification-attempts (:attempts n)))
-      (is (nil? (:retry-at n))))))
+    (let [[n] (vals (:messages (state)))]
+      (is (= messages/attempts (get-in n [:deliveries "phone" :attempts])))
+      (is (nil? (get-in n [:deliveries "phone" :retry-at]))))))
 
 (deftest a-wake-whose-process-died-is-reaped-by-the-tick
   (let [id (memo! "clerk" "x")
@@ -457,7 +463,7 @@
     (is (empty? (chat-wakes)))))
 
 (deftest the-client-must-be-a-command
-  (let [cfg (fn [c] (config/resolve-config (cond-> {:timezone "UTC" :default-harness :a :notify {:kind :none}
+  (let [cfg (fn [c] (config/resolve-config (cond-> {:timezone "UTC" :default-harness :a
                                                     :harnesses {:a {:kind :script}}}
                                              (some? c) (assoc :client c))))]
     (is (= ["relay-tui"] (:client (cfg nil))) "relay-tui by default")
@@ -469,7 +475,7 @@
   ;; :chat-client, the setting's old name, is gone. A relay.edn that still
   ;; has it must not stop the tick: the key is ignored, as any unknown
   ;; top-level key is, and the client is the default.
-  (let [cfg (config/resolve-config {:timezone "UTC" :default-harness :a :notify {:kind :none}
+  (let [cfg (config/resolve-config {:timezone "UTC" :default-harness :a
                                     :harnesses {:a {:kind :script}} :chat-client ["old-tui"]})]
     (is (= ["relay-tui"] (:client cfg)))))
 
@@ -539,8 +545,7 @@
                          gen-junk gen-junk))]))
 
 (def conversation-end-is-always-accepted
-  (let [cfg (config/resolve-config {:timezone "UTC" :default-harness :x :harnesses {:x {:kind :script}}
-                                    :notify {:kind :none}})
+  (let [cfg (config/resolve-config {:timezone "UTC" :default-harness :x :harnesses {:x {:kind :script}}})
         now (Instant/parse "2026-10-15T12:00:00Z")
         cmd (fn [state actor type args]
               (first (core/run-command state {:type type :actor actor :args args} {:now now :config cfg})))
@@ -578,8 +583,7 @@
   (gen/fmap #(Instant/ofEpochSecond %) (gen/choose 1700000000 1900000000)))
 
 (def a-wake-request-is-a-pure-value
-  (let [cfg (config/resolve-config {:timezone "UTC" :default-harness :x :harnesses {:x {:kind :script}}
-                                    :notify {:kind :none}})
+  (let [cfg (config/resolve-config {:timezone "UTC" :default-harness :x :harnesses {:x {:kind :script}}})
         t0 (Instant/parse "2026-10-15T12:00:00Z")
         cmd (fn [state actor type args]
               (first (core/run-command state {:type type :actor actor :args args} {:now t0 :config cfg})))
@@ -630,8 +634,7 @@
                        gen-report-field))]))
 
 (def a-script-wake-always-ends
-  (let [cfg (config/resolve-config {:timezone "UTC" :default-harness :x :harnesses {:x {:kind :script}}
-                                    :notify {:kind :none}})
+  (let [cfg (config/resolve-config {:timezone "UTC" :default-harness :x :harnesses {:x {:kind :script}}})
         now (Instant/parse "2026-10-15T12:00:00Z")
         cmd (fn [state actor type args]
               (first (core/run-command state {:type type :actor actor :args args} {:now now :config cfg})))

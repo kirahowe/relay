@@ -35,8 +35,7 @@
     (log/init! data)
     (spit (str data "/relay.edn")
           (pr-str {:timezone "UTC" :default-harness :a
-                   :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin agent}}
-                   :notify {:kind :none}}))
+                   :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin agent}}}))
     (let [sys (inbound/system data)
           op! (fn [card args] (inbound/submit! sys {:type :card/op :actor "hub" :labels [] :args (assoc args :card card)}))
           add! (fn [labels args] (:seq (first (inbound/submit! sys {:type :card/add :actor "hub" :labels labels :args args}))))

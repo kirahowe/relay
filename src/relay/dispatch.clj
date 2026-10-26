@@ -794,7 +794,7 @@
 
 (defn send-brief!
   "Composes the morning brief when one is due at `t` and records it, which
-  pushes it when it has something to say. Returns the events appended, or
+  sends it as a digest message when it has something to say. Returns the events appended, or
   nil when no brief is due."
   [{:keys [config] :as sys} state ^Instant t]
   (when-let [date (brief/due config state t)]
@@ -823,8 +823,9 @@
 
 (defn tick!
   "One pass: end wakes whose process has gone, fire due
-  routines, report what needs reporting, push notifications left
-  stranded, then start a wake for every role with work waiting, and send the morning brief when
+  routines, report what needs reporting, deliver messages that are due
+  (held for quiet hours or the digest, left stranded, or failed and due
+  again), then start a wake for every role with work waiting, and send the morning brief when
   it is due. Returns the roles woken."
   ([sys] (tick! sys {}))
   ([{:keys [config] :as sys} {:keys [spawn!] :or {spawn! spawn-wake!}}]
@@ -833,8 +834,8 @@
                            :args {:lost-wakes (lost-wakes state)}}))
    (let [state (inbound/current-state sys)
          t (now sys state)]
-     (doseq [n (core/notifications-to-push state t (.minus ^Instant t stale-after))]
-       (inbound/deliver! sys {:seq (:id n) :data n}))
+     (doseq [{:keys [channel messages]} (core/messages-due state t (.minus ^Instant t stale-after))]
+       (inbound/deliver! sys channel messages))
      ;; Before any wake, so a role granted the shell finds it running.
      ;; A shell that will not start stops nothing else: the reason goes
      ;; to the tick's log, and `relay house status` says it.

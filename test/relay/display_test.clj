@@ -86,8 +86,7 @@
     (log/init! data)
     (spit (str data "/relay.edn")
           (pr-str {:timezone "UTC" :default-harness :a
-                   :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}}
-                   :notify {:kind :none}}))
+                   :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}}}))
     (let [sys (inbound/system data)]
       (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "clerk" :title "C" :instructions "x"}})
       [dir sys])))
@@ -135,7 +134,6 @@
       (spit (str (:data-dir sys) "/relay.edn")
             (pr-str {:timezone "UTC" :default-harness :a
                      :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}}
-                     :notify {:kind :none}
                      :tools (into {} (for [m ["display" "baddisplay"]]
                                        [m {:class :read :labels ["private"] :protocol :envelope :description "d"
                                            :command [fixture m] :parameters {:type "object"}}]))
@@ -262,8 +260,7 @@
                                          :command [fixture "display"]
                                          :parameters {:type "object" :properties {:question {:type "string"}}
                                                       :required ["question"] :additionalProperties false}}}
-                       :grants {"clerk" {:tools ["venues"]}}
-                       :notify {:kind :none}}))
+                       :grants {"clerk" {:tools ["venues"]}}}))
         (binding [*sys* (inbound/system (data))]
           (inbound/submit! *sys* {:type :role/add :actor "operator"
                                   :args {:id "clerk" :title "Clerk" :instructions "Find things."}})
@@ -310,10 +307,10 @@
           (testing "the session did not become contaminated"
             (is (not (core/contaminated? (get-in (state) [:wakes (:wake result) :labels])))))
           (testing "the operator is told, by path"
-            (let [n (first (filter #(= "shown" (:kind %)) (vals (:notifications (state)))))]
+            (let [n (first (filter #(= "shown" (:origin %)) (vals (:messages (state)))))]
               (is n)
-              (is (str/includes? (:body n) (str "relay doc " (:path doc))))
-              (is (not (str/includes? (str (:title n) (:body n)) "DISPLAY-BODY"))))))))))
+              (is (str/includes? (support/message-text n) (str "relay doc " (:path doc))))
+              (is (not (str/includes? (str (:subject n) (support/message-text n)) "DISPLAY-BODY"))))))))))
 
 (defn- start-relay! [& extra]
   (client/start! (concat [relay-bin "acp" "clerk" "--data" (data)] extra) {:dir *dir*}))
@@ -355,7 +352,7 @@
             (client/close-input! c)
             (is (= 0 (client/wait! c 20000)))
             (testing "a conversation's operator saw them as they came, so no notification"
-              (is (not-any? #(= "shown" (:kind %)) (vals (:notifications (state)))))))))))
+              (is (not-any? #(= "shown" (:origin %)) (vals (:messages (state)))))))))))
 
 (deftest relay-tool-passes-a-display-on-to-agentloop
   (let [result {:ok "x" :labels [] :display {:title "t" :body "b" :labels ["private"] :sources []}}]

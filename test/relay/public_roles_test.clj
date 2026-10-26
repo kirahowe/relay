@@ -26,7 +26,6 @@
   {:timezone "UTC"
    :default-harness :agentloop
    :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent/agentloop"}}
-   :notify {:kind :none}
    :tools {"search" {:class :egress :labels ["contaminated"] :description "Search the web." :command ["true"]}
            "lookup" {:class :read :labels [] :protocol :envelope :description "Look something up."
                      :command [fixture "private"] :parameters {:type "object"}}
@@ -365,9 +364,9 @@
               (run-before "operator" :role/update {:id "scout" :instructions "Unmarked."})
               (run "dispatcher" :tick {:lost-wakes []})
               (run "dispatcher" :tick {:lost-wakes []}))
-        told (filter #(= "public-role-cannot-run" (:kind %)) (vals (:notifications (:state w))))]
+        told (filter #(= "public-role-cannot-run" (:origin %)) (vals (:messages (:state w))))]
     (is (= 1 (count told)))
-    (is (str/includes? (:body (first told)) "relay update scout --public"))
+    (is (str/includes? (support/message-text (first told)) "relay update scout --public"))
     (is (some #(str/includes? % "Public role scout cannot run") (render/status (:state w) java.time.ZoneOffset/UTC t0 cfg)))))
 
 ;; --- an event marked public never carries private
@@ -378,7 +377,7 @@
                                        :labels ["private"] :public true :data {:owner "scout" :text "x"}}])))
   (testing "only an item is ever public"
     (is (thrown? clojure.lang.ExceptionInfo
-                 (core/replay [{:seq 1 :at "2026-10-14T12:00:00Z" :type "notification/created" :actor "scout"
+                 (core/replay [{:seq 1 :at "2026-10-14T12:00:00Z" :type "message/created" :actor "scout"
                                 :labels [] :public true :data {:kind "x" :title "t" :body "b"}}])))))
 
 
@@ -397,12 +396,12 @@
       (doseq [id ["hub" "scout"]]
         (inbound/submit! sys {:type :role/add :actor "operator" :public (= "scout" id) :args {:id id :title id :instructions "x"}}))
       (let [{:keys [ok error labels]} (tools/call! sys "scout" "lookup" {} ["contaminated"] "c1")
-            notes (vals (:notifications (inbound/current-state sys)))]
+            notes (vals (:messages (inbound/current-state sys)))]
         (is (nil? ok))
         (is (= tools/refused-result error))
         (is (= [] labels))
-        (is (some #(and (= "result-refused" (:kind %)) (str/includes? (:body %) "lookup")) notes))
-        (is (not-any? #(str/includes? (str (:body %)) "SECRET") notes))))))
+        (is (some #(and (= "result-refused" (:origin %)) (str/includes? (support/message-text %) "lookup")) notes))
+        (is (not-any? #(str/includes? (support/message-text %) "SECRET") notes))))))
 
 (deftest agentloop-s-refusals-reach-the-operator
   (let [report (agentloop/classify {:outcome {:type "outcome" :reason "completed" :labels ["contaminated"]
@@ -417,9 +416,9 @@
           wake (support/calling-wake (:state w) "scout")
           ended (run w "dispatcher" :wake/end (dispatch/wake-end-args (:id wake) report))
           ended-forbidden (run w "dispatcher" :wake/end (dispatch/wake-end-args (:id wake) forbidden))]
-      (is (some #(and (= "result-refused" (:kind %)) (str/includes? (:body %) "lookup"))
-                (vals (:notifications (:state ended)))))
-      (is (some #(= "session-forbidden" (:kind %)) (vals (:notifications (:state ended-forbidden)))))
+      (is (some #(and (= "result-refused" (:origin %)) (str/includes? (support/message-text %) "lookup"))
+                (vals (:messages (:state ended)))))
+      (is (some #(= "session-forbidden" (:origin %)) (vals (:messages (:state ended-forbidden)))))
       (is (nil? (:interrupted-wake (core/role (:state ended-forbidden) "scout")))
           "its next wake starts a fresh session"))))
 
@@ -607,7 +606,7 @@
               tick
               (run-before "operator" :role/update {:id "scout" :instructions "Unmarked again."})
               tick)
-        kinds (map :kind (sort-by :id (vals (:notifications (:state w)))))]
+        kinds (map :origin (sort-by :id (vals (:messages (:state w)))))]
     (is (= ["public-role-cannot-run" "public-role-can-run" "public-role-cannot-run"]
            (filter #{"public-role-cannot-run" "public-role-can-run"} kinds)))))
 

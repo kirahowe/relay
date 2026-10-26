@@ -107,8 +107,7 @@
     (log/init! data)
     (spit (str data "/relay.edn")
           (pr-str {:timezone "UTC" :default-harness :a
-                   :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}}
-                   :notify {:kind :none} :tools {"slow" spec} :grants {"clerk" {:tools ["slow"]}}}))
+                   :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}} :tools {"slow" spec} :grants {"clerk" {:tools ["slow"]}}}))
     (let [sys (inbound/system data)]
       (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "clerk" :title "C" :instructions "x"}})
       (f sys))))
@@ -128,8 +127,7 @@
                  (tools/call! sys "clerk" "slow" {:args []} [] "c1"))))))))
 
 (deftest a-tool-s-time-limit-is-checked
-  (let [base {:timezone "UTC" :default-harness :x :harnesses {:x {:kind :agentloop :api-key-command ["true"]}}
-              :notify {:kind :none}}
+  (let [base {:timezone "UTC" :default-harness :x :harnesses {:x {:kind :agentloop :api-key-command ["true"]}}}
         ok? (fn [t] (try (config/resolve-config (assoc base :tools {"t" (merge {:class :read :labels [] :command ["t"]} t)}))
                          true
                          (catch clojure.lang.ExceptionInfo _ false)))]

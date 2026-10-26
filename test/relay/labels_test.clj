@@ -37,7 +37,6 @@
 (def cfg (config/resolve-config {:timezone "UTC"
                                  :default-harness :agentloop
                                  :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"]}}
-                                 :notify {:kind :none}
                                  :max-attempts 2
                                  :tools {"fetch" {:class :read :labels ["contaminated"]
                                                   :description "Fetch a page." :command ["true"]}
@@ -476,7 +475,7 @@
 (deftest a-memo-from-outside-is-shown-to-any-house-role
   (let [w (-> (seed) (run "clerk" ["contaminated"] :memo/send {:to "hub" :subject "About x" :body "b"}))
         id (:id (first (core/unread-memos (:state w) "hub")))]
-    (is (empty? (:notifications (:state w))) "nobody is asked to release it")
+    (is (empty? (:messages (:state w))) "nobody is asked to release it")
     (is (= ["hub"] (core/roles-to-wake (:state w) cfg (:now w))))
     (let [r ((:read (get tools/builtin "inbox")) {:state (:state w) :config cfg :now t0} "hub" {})]
       (is (str/includes? (:content r) "About x"))
@@ -489,7 +488,7 @@
         m (first (core/unread-memos (:state w) "clerk"))
         ctx {:state (:state w) :config cfg :now t0}
         r ((:read (get tools/builtin "inbox")) ctx "clerk" {})]
-    (is (empty? (vals (:notifications (:state w)))))
+    (is (empty? (vals (:messages (:state w)))))
     (is (str/includes? (:content r) "From the web"))
     (is (= ["contaminated" "private"] (:labels r)) "and reading it makes clerk contaminated")
     (let [w (run w "dispatcher" [] :wake/start {:role "clerk" :dispatched true})
@@ -591,7 +590,6 @@
       (spit (str data "/relay.edn")
             (pr-str {:timezone "America/Halifax" :default-harness :a
                      :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}}
-                     :notify {:kind :none}
                      :grants {"clerk" {:may-add true}}}))
       (let [sys (inbound/system data)]
         (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "clerk" :title "C" :instructions "x"}})

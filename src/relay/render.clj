@@ -338,11 +338,11 @@
 
 ;; --- the morning brief (relay.brief)
 ;;
-;; One push: a title of counts and a body of short lines. The text from
-;; the calendar and reminders is one field of one line of what the tool
-;; printed, so it holds no line break; the push edge (relay.notify) makes
-;; every character visible and, when the brief's labels say it came from
-;; outside, marks the whole brief and breaks its URLs.
+;; One digest message: a subject of counts and a section for each tool.
+;; The text from the calendar and reminders is one field of one line of
+;; what the tool printed, so it holds no line break; each channel's
+;; renderer (relay.channels) makes every character visible and, when the
+;; brief's labels say it came from outside, marks it and breaks its URLs.
 
 (def ^:private brief-names
   {:calendar ["Calendar" "event" "events"]
@@ -364,17 +364,17 @@
   (let [[heading] (brief-names key)]
     (case status
       :ok (if (zero? count)
-            [(str heading ": none")]
-            (cons (str heading ": " count) (map #(str "  " %) lines)))
-      :unavailable [(str heading ": unavailable, the tool " tool " " why ".")]
-      :missing [(str heading ": not configured, relay.edn has no tool " tool ".")])))
+            {:items [(str heading ": none")]}
+            {:heading (str heading ": " count) :list true :items (vec lines)})
+      :unavailable {:items [(str heading ": unavailable, the tool " tool " " why ".")]}
+      :missing {:items [(str heading ": not configured, relay.edn has no tool " tool ".")]})))
 
 (defn brief
-  "A composed brief (relay.brief/compose) as the push that carries it:
-  {:title :body}."
+  "A composed brief (relay.brief/compose) as the message that carries it:
+  {:title :parts}, its subject and its sections."
   [{:keys [date sections]}]
   {:title (str "Morning brief for " date ": " (str/join ", " (keep brief-count sections)))
-   :body (str/join "\n" (mapcat brief-section sections))})
+   :parts (mapv brief-section sections)})
 
 ;; --- relay week
 
@@ -408,7 +408,7 @@
 
 (defn week-report
   "relay week's report (relay.week/report) as lines."
-  [{:keys [window interruptions actions notifications roles health flags]} ^ZoneId zone]
+  [{:keys [window interruptions actions messages roles health flags]} ^ZoneId zone]
   (let [{:keys [from until]} window
         names (into {} (map (juxt first second) week/interruption-kinds))
         how (into {} (map (juxt first #(nth % 2)) week/interruption-kinds))
@@ -435,14 +435,14 @@
                (str "    " (interruption-ref p) (when role (str ", " role)) ", since " (local arose-at zone)))))
      [(str "  Your own decisions: " (if (seq actions) (str/join ", " (for [[a n] actions] (str a " " n))) "none"))
       ""
-      (str "Notifications: " (:total notifications))]
-     (let [per-day (:per-day notifications)]
+      (str "Messages to you: " (:total messages))]
+     (let [per-day (:per-day messages)]
        (for [d (days-between window zone per-day)] (format "  %s  %d" d (get per-day d 0))))
-     (when (seq (:per-kind notifications))
-       [(str "  by kind: " (str/join ", " (for [[k n] (sort-by (comp - val) (:per-kind notifications))] (str k " " n))))])
-     (when (seq (:memos-by-role notifications))
+     (when (seq (:per-kind messages))
+       [(str "  by kind: " (str/join ", " (for [[k n] (sort-by (comp - val) (:per-kind messages))] (str k " " n))))])
+     (when (seq (:memos-by-role messages))
        [(str "  memos to you, by sender: "
-             (str/join ", " (for [[r n] (:memos-by-role notifications)] (str r " " n))))])
+             (str/join ", " (for [[r n] (:memos-by-role messages)] (str r " " n))))])
      ["" "Wakes by role"]
      (if (empty? roles)
        ["  none"]

@@ -37,8 +37,7 @@
     (log/init! data)
     (spit (str data "/relay.edn")
           (pr-str {:timezone "UTC" :default-harness :agentloop
-                   :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}}
-                   :notify {:kind :none}}))
+                   :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}}}))
     (try (f data) (finally (fs/delete-tree dir)))))
 
 (defspec nothing-a-role-wrote-reaches-the-terminal-raw 25
@@ -193,7 +192,6 @@
       (spit (str data "/relay.edn")
             (pr-str {:timezone "UTC" :default-harness :agentloop
                      :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}}
-                     :notify {:kind :none}
                      :tools {"post" {:class :edit :labels [] :description "Post." :command ["true"]}}
                      :grants {"clerk" {:tools ["post"]}}}))
       (let [sys (inbound/system data)
@@ -229,7 +227,6 @@
       (spit (str data "/relay.edn")
             (pr-str {:timezone "UTC" :default-harness :agentloop
                      :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}}
-                     :notify {:kind :none}
                      :tools {"post" {:class :edit :labels [] :description "Post." :command ["true"]}}
                      :grants {"clerk" {:tools ["post"]}}}))
       (let [sys (inbound/system data)

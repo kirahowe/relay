@@ -47,7 +47,7 @@
 
   An assertion is [:has kind pattern], [:none kind pattern] or
   [:count kind pattern n]. Kind is one of :memo :wake :role :routine
-  :dead-letter :notification (relay's records of one), :event (the log's
+  :dead-letter :message (what relay told the operator), :event (the log's
   events, as JSON read back) or :sent (what the file notifier received),
   and also:
 
@@ -156,7 +156,7 @@
 
     :else (= pattern value)))
 
-(def kinds #{:memo :wake :role :routine :dead-letter :notification :event :sent
+(def kinds #{:memo :wake :role :routine :dead-letter :message :event :sent
              :fact :journal :note :doc :tool-call :citation})
 
 ;; --- the newer kinds, from the state and the wakes' transcripts
@@ -260,7 +260,7 @@
     :role (sort-by :id (vals (:roles state)))
     :routine (sort-by (juxt :owner :name) (mapcat vals (vals (:routines state))))
     :dead-letter (sort-by :id (vals (:dead-letters state)))
-    :notification (sort-by :id (vals (:notifications state)))
+    :message (sort-by :id (vals (:messages state)))
     :citation (citation-items world)
     :event events
     :sent sent))

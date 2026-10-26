@@ -22,7 +22,6 @@
   {:timezone "UTC"
    :default-harness :agentloop
    :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent/agentloop"}}
-   :notify {:kind :none}
    :house {:runner [container-bin] :mounts [notes] :timeout-seconds 3}
    :grants {"hub" {:shell true}}})
 
