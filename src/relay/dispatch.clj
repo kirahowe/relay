@@ -124,7 +124,8 @@
                                           :operator-additions (when-not public? operator-additions)
                                           :notes (core/prompt-notes state config role)
                                           :skills (core/prompt-skills state config role)
-                                          :granted (tools/grants-summary config role script)}
+                                          :granted (tools/grants-summary config role script)
+                                          :steward (:dead-letter-handler config)}
                                          role-row)
      :prompt (prompt/wake {:role role-row
                            :memos (map #(core/memo state %) memos)
@@ -193,11 +194,11 @@
   [{:keys [clock]} request]
   (try
     (if-not (:harness request)
-      {:outcome "needs-attention" :exit nil :crashed false
+      {:outcome "needs-attention" :exit nil :crashed false :local true
        :said (str "relay.edn has no harness called " (:harness-name request) ".")}
       (let [{:keys [problem out-file] :as command} (harness/wake-command request)]
         (if problem
-          {:outcome "needs-attention" :exit nil :crashed false :said problem}
+          {:outcome "needs-attention" :exit nil :crashed false :local true :said problem}
           (let [ran (assoc (run-command! command) :now (clock))]
             (assoc (harness/wake-report request command ran) :transcript out-file)))))
     (catch Exception e
@@ -212,7 +213,7 @@
 (defn wake-end-args
   "The :wake/end args for a harness's report on a wake."
   [wake-id report]
-  (-> (select-keys report [:outcome :exit :crashed :cut-short :session :said :resets-at :labels
+  (-> (select-keys report [:outcome :exit :crashed :cut-short :session :said :local :resets-at :labels
                            :refused :forbidden :usage :cost-usd :tools-error :pins :shown])
       (update :exit exit-field)
       (update :resets-at #(some-> % str))

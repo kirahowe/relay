@@ -208,6 +208,29 @@
            (binding [*out* *err*]
              (println (str "relay tick: could not record what " source-name " brought in: " (ex-message e))))))))
 
+(defn- and-list [xs]
+  (let [xs (vec xs)]
+    (case (count xs)
+      0 ""
+      1 (first xs)
+      (str (str/join ", " (pop xs)) " and " (peek xs)))))
+
+(defn poll-line
+  "What relay poll says for one source: `events` the poll appended (nil
+  when it did not poll), and `started` the GitHub repositories it saw for
+  the first time, which only mark where watching begins. Pure."
+  [source-name src events started]
+  (let [memos (count (filter #(= "memo/sent" (:type %)) events))
+        failed (first (filter #(#{"ingest/failed" "error"} (:type %)) events))]
+    (str source-name ": "
+         (cond
+           (nil? events) (str "not checked, since " (:to src) " is not a role.")
+           failed (str "could not check it: " (get-in failed [:data :error]))
+           (and (zero? memos) (seq started))
+           (str "now watching " (and-list started) "; new issues and pull requests show up from the next check.")
+           (zero? memos) "nothing new."
+           :else (str memos " new memo" (when (> memos 1) "s") " for " (:to src) ".")))))
+
 (defn poll-now!
   "Polls the named source, or every one, now, due or not (relay poll).
   Returns a line for each, saying what came in."
@@ -218,12 +241,7 @@
     (when (empty? sources)
       (throw (ex-info "relay.edn has no :ingest sources to check." {:relay/usage true})))
     (vec (for [[n src] sources]
-           (let [events (try (poll! sys n) (catch Exception e [{:type "error" :data {:error (ex-message e)}}]))
-                 memos (count (filter #(= "memo/sent" (:type %)) events))
-                 failed (first (filter #(#{"ingest/failed" "error"} (:type %)) events))]
-             (str n ": "
-                  (cond
-                    (nil? events) (str "not checked, since " (:to src) " is not a role.")
-                    failed (str "could not check it: " (get-in failed [:data :error]))
-                    (zero? memos) "nothing new."
-                    :else (str memos " new memo" (when (> memos 1) "s") " for " (:to src) "."))))))))
+           (let [watched (set (keep :repo (filter map? (:cursor (core/ingest-record (inbound/current-state sys) n)))))
+                 started (when (= :github (:kind src)) (remove watched (:repos src)))
+                 events (try (poll! sys n) (catch Exception e [{:type "error" :data {:error (ex-message e)}}]))]
+             (poll-line n src events started))))))

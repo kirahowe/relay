@@ -10,7 +10,7 @@
  :clock "2026-10-12T09:00"
 
  :model
- {"hub" [{:tool-uses [{:name "facts" :input {:search "office closed"}}]}
+ {"steward" [{:tool-uses [{:name "facts" :input {:search "office closed"}}]}
          {:tool-uses [{:name "facts" :input {:topic "projects"}}]}
          {:tool-uses [{:name "memo_send"
                        :input {:to "operator" :subject "Office days and project name"
@@ -25,7 +25,7 @@
  :foils
  {"no-refs"
   {:fails #{:cites :refs-resolve :cites-the-closed-day}
-   :model {"hub" [{:tool-uses [{:name "facts" :input {:search "office closed"}}]}
+   :model {"steward" [{:tool-uses [{:name "facts" :input {:search "office closed"}}]}
                   {:tool-uses [{:name "memo_send"
                                 :input {:to "operator" :subject "Office days and project name"
                                         :body "The office is closed on Mondays. The project is called Lighthouse."}}]}
@@ -34,7 +34,7 @@
                   {:tool-uses [{:name "journal_write" :input {:text "Answered."}}]}]}}
   "invented-ref"
   {:fails #{:refs-resolve :cites-the-closed-day}
-   :model {"hub" [{:tool-uses [{:name "facts" :input {:search "office closed"}}]}
+   :model {"steward" [{:tool-uses [{:name "facts" :input {:search "office closed"}}]}
                   {:tool-uses [{:name "memo_send"
                                 :input {:to "operator" :subject "Office days and project name"
                                         :body "The office is closed on Mondays [[fact:999]]. The project is called Lighthouse [[fact:6]]."}}]}
@@ -43,12 +43,12 @@
                   {:tool-uses [{:name "journal_write" :input {:text "Answered."}}]}]}}}
 
  :steps
- [{:run ["memo" "hub" "-s" "Office and project"
+ [{:run ["memo" "steward" "-s" "Office and project"
          "-m" "Which day is the office closed, and what is the project called?"]}
   {:tick 1}]
 
  :assert
- [[:has :wake {:role "hub" :outcome "ran"}]
+ [[:has :wake {:role "steward" :outcome "ran"}]
   [:has :fact {:id 4 :text [:includes "Mondays"]}]]
 
  :graders

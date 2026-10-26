@@ -29,6 +29,7 @@
    :default-harness :agentloop
    :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent/agentloop"}}
    :tools {}
+   :dead-letter-handler "hub"
    :grants {"steward" {:files ["/Users/someone/Downloads" "/Users/someone/Documents/Taxes"]}}})
 
 (defn- problem [settings]

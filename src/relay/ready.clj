@@ -139,7 +139,9 @@
 
 (def sources
   "Where items come from: functions of the state giving items."
-  [(fn [state] (map #(message-item state %) (vals (:messages state))))
+  [;; An alert about a trouble that is over (core/resolve-alerts) is no
+   ;; longer anything for her to do.
+   (fn [state] (map #(message-item state %) (remove :resolved (vals (:messages state)))))
    (fn [state] (map draft-item (vals (:prepared state))))
    (fn [state]
      (for [e (core/calendar-events state {})] (event-item e)))

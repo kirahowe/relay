@@ -26,6 +26,7 @@
                                  :mcp-servers {"srv" {:command ["srv"]}}
                                  :tools {"t1" {:protocol :mcp-stdio :server "srv" :tool "one" :class :read :labels []}
                                          "t2" {:protocol :mcp-stdio :server "srv" :tool "two" :class :read :labels []}}
+                                 :dead-letter-handler "hub"
                                  :grants {"hub" {:may-add true}
                                           "courier" {:public true}}}))
 
@@ -174,7 +175,10 @@
       (is (str/includes? (:subject report) "File this"))
       (is (str/includes? (:body report) "relay retry clerk"))
       (is (str/includes? (:body report) "the end")))
-    (is (empty? (notifications w)) "the operator is not told")
+    (is (= ["work-abandoned"] (notifications w)) "the operator asked, so they are told, once")
+    (let [m (first (vals (:messages (:state w))))]
+      (is (= "Could not finish \"File this\"" (:subject m)))
+      (is (str/includes? (str (get-in m [:sections 0 :items])) "relay retry clerk")))
     (testing "a retry puts it back with a clean slate"
       (let [w (run w "hub" :memo/retry {:role "clerk"})
             m (core/memo (:state w) id)]
@@ -943,14 +947,27 @@
     ;; An open dead letter's memo is dead.
     (doseq [l (vals (:dead-letters s)) :when (= :open (:status l))]
       (when-not (= :dead (:status (core/memo s (:memo l)))) (fail! [:open-letter-live-memo l])))
-    ;; Every dead letter is passed on exactly once, to the handler or the operator.
-    (let [letters (count (filter #(= "memo/dead-lettered" (:type %)) batch))
-          passed (count (filter #(or (and (= "memo/sent" (:type %)) (= "dispatcher" (get-in % [:data :from]))
-                                          (str/starts-with? (get-in % [:data :subject]) "Dead letter"))
-                                     (and (= "message/created" (:type %))
-                                          (= "work-abandoned" (get-in % [:data :origin]))))
-                                batch))]
-      (when (not= letters passed) (fail! [:escalation letters passed])))
+    ;; Every dead letter is passed on: to the handler at most once, to the
+    ;; operator at most once, and to someone, unless it is a dead letter
+    ;; about the operator's own request, which they were told of already.
+    (doseq [e batch :when (= "memo/dead-lettered" (:type e))
+            :let [l (:seq e)
+                  h (count (filter #(and (= "memo/sent" (:type %)) (= l (get-in % [:data :about]))) batch))
+                  o (count (filter #(and (= "message/created" (:type %)) (= l (get-in % [:data :dead-letter]))) batch))
+                  request (loop [m (core/memo s (get-in e [:data :memo])) seen #{}]
+                            (let [a (:about m)]
+                              (if (and a (not (seen a)))
+                                (recur (core/memo s (get-in s [:dead-letters a :memo])) (conj seen a))
+                                m)))]]
+      (when (or (> h 1) (> o 1)
+                (and (zero? (+ h o)) (not (and (= "operator" (:from request))
+                                               (some? (:about (core/memo s (get-in e [:data :memo]))))))))
+        (fail! [:escalation l h o])))
+    ;; The operator's own request that fails is told to them.
+    (doseq [e batch :when (and (= "memo/dead-lettered" (:type e))
+                               (= "operator" (:from (core/memo s (get-in e [:data :memo])))))]
+      (when-not (some #(and (= "message/created" (:type %)) (= (:seq e) (get-in % [:data :dead-letter]))) batch)
+        (fail! [:operator-not-told (:seq e)])))
     ;; A harness failure counts against no memo.
     (let [failed-wakes (set (keep #(when (and (= "wake/ended" (:type %))
                                               (not= "ran" (get-in % [:data :outcome])))

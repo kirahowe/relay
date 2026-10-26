@@ -1,10 +1,10 @@
-;; A routine on the hub fires when its time comes, the hub is woken for the
+;; A routine on the steward fires when its time comes, the steward is woken for the
 ;; run, and sends the operator a memo about it.
 {:doc "A routine fires, wakes its role and ends in a memo to the operator."
  :live? true
 
  :model
- {"hub" [{:tool-uses [{:name "memo_send"
+ {"steward" [{:tool-uses [{:name "memo_send"
                        :input {:to "operator"
                                :subject "Daily digest"
                                :body "Nothing needs you today."}}
@@ -14,7 +14,7 @@
          {:text "Done."}]}
 
  :steps
- [{:run ["routine" "hub" "digest" "--schedule" "every 1m"]
+ [{:run ["routine" "steward" "digest" "--schedule" "every 1m"]
    :stdin "Send the operator a memo with the subject \"Daily digest\" saying nothing needs them, then close this routine's memo."}
   {:tick 1}
   {:assert [[:none :wake {}]]}
@@ -22,8 +22,8 @@
   {:tick 2}]
 
  :assert
- [[:has :event {:type "routine/fired" :data {:owner "hub" :name "digest"}}]
-  [:has :memo {:from "hub" :to "operator" :subject "Daily digest" :status :unread}]
-  [:has :memo {:to "hub" :routine "digest" :status :read}]
-  [:has :wake {:role "hub" :outcome "ran"}]
+ [[:has :event {:type "routine/fired" :data {:owner "steward" :name "digest"}}]
+  [:has :memo {:from "steward" :to "operator" :subject "Daily digest" :status :unread}]
+  [:has :memo {:to "steward" :routine "digest" :status :read}]
+  [:has :wake {:role "steward" :outcome "ran"}]
   [:has :sent {:title [:includes "Daily digest"]}]]}

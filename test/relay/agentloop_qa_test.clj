@@ -121,6 +121,16 @@
   (is (str/includes? (:said (agentloop/classify {:outcome nil :exit 2 :stderr "bad" :session "s" :now now}))
                      "did not start")))
 
+(deftest an-agentloop-that-did-not-start-is-named-with-what-to-try
+  ;; agentloop on PATH wins over the sibling build, so the binary that ran
+  ;; may not be the one the operator rebuilt.
+  (let [said (:said (agentloop/classify {:outcome nil :exit 2 :stderr "policy.tools has no entry" :session "s"
+                                         :now now :bin "/Users/you/.local/bin/agentloop"}))]
+    (is (str/includes? said "/Users/you/.local/bin/agentloop"))
+    (is (str/includes? said "policy.tools has no entry"))
+    (is (str/includes? said "may be older than relay"))
+    (is (str/includes? said "point :bin in relay.edn"))))
+
 (deftest harness-failures-count-against-no-memo
   ;; Whatever classify says, relay's core must leave memos' attempts alone
   ;; for the three harness outcomes and count a failed ran.

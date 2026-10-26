@@ -15,11 +15,11 @@
  :model
  {"clerk" [{:tool-uses [{:name "web-demo" :input {:page "office-holidays.html"}}]}
            {:tool-uses [{:name "memo_send"
-                         :input {:to "hub" :subject "Office Thanksgiving hours: closed Mon 12 Oct, open Tue 13 Oct 10:00-15:00"
+                         :input {:to "steward" :subject "Office Thanksgiving hours: closed Mon 12 Oct, open Tue 13 Oct 10:00-15:00"
                                  :body "For the operator: the office page says it is closed Monday 12 October for Thanksgiving and open Tuesday 13 October from 10:00 to 15:00."}}]}
            {:tool-uses [{:name "memo_close"
                          :input {:memo {:memo-id {:subject "Thanksgiving hours"}}
-                                 :outcome "Closed Monday 12 October; open Tuesday 13 October 10:00 to 15:00. Sent to the hub for the operator."}}
+                                 :outcome "Closed Monday 12 October; open Tuesday 13 October 10:00 to 15:00. Sent to the steward for the operator."}}
                         {:name "memo_block"
                          :input {:memo {:memo-id {:subject "Office visit"}}
                                  :explanation "I can only read web pages; I cannot book a visit. Someone who can contact the office has to do it."}}]}

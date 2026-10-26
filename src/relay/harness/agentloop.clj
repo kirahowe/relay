@@ -177,7 +177,7 @@
 (defn classify
   "How a run ended. Pure: takes the parsed outcome line (nil when there was
   none), the exit code, stderr, the session id and the time."
-  [{:keys [outcome exit stderr session now]}]
+  [{:keys [outcome exit stderr session now bin]}]
   (let [{:keys [reason text error labels refused forbidden cost_usd] :as line}
         (when (map? outcome) outcome)
         error (when (map? error) error)
@@ -206,11 +206,17 @@
       ;; the run crashed, and with no labels reported relay assumes the
       ;; worst. It says nothing about the harness, so nothing is paused.
       (= ::unreadable outcome) (report "ran" :crashed true :said "agentloop's outcome could not be read.")
-      (nil? outcome) (report "needs-attention"
-                             :said (str (if (and (number? exit) (> exit 128))
-                                          (str "agentloop was killed (exit " exit ") before it finished. ")
-                                          "agentloop did not start. ")
-                                        (harness/tail stderr 5)))
+      ;; Nothing ran on this machine, so the model service is not to blame.
+      ;; The binary is named: agentloop on PATH wins over the sibling
+      ;; checkout's build, so it may not be the one the operator built.
+      (nil? outcome) (report "needs-attention" :local true
+                             :said (if (and (number? exit) (> exit 128))
+                                     (str "agentloop was killed (exit " exit ") before it finished. "
+                                          (harness/tail stderr 5))
+                                     (str "agentloop" (when bin (str " (" bin ")")) " did not start. "
+                                          (harness/tail stderr 5)
+                                          "\nThis agentloop may be older than relay: rebuild it, or point :bin"
+                                          " in relay.edn at the one you built.")))
       :else
       (case reason
         ("completed" "max_tokens" "limit") (report "ran")
@@ -444,9 +450,10 @@
        :timeout-ms (+ timeout-ms 15000)
        :session id})))
 
-(defmethod harness/wake-report :agentloop [_ {:keys [session]} {:keys [exit out err now]}]
+(defmethod harness/wake-report :agentloop [_ {:keys [session] :as command} {:keys [exit out err now]}]
   (let [pins (parse-pins out)]
-    (cond-> (classify {:outcome (parse-outcome out) :exit exit :stderr err :session session :now now})
+    (cond-> (classify {:outcome (parse-outcome out) :exit exit :stderr err :session session :now now
+                       :bin (first (:argv command))})
       (seq pins) (assoc :pins pins))))
 
 (defmethod harness/acp-command :agentloop [{:keys [session-dir] :as request}]

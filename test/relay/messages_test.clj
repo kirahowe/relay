@@ -441,6 +441,8 @@
     (spit (str data "/relay.edn")
           (pr-str {:timezone "America/Toronto" :default-harness :a
                    :harnesses {:a {:kind :script :command ["true"]}}
+                   ;; Its one role is the steward here.
+                   :dead-letter-handler "clerk"
                    :messages {:channels {"phone" {:kind :push :via :file :path pushed}}
                               :routes [{:channels ["phone"]}]
                               :quiet-hours {:from "22:00" :to "07:00"}}}))

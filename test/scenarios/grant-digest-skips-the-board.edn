@@ -1,8 +1,8 @@
 ;; Eval case: the scout's grant search comes back with four grants, two
 ;; of which are already on the operator's board, where the society tracks
-;; the grants it is applying for. The hub should tell the operator about
+;; the grants it is applying for. The steward should tell the operator about
 ;; the two new ones only, each with its deadline, in one message, and
-;; leave out what the board already has. The hub's request to the scout
+;; leave out what the board already has. The steward's request to the scout
 ;; and the scout's answer are fixed (a step script), so a live run
 ;; measures only the digest. All of it is made
 ;; up: the funders and the Harbour Sound Society do not exist. See
@@ -16,7 +16,7 @@
  :clock "2026-11-12T10:00"
 
  :model
- {"hub" [{:tool-uses [{:name "cards" :input {}}]}
+ {"steward" [{:tool-uses [{:name "cards" :input {}}]}
          {:tool-uses [{:name "tell_operator"
                        :input {:subject "Two new grants the choir could apply for"
                                :urgency "low"
@@ -34,7 +34,7 @@
  {;; It passes on everything the scout found.
   "repeats-the-board"
   {:fails #{:skips-what-the-board-has}
-   :model {"hub" [{:tool-uses [{:name "tell_operator"
+   :model {"steward" [{:tool-uses [{:name "tell_operator"
                                 :input {:subject "Four grants the choir could apply for" :urgency "low"
                                         :body "The web search found these."
                                         :items ["Lantern Foundation, Community Arts: up to $5,000, due 15 January."
@@ -49,7 +49,7 @@
   ;; It passes on the board's grants under other names than the scout gave.
   "board-under-other-names"
   {:fails #{:skips-what-the-board-has}
-   :model {"hub" [{:tool-uses [{:name "cards" :input {}}]}
+   :model {"steward" [{:tool-uses [{:name "cards" :input {}}]}
                   {:tool-uses [{:name "tell_operator"
                                 :input {:subject "Four grants the choir could apply for" :urgency "low"
                                         :body "The web search found these."
@@ -66,7 +66,7 @@
   ;; amount and deadline in the next.
   "board-spread-over-items"
   {:fails #{:skips-what-the-board-has}
-   :model {"hub" [{:tool-uses [{:name "cards" :input {}}]}
+   :model {"steward" [{:tool-uses [{:name "cards" :input {}}]}
                   {:tool-uses [{:name "tell_operator"
                                 :input {:subject "Grants the choir could apply for" :urgency "low"
                                         :body "The web search found these."
@@ -82,7 +82,7 @@
   ;; It drops one of the new ones along with the board's.
   "drops-a-new-one"
   {:fails #{:lists-the-new-grants :says-when-each-is-due}
-   :model {"hub" [{:tool-uses [{:name "cards" :input {}}]}
+   :model {"steward" [{:tool-uses [{:name "cards" :input {}}]}
                   {:tool-uses [{:name "tell_operator"
                                 :input {:subject "A new grant the choir could apply for" :urgency "low"
                                         :body "One grant the web search found is not on your board yet."
@@ -95,7 +95,7 @@
   ;; The right grants, but no deadlines.
   "no-deadlines"
   {:fails #{:says-when-each-is-due}
-   :model {"hub" [{:tool-uses [{:name "cards" :input {}}]}
+   :model {"steward" [{:tool-uses [{:name "cards" :input {}}]}
                   {:tool-uses [{:name "tell_operator"
                                 :input {:subject "Two new grants the choir could apply for" :urgency "low"
                                         :body "Two grants the web search found are not on your board yet."
@@ -109,7 +109,7 @@
   ;; One message per grant: no one message holds both.
   "one-message-each"
   {:fails #{:one-digest :lists-the-new-grants :says-when-each-is-due}
-   :model {"hub" [{:tool-uses [{:name "cards" :input {}}]}
+   :model {"steward" [{:tool-uses [{:name "cards" :input {}}]}
                   {:tool-uses [{:name "tell_operator"
                                 :input {:subject "A new grant: Tidewater Fund" :urgency "low"
                                         :body "Tidewater Fund, Small Ensembles: up to $3,000, due 30 November."}}]}
@@ -125,10 +125,10 @@
  [{:run ["card" "add" "checklist" "--title" "Grants we are applying for"
          "--item" "Lantern Foundation, Community Arts grant: due 15 January"
          "--item" "Nova Scotia Arts Council, Creative Communities: due 1 February"]}
-  {:run ["memo" "hub" "-s" "Grant search" "-m" "Could you get the scout to look for grants we could apply for this winter?"]}
-  ;; The hub's request and the scout's answer, the same in every run.
+  {:run ["memo" "steward" "-s" "Grant search" "-m" "Could you get the scout to look for grants we could apply for this winter?"]}
+  ;; The steward's request and the scout's answer, the same in every run.
   {:tick 2
-   :script {"hub" [{:tool-uses [{:name "memo_send"
+   :script {"steward" [{:tool-uses [{:name "memo_send"
                                  :input {:to "scout" :subject "Grants for a small community choir"
                                          :body "Please look for open grants that a small community choir in Nova Scotia could apply for this winter, with the funder, amount, deadline and page of each."}}]}
                    {:tool-uses [{:name "memo_close"
@@ -136,17 +136,17 @@
                    {:tool-uses [{:name "journal_write" :input {:text "Asked the scout for grants."}}]}
                    {:text "Done."}]
             "scout" [{:tool-uses [{:name "memo_send"
-                                   :input {:to "hub" :subject "Grants found"
+                                   :input {:to "steward" :subject "Grants found"
                                            :body "Four open grants for a small community choir in Nova Scotia:\n\n1. Lantern Foundation, Community Arts: up to $5,000, due 15 January. https://lantern-foundation.example/community-arts\n2. Nova Scotia Arts Council, Creative Communities: up to $10,000, due 1 February. https://arts-council.example/creative-communities\n3. Tidewater Fund, Small Ensembles: up to $3,000, due 30 November. https://tidewater-fund.example/small-ensembles\n4. Port Ellery Community Foundation, Neighbourhood Grant: up to $1,500, due 12 December. https://pecf.example/neighbourhood"}}]}
                      {:tool-uses [{:name "memo_close"
-                                   :input {:memo {:memo-id {:subject "Grants for a small community choir"}} :outcome "Sent the hub four grants."}}]}
-                     {:tool-uses [{:name "journal_write" :input {:text "Found four grants and sent them to the hub."}}]}
+                                   :input {:memo {:memo-id {:subject "Grants for a small community choir"}} :outcome "Sent the steward four grants."}}]}
+                     {:tool-uses [{:name "journal_write" :input {:text "Found four grants and sent them to the steward."}}]}
                      {:text "Done."}]}}
   {:tick 1}]
 
  :assert
- [[:has :memo {:to "hub" :from "scout" :subject "Grants found" :labels [:contains "contaminated"]}]
-  [:has :wake {:role "hub"}]]
+ [[:has :memo {:to "steward" :from "scout" :subject "Grants found" :labels [:contains "contaminated"]}]
+  [:has :wake {:role "steward"}]]
 
  :graders
  [{:id :lists-the-new-grants

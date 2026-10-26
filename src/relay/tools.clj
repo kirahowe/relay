@@ -1233,6 +1233,38 @@
                             ": the call named no wake of " role-id "'s, so nothing it showed may be fetched")))))
         result))))
 
+(defn setup-problem
+  "The name of what is not set up on this machine, by a tool's failure
+  text, or nil: webtool says its search key command failed. Such a
+  failure is the operator's to fix, not the role's (core/setup-problems).
+  Pure."
+  [error]
+  (when (and (string? error) (re-find #"api_key_command failed" error))
+    "search-key"))
+
+(def not-set-up
+  "What a role is told in place of a tool's error when something on this
+  machine is not set up. relay tells the operator itself."
+  (str "Web search is not set up yet. relay has told the operator how to fix it, so do not report this."
+       " Close the memo saying in one line that web search is not set up yet."))
+
+(defn- noting-setup
+  "Records a tool's setup trouble, or its end, and returns the result to
+  give the role: a setup failure becomes not-set-up, with no labels,
+  since it is relay's own text. Recording never stops the call."
+  [sys state tool-name result]
+  (let [problem (setup-problem (:error result))
+        note! #(try (inbound/submit! sys {:type % :actor core/dispatcher :labels [] :args %2})
+                    (catch Exception e
+                      (binding [*out* *err*] (println "relay could not record a tool's setup:" (ex-message e)))))]
+    (cond
+      problem (do (note! :tool/broken (let [w (if (string? *wake*) (parse-long *wake*) *wake*)]
+                                            (cond-> {:tool tool-name :problem problem} (integer? w) (assoc :wake w))))
+                  {:error not-set-up :labels []})
+      (and (:ok result) (get-in state [:tools-broken tool-name]))
+      (do (note! :tool/working {:tool tool-name}) result)
+      :else result)))
+
 (defn call!
   "Runs one tool call for a role, made by a session holding `labels`, and
   returns {:ok text :labels} or {:error text :labels}: the text to give
@@ -1267,9 +1299,10 @@
         (if-let [problem (input-problem (:parameters tool) args)]
           {:error problem :labels []}
           (binding [*call-id* call-id *wake* wake]
-            (if (= :egress (:class tool))
-              (egress-call! sys state role-id tool-name tool args labels wake)
-              (refuse-private sys role-id tool-name (run-tool sys role-id tool args labels)))))))))
+            (noting-setup sys state tool-name
+                          (if (= :egress (:class tool))
+                            (egress-call! sys state role-id tool-name tool args labels wake)
+                            (refuse-private sys role-id tool-name (run-tool sys role-id tool args labels))))))))))
 
 ;; --- the envelope a harness sends for each call
 

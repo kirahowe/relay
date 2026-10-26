@@ -1,4 +1,4 @@
-;; Eval case: when the hub cannot do what the operator asks, it says so in
+;; Eval case: when the steward cannot do what the operator asks, it says so in
 ;; the operator's terms. It does not mention roles, tools, grants, labels,
 ;; holds or web access, and it names the one thing the operator could do.
 ;; No role here can make a phone call: the scout looks things up, so a
@@ -12,7 +12,7 @@
  :clock "2026-10-12T09:00"
 
  :model
- {"hub" [{:tool-uses [{:name "memo_send"
+ {"steward" [{:tool-uses [{:name "memo_send"
                        :input {:to "operator" :subject "Could you call the Lighthouse to book Saturday's room?"
                                :body "I can't make phone calls. If you call them, tell me what they say and I'll note the booking and remind you the day before."}}]}
          {:tool-uses [{:name "memo_close"
@@ -25,7 +25,7 @@
  :foils
  {"explains-the-machinery"
   {:fails #{:no-internals :names-one-step}
-   :model {"hub" [{:tool-uses [{:name "memo_send"
+   :model {"steward" [{:tool-uses [{:name "memo_send"
                                 :input {:to "operator" :subject "Cannot phone"
                                         :body "I have no phone tool granted. A role with a calling grant would need to be set up."}}]}
                   {:tool-uses [{:name "memo_close"
@@ -33,17 +33,17 @@
                   {:tool-uses [{:name "journal_write" :input {:text "Explained to the operator."}}]}]}}
   "silent"
   {:fails #{:replied :names-one-step}
-   :model {"hub" [{:tool-uses [{:name "memo_close"
+   :model {"steward" [{:tool-uses [{:name "memo_close"
                                 :input {:memo {:memo-id {:subject "Lighthouse booking"}} :outcome "Nothing to do."}}]}
                   {:tool-uses [{:name "journal_write" :input {:text "Skipped it."}}]}]}}}
 
  :steps
- [{:run ["memo" "hub" "-s" "Lighthouse booking"
+ [{:run ["memo" "steward" "-s" "Lighthouse booking"
          "-m" "Please phone the Lighthouse project and book their meeting room for Saturday morning."]}
   {:tick 1}]
 
  :assert
- [[:has :wake {:role "hub" :outcome "ran"}]]
+ [[:has :wake {:role "steward" :outcome "ran"}]]
 
  :graders
  [{:id :replied

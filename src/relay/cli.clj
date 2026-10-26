@@ -6,6 +6,7 @@
             [clojure.string :as str]
             [relay.cards :as cards]
             [relay.config :as config]
+            [relay.channels :as channels]
             [relay.connect :as connect]
             [relay.core :as core]
             [cheshire.core :as json]
@@ -56,6 +57,9 @@ Every command needs the data directory, from --data <dir> or from the file
   relay routines [<role>]             list routines
   relay routine <role> <name> --schedule <s>
                                       write a routine; instructions on stdin
+  relay routine run [<role>] <name>   run a routine now, as its schedule would, and
+                                      wake its role to do it; <role> only when two
+                                      roles have a routine of that name
   relay unroutine <role> <name>       remove a routine
   relay retry <role>                  requeue a role's dead-lettered memos
   relay wake <role> [--note <text>]   run a role now, ignoring retry delays
@@ -134,13 +138,17 @@ Every command needs the data directory, from --data <dir> or from the file
   relay undo <move>                   put back what one call moved, when nothing has
                                       changed since; otherwise say what changed and
                                       touch nothing
-  relay house build|up|down|status    the steward's shell, from relay.edn's :house:
+  relay house build|up|down|remove|status
+                                      the steward's shell, from relay.edn's :house:
                                       build its image (this needs the network),
-                                      start it, remove it, or say how it is (the
-                                      tick starts it when it is missing)
-  relay changes [-n <count>]          the latest changes helpers made to how they
-                                      work (skills, routines, notes, helpers),
+                                      start it, stop it, stop it and delete its
+                                      image, or say how it is and what it sees
+                                      (the tick starts it when it is missing)
+  relay changes [-n <count>]          the latest changes roles made to how they
+                                      work (skills, routines, notes, roles),
                                       each with its number
+  relay note [now]                    show the daily note as it would go out now;
+                                      with now, make today's and send it
   relay revert <change>               put back what a change replaced, such as one
                                       the daily note flags
   relay dismiss <item> [<note>]       drop a suggestion of the latest daily note
@@ -212,25 +220,54 @@ id public too.")
   [exit & lines]
   {:exit exit :out lines})
 
+(defn- add-starters!
+  "Adds the steward, its daily-note skill and routine, and with the web
+  the scout, to a log that has no roles yet, from the texts in setup/.
+  Returns the lines to say."
+  [dir web?]
+  (let [sys (inbound/system dir)]
+    (cond
+      (seq (:roles (inbound/current-state sys))) []
+      :else
+      (if-let [texts (some-> (setup/repo-root) setup/starter-texts)]
+        (do (doseq [c (setup/starter-commands texts web?)]
+              (inbound/submit! sys (assoc c :actor core/operator)))
+            [(str "Added your steward" (when web? " and a scout that searches the web")
+                  ", and the steward's daily-note routine.")])
+        ["relay could not find its setup/ texts, so it added no roles. Add your steward with"
+         "  relay add steward --title Steward < setup/steward.md"]))))
+
 (defn- init!
-  "Makes a data directory, asking for its settings when it has none. An
-  existing relay.edn is checked, never rewritten."
+  "Makes a data directory, asking for its settings when it has none, and
+  adds the roles relay sets up when the log has none. An existing
+  relay.edn is checked, never rewritten."
   [dir]
   (let [file (str (fs/path dir "relay.edn"))
-        ready (fn []
+        ready (fn [& more]
                 (log/init! dir)
-                (result 0 (str "relay data directory ready at " (fs/absolutize dir))))]
+                (apply result 0 (str "relay data directory ready at " (fs/absolutize dir)) more))]
     (cond
       (fs/exists? file) (do (config/load-config dir) (ready))
       (not (System/console))
       (fail! "relay init asks for settings, so run it in a terminal. Or write"
              file "yourself, from setup/relay.example.edn.")
-      (setup/create! {:ask (fn [prompt] (print prompt) (flush) (read-line))
-                      :say println
-                      :webtool (setup/webtool-bin)}
-                     file)
-      (ready)
-      :else (result 1))))
+      :else
+      (if-let [settings (setup/create! {:ask (fn [prompt] (print prompt) (flush) (read-line))
+                                        :say println
+                                        :webtool (setup/webtool-bin)}
+                                       file)]
+        (do (log/init! dir)
+            (let [web (:web settings)
+                  added (add-starters! dir (some? web))]
+              (apply ready
+                     (concat added
+                             (setup/next-steps
+                              {:key-ok? (setup/command-works? (get-in settings [:harnesses :agentloop :api-key-command]))
+                               :provider (get-in settings [:harnesses :agentloop :provider])
+                               :web? (some? web)
+                               :brave-ok? (and web (setup/command-works? (:key-command web)))
+                               :data-dir (str (fs/absolutize dir))})))))
+        (result 1)))))
 
 (def ^:dynamic *stdin*
   "Text to read as stdin instead of the process's, or nil. Bound by the
@@ -430,13 +467,84 @@ id public too.")
                 (result 0 (if restarted "Built the shell's image, and restarted the shell with it." "Built the shell's image.")))
       "up" (result 0 (case (shell/up! (ctx)) :running "The shell is already running." :started "Started the shell."))
       "down" (result 0 (case (shell/down! (ctx)) :stopped "Stopped the shell. Its scratch files are gone." :absent "The shell was not running."))
-      "status" (let [{:keys [running current image-present]} (shell/status (ctx))]
-                 (result 0 (cond
-                             (and running current) "The shell is running."
-                             running "The shell is running with older settings. relay house up restarts it."
-                             (not image-present) "The shell is not running, and its image is not built. Run relay house build."
-                             :else "The shell is not running. relay house up starts it.")))
-      (fail! "usage: relay house build|up|down|status"))))
+      "remove" (let [{:keys [container image]} (shell/remove! (ctx))]
+                 (result 0 (str (case container :stopped "Stopped the shell" :absent "The shell was not running")
+                                (case image
+                                  :removed ", and removed its image. relay house build makes it again."
+                                  :absent ", and it has no image."
+                                  :kept (str ". Its image " (get-in (ctx) [:house :image])
+                                             " is named in relay.edn, so it is kept.")))))
+      "status" (let [c (ctx)
+                     {:keys [running current image-present]} (shell/status c)
+                     mounts (get-in c [:house :mounts])]
+                 (apply result 0
+                        (cond
+                          (and running current) "The shell is running."
+                          running "The shell is running with older settings. relay house up restarts it."
+                          (not image-present) "The shell is not running, and its image is not built. Run relay house build."
+                          :else "The shell is not running. relay house up starts it.")
+                        (if (seq mounts)
+                          (cons "It sees, read-only:" (map #(str "  " %) mounts))
+                          ["It sees none of your folders: :house has no :mounts."])))
+      (fail! "usage: relay house build|up|down|remove|status"))))
+
+(defn- run-routine!
+  "relay routine run [<role>] <name>: sends the routine's run now, as the
+  tick would when it came due, then wakes its role to do it, as relay
+  wake does."
+  [sys args]
+  (let [[owner rname] (if (next args) args [nil (first args)])]
+    (when (str/blank? rname) (fail! "usage: relay routine run [<role>] <name>"))
+    (let [events (submit! sys :routine/run {:owner owner :name rname})
+          fired (first (filter #(= "routine/fired" (:type %)) events))
+          role (get-in fired [:data :owner])
+          woke (dispatch/wake! sys role {})]
+      {:exit (if (#{:ran :idle} (:result woke)) 0 1)
+       :out (cons (str "Sent " role " its " rname " routine now (memo " (get-in fired [:data :memo]) ").")
+                  (render/wake-result woke))})))
+
+(defn- note!
+  "relay note shows the daily note as it would go out now; relay note now
+  makes today's and sends it, as the tick does at :daily-note :at. It is
+  made from what the steward wrote for it, so relay routine run
+  daily-note first has the steward write its parts."
+  [sys [sub]]
+  (let [config (:config sys)
+        zone (config/zone config)
+        now ((:clock sys))
+        today (.toLocalDate (.atZone ^java.time.Instant now zone))
+        state (inbound/current-state sys)]
+    (when-not (:daily-note config)
+      (fail! "relay.edn has no :daily-note, so there is no daily note. Set :daily-note {:at \"07:30\" :role \"steward\"}."))
+    (case sub
+      nil (let [{:keys [subject sections]} (core/compose-note state today now)]
+            (if-not sections
+              (result 0 "The daily note has nothing to say yet, so none would go out now."
+                      (str "The steward writes its parts from its routine: relay routine run "
+                           (digest/role-of config) " daily-note."))
+              (apply result 0 subject ""
+                     (str/split-lines (channels/body-text {:subject subject :sections sections :labels []})))))
+      "now" (cond
+              (and (= today (core/daily-date state)) (not (false? (get-in state [:daily :sent]))))
+              (result 0 (str "Today's note was made already. The next one is tomorrow at "
+                             (get-in config [:daily-note :at]) "."))
+              ;; Nothing to say yet: nothing is recorded, so the day's note
+              ;; can still go out once the steward has written its parts.
+              (nil? (:sections (core/compose-note state today now)))
+              (result 0 "Today's note has nothing to say yet, so nothing was sent, and it can still go out today."
+                      (str "The steward writes its parts from its routine: relay routine run "
+                           (digest/role-of config) " daily-note."))
+              :else
+              (let [events (inbound/submit! sys {:type :digest/compose :actor core/dispatcher
+                                                 :args {:date (str today)}})
+                    sent? (some #(= "message/created" (:type %)) events)
+                    st (inbound/current-state sys)]
+                (doseq [{:keys [channel messages]} (core/messages-due st now (.minusSeconds ^java.time.Instant now 120))]
+                  (inbound/deliver! sys channel messages))
+                (result 0 (if sent?
+                            "Sent today's daily note. It counts as today's, so the next one is tomorrow."
+                            "Today's note had nothing to say, so nothing was sent."))))
+      (fail! "usage: relay note [now]"))))
 
 (def ^:private ready-shown
   "How many of the newest items relay ready shows without --all."
@@ -485,10 +593,12 @@ id public too.")
                  (submit! sys :role/remove {:id id})
                  (result 0 (str "Removed " id)))
       "routines" (lines (render/routines (state) zone (take 1 more)))
-      "routine" (let [[owner rname] more]
+      "routine" (if (and (= "run" (first more)) (nil? (:schedule opts)))
+                  (run-routine! sys (rest more))
+                  (let [[owner rname] more]
                   (submit! sys :routine/write {:owner owner :name rname :schedule (:schedule opts)
                                                :instructions (stdin-text)})
-                  (result 0 (str "Routine " rname " is set for " owner)))
+                  (result 0 (str "Routine " rname " is set for " owner))))
       "unroutine" (let [[owner rname] more]
                     (submit! sys :routine/remove {:owner owner :name rname})
                     (result 0 (str "Removed routine " rname)))
@@ -585,6 +695,7 @@ id public too.")
       "poll" (let [said (ingest-run/poll-now! sys (first more))]
                (dispatch/announce-github! sys)
                (apply result 0 said))
+      "note" (note! sys more)
       "changes" (let [st (state)]
                   (lines (digest/changes-lines (core/recipe-changes st) (or (:reverted st) #{}) zone
                                                (or (:tail opts) 30))))
@@ -620,20 +731,50 @@ id public too.")
                              :pin! (fn [pins] (submit! sys :tools/pin {:pins pins}))}))))
       (apply result 1 (str/split-lines usage)))))
 
+(def ^:private last-messages-file
+  "Where the tick keeps the :messages of the last relay.edn that loaded,
+  so it can still say relay has stopped when relay.edn cannot be read."
+  ".messages-last-loaded.edn")
+
+(defn- keep-loaded-messages!
+  "Keeps the :messages of a relay.edn that loaded, when they changed.
+  Best effort: it never throws."
+  [dir config]
+  (try
+    (let [f (str (fs/path dir last-messages-file))
+          text (pr-str (:messages config))]
+      (when-not (and (fs/exists? f) (= text (slurp f)))
+        (spit f text)))
+    (catch Exception e
+      (binding [*out* *err*] (println (str "relay tick: could not keep the message settings: " (ex-message e)))))))
+
+(defn- usable-messages
+  "The :messages to tell the operator through when relay.edn cannot be
+  loaded: its own when that section alone is sound, else those of the
+  last relay.edn that loaded, else the client alone."
+  [dir]
+  (let [sound (fn [read]
+                (try (let [m (read)] (when (map? m) (config/check-messages m) m))
+                     (catch Exception _ nil)))]
+    (or (sound #(let [raw (edn/read-string (slurp (str (fs/path dir "relay.edn"))))]
+                  (when (map? raw) (or (:messages raw) messages/default-settings))))
+        (sound #(edn/read-string (slurp (str (fs/path dir last-messages-file)))))
+        messages/default-settings)))
+
 (defn- report-broken-settings!
   "When the tick cannot load relay.edn, nothing else runs, so it says so:
   on stderr, which launchd keeps, and once per distinct problem as an
-  alert through the channels :messages routes one to, if that section
-  alone is sound. The log may be what is wrong, so the alert is not
-  recorded there. Best effort: it never throws."
+  alert through the channels :messages routes one to: relay.edn's own
+  when that section alone is sound, else those of the last relay.edn
+  that loaded, so a file relay cannot read at all is told too. The log
+  may be what is wrong, so the alert is not recorded there. Best effort:
+  it never throws."
   [dir problem]
   (binding [*out* *err*] (println (str "relay tick: relay.edn cannot be used: " problem)))
   (try
     (let [marker (fs/path dir ".settings-problem")
-          raw (edn/read-string (slurp (str (fs/path dir "relay.edn"))))
-          settings (or (:messages raw) messages/default-settings)]
+          settings (usable-messages dir)]
       (when-not (and (fs/exists? marker) (= problem (slurp (str marker))))
-        (config/check-messages settings)
         (let [now (java.time.Instant/now)
               msg (assoc (messages/message {:kind "alert" :urgency "high"
                                             :subject "relay has stopped: relay.edn cannot be used"
@@ -701,7 +842,9 @@ id public too.")
                                     (catch clojure.lang.ExceptionInfo e
                                       (when (= "tick" cmd) (report-broken-settings! dir (ex-message e)))
                                       (throw e)))]
-                       (when (= "tick" cmd) (fs/delete-if-exists (fs/path dir ".settings-problem")))
+                       (when (= "tick" cmd)
+                         (fs/delete-if-exists (fs/path dir ".settings-problem"))
+                         (keep-loaded-messages! dir (:config sys)))
                        (binding [*public* (true? (:public opts))
                                  *reports* reports]
                          (command sys dir cmd more opts))))

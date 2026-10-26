@@ -264,9 +264,9 @@
         (is (= [] (busy)))
         (let [sys (inbound/system data)
               id (:seq (first (inbound/submit! sys {:type :wake/start :actor "dispatcher"
-                                                    :args (merge {:role "hub" :note "Go." :dispatched true}
+                                                    :args (merge {:role "steward" :note "Go." :dispatched true}
                                                                  (dispatch/current-process))})))]
-          (is (= [(str "hub (wake " id ")")] (busy)))
+          (is (= [(str "steward (wake " id ")")] (busy)))
           (inbound/submit! sys {:type :wake/end :actor "dispatcher"
                                 :args {:wake id :outcome "ran" :exit 0 :session "s" :said ""}}))
         (is (some #(str/starts-with? % "a relay tick (pid ") (pause/while-ticking (home-canonical pause-file) busy)))

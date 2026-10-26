@@ -9,7 +9,7 @@
  :clock "2026-10-12T09:00"
 
  :model
- {"hub" [{:tool-uses [{:name "facts" :input {:search "dentist"}}]}
+ {"steward" [{:tool-uses [{:name "facts" :input {:search "dentist"}}]}
          {:tool-uses [{:name "fact_correct"
                        :input {:fact {:fact-id {:first-text [:includes "Patel"]}}
                                :text "The operator's dentist is Dr. Okafor."
@@ -24,7 +24,7 @@
  :foils
  {"supersede-instead"
   {:fails #{:used-correct :not-superseded}
-   :model {"hub" [{:tool-uses [{:name "fact_supersede"
+   :model {"steward" [{:tool-uses [{:name "fact_supersede"
                                 :input {:fact {:fact-id {:first-text [:includes "Patel"]}}
                                         :text "The operator's dentist is Dr. Okafor."}}]}
                   {:tool-uses [{:name "memo_close"
@@ -33,13 +33,13 @@
 
  :steps
  [{:run ["fact" "add" "The operator's dentist is Dr. Patel." "--topic" "health/dentist"]}
-  {:run ["memo" "hub" "-s" "Dentist"
+  {:run ["memo" "steward" "-s" "Dentist"
          "-m" "You have my dentist wrong. It's always been Dr. Okafor, never Patel."]}
   {:tick 2}]
 
  :assert
  [[:has :fact {:first-text "The operator's dentist is Dr. Patel."}]
-  [:has :wake {:role "hub" :outcome "ran"}]]
+  [:has :wake {:role "steward" :outcome "ran"}]]
 
  :graders
  [{:id :used-correct

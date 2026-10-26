@@ -296,6 +296,9 @@
 (defn remove-argv [house {:keys [container]}]
   (into (vec (:runner (merge defaults house))) ["rm" "--force" container]))
 
+(defn image-remove-argv [house {:keys [image]}]
+  (into (vec (:runner (merge defaults house))) ["image" "rm" image]))
+
 (defn image-inspect-argv [house {:keys [image]}]
   (into (vec (:runner (merge defaults house))) ["image" "inspect" image]))
 
@@ -478,6 +481,24 @@
         (run-runner! (remove-argv house names) {:ms 60000 :limit 4096})
         (fs/delete-if-exists (state-file data-dir))
         (if was :stopped :absent)))))
+
+(defn remove!
+  "Removes the container and, when relay named it, its image, so a data
+  directory leaves nothing behind. An image :house names is the
+  operator's, perhaps shared, and is kept. Returns {:container
+  :stopped|:absent :image :removed|:kept|:absent}."
+  [{:keys [house names] :as ctx}]
+  (let [container (down! ctx)
+        image (cond
+                (:image house) :kept
+                (not (image-present? ctx)) :absent
+                :else (let [r (run-runner! (image-remove-argv house names) {:ms 120000 :limit 4096})]
+                        (when-not (zero? (:exit r))
+                          (throw (ex-info (str "The shell's image " (:image names) " could not be removed: "
+                                               (runner-said r))
+                                          {:relay/usage true})))
+                        :removed))]
+    {:container container :image image}))
 
 (defn status
   "{:running :current :image-present}: whether it answers, whether it runs

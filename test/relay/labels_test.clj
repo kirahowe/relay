@@ -43,6 +43,7 @@
                                          "search" {:class :egress :labels ["contaminated"]
                                                    :description "Search the web." :command ["true"]
                                                    :protocol :envelope :queries ["query"] :parameters {:type "object" :properties {:query {:type "string"}}}}}
+                                 :dead-letter-handler "hub"
                                  :grants {"hub" {:may-add true :tools ["fetch"]}
                                           "scout" {:public true :tools ["search"]}}}))
 

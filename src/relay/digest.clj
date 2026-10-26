@@ -199,7 +199,7 @@
     "skill" (str "how-to \"" name "\"")
     "routine" (str "routine \"" name "\"")
     "note" (str "note \"" name "\"")
-    "role" (str "helper \"" name "\""))))
+    "role" (str "role \"" name "\""))))
 
 (defn change-line
   "One line saying what a change did, in plain words."
@@ -332,7 +332,7 @@
   [changes reverted ^ZoneId zone n]
   (let [fmt (DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm")]
     (if (empty? changes)
-      ["No helper has changed how it works yet."]
+      ["No role has changed how it works yet."]
       (vec (for [{:keys [seq at labels actor] :as c} (take-last n changes)]
              (str seq "  " (.format fmt (.atZone (Instant/parse (str at)) zone)) "  " (change-line c)
                   (when (= "operator" actor) ", by you")

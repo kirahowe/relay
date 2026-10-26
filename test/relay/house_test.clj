@@ -62,7 +62,7 @@
 
 (deftest there-is-no-class-that-acts-as-the-operator
   (is (= #{:read :write :edit :egress} config/tool-classes))
-  (is (str/includes? (problem (assoc-in settings [:tools "draft" :class] :act)) "needs a :class"))
+  (is (str/includes? (problem (assoc-in settings [:tools "draft" :class] :act)) "relay never acts as you"))
   (testing "a connection file's tool may not be :act either"
     (is (not (contains? config/tool-classes :act)))))
 
@@ -72,8 +72,8 @@
       (is (str/includes? (str (problem (assoc-in settings [:tools "draft" k] true))) "no longer has")))))
 
 (deftest grants-and-harness-settings-that-are-gone-are-refused
-  (is (str/includes? (problem (assoc-in settings [:grants "hub" :quarantine] ["web"])) "does not know"))
-  (is (str/includes? (problem (assoc-in settings [:grants "hub" :workbench] true)) "does not know"))
+  (is (str/includes? (problem (assoc-in settings [:grants "hub" :quarantine] ["web"])) "no longer has"))
+  (is (str/includes? (problem (assoc-in settings [:grants "hub" :workbench] true)) "no longer has"))
   (is (str/includes? (problem (assoc-in settings [:harnesses :agentloop :reader] {:model "m"})) "no longer has"))
   (is (str/includes? (problem (assoc-in settings [:harnesses :agentloop :workbench] {})) "no longer has")))
 
@@ -540,6 +540,27 @@
     (dotimes [_ 2]
       (is (thrown? clojure.lang.ExceptionInfo (relay data "tick"))))
     (is (= ["relay has stopped: relay.edn cannot be used"] (str/split-lines (slurp told))) "told once, not every tick")
+    (fs/delete-tree dir)))
+
+(deftest a-tick-that-cannot-read-relay-edn-at-all-tells-the-operator-through-the-last-one-that-loaded
+  (let [dir (str (fs/create-temp-dir {:prefix "relay-unreadable"}))
+        data (str dir "/data")
+        told (str dir "/told")
+        notify (str dir "/notify.sh")
+        good {:timezone "UTC" :default-harness :a :harnesses {:a {:kind :agentloop :api-key-command ["true"]}}
+              :messages {:channels {"phone" {:kind :push :via :command :command [notify]}} :routes [{:channels ["phone"]}]}}]
+    (log/init! data)
+    (spit notify (str "#!/bin/sh\necho \"$1\" >> " told "\n"))
+    (fs/set-posix-file-permissions notify "rwxr-xr-x")
+    (spit (str data "/relay.edn") (pr-str good))
+    (relay data "tick")
+    ;; A section half uncommented: an odd number of forms in the map.
+    (spit (str data "/relay.edn") (str (subs (pr-str good) 0 (dec (count (pr-str good)))) " :ingest}"))
+    (dotimes [_ 2]
+      (try (relay data "tick") (is false "refused")
+           (catch clojure.lang.ExceptionInfo e
+             (is (str/starts-with? (ex-message e) "relay.edn is not valid EDN")))))
+    (is (= ["relay has stopped: relay.edn cannot be used"] (str/split-lines (slurp told))) "told once")
     (fs/delete-tree dir)))
 
 (deftest an-outcome-relay-cannot-read-is-a-crash-not-a-pause

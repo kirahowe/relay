@@ -8,7 +8,7 @@
  :clock "2026-10-12T09:00"
 
  :model
- {"hub" [{:tool-uses [{:name "fact_add"
+ {"steward" [{:tool-uses [{:name "fact_add"
                        :input {:text "The operator's sister Ana's birthday is March 3."
                                :topic "family"}}]}
          {:tool-uses [{:name "memo_close"
@@ -21,7 +21,7 @@
  :foils
  {"noted"
   {:fails #{:no-operator-memo :nothing-sent}
-   :model {"hub" [{:tool-uses [{:name "fact_add"
+   :model {"steward" [{:tool-uses [{:name "fact_add"
                                 :input {:text "The operator's sister Ana's birthday is March 3." :topic "family"}}
                                {:name "memo_send"
                                 :input {:to "operator" :subject "Noted!" :body "I recorded Ana's birthday."}}]}
@@ -30,11 +30,11 @@
                   {:tool-uses [{:name "journal_write" :input {:text "Recorded Ana's birthday."}}]}]}}}
 
  :steps
- [{:run ["memo" "hub" "-s" "Ana's birthday" "-m" "My sister Ana's birthday is March 3."]}
+ [{:run ["memo" "steward" "-s" "Ana's birthday" "-m" "My sister Ana's birthday is March 3."]}
   {:tick 2}]
 
  :assert
- [[:has :wake {:role "hub" :outcome "ran"}]]
+ [[:has :wake {:role "steward" :outcome "ran"}]]
 
  :graders
  [{:id :recorded
@@ -45,4 +45,4 @@
    :doc "No notification went out."
    :check [:none :sent {}]}
   {:id :closed
-   :check [:has :memo {:subject "Ana's birthday" :closed-by "hub"}]}]}
+   :check [:has :memo {:subject "Ana's birthday" :closed-by "steward"}]}]}

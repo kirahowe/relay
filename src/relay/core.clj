@@ -950,9 +950,9 @@
   (update-in state [:roles (:id data)] assoc :status :removed :removed-at (inst at)))
 
 (defmethod evolve* "memo/sent" [state {:keys [seq at data labels public]}]
-  (let [{:keys [from to subject body routine]} data]
+  (let [{:keys [from to subject body routine about]} data]
     (assoc-in state [:memos seq] {:id seq :from from :to to :subject subject :body body
-                                  :routine routine :sent-at (inst at) :status :unread
+                                  :routine routine :about about :sent-at (inst at) :status :unread
                                   :attempts 0 :retry-at nil :labels (union labels)
                                   :public (true? public)})))
 
@@ -1107,13 +1107,27 @@
   (assoc-in state [:wakes (:wake data) :seen] (:turn data)))
 
 (defmethod evolve* "harness/paused" [state {:keys [data]}]
-  (let [{:keys [harness reason until failed-tries down-since]} data]
+  (let [{:keys [harness reason until failed-tries down-since said local]} data]
     (update-in state [:harnesses harness] assoc
                :condition reason :paused-until (inst until) :failed-tries failed-tries
-               :down-since (inst down-since))))
+               :down-since (inst down-since) :said said :local (true? local))))
 
-(defmethod evolve* "harness/recovered" [state {:keys [data]}]
-  (assoc-in state [:harnesses (:harness data)] {:condition "available" :failed-tries 0}))
+(defn resolve-alerts
+  "Marks the alerts the operator was sent about a trouble that is over as
+  resolved at event `seq`: those whose :origin is in `origins` and whose
+  `k` is `v`. A resolved alert leaves what is ready for them
+  (relay.ready). Pure."
+  [state seq origins k v]
+  (reduce (fn [st [id m]]
+            (if (and (origins (:origin m)) (= v (get m k)) (not (:resolved m)))
+              (update-in st [:messages id] assoc :resolved seq :rev seq)
+              st))
+          state (:messages state)))
+
+(defmethod evolve* "harness/recovered" [state {:keys [seq data]}]
+  (-> state
+      (assoc-in [:harnesses (:harness data)] {:condition "available" :failed-tries 0})
+      (resolve-alerts seq #{"harness-needs-attention" "harness-unreachable"} :harness (:harness data))))
 
 (defn- told
   "What relay remembers it told the operator, from a message's :origin,
@@ -1136,7 +1150,10 @@
 
 (defn- add-message [state {:keys [seq at labels]} data]
   (let [parent (get-in state [:messages (:in-reply-to data)])]
-    (-> state
+    (-> (cond-> state
+          ;; Web work that runs again ends the alert that said it stopped.
+          (= "public-role-can-run" (:origin data))
+          (resolve-alerts seq #{"public-role-cannot-run"} :role (:role data)))
         (assoc-in [:messages seq]
                   (-> (dissoc data :route)
                       (assoc :id seq :created-at (inst at) :rev seq :labels (union labels)
@@ -1185,8 +1202,8 @@
 ;; What an ingest source has brought in. :seen is [[key version] ...],
 ;; :gone the keys it no longer has; pairs, not a map, since the log's
 ;; JSON would make the keys keywords.
-(defmethod evolve* "ingest/polled" [state {:keys [data]}]
-  (cond-> (update-in state [:ingest (:source data)]
+(defmethod evolve* "ingest/polled" [state {n :seq data :data}]
+  (cond-> (update-in (resolve-alerts state n #{"ingest-failing"} :source (:source data)) [:ingest (:source data)]
                      (fn [r]
                        (-> (or r {:seen {}})
                            (update :seen #(apply dissoc (into (or % {}) (map vec (:seen data))) (:gone data)))
@@ -1409,9 +1426,11 @@
   "Sends a memo. `copied` is the labels of text it copies, such as a
   routine's instructions."
   ([tx m] (send-memo tx m []))
-  ([tx {:keys [from to subject body routine]} copied]
+  ([tx {:keys [from to subject body routine about]} copied]
    (let [tx (emit tx "memo/sent" (cond-> {:from from :to to :subject subject :body body}
-                                   routine (assoc :routine routine))
+                                   routine (assoc :routine routine)
+                                   ;; A dead letter's memo names the letter it is about.
+                                   about (assoc :about about))
                   copied)]
      (if (= operator to)
        (tell tx "memo-for-operator" "note" "normal" subject
@@ -1419,33 +1438,81 @@
              :memo (last-id tx) :labels copied)
        tx))))
 
+(def ^:private dead-letter-subject
+  #"(?s)Dead letter: .*? could not finish \"(.*)\"")
+
+(defn original-subject
+  "The subject of the request a dead letter is about, however many dead
+  letters wrap it: a dead letter's memo is titled `Dead letter: <role>
+  could not finish \"<subject>\"`, and the handler's own dead letter of
+  one wraps it again. Pure; idempotent."
+  [subject]
+  (loop [s (str subject)]
+    (if-let [[_ inner] (re-matches dead-letter-subject s)]
+      (recur inner)
+      s)))
+
+(defn- abandoned-why [letter]
+  (case (:reason letter)
+    "blocked" (str "It stopped, saying:\n\n" (quote-block (:explanation letter)))
+    "never-closed" (str "It was tried " (:attempts letter) " times and never finished.")
+    "recipient-removed" "Whoever was doing it was removed before it was done."))
+
+(defn- request-of
+  "The memo a chain of dead letters is about: a dead letter's memo names
+  its letter (:about), whose memo may be a dead letter's memo in turn."
+  [state m]
+  (loop [m m seen #{}]
+    (let [l (:about m)
+          inner (when (and l (not (seen l))) (memo state (get-in state [:dead-letters l :memo])))]
+      (if inner (recur inner (conj seen l)) m))))
+
 (defn- escalate
-  "Passes a fresh dead letter on: as a memo to the dead letter handler, or as
-  a message to the operator when the memo was the handler's own or
-  there is no handler."
+  "Passes a fresh dead letter on. The operator's own request comes back to
+  them at once, in one plain message, since they asked for it. Every dead
+  letter goes as a memo to the dead letter handler, unless the memo was
+  the handler's own or there is no handler; then the operator is told,
+  by the request it is about, unless they were told of that already."
   [{:keys [state config] :as tx} letter-id]
   (let [letter (get-in state [:dead-letters letter-id])
-        {:keys [to subject]} (memo state (:memo letter))
+        {:keys [from to subject]} (memo state (:memo letter))
         handler (:dead-letter-handler config)
         title (str to " could not finish \"" subject "\"")
         report (dead-letter-report state letter)
         ;; The report quotes the memo, and what the role said about it.
         m (memo state (:memo letter))
-        copied (union (memo-labels state m) (ids-labels state [(:from m) to]) (:labels letter))]
-    (if (and handler (active-role? state handler) (not= handler to))
+        copied (union (memo-labels state m) (ids-labels state [(:from m) to]) (:labels letter))
+        operators? (= operator from)
+        to-handler? (and handler (active-role? state handler) (not= handler to))
+        tx (if operators?
+             (tell tx "work-abandoned" "alert" "normal" (str "Could not finish \"" subject "\"")
+                   [(abandoned-why letter) (str "To try again, run relay retry " to ".")]
+                   :role to :dead-letter letter-id :labels copied)
+             tx)]
+    (cond
+      to-handler?
       ;; The dispatcher writes it, so it is never public, whoever's call
       ;; set it off.
       (with-public tx false
-        #(send-memo % {:from dispatcher :to handler :subject (str "Dead letter: " title) :body report}
+        #(send-memo % {:from dispatcher :to handler :subject (str "Dead letter: " title)
+                       :body (cond-> report
+                               operators? (str "\n\nrelay has told the operator, so do not tell them again."))
+                       :about letter-id}
                     copied))
-      (tell tx "work-abandoned" "alert" "normal" (str "Could not finish \"" subject "\"")
-            [(case (:reason letter)
-               "blocked" (str "It stopped, saying:\n\n" (quote-block (:explanation letter)))
-               "never-closed" (str "It was tried " (:attempts letter) " times and never finished.")
-               "recipient-removed" "Whoever was doing it was removed before it was done.")
-             (str "What was asked:\n\n" (quote-block (:body m)))
-             (str "To try again, run relay retry " to ".")]
-            :role to :dead-letter letter-id :labels copied))))
+
+      operators? tx
+
+      ;; The request a dead letter of a dead letter is about was the
+      ;; operator's own, and they were told when it failed.
+      (= operator (:from (request-of state m))) tx
+
+      :else
+      (let [nested? (some? (:about m))]
+        (tell tx "work-abandoned" "alert" "normal" (str "Could not finish \"" (original-subject subject) "\"")
+              [(abandoned-why letter)
+               (when-not nested? (str "What was asked:\n\n" (quote-block (:body m))))
+               (str "To try again, run relay retry " to ".")]
+              :role to :dead-letter letter-id :labels copied)))))
 
 (defn- dead-letter
   "Dead-letters a memo. `copied` is the labels of the text in `more`, such
@@ -1835,13 +1902,28 @@
                                                     (config/retry-delay-seconds config attempt)))}))))
           tx (:memos wake)))
 
+(defn harness-attention-items
+  "What the operator is told when a harness needs them. A local failure
+  (agentloop would not start, or relay.edn names no such harness) is
+  theirs to fix on this machine, and nothing changes until they do; a
+  model service's refusal (a key it does not take, billing) is told as
+  the service's. Either way the work waits and relay tries again. Pure."
+  [said local?]
+  (if local?
+    [(str "relay could not start its model runner on this machine:\n\n" (quote-block said))
+     (str "Nothing has been dropped: the work waits. It will not start until this is fixed here;"
+          " then it carries on at the next try, and relay status shows when that is.")]
+    [(str "The model service said:\n\n" (quote-block said))
+     (str "Nothing has been dropped: the work waits. If the key or account needs fixing, fix it;"
+          " relay tries again on its own, and relay status shows when.")]))
+
 (defn- note-harness
   "Records what a run says about its harness. A run that got to work clears
   any pause. A limit pauses until its reset, or for the probe interval when
   none was given. Being unreachable or needing a person pauses for a wait
   that doubles with each failed try. The operator is told at once when a
   person is needed, and once when an outage outlasts their patience."
-  [{:keys [state config ^Instant now] :as tx} harness outcome resets-at said]
+  [{:keys [state config ^Instant now] :as tx} harness outcome resets-at said local?]
   (let [h (get-in state [:harnesses harness])]
     (if (= "ran" outcome)
       (if (and h (or (:paused-until h) (pos? (or (:failed-tries h) 0)) (:down-since h)))
@@ -1855,14 +1937,15 @@
                       (.plusSeconds now (* 60 (:limit-probe-minutes config))))
                     (.plusSeconds now (config/retry-delay-seconds config tries)))
             down-since (or (:down-since h) now)
-            tx (emit tx "harness/paused" {:harness harness :reason outcome :until (str until)
-                                          :failed-tries tries :down-since (str down-since)})
+            tx (emit tx "harness/paused" (cond-> {:harness harness :reason outcome :until (str until)
+                                                  :failed-tries tries :down-since (str down-since)}
+                                           ;; Why it needs someone, for relay status.
+                                           (= "needs-attention" outcome) (assoc :said (str said) :local local?)))
             told? (:operator-told h)]
         (cond
           (and (= "needs-attention" outcome) (not told?))
           (tell tx "harness-needs-attention" "alert" "high" "relay needs you before it can work"
-                [(str "The model service said:\n\n" (quote-block said))
-                 "Work waits, and nothing has been dropped. It carries on by itself once the service runs again."]
+                (harness-attention-items said local?)
                 :harness harness :labels (:said-labels tx))
           :else tx)))))
 
@@ -2070,7 +2153,7 @@
     (emit tx "conversation/turn-ended" {:wake wake-id :role role :turn turns
                                         :stop-reason (if (stop-reasons stop-reason) stop-reason "other")})))
 
-(defn- end-wake [{:keys [state config] :as tx} wake-id {:keys [outcome exit crashed cut-short session sessions said
+(defn- end-wake [{:keys [state config] :as tx} wake-id {:keys [outcome exit crashed cut-short session sessions said local
                                                               transcript resets-at labels usage cost-usd
                                                               tools-error pins shown]
                                                        :as report}]
@@ -2108,7 +2191,7 @@
       ;; harness's: no model was called.
       (if tools-error
         (tools-unavailable tx wake session tools-error)
-        (note-harness tx (:harness wake) outcome resets-at said))
+        (note-harness tx (:harness wake) outcome resets-at said (true? local)))
       (if cut-short (journal-cut-short tx wake) tx)
       (if (= "ran" outcome) (settle-memos tx wake said) tx)
       (tell-refusals tx wake report)
@@ -2132,6 +2215,71 @@
   (tell tx "result-refused" "alert" "low" "Something private was kept off the web"
         [(str tool " returned your private things during web work, so it was held back.")]
         :role actor :labels (id-labels state actor)))
+
+(def setup-problems
+  "What relay tells the operator when a tool fails because something on
+  this machine is not set up, by the problem's name: a subject and the
+  paragraphs, plain, with the one thing to do."
+  {"search-key"
+   {:subject "Web search isn't set up yet"
+    :status (str "Web search isn't set up yet: store the Brave Search key with"
+                 " security add-generic-password -a \"$USER\" -s relay-brave -w")
+    :items ["There's no Brave Search key where relay looks for it, so nothing can be looked up on the web."
+            (str "If you keep it in the login keychain, as relay init suggests, add it with:\n\n"
+                 "    security add-generic-password -a \"$USER\" -s relay-brave -w\n\n"
+                 "It is used only to send searches to Brave. Get one at https://brave.com/search/api/."
+                 " Searches work as soon as it is there.")]
+    :still "Web search still isn't set up"
+    :fix (str "Store the Brave Search key with\n\n"
+              "    security add-generic-password -a \"$USER\" -s relay-brave -w")}})
+
+(defn- unmet-requests
+  "The operator's own requests that wake `wake` carried and a setup
+  problem stopped, not yet told: their memo ids and subjects."
+  [state wake]
+  (for [id (get-in state [:wakes wake :memos])
+        :let [m (get-in state [:memos id])]
+        :when (and (= operator (:from m)) (not (get-in state [:setup-told id])))]
+    {:memo id :subject (:subject m)}))
+
+(defn- unmet-line [requests]
+  (str (str/join ", " (map #(pr-str (str (:subject %))) requests))
+       " couldn't be done without it, so ask again once the key is in."))
+
+(defmethod decide* :tool/broken [{:keys [state] :as tx} {{:keys [tool problem wake]} :args}]
+  ;; A tool that cannot work until the operator sets something up on this
+  ;; machine. They are told once, by relay, with what to do; the role that
+  ;; called it is told not to report it.
+  ;; A request of the operator's own that it stopped is named, once, so
+  ;; they know to ask again: nothing reruns it by itself.
+  (dispatcher-only! tx)
+  (let [{:keys [subject items still fix]} (or (setup-problems problem) (reject! (str "No setup problem " (pr-str problem) ".")))
+        requests (vec (when (integer? wake) (unmet-requests state wake)))
+        event {:tool tool :problem problem :memos (mapv :memo requests)}]
+    (cond
+      (not (get-in state [:tools-broken tool]))
+      (-> (emit tx "tool/broken" event)
+          (tell "tool-broken" "alert" "normal" subject
+                (cond-> (vec items) (seq requests) (conj (unmet-line requests))) :tool tool))
+      (seq requests)
+      (-> (emit tx "tool/broken" event)
+          (tell "tool-broken" "alert" "normal" still [(unmet-line requests) fix] :tool tool))
+      :else tx)))
+
+(defmethod decide* :tool/working [{:keys [state] :as tx} {{:keys [tool]} :args}]
+  (dispatcher-only! tx)
+  (if (get-in state [:tools-broken tool])
+    (emit tx "tool/working" {:tool tool})
+    tx))
+
+(defmethod evolve* "tool/broken" [state {:keys [data]}]
+  (reduce #(assoc-in %1 [:setup-told %2] true)
+          (assoc-in state [:tools-broken (:tool data)] (:problem data))
+          (:memos data)))
+
+(defmethod evolve* "tool/working" [state {:keys [seq data]}]
+  (-> (update state :tools-broken dissoc (:tool data))
+      (resolve-alerts seq #{"tool-broken"} :tool (:tool data))))
 
 (defmethod decide* :conversation/turn-unrecorded [{:keys [state] :as tx} {{:keys [wake]} :args}]
   ;; relay serve could not record the end of a conversation's turn, so the
@@ -2238,22 +2386,55 @@
 
 ;; the tick
 
+(defn- fire-routine
+  "Sends a routine's run: its instructions as a memo to its owner, as the
+  tick does when it comes due."
+  [tx {:keys [owner name instructions schedule] :as r}]
+  (let [;; A run copies the routine, so it is public when the
+        ;; routine is.
+        tx (with-public tx (:public r)
+             #(send-memo % {:from dispatcher :to owner :subject name :body instructions
+                            :routine name}
+                         (:labels r)))
+        memo-id (:seq (first (filter #(= "memo/sent" (:type %))
+                                     (rseq (:events tx)))))]
+    (emit tx "routine/fired" {:owner owner :name name :memo memo-id
+                              :one-off (schedule/one-off? (schedule/parse schedule))})))
+
 (defn- fire-routines [{:keys [state config now] :as tx}]
-  (reduce (fn [tx {:keys [owner name instructions schedule] :as r}]
+  (reduce (fn [tx r]
             (if (routine-due? (:state tx) config r now)
-              (let [;; A run copies the routine, so it is public when the
-                    ;; routine is.
-                    tx (with-public tx (:public r)
-                         #(send-memo % {:from dispatcher :to owner :subject name :body instructions
-                                        :routine name}
-                                     (:labels r)))
-                    memo-id (:seq (first (filter #(= "memo/sent" (:type %))
-                                                 (rseq (:events tx)))))]
-                (emit tx "routine/fired" {:owner owner :name name :memo memo-id
-                                          :one-off (schedule/one-off? (schedule/parse schedule))}))
+              (fire-routine tx r)
               tx))
           tx
           (mapcat #(active-routines state %) (active-role-ids state))))
+
+(defn find-routine
+  "The active routine `name` of `owner`, or, with no owner, the one active
+  routine of that name, whoever owns it: {:routine r} or {:problem text}."
+  [state owner name]
+  (let [named (for [id (active-role-ids state)
+                    r (active-routines state id)
+                    :when (and (= name (:name r)) (or (nil? owner) (= owner id)))]
+                r)]
+    (cond
+      (empty? named) {:problem (str "There is no routine called " name (when owner (str " for " owner))
+                                    ". relay routines lists them.")}
+      (next named) {:problem (str (count named) " roles have a routine called " name ": "
+                                  (str/join ", " (sort (map :owner named)))
+                                  ". Say which, as relay routine run <role> " name ".")}
+      :else {:routine (first named)})))
+
+(defmethod decide* :routine/run [{:keys [state] :as tx} {{:keys [owner name]} :args}]
+  ;; The operator runs a routine now, to see what it does: its run goes out
+  ;; exactly as the tick sends it, and its schedule counts from now.
+  (operator-only! tx "runs a routine by hand")
+  (let [{:keys [routine problem]} (find-routine state owner name)]
+    (when problem (reject! :not-found problem))
+    (when (has-open-run? state routine)
+      (reject! :conflict (str "The last run of " name " (memo " (:last-memo routine) ") is still open, so "
+                              (:owner routine) " has it already.")))
+    (fire-routine tx routine)))
 
 (defn- trip-guards [{:keys [state config ^Instant now] :as tx}]
   (reduce (fn [tx id]
@@ -2289,6 +2470,25 @@
                       ["It carries on as usual from now on."] :role id :labels (id-labels state id))
                 :else tx)))
           tx (active-role-ids state)))
+
+(defn- report-misnamed-roles
+  "Tells the operator, once for each change, when relay.edn names the
+  steward by an id no active role has (config/role-name-problems), and
+  resolves the alert when the names are put right."
+  [{:keys [state config] :as tx}]
+  (let [problems (vec (config/role-name-problems config (active-role-ids state)))]
+    (if (= problems (vec (:misnamed-told state)))
+      tx
+      (cond-> (emit tx "settings/misnamed" {:problems problems})
+        (seq problems)
+        (tell "settings-misnamed" "alert" "normal" "relay.edn names a role that isn't there"
+              (conj problems "Until it is set, relay works as if that role were missing."))))))
+
+(defmethod evolve* "settings/misnamed" [state {n :seq data :data}]
+  (let [problems (vec (:problems data))]
+    (-> (resolve-alerts state n #{"settings-misnamed"} :origin "settings-misnamed")
+        (cond-> (empty? problems) (dissoc :misnamed-told)
+                (not-empty problems) (assoc :misnamed-told problems)))))
 
 (defn- report-outages [{:keys [state config ^Instant now] :as tx}]
   (reduce (fn [tx [harness h]]
@@ -2330,6 +2530,7 @@
     (fire-routines tx)
     (trip-guards tx)
     (report-unwakeable tx)
+    (report-misnamed-roles tx)
     (report-outages tx)))
 
 ;; messages to the operator (relay.messages)
@@ -2620,7 +2821,9 @@
   (assoc state :daily {:date (:date data) :seq seq}))
 
 (defmethod evolve* "digest/composed" [state {:keys [seq data]}]
-  (assoc state :daily {:date (:date data) :seq seq}))
+  ;; A note with nothing to say is not sent, and `relay note now` may make
+  ;; the day's again once there is something.
+  (assoc state :daily {:date (:date data) :seq seq :sent (not (false? (:sent data)))}))
 
 (defmethod evolve* "digest/part-written" [state {:keys [seq at data labels]}]
   (assoc-in state [:daily-parts (:part data)] {:seq seq :at (inst at) :items (vec (:items data)) :labels (union labels)}))
@@ -2667,11 +2870,13 @@
 (defmethod decide* :digest/compose [{:keys [state now] :as tx} {{:keys [date]} :args}]
   ;; Recorded once a day under the log's lock, so two ticks cannot both
   ;; make one, and a restart makes none twice. A note with nothing to say
-  ;; is recorded and not sent.
+  ;; is recorded and not sent; it does not stop the day's being made again
+  ;; by hand (relay note now) once there is something to say.
   (dispatcher-only! tx)
   (let [d (or (try (LocalDate/parse (str date)) (catch Exception _ nil))
               (reject! (str "A daily note needs its date, not " (pr-str date) ".")))]
-    (when (some-> (daily-date state) (.isBefore d) not)
+    (when (when-let [made (daily-date state)]
+            (or (.isAfter made d) (and (= made d) (not (false? (get-in state [:daily :sent]))))))
       (reject! :invalid (str "The daily note for " d " was already made.")))
     (let [{:keys [subject sections numbered flagged]} (compose-note state d now)]
       (cond-> (emit tx "digest/composed" {:date (str d) :sent (some? sections) :flagged flagged})
@@ -2741,7 +2946,7 @@
   (let [c (undo-target state c)
         {:keys [what owner name before change]} c
         live! #(when-not (active-role? state owner)
-                 (reject! :not-found (str "The helper " owner " is gone, so there is nothing to put back.")))]
+                 (reject! :not-found (str "The role " owner " is gone, so there is nothing to put back.")))]
     (case what
       "skill" (restore-doc tx (:path c) (:version before))
       "routine" (do (live!)
@@ -2768,7 +2973,7 @@
                              (emit (assoc tx :public (true? (:public before))) "role/updated"
                                    (assoc (select-keys before [:title :instructions :reports-to :harness :model]) :id owner)
                                    (:labels before)))
-               "removed" (reject! :invalid (str "The helper " owner " was removed, and a removed helper cannot"
+               "removed" (reject! :invalid (str "The role " owner " was removed, and a removed role cannot"
                                                 " come back under its old name. Add it again under a new one."))))))
 
 (defn- revert!

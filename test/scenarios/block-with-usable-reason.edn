@@ -8,7 +8,7 @@
 
  :clock "2026-10-12T09:00"
 
- ;; One tick: only the clerk wakes. The hub would wake on the dead letter
+ ;; One tick: only the clerk wakes. The steward would wake on the dead letter
  ;; next, which is not what this case grades.
  :model
  {"clerk" [{:tool-uses [{:name "memo_block"

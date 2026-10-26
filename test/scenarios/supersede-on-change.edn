@@ -9,7 +9,7 @@
  :clock "2026-10-12T09:00"
 
  :model
- {"hub" [{:tool-uses [{:name "facts" :input {:topic "household/car"}}]}
+ {"steward" [{:tool-uses [{:name "facts" :input {:topic "household/car"}}]}
          {:tool-uses [{:name "fact_supersede"
                        :input {:fact {:fact-id {:first-text [:includes "Civic"]}}
                                :text "The operator drives a 2022 Toyota Corolla."
@@ -24,7 +24,7 @@
  :foils
  {"correct-instead"
   {:fails #{:used-supersede :old-ends-right :old-ends-soft :new-current}
-   :model {"hub" [{:tool-uses [{:name "fact_correct"
+   :model {"steward" [{:tool-uses [{:name "fact_correct"
                                 :input {:fact {:fact-id {:first-text [:includes "Civic"]}}
                                         :text "The operator drives a 2022 Toyota Corolla."
                                         :why "The operator sold the Civic."}}]}
@@ -33,7 +33,7 @@
                   {:tool-uses [{:name "journal_write" :input {:text "Updated the car fact."}}]}]}}
   "add-leave-open"
   {:fails #{:used-supersede :old-ends-right :old-ends-soft :new-current :one-current}
-   :model {"hub" [{:tool-uses [{:name "fact_add"
+   :model {"steward" [{:tool-uses [{:name "fact_add"
                                 :input {:text "The operator drives a 2022 Toyota Corolla."
                                         :topic "household/car" :valid_from "2026-10-06"}}]}
                   {:tool-uses [{:name "memo_close"
@@ -42,13 +42,13 @@
 
  :steps
  [{:run ["fact" "add" "The operator drives a 2015 Honda Civic." "--topic" "household/car" "--from" "2019-05-01"]}
-  {:run ["memo" "hub" "-s" "New car"
+  {:run ["memo" "steward" "-s" "New car"
          "-m" "I sold the Civic last Tuesday and bought a 2022 Toyota Corolla."]}
   {:tick 2}]
 
  :assert
  [[:has :fact {:first-text "The operator drives a 2015 Honda Civic."}]
-  [:has :wake {:role "hub" :outcome "ran"}]]
+  [:has :wake {:role "steward" :outcome "ran"}]]
 
  :graders
  [{:id :used-supersede

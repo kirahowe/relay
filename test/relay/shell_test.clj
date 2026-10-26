@@ -243,7 +243,8 @@
     (spit path (str "#!/bin/bash\nS=" s "\n"
                     "printf '%s\\n' \"$*\" >> $S/calls\n"
                     "case \"$1\" in\n"
-                    "  image) [ -e $S/image ] && exit 0; echo 'Error: image not found' >&2; exit 1;;\n"
+                    "  image) [ \"$2\" = rm ] && { rm -f $S/image; exit 0; }\n"
+                    "         [ -e $S/image ] && exit 0; echo 'Error: image not found' >&2; exit 1;;\n"
                     "  build) touch $S/image; exit 0;;\n"
                     "  rm) rm -f $S/running; exit 0;;\n"
                     "  run) [ -e $S/fail-run ] && { echo 'Error: it broke' >&2; exit 1; }; touch $S/running; exit 0;;\n"
@@ -421,13 +422,33 @@
 (deftest the-operator-runs-the-shell-from-the-command-line
   (let [sys (data! {})
         relay #(cli/execute (concat ["--data" (:data-dir sys) "house"] %&))]
-    (is (= ["The shell is not running. relay house up starts it."] (:out (relay "status"))))
+    (is (= "The shell is not running. relay house up starts it." (first (:out (relay "status")))))
     (is (= ["Started the shell."] (:out (relay "up"))))
     (is (= ["The shell is already running."] (:out (relay "up"))))
-    (is (= ["The shell is running."] (:out (relay "status"))))
+    (let [[said sees & mounts] (:out (relay "status"))]
+      (is (= "The shell is running." said))
+      (is (= "It sees, read-only:" sees) "status lists what the shell can see")
+      (is (= (map #(str "  " %) (get-in sys [:config :house :mounts])) mounts)))
     (is (= ["Built the shell's image, and restarted the shell with it."] (:out (relay "build"))))
     (is (= ["Stopped the shell. Its scratch files are gone."] (:out (relay "down"))))
+    (testing "remove takes relay's image with it, so the data directory leaves nothing behind"
+      (relay "up")
+      (is (= ["Stopped the shell, and removed its image. relay house build makes it again."] (:out (relay "remove"))))
+      (is (not (fs/exists? (str *dir* "/runner/image"))))
+      (is (= ["The shell was not running, and it has no image."] (:out (relay "remove")))))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"usage: relay house" (relay "sideways")))))
+
+(deftest remove-keeps-an-image-relay-edn-names
+  ;; The image is the operator's, perhaps built by hand or shared with
+  ;; another data directory, so removing this one's shell leaves it be.
+  (let [sys (data! {:image "my/own:1"})
+        relay #(cli/execute (concat ["--data" (:data-dir sys) "house"] %&))]
+    (relay "up")
+    (clear-calls!)
+    (let [[said] (:out (relay "remove"))]
+      (is (str/includes? said "Its image my/own:1 is named in relay.edn, so it is kept.")))
+    (is (not-any? #(str/starts-with? % "image rm") (calls)) "no image is removed")
+    (is (fs/exists? (str *dir* "/runner/image")) "the image is still there")))
 
 ;; --- I1 over any relay.edn
 

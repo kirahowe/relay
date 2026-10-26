@@ -15,6 +15,7 @@
             [clojure.walk]
             [clojure.string :as str]
             [relay.cards :as cards]
+            [relay.config :as config]
             [relay.core :as core]
             [relay.spend :as spend]
             [relay.text :as text]
@@ -138,11 +139,21 @@
    ["Roles"]
    (mapcat #(role-status state zone now %) (core/active-role-ids state))
    (mapcat (fn [line] ["" line])
-    (for [[h {:keys [condition paused-until]}] (sort-by key (:harnesses state))]
+    (for [[h {:keys [condition paused-until said]}] (sort-by key (:harnesses state))]
      (str "Harness " h ": "
           (if (and paused-until (.isAfter ^Instant paused-until now))
-            (str condition ", next try " (local paused-until zone))
+            (str condition ", next try " (local paused-until zone)
+                 ;; One line; what it said is the harness's or relay's own words.
+                 (when-not (str/blank? said)
+                   (let [l (str/trim (str/replace (str said) #"\s+" " "))]
+                     (str ". " (if (> (count l) 160) (str (subs l 0 160) "...") l)))))
             "available"))))
+   (mapcat (fn [line] ["" line])
+           (distinct (keep (fn [[_ problem]] (get-in core/setup-problems [problem :status]))
+                           (sort-by key (:tools-broken state)))))
+   ;; A setting naming the steward by an id no role has, said plainly.
+   (mapcat (fn [line] ["" line])
+           (when config (config/role-name-problems config (core/active-role-ids state))))
    ["" (format "Operator's inbox: %d open" (count (core/unread-memos state core/operator)))]
    (for [id (core/active-role-ids state)
          :let [why (when config (core/unwakeable-reason state config id))]

@@ -185,9 +185,9 @@
   (testing "no :serve, or no :websocket in it, is no listener"
     (is (nil? (:serve (config/resolve-config complete))))
     (is (= {} (:serve (config/resolve-config (assoc complete :serve {}))))))
-  (testing "the defaults: the hub for a session/new with no role, and no browser origin"
+  (testing "the defaults: the steward for a session/new with no role, and no browser origin"
     (is (= {:websocket {:port 8765 :token-command ["security" "find-generic-password" "-s" "relay-websocket" "-w"]
-                        :default-role "hub" :allowed-origins []}}
+                        :default-role "steward" :allowed-origins []}}
            (:serve (config/resolve-config (assoc complete :serve {:websocket {:port 8765 :token-command ["security" "find-generic-password" "-s" "relay-websocket" "-w"]}}))))))
   (testing "what is given is kept"
     (is (= {:port 1 :token-command ["cat" "/t"] :default-role "clerk" :allowed-origins ["https://a.example"]}

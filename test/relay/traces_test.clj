@@ -71,18 +71,18 @@
       (try
         (is (:pass? result) (pr-str (:failures result)))
         (let [sys (inbound/system dir)
-              wake (first (filter #(= "hub" (:role %)) (vals (:wakes (inbound/current-state sys)))))
+              wake (first (filter #(= "steward" (:role %)) (vals (:wakes (inbound/current-state sys)))))
               ;; A conversation, recorded as relay acp records one, whose
               ;; session file is the wake's own run.
               started (inbound/submit! sys {:type :wake/start :actor core/operator
-                                            :args {:role "hub" :chat true :note "talk"}})
+                                            :args {:role "steward" :chat true :note "talk"}})
               chat (:seq (first (filter #(= "wake/started" (:type %)) started)))
               _ (inbound/submit! sys {:type :wake/end :actor core/dispatcher
                                       :args {:wake chat :outcome "ran" :said "Conversation ended."
                                              :sessions ["conv-1"]}})
-              _ (fs/create-dirs (fs/path dir "runs/hub/conversations-labelled"))
-              _ (fs/copy (fs/path dir "runs/hub" (str (:id wake)) "transcript.jsonl")
-                         (fs/path dir "runs/hub/conversations-labelled/conv-1.jsonl"))]
+              _ (fs/create-dirs (fs/path dir "runs/steward/conversations-labelled"))
+              _ (fs/copy (fs/path dir "runs/steward" (str (:id wake)) "transcript.jsonl")
+                         (fs/path dir "runs/steward/conversations-labelled/conv-1.jsonl"))]
           (operator! dir "flag" (str (:id wake)) "good" "the" "secret" "note")
           (operator! dir "flag" (str chat) "bad")
           (is (= :not-found (try (cli/execute ["--data" dir "flag" "999999" "good"]) nil
@@ -90,13 +90,13 @@
               "an unknown id is refused")
           (testing "relay week shows both and the flags"
             (let [text (str/join "\n" (operator! dir "week"))]
-              (is (str/includes? text (str "wake " (:id wake) ", hub")))
-              (is (str/includes? text (str "conversation " chat ", hub")))
+              (is (str/includes? text (str "wake " (:id wake) ", steward")))
+              (is (str/includes? text (str "conversation " chat ", steward")))
               (is (str/includes? text "good: the secret note"))))
           (testing "and --json is the same data, as JSON"
             (let [r (json/parse-string (first (operator! dir "week" "--json")) true)]
               (is (= 2 (count (:flags r))))
-              (is (= ["hub"] (map :role (:roles r))))))
+              (is (= ["steward"] (map :role (:roles r))))))
           (let [[said] (operator! dir "traces" "--out" out "--agentloop" support/agentloop-bin)
                 text (slurp (str (fs/path out "traces.otlp.jsonl")))
                 reqs (mapv #(json/parse-string % true) (str/split-lines text))

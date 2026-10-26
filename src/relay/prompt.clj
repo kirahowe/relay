@@ -50,14 +50,18 @@
   "The system prompt for a role: the shared instructions, the operator's own
   additions if there are any, the role's own instructions, what it is
   granted, its notes and its skills."
-  [{:keys [shared operator-additions notes granted skills]} {:keys [id title instructions]}]
+  [{:keys [shared operator-additions notes granted skills steward]} {:keys [id title instructions]}]
   (str (str/trim shared) "\n\n"
        (when-not (str/blank? operator-additions)
          (str "---\n\n" (str/trim operator-additions) "\n\n"))
        "---\n\n# Your role\n\n"
        "Your id is `" id "` and your title is " title ". Your own instructions, set by the"
-       " operator or the hub, follow. You cannot change them; if they are wrong or too"
-       " narrow, send a memo to whoever you report to.\n\n"
+       " operator or the steward, follow. You cannot change them; if they are wrong or too"
+       " narrow, send a memo to whoever you report to."
+       ;; The shared instructions say "the steward"; this names it.
+       (when (and steward (not= steward id)) (str " The steward is the role `" steward "`."))
+       (when (= steward id) " You are the steward.")
+       "\n\n"
        (str/trim instructions) "\n"
        (when-not (str/blank? granted)
          (str "\n# What you are granted\n\n" granted "\n"))

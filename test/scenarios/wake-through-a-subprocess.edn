@@ -6,15 +6,15 @@
  :live? false
 
  :model
- {"hub" [{:tool-uses [{:name "memo_close"
+ {"steward" [{:tool-uses [{:name "memo_close"
                        :input {:memo {:memo-id {:subject "Subprocess please"}}
                                :outcome "Done in a subprocess."}}]}
          {:text "Closed it."}]}
 
  :steps
- [{:run ["memo" "hub" "-s" "Subprocess please" "-m" "Close this."]}
+ [{:run ["memo" "steward" "-s" "Subprocess please" "-m" "Close this."]}
   {:tick 1 :spawn :process}]
 
  :assert
- [[:has :memo {:subject "Subprocess please" :status :read :closed-by "hub"}]
-  [:has :wake {:role "hub" :outcome "ran" :status :ended}]]}
+ [[:has :memo {:subject "Subprocess please" :status :read :closed-by "steward"}]
+  [:has :wake {:role "steward" :outcome "ran" :status :ended}]]}

@@ -82,7 +82,7 @@
 (defn surface-digests [surface repo-root]
   {:prompt-digest (sha256 (pr-str surface))
    :agents-md (sha256 (slurp (str (fs/path repo-root "resources" "AGENTS.md"))))
-   :hub-md (sha256 (slurp (str (fs/path repo-root "setup" "hub.md"))))
+   :steward-md (sha256 (slurp (str (fs/path repo-root "setup" "steward.md"))))
    :tools (sha256 (pr-str (into (sorted-map) (for [[r {t :tools}] surface] [r t]))))})
 
 (defn- commit-of

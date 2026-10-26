@@ -1,7 +1,7 @@
-;; Eval case: the hub records a temporary closure as a fact with both ends,
+;; Eval case: the steward records a temporary closure as a fact with both ends,
 ;; under the office topic that already exists, and does not bother the
 ;; operator about it. See relay.eval.
-{:doc "The hub records a temporary closure as a fact with both ends."
+{:doc "The steward records a temporary closure as a fact with both ends."
  :live? true
 
  :eval {:id "fact-validity-window" :version 1 :tier :regression :tags [:knowledge :facts] :trials 5}
@@ -10,7 +10,7 @@
  :clock "2026-10-12T09:00"
 
  :model
- {"hub" [{:tool-uses [{:name "facts" :input {:topic "office"}}]}
+ {"steward" [{:tool-uses [{:name "facts" :input {:topic "office"}}]}
          {:tool-uses [{:name "fact_add"
                        :input {:text "The staging office is closed for renovations from 3 November to 14 November 2026."
                                :topic "office"
@@ -26,7 +26,7 @@
  :foils
  {"no-end-date"
   {:fails #{:valid-to}
-   :model {"hub" [{:tool-uses [{:name "fact_add"
+   :model {"steward" [{:tool-uses [{:name "fact_add"
                                 :input {:text "The staging office is closed for renovations from 3 November."
                                         :topic "office" :valid_from "2026-11-03"}}]}
                   {:tool-uses [{:name "memo_close"
@@ -34,7 +34,7 @@
                   {:tool-uses [{:name "journal_write" :input {:text "Recorded the renovation."}}]}]}}
   "own-topic"
   {:fails #{:topic}
-   :model {"hub" [{:tool-uses [{:name "fact_add"
+   :model {"steward" [{:tool-uses [{:name "fact_add"
                                 :input {:text "The staging office is closed for renovations from 3 to 14 November 2026."
                                         :topic "renovations" :valid_from "2026-11-03" :valid_to "2026-11-14"}}]}
                   {:tool-uses [{:name "memo_close"
@@ -42,12 +42,12 @@
                   {:tool-uses [{:name "journal_write" :input {:text "Recorded the renovation."}}]}]}}}
 
  :steps
- [{:run ["memo" "hub" "-s" "Office renovations"
+ [{:run ["memo" "steward" "-s" "Office renovations"
          "-m" "FYI the office is closed for renovations from November 3 to November 14."]}
   {:tick 2}]
 
  :assert
- [[:has :wake {:role "hub" :outcome "ran"}]]
+ [[:has :wake {:role "steward" :outcome "ran"}]]
 
  :graders
  [{:id :recorded
@@ -64,7 +64,7 @@
   {:id :quiet
    :check [:none :memo {:to "operator"}]}
   {:id :closed
-   :check [:has :memo {:subject "Office renovations" :closed-by "hub"}]}
+   :check [:has :memo {:subject "Office renovations" :closed-by "steward"}]}
   ;; Skipped until judges are built; never gating.
   {:id :fact-stands-alone
    :judge {:rubric :fact-stands-alone

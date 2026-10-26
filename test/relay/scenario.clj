@@ -444,7 +444,7 @@
       (seq (remove #{:grants :mailbox} (keys settings))) [":settings may hold only :grants and :mailbox."]
       (and (contains? settings :mailbox) (not (and (string? (:mailbox settings))
                                                     (re-matches #"[a-z][a-z0-9-]{0,39}" (:mailbox settings)))))
-      [":settings :mailbox is the id of the role the mailbox reports to, such as \"hub\"."]
+      [":settings :mailbox is the id of the role the mailbox reports to, such as \"steward\"."]
       (and (contains? settings :grants) (not (map? (:grants settings))))
       [":settings :grants maps a role id to {:tools [...]}."]
       :else

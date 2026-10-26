@@ -58,6 +58,7 @@
                         :messages {:channels {"phone" {:kind :push :via :command :command [(str *dir* "/notify")]}}
                                    :routes [{:channels ["phone"]}]}
                         :max-attempts 2
+                        :dead-letter-handler "hub"
                         :grants {}}
                        extra))))
 
@@ -148,8 +149,9 @@
     (dispatch/wake! *sys* "clerk" {})
     (is (= :dead (:status (core/memo (state) id))))
     (let [[report] (core/unread-memos (state) "hub")]
-      (is (str/starts-with? (:subject report) "Dead letter")))
-    (is (empty? (notifications)) "the operator is not bothered")))
+      (is (str/starts-with? (:subject report) "Dead letter"))
+      (is (str/includes? (:body report) "do not tell them again")))
+    (is (= ["Could not finish \"File this\""] (notifications)) "the operator asked, so is told once")))
 
 (deftest a-rate-limited-run-pauses-and-the-next-wake-resumes-its-session
   (let [id (memo! "clerk" "File this")]
@@ -472,12 +474,11 @@
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #":client" (cfg bad)) (pr-str bad)))))
 
 (deftest chat-client-is-not-a-setting
-  ;; :chat-client, the setting's old name, is gone. A relay.edn that still
-  ;; has it must not stop the tick: the key is ignored, as any unknown
-  ;; top-level key is, and the client is the default.
-  (let [cfg (config/resolve-config {:timezone "UTC" :default-harness :a
-                                    :harnesses {:a {:kind :script}} :chat-client ["old-tui"]})]
-    (is (= ["relay-tui"] (:client cfg)))))
+  ;; :chat-client, the setting's old name, is gone. It is refused, as any
+  ;; key relay does not know is, saying what it is now called.
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"now :client"
+                        (config/resolve-config {:timezone "UTC" :default-harness :a
+                                                :harnesses {:a {:kind :script}} :chat-client ["old-tui"]}))))
 
 (defn- recording-client!
   "A client that writes its arguments, one per line, to argv.txt and exits 0."

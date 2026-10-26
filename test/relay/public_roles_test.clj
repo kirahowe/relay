@@ -106,8 +106,8 @@
   (is (str/includes? (problem {"scout" {:public true :may-add true}}) ":may-add"))
   (is (str/includes? (problem {"scout" {:public true :tools ["rem-read"]}}) "whose output is private"))
   (is (str/includes? (problem {"scout" {:public true}} :dead-letter-handler "scout") "dead-letter-handler"))
-  (is (str/includes? (problem {"hub" {:public true}}) "dead-letter-handler")
-      "the default handler, hub, counts too")
+  (is (str/includes? (problem {"steward" {:public true}}) "dead-letter-handler")
+      "the default handler, the steward, counts too")
   (is (str/includes? (problem {"scout" {:public "yes"}}) "true or false"))
   (is (str/includes? (problem {"scout" {:public true}}
                               :harnesses {:s {:kind :script :command ["true"]}} :default-harness :s)

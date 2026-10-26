@@ -273,8 +273,8 @@
                                                         {:grants {"clerk" {:tools ["fail-demo"]}}})
                                [:grants "clerk" :tools])))
   (is (true? (get-in (scenario/merge-settings (staging/settings {:data-dir "/s"})
-                                              {:grants {"hub" {:tools ["campaign-draft-demo"]}}})
-                     [:grants "hub" :may-add]))
+                                              {:grants {"steward" {:tools ["campaign-draft-demo"]}}})
+                     [:grants "steward" :may-add]))
       "a grant's other keys stay"))
 
 (deftest settings-may-open-a-mailbox-and-a-folder

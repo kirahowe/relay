@@ -105,7 +105,7 @@
                               :schedule "daily 07:00"})))
   (is (= "Removed the note \"vendors\"" (digest/change-line {:what "note" :name "vendors" :change "removed"
                                                             :delta {:added 0 :removed 4}})))
-  (is (= "Changed the helper \"clerk\"" (digest/change-line {:what "role" :name "clerk" :change "changed"
+  (is (= "Changed the role \"clerk\"" (digest/change-line {:what "role" :name "clerk" :change "changed"
                                                             :delta {:added 0 :removed 0}})))
   (testing "a name chosen in a session that read outside text is defanged"
     (is (= "New how-to \"evil[.]example/pin\""
