@@ -38,6 +38,9 @@ A role has no files and no shell. It works only through tools, each one a
   `doc_remove`
 - the board, for roles that are not public: `cards`, `card_add`,
   `card_op` (see Cards)
+- the agent's own calendar, for roles that are not public: `calendar`,
+  `calendar_add`, `calendar_update`, `calendar_remove` (see The
+  calendar)
 - the registry, for roles granted `:may-add`: `role_add`, `role_update`,
   `role_remove`
 - `dead_letters_retry`, for the dead letter handler and roles granted
@@ -981,6 +984,39 @@ connection on a binary message, on one over 8 MB, 1024 frames or 30
 seconds, and on anything else RFC 6455 forbids. WebSocket clients
 share the socket's limits: at most 64 connected clients, and a client
 that stops reading is dropped once 64 MB wait for it.
+
+### The calendar
+
+The agent has a calendar of its own, and the operator subscribes to it in
+their calendar app. A role that is not public puts events on it with
+`calendar_add`, moves them with `calendar_update` and takes them off with
+`calendar_remove`; `calendar` lists them. These tools are class `edit`:
+they change something outside relay that only the operator sees and can
+undo. Nothing on this calendar invites anyone, and relay never writes the
+operator's own calendar. The operator and the dispatcher cannot write
+this one either, so the feed holds only what a role wrote.
+
+An event is versioned the way a fact is: every change is a new version
+with the labels of what its writer had seen, and removing an event keeps
+its history. `relay serve` publishes the calendar at `/calendar.ics` as
+iCalendar (RFC 5545). A UID is made from the event's number and never
+changes, and `SEQUENCE` counts the event's changes, so a calendar app
+sees each change as an update to the same event. Times are UTC. A removed
+event stays in the feed as `STATUS:CANCELLED` for 30 days, so a
+subscriber that polls now and then still hears of it, and is then
+dropped. An event that ended more than 30 days ago is dropped too; the
+log keeps it. The feed carries at most 1000 events, counting both kinds,
+so adding and removing in a loop cannot grow it. Text is escaped and stripped of control and invisible
+characters, so what a role writes cannot add a property or an event.
+
+The feed is on the WebSocket listener (see Reaching relay from your
+phone), on that port and no other, so it is reachable only where that
+listener is: 127.0.0.1, published on your tailnet by `tailscale serve`.
+It takes the listener's token, as `Authorization: Bearer <token>` or,
+since a calendar app cannot send a header, as `?token=<token>` in the
+URL. A request without it gets a bare 401, and one with an `Origin` the
+listener does not allow a bare 403. To subscribe, add a calendar by URL:
+`https://<your Mac's tailnet name>:8765/calendar.ics?token=<token>`.
 
 ## Development
 

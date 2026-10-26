@@ -336,6 +336,7 @@ enum NotificationKind {
 enum ToolClass { read | write | edit | egress }
 enum Label { private | contaminated }
 enum FactChange { added | superseded | corrected | retracted }
+enum CalendarChange { added | changed | removed }
 enum CardKind { checklist | tracker | note }
 enum CardStatus { active | archived }
 enum CellState { open | done | skip }
@@ -774,6 +775,32 @@ entity FactVersion {
     superseded_by: Fact?
 }
 
+entity CalendarEvent {
+    -- An event on the agent's own calendar. The id is the seq of the event
+    -- that added it, and makes its UID in the feed, so the UID never
+    -- changes. Versioned like a fact; no version is dropped.
+    versions: CalendarEventVersion with event = this
+
+    current: versions.latest
+    is_removed: current.change = removed
+    -- The feed's SEQUENCE: how many changes it has had.
+    sequence: versions.count - 1
+}
+
+entity CalendarEventVersion {
+    event: CalendarEvent
+    seq: Integer
+    recorded_at: Timestamp
+    actor: Role
+    change: CalendarChange
+    title: String
+    start: Timestamp
+    end: Timestamp
+    location: String?
+    description: String?
+    why: String?
+}
+
 entity Note {
     -- A role's note: named, and shown in the role's prompt at every wake.
     owner: Role
@@ -952,6 +979,9 @@ config {
     -- Limits on what is written.
     max_subject_length: Integer = 200
     max_fact_length: Integer = 2000
+    -- Events the feed carries at once: live ones not over for more than 30
+    -- days, and removed ones still listed as cancelled.
+    max_calendar_events: Integer = 1000
     max_note_length: Integer = 4000
     max_journal_entry_length: Integer = 20000
     max_doc_length: Integer = 500000
@@ -2466,6 +2496,92 @@ rule RunTool {
         -- What a tool does is the command it stands for, decided in the
         -- ordinary way with the role as the caller. A refusal comes back
         -- to the role as text, so it can read why and adjust.
+}
+
+-- The agent's calendar
+
+rule AddCalendarEvent {
+    when: CalendarAddRequested(caller, title, start, end?, location?, description?)
+
+    -- The calendar is the agent's own. The operator and the dispatcher
+    -- never write it, so the feed holds only what a role wrote, and a
+    -- public role has none. relay never writes the operator's calendar.
+    requires: caller is Role and not caller.is_public
+    requires: title != "" and title.length <= 200
+    requires: end = null or end > start
+    requires: year(start) in 1970..9999
+    requires: CalendarEvent.where(not is_removed).count < config.max_calendar_events
+
+    ensures: CalendarEventVersion.created(
+        event: CalendarEvent.created(),
+        change: added,
+        recorded_at: now,
+        actor: caller,
+        title: title,
+        start: start,
+        end: end ?? start + 1.hour,
+        location: location,
+        description: description
+    )
+}
+
+rule UpdateCalendarEvent {
+    when: CalendarUpdateRequested(caller, event, title?, start?, end?, location?, description?, why?)
+
+    requires: caller is Role and not caller.is_public
+    requires: not event.is_removed
+    requires: the new version differs from event.current
+    requires: the new end is after the new start
+
+    ensures: CalendarEventVersion.created(
+        event: event,
+        change: changed,
+        recorded_at: now,
+        actor: caller,
+        title: title ?? event.current.title,
+        start: start ?? event.current.start,
+        end: end ?? event.current.end,
+        location: location ?? event.current.location,
+        description: description ?? event.current.description,
+        why: why
+    )
+
+    @guidance
+        -- An empty location or description clears it. A new start at or
+        -- after the old end needs a new end too.
+}
+
+rule RemoveCalendarEvent {
+    when: CalendarRemoveRequested(caller, event, why?)
+
+    requires: caller is Role and not caller.is_public
+    requires: not event.is_removed
+
+    ensures: CalendarEventVersion.created(
+        event: event,
+        change: removed,
+        recorded_at: now,
+        actor: caller,
+        title: event.current.title,
+        start: event.current.start,
+        end: event.current.end,
+        location: event.current.location,
+        description: event.current.description,
+        why: why
+    )
+}
+
+rule ServeCalendarFeed {
+    when: CalendarFeedRequested(request)
+
+    -- The feed is served on the WebSocket listener only (127.0.0.1, behind
+    -- the operator's tailnet), to the listener's token given as a bearer
+    -- token or as ?token= in the URL, and to no request with a foreign
+    -- Origin. It lists every event; a removed one stays as STATUS:CANCELLED
+    -- for 30 days and is then dropped. Times are UTC, DTSTAMP is the time of
+    -- the event's last change, and lines are folded at 75 octets.
+    requires: request.path = "/calendar.ics" and request.method = GET
+    requires: request.token = config.serve.websocket.token
 }
 
 -- Knowledge: facts
