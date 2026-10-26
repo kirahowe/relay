@@ -1,5 +1,5 @@
 -- allium: 3
--- relay: an operator, a hub and the roles they add.
+-- relay: an operator, a steward (the main role) and the roles they add.
 --
 -- The record of what happened is an event log, and everything else is the
 -- log folded in order.
@@ -350,7 +350,8 @@ enum MessageOrigin {
     | budget_reached | brief | daily_note | daily_note_acted | github_news
     | tools_unavailable | tool_changed | shown
     | session_forbidden | result_refused | public_role_cannot_run | public_role_can_run
-    | turn_unrecorded | conversation_line_dropped | ingest_failing
+    | turn_unrecorded | conversation_line_dropped | ingest_failing | tool_broken
+    | settings_misnamed
 }
 enum ToolClass { read | write | edit | egress }
 enum Label { private | contaminated }
@@ -783,6 +784,9 @@ entity Message {
     deliveries: List<Delivery>
     -- The operator's answers (ReplyToAMessage), oldest first.
     replies: List<Reply>
+    -- For an alert: set when the trouble it told of is over
+    -- (ResolveAlerts). A resolved alert is no longer ready for her.
+    resolved: Timestamp?
 }
 
 value Reply {
@@ -1123,7 +1127,7 @@ config {
     -- The role that is told about dead letters and decides what to do
     -- with them. When it is absent, or is not an active role, dead
     -- letters go to the operator.
-    dead_letter_handler: String = "hub"
+    dead_letter_handler: String = "steward"
 
     -- The harness a role runs on when it names none.
     default_harness: String = "agentloop"
@@ -1671,12 +1675,39 @@ rule EscalateToHandler {
         -- and quotes the memo and the end of the last transcript.
 }
 
+rule TellOperatorOfTheirRequest {
+    when: letter: DeadLetter.created
+
+    requires: letter.memo.sender = operator
+
+    ensures: Message.created(
+        origin: work_abandoned,
+        kind: alert,
+        urgency: normal,
+        subject: "Could not finish " + letter.memo.subject,
+        sections: [why_and_how_to_retry(letter)],          -- black box: see guidance
+        about: letter.memo.recipient,
+        dead_letter: letter,
+        created_at: now,
+        deliveries: route(this, now)
+    )
+
+    @guidance
+        -- The operator asked for it, so they hear at once, once: the
+        -- reason in a line and the relay retry that tries again. The
+        -- handler still gets the dead letter (EscalateToHandler), and
+        -- its report says the operator was told.
+}
+
 rule EscalateToOperator {
     when: letter: DeadLetter.created
 
     let handler = Role{id: config.dead_letter_handler}
 
     requires: not exists handler or handler.status != active or letter.memo.recipient = handler
+    -- Told already by TellOperatorOfTheirRequest, directly or for the
+    -- request a dead letter's memo is about.
+    requires: request_of(letter.memo).sender != operator
 
     ensures: Message.created(
         origin: work_abandoned,
@@ -1693,7 +1724,10 @@ rule EscalateToOperator {
     @guidance
         -- When the handler's own work is dead-lettered, or there is no
         -- handler, there is nobody left to escalate to but the
-        -- operator.
+        -- operator. A dead letter's memo names the letter it is about,
+        -- so a dead letter of a dead letter is told by the subject of
+        -- the request at the bottom of the chain (request_of), never as
+        -- "Dead letter: ... could not finish ...".
 }
 
 rule RequeueMemos {
@@ -1868,6 +1902,34 @@ rule FireRoutines {
         -- abandoned. A run missed while nothing was ticking is due once,
         -- not once per missed slot, because the baseline moves to the
         -- moment it fires.
+}
+
+rule RunRoutineNow {
+    when: OperatorRunsRoutine(owner?, name)
+
+    let routine = the one active routine called name, of owner when given
+
+    requires: exists routine
+    requires: not routine.has_open_run
+
+    ensures:
+        let run = Memo.created(
+            sender: dispatcher,
+            recipient: routine.owner,
+            routine: routine,
+            subject: routine.name,
+            body: routine.instructions,
+            sent_at: now,
+            status: unread,
+            attempts: 0
+        )
+        routine.baseline = now
+        routine.last_run = run
+
+    @guidance
+        -- relay routine run: the run goes out exactly as FireRoutines
+        -- sends it, and the schedule counts from now. Two roles with a
+        -- routine of one name need the owner named.
 }
 
 rule RetireOneOffRoutine {
@@ -2279,7 +2341,80 @@ rule TellOperatorHarnessNeedsThem {
 
     @guidance
         -- At once, and once per outage: the flag is cleared only when
-        -- a run gets to work.
+        -- a run gets to work. A failure on this machine (agentloop did
+        -- not start, or no such harness) is told as one, with what it
+        -- said and that nothing changes until it is fixed here; only a
+        -- model service's refusal is told as the service's. relay status
+        -- shows what it said beside the harness.
+}
+
+rule ResolveAlerts {
+    when: HarnessRecovers or SourcePolled or PublicRoleRunsAgain or ToolWorksAgain
+
+    ensures: for alert in Messages where kind = alert and not resolved
+                 and is_about_the_trouble_that_ended:
+        alert.resolved = now
+
+    @guidance
+        -- harness_needs_attention and harness_unreachable for that
+        -- harness, ingest_failing for that source,
+        -- public_role_cannot_run for that role, and tool_broken for that
+        -- tool. relay ready, and the client's ready view, leave a
+        -- resolved alert out.
+}
+
+rule ToolNotSetUp {
+    when: ToolCallFailed(tool, error)
+
+    requires: setup_problem(error) != null   -- webtool's search key command failed
+    requires: not tool.broken
+
+    ensures: tool.broken = setup_problem(error)
+    ensures: Message.created(
+        origin: tool_broken,
+        kind: alert,
+        urgency: normal,
+        subject: "Web search isn't set up yet",
+        sections: [how_to_fix(setup_problem(error))],
+        created_at: now,
+        deliveries: route(this, now)
+    )
+
+    @guidance
+        -- Once, by relay, in plain words with the command that fixes it,
+        -- and with no outside label: it is a setting on this machine.
+        -- The role is told not to report it. The next call that works
+        -- clears tool.broken and resolves the alert (ToolWorksAgain).
+        -- Nothing reruns the work it stopped, so each request of the
+        -- operator's own that the failing session carried is named,
+        -- once, with "ask again once the key is in": in this alert, or,
+        -- when the tool is broken already, in a short one of its own.
+}
+
+rule SettingNamesNoRole {
+    when: DispatcherTicks(lost_wakes)
+
+    let problems = role_name_problems(config, active_roles)
+    requires: problems != told_misnamed
+
+    ensures: told_misnamed = problems
+    ensures: for alert in Messages where origin = settings_misnamed and not resolved:
+        alert.resolved = now
+    ensures:
+        if problems.any:
+            Message.created(origin: settings_misnamed, kind: alert, urgency: normal,
+                            subject: "relay.edn names a role that isn't there",
+                            sections: [problems], created_at: now, deliveries: route(this, now))
+
+    @guidance
+        -- role_name_problems: config.dead_letter_handler, and
+        -- serve.websocket.default_role when there is a websocket, each
+        -- when it names no active role while some role is active, with
+        -- the likely main role (the first house role that may add
+        -- roles) to set instead. An install made when the main role
+        -- was hub otherwise loses dead letters to the operator, and
+        -- phone sessions, without a word. relay status shows the same
+        -- lines.
 }
 
 -- MCP tools that could not be set up
@@ -2854,7 +2989,10 @@ rule MakeDailyNote {
         -- Suggestions in ahead and grants are numbered so the operator
         -- can drop one. No role, tool, label or class is named in the
         -- text. A day's note is due from its time until the day ends;
-        -- a day with no tick past its time has none.
+        -- a day with no tick past its time has none. relay note now
+        -- makes the day's note at once when the day has none yet, or
+        -- only one that was not sent; it records nothing when there is
+        -- nothing to say, so an empty note never uses up the day.
 }
 
 rule RecordRecipeChange {

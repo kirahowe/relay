@@ -198,9 +198,11 @@ sequenceDiagram
 container system start          # once, on macOS
 relay house build               # builds relay-shell-<id>:latest, needs the network
 relay house up                  # or let the tick start it
-relay house status
+relay house status              # and which folders it sees
 relay house down                # removes it, and /scratch with it
+relay house remove              # removes it and relay's image, leaving nothing behind
 ```
 
 On Linux, set `:runner ["docker"]` or `["podman"]`; relay uses the same
-verbs (`run`, `exec`, `rm --force`, `image inspect`, `build`) with each.
+verbs (`run`, `exec`, `rm --force`, `image inspect`, `image rm`, `build`)
+with each.

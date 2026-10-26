@@ -144,7 +144,10 @@ command line instead.
   everything prepared for the operator: what relay told her, drafts a
   role made with an edit tool that is not relay's own, entries on the
   agent's calendar that have not ended, findings a role put on the
-  board, and file moves with their undo.
+  board, and file moves with their undo. An alert about a trouble that
+  is over (the model runner works again, a source can be checked, a tool
+  that was not set up works) is left out, and leaves a client's view as a
+  `gone` id in `_relay/ready/changed`.
 - An Item is `{"id", "kind", "at", "seq", "title", "lines": [string],
   "from": string or null, "outsider": bool}` and what its kind adds.
   `seq` is the log's number of the event that made the item; items with
