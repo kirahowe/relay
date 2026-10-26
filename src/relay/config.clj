@@ -7,6 +7,7 @@
             [clojure.edn :as edn]
             [clojure.string :as str]
             [relay.connections :as connections]
+            [relay.messages :as messages]
             [relay.shell :as shell])
   (:import (java.time ZoneId)))
 
@@ -36,8 +37,9 @@
 
 (def defaults
   "Settings relay can sensibly choose for itself. Everything relay needs
-  and cannot guess, :timezone, :default-harness, :harnesses and :notify,
-  is required in relay.edn; `relay init` asks for it."
+  and cannot guess, :timezone, :default-harness and :harnesses, is
+  required in relay.edn; `relay init` asks for it. Without :messages,
+  every message is the client's to show and goes nowhere else."
   {:dead-letter-handler "hub"
    :wake-timeout-minutes 30
    ;; A memo a wake carries and leaves open is retried after a wait that
@@ -61,35 +63,20 @@
    :mcp-servers {}
    ;; The remote MCP servers relay connect set up, by name (relay.connections).
    :connections []
-   :grants {}})
-
-(def notify-kinds #{:ntfy :command :macos :file :none})
+   :grants {}
+   :messages messages/default-settings})
 
 (defn- problem! [msg] (throw (ex-info msg {:relay/usage true})))
 
-(defn check-notify
-  "Checks the :notify settings alone, throwing on the first problem, so a
-  relay.edn broken elsewhere can still say so to the operator."
-  [notify]
-  (let [{:keys [kind url topic command]} notify]
-    (when-not (notify-kinds kind)
-      (problem! (str "relay.edn needs :notify with a :kind, one of "
-                     (sort (map name notify-kinds)) ", saying where notifications go.")))
-    (when (and (= :ntfy kind) (not (and (string? url) (string? topic))))
-      (problem! "The ntfy :notify in relay.edn needs a :url and a :topic."))
-    (let [{:keys [token-command token-file]} notify]
-      (when (and (some? token-command)
-                 (not (and (sequential? token-command) (seq token-command) (every? string? token-command))))
-        (problem! "The ntfy :token-command in relay.edn must be a command, such as [\"cat\" \"/path/to/token\"]."))
-      (when (and (some? token-file) (not (and (string? token-file) (not (str/blank? token-file)))))
-        (problem! "The ntfy :token-file in relay.edn must be a path."))
-      (when (and token-command token-file)
-        (problem! "The ntfy :notify in relay.edn takes :token-command or :token-file, not both.")))
-    (when (and (= :command kind) (not (and (sequential? command) (seq command))))
-      (problem! "The command :notify in relay.edn needs a :command."))
-    ;; Absolute, so that where it writes never depends on whoever runs relay.
-    (when (and (= :file kind) (not (and (string? (:path notify)) (fs/absolute? (:path notify)))))
-      (problem! "The file :notify in relay.edn needs a :path, the absolute path of the file to append to."))))
+(defn check-messages
+  "Checks the :messages settings alone, throwing on the first problem, so
+  a relay.edn broken elsewhere can still say so to the operator."
+  [settings]
+  (when-let [why (messages/settings-problem settings)] (problem! why)))
+
+(def removed-keys
+  "Settings relay no longer has, and what took their place."
+  {:notify "relay.edn has :notify, which relay no longer has. Say where messages go with :messages; setup/relay.example.edn shows how."})
 
 (def efforts #{"low" "medium" "high" "xhigh" "max"})
 
@@ -99,7 +86,7 @@
   #{:reader :workbench})
 
 (defn- check-required
-  [{:keys [timezone default-harness harnesses notify]}]
+  [{:keys [timezone default-harness harnesses]}]
   (when-not (and (string? timezone)
                  (try (ZoneId/of timezone) (catch Exception _ nil)))
     (problem! (str "relay.edn needs :timezone, a zone name such as \"America/Halifax\""
@@ -118,8 +105,7 @@
                      "the command that prints the API key."))))
   (when-not (contains? harnesses default-harness)
     (problem! (str "relay.edn needs :default-harness, naming one of :harnesses"
-                   (when default-harness (str "; there is no harness " (pr-str default-harness))) ".")))
-  (check-notify notify))
+                   (when default-harness (str "; there is no harness " (pr-str default-harness))) "."))))
 
 (def reserved-role-ids
   "Names no role may have: the operator, the dispatcher, and words relay
@@ -422,7 +408,9 @@
 (defn validate
   "Returns the config, or throws describing the first problem found."
   [{:keys [tools grants max-attempts] client :client :as config}]
+  (doseq [[k why] (sort-by key removed-keys) :when (contains? config k)] (problem! why))
   (check-required config)
+  (check-messages (:messages config))
   (when-not (and (sequential? client) (seq client)
                  (every? #(and (string? %) (not (str/blank? %))) client))
     (problem! (str "relay.edn has :client " (pr-str client)

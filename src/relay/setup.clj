@@ -65,13 +65,15 @@
         model (ask! io "Model" (default-models provider) nil)
         effort (ask! io (str "Effort (" (str/join ", " efforts) ")") "medium" (one-of efforts))
         api-key (ask! io "Command that prints the API key" (str/join " " (key-command provider)) nil)
-        kind (ask! io "Notifications: macos (this Mac), ntfy (a phone, via an ntfy server) or none"
+        kind (ask! io "Pushes: macos (this Mac), ntfy (a phone, via an ntfy server) or none"
                    "macos" (one-of ["macos" "ntfy" "none"]))
-        notify (if (= "ntfy" kind)
-                 {:kind :ntfy
-                  :url (ask! io "ntfy server URL" "http://127.0.0.1:2586" url-problem)
-                  :topic (ask! io "ntfy topic" "relay" nil)}
-                 {:kind (keyword kind)})
+        messages (case kind
+                   "none" {:channels {} :routes []}
+                   "macos" {:channels {"push" {:kind :push :via :macos}} :routes [{:channels ["push"]}]}
+                   "ntfy" {:channels {"push" {:kind :push :via :ntfy
+                                              :url (ask! io "ntfy server URL" "http://127.0.0.1:2586" url-problem)
+                                              :topic (ask! io "ntfy topic" "relay" nil)}}
+                           :routes [{:channels ["push"]}]})
         _ ((:say io) (str "\nrelay can look things up on the web for you. It searches with Brave Search"
                           " and reads the top pages with webtool. Brave needs an API key"
                           " (https://brave.com/search/api/), used only to send your searches to Brave."
@@ -87,7 +89,7 @@
      :default-harness :agentloop
      :harnesses {:agentloop {:kind :agentloop :provider provider :model model :effort effort
                              :api-key-command (str/split api-key #"\s+")}}
-     :notify notify
+     :messages messages
      :web web}))
 
 (defn webtool-config
@@ -127,7 +129,7 @@
 (defn render
   "relay.edn's text for the settings `interview` returns. `webtool-file`
   is where webtool.json goes, when the settings have the web."
-  [{:keys [timezone harnesses notify web]} webtool-file]
+  [{:keys [timezone harnesses messages web]} webtool-file]
   (let [{:keys [provider model effort api-key-command]} (:agentloop harnesses)]
     (str ";; relay's settings, written by `relay init`. Only the operator edits this\n"
          ";; file; no role can read it. setup/relay.example.edn in the relay\n"
@@ -141,7 +143,15 @@
          "              :model " (pr-str model) "\n"
          "              :effort " (pr-str effort) "\n"
          "              :api-key-command " (pr-str api-key-command) "}}\n\n"
-         " :notify " (pr-str notify) "\n\n"
+         " ;; What relay tells you goes to these channels; every message also\n"
+         " ;; shows in the client. An email channel, from the agent's own\n"
+         " ;; address to yours, looks like\n"
+         " ;;   \"mail\" {:kind :email :url \"smtps://smtp.example.org:465\"\n"
+         " ;;           :from \"agent@example.org\" :to \"you@example.org\"\n"
+         " ;;           :user \"agent@example.org\"\n"
+         " ;;           :credentials-command [\"security\" \"find-generic-password\" \"-s\" \"relay-mail\" \"-w\"]}\n"
+         " ;; See setup/relay.example.edn for routes, quiet hours and the digest.\n"
+         " :messages " (pr-str messages) "\n\n"
          " ;; Tools beyond relay's own. Each needs :class and :labels; see\n"
          " ;; setup/relay.example.edn. Apple Reminders, for one, is two tools:\n"
          " ;;   \"rem-read\" {:class :read :labels [\"private\"]\n"

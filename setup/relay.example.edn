@@ -1,6 +1,6 @@
 ;; relay's settings. Copy this to <data dir>/relay.edn and edit it. Only the
 ;; operator edits this file; no role has a tool that can read it.
-;; :timezone, :default-harness, :harnesses and :notify are required.
+;; :timezone, :default-harness and :harnesses are required.
 {:timezone "America/New_York"
 
  :default-harness :agentloop
@@ -16,16 +16,44 @@
               ;;   security add-generic-password -a "$USER" -s relay-anthropic -w
               :api-key-command ["security" "find-generic-password" "-s" "relay-anthropic" "-w"]}}
 
- ;; Where notifications go. See setup/ntfy/server.yml for the server.
- ;; With the server locked down, give relay its write token from the login
- ;; keychain (setup/ntfy/lockdown stores it there):
- ;;   :token-command ["security" "find-generic-password" "-s" "relay-ntfy" "-w"]
- ;; or from a file only you can read, with :token-file "/path/to/token".
- :notify {:kind :ntfy :url "http://127.0.0.1:2586" :topic "relay"}
- ;; Other kinds: {:kind :macos}, {:kind :command :command [...]},
- ;; {:kind :none}, and {:kind :file :path "/path/to/notifications.log"},
- ;; which appends one JSON line per notification and reaches nobody (used
- ;; by staging data).
+ ;; What relay tells you: one message, whatever carries it. Every message
+ ;; shows in the client (relay-tui); :routes say which other channels get
+ ;; it. A route matches a message by :kinds (note, alert, digest, reply)
+ ;; and :urgencies (low, normal, high), each optional; the message goes to
+ ;; every channel a matching route names. A route with :at :digest waits
+ ;; for :digest-at. :quiet-hours hold everything but high urgency until
+ ;; they end. Leave :messages out and messages show in the client only.
+ :messages
+ {:channels
+  {;; A push to your phone through ntfy (setup/ntfy/server.yml). With
+   ;; the server locked down, give relay its write token from the login
+   ;; keychain (setup/ntfy/lockdown stores it there):
+   ;;   :token-command ["security" "find-generic-password" "-s" "relay-ntfy" "-w"]
+   ;; or from a file only you can read, with :token-file "/path/to/token".
+   ;; :link opens the client when you tap the push; {id} is the message.
+   ;; Other :via: :macos (this Mac), :command (title as its last argument,
+   ;; body on stdin), and :file with an absolute :path, which appends one
+   ;; JSON line per push and reaches nobody (used by staging data).
+   "phone" {:kind :push :via :ntfy :url "http://127.0.0.1:2586" :topic "relay"}
+   ;; Mail from the agent's own address to yours, and to no one else,
+   ;; sent with curl. smtps:// for a real server; plain smtp:// only to
+   ;; this machine. The password is what :credentials-command prints.
+   ;; "mail" {:kind :email
+   ;;         :url "smtps://smtp.example.org:465"
+   ;;         :from "agent@example.org"
+   ;;         :to "you@example.org"
+   ;;         :user "agent@example.org"
+   ;;         :credentials-command ["security" "find-generic-password" "-s" "relay-mail" "-w"]}
+   }
+  :routes [{:channels ["phone"]}]
+  ;; With mail set up, for example:
+  ;; :routes [{:kinds ["alert"] :channels ["phone" "mail"]}
+  ;;          {:urgencies ["high"] :channels ["phone"]}
+  ;;          {:urgencies ["normal"] :channels ["mail"]}
+  ;;          {:urgencies ["low"] :channels ["mail"] :at :digest}]
+  ;; :quiet-hours {:from "22:00" :to "07:00"}
+  ;; :digest-at "18:00"
+  }
 
  ;; relay serve's WebSocket listener, for a phone client over the tailnet
  ;; (README: Reaching relay from your phone). It listens on 127.0.0.1 at
@@ -39,13 +67,13 @@
  ;; The role that is sent dead letters to sort out.
  :dead-letter-handler "hub"
 
- ;; A weekly budget in US dollars for all roles together. relay notifies
+ ;; A weekly budget in US dollars for all roles together. relay tells
  ;; you when the week's spend (from Monday) reaches 80% of it and 100%.
  ;; It never stops anything. Leave it out for no budget.
  ;; :budget {:weekly-usd 15}
 
  ;; A morning brief at 07:30 in :timezone: today's calendar and reminders
- ;; due, in one notification. relay composes it
+ ;; due, in one digest message. relay composes it
  ;; itself, with the "cal" and "rem-read" tools defined below; :calendar and
  ;; :reminders name other :read tools. Nothing is sent on a day with
  ;; nothing to say. Leave it out for no brief.

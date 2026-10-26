@@ -7,7 +7,7 @@
 #
 # It refuses a config that already has an auth-file. relay's token goes
 # into the login keychain (service relay-ntfy), never a file. When it
-# finishes it prints the :notify settings for relay.edn and what to change
+# finishes it prints the push channel settings for relay.edn and what to change
 # on the phone. Until you do both, notifications stop reaching the phone.
 set -euo pipefail
 
@@ -67,9 +67,9 @@ echo "Publish with relay's token: $withtoken (want 200)"
 
 cat <<EOF
 
-Set :notify in relay.edn to:
+Set the push channel in relay.edn's :messages :channels to:
 
-  :notify {:kind :ntfy :url "http://$url" :topic "$topic"
+  "phone" {:kind :push :via :ntfy :url "http://$url" :topic "$topic"
            :token-command ["security" "find-generic-password" "-s" "$service" "-w"]}
 
 On the phone, in the ntfy app: sign in to your server as "phone" with the

@@ -32,7 +32,7 @@
     (is written)
     (is (= {} (:tools settings)) "no webtool found, so no web")
     (is (= {} (:grants settings)))
-    (is (= {:kind :macos} (:notify settings)))
+    (is (= {:channels {"push" {:kind :push :via :macos}} :routes [{:channels ["push"]}]} (:messages settings)))
     (is (= "anthropic" (get-in settings [:harnesses :agentloop :provider])))
     (is (= "claude-opus-5-5" (get-in settings [:harnesses :agentloop :model])))
     (is (= ["security" "find-generic-password" "-s" "relay-anthropic" "-w"]
@@ -60,12 +60,13 @@
       (is (= "gpt-x" (get-in settings [:harnesses :agentloop :model])))
       (is (= ["security" "find-generic-password" "-s" "relay-openai" "-w"]
              (get-in settings [:harnesses :agentloop :api-key-command])))
-      (is (= {:kind :none} (:notify settings)))
+      (is (= {:channels {} :routes []} (:messages settings)) "none: the client alone")
       (is (some #(str/includes? % "needs an answer") @(:said io))))))
 
 (deftest ntfy-asks-where-the-server-is
   (let [{:keys [settings]} (create ["" "" "" "" "" "ntfy" "localhost" "http://nas:2586" "alerts" "" "y"])]
-    (is (= {:kind :ntfy :url "http://nas:2586" :topic "alerts"} (:notify settings)))))
+    (is (= {"push" {:kind :push :via :ntfy :url "http://nas:2586" :topic "alerts"}}
+           (get-in settings [:messages :channels])))))
 
 (deftest the-scout-gets-the-web-when-webtool-is-there
   (let [{:keys [written settings dir io]} (create ["" "" "" "" "" "" "" "" "y"] {:webtool "/opt/webtool/bin/webtool"})
@@ -104,13 +105,13 @@
 
 (deftest relay-refuses-a-config-missing-what-it-needs
   (let [complete {:timezone "UTC" :default-harness :agentloop
-                  :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"]}}
-                  :notify {:kind :none}}]
+                  :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"]}}}]
     (is (map? (config/resolve-config complete)))
     (doseq [[what broken] [["no timezone" (dissoc complete :timezone)]
                            ["a bad timezone" (assoc complete :timezone "Nowhere")]
-                           ["no notify" (dissoc complete :notify)]
-                           ["an ntfy without a topic" (assoc complete :notify {:kind :ntfy :url "http://x"})]
+                           ["the old :notify" (assoc complete :notify {:kind :none})]
+                           ["an ntfy without a topic"
+                            (assoc complete :messages {:channels {"p" {:kind :push :via :ntfy :url "http://x"}} :routes []})]
                            ["no harnesses" (dissoc complete :harnesses)]
                            ["a default harness that is not defined" (assoc complete :default-harness :other)]
                            ["an agentloop with no key command"
@@ -119,8 +120,7 @@
 
 (deftest a-budget-is-optional-and-checked
   (let [complete {:timezone "UTC" :default-harness :agentloop
-                  :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"]}}
-                  :notify {:kind :none}}]
+                  :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"]}}}]
     (is (nil? (:budget (config/resolve-config complete))) "no budget unless one is set")
     (doseq [ok [15 15.5 0.01]]
       (is (= {:weekly-usd ok} (:budget (config/resolve-config (assoc complete :budget {:weekly-usd ok})))) (pr-str ok)))

@@ -169,20 +169,24 @@ the problem from everyone.
 
 ## The operator's attention
 
-A memo to `operator` sends a notification to the operator's phone. It is
+`tell_operator` is how you reach the operator. relay decides how the
+message gets to them: their phone, their mail, their screen. A memo to
+`operator` reaches them the same way, as a plain note. What you send is
 the only thing that reaches them, and they don't browse relay to see how
 things are going. So:
 
-- Send them a memo only when they have to decide something, have
-  something ready to look at, or need to know something now. Progress
-  goes in your journal.
-- Put the ask in the subject line, because the subject is the
-  notification. "Renew the domain for another year?" works. "Update" does
-  not.
-- Make the body complete. They should be able to answer from the memo
-  alone.
-- Unless your instructions say otherwise, send it to the hub, which decides
-  whether it goes to the operator and batches what can wait.
+- Tell them only when they have to decide something, have something
+  ready to look at, or need to know something now. Progress goes in
+  your journal.
+- Put the ask in the subject, because the subject is often all they
+  see. "Renew the domain for another year?" works. "Update" does not.
+- Make the body complete. They should be able to answer from the
+  message alone. Put refs after what you drew on, and list what a draft
+  still needs in `items`.
+- Pick the urgency honestly. `low` can wait for the day's digest,
+  `normal` is most things, and `high` is for what they should see now.
+- Unless your instructions say otherwise, send it to the hub, which
+  decides whether it goes to the operator and batches what can wait.
 
 Before you ask the operator anything, check the facts and your notes. They
 should never have to tell relay the same thing twice.

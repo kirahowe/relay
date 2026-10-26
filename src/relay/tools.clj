@@ -34,6 +34,7 @@
             [relay.harness :as harness]
             [relay.inbound :as inbound]
             [relay.json :as strict]
+            [relay.messages :as messages]
             [relay.refs :as refs]
             [relay.shell :as shell])
   (:import (java.time Instant LocalTime)
@@ -545,6 +546,32 @@
     :run (fn [sys actor labels args]
            (submit sys actor labels :doc/remove (select-keys args [:path]))
            (str "Removed " (:path args) "."))}
+
+   "tell_operator"
+   {:class :edit
+    :grant :private
+    :description (str "Tell the operator something: that a draft is ready and where it is, a question only"
+                      " they can answer, or something they need to know now. relay decides how it reaches"
+                      " them. The subject is one line and carries the point; the body stands on its own."
+                      " Put refs after what you drew on. `items` are listed after the body, one each, such"
+                      " as the placeholders a draft still needs. `urgency` is low (can wait for the day's"
+                      " digest), normal (the default) or high (they should see it now). To answer a message"
+                      " of yours they replied to, give its number as `in_reply_to`.")
+    :parameters (obj {:subject text
+                      :body text
+                      :items {:type "array" :items text}
+                      :urgency {:type "string" :enum messages/urgencies}
+                      :in_reply_to {:type "integer" :description "The number of the message this answers."}}
+                     "subject" "body")
+    :run (fn [sys actor labels {:keys [subject body items urgency in_reply_to]}]
+           (let [with-refs (fn [t] {:text t :refs (mapv :ref (refs/parse t))})
+                 sections (mapv (fn [sec] (update sec :items #(mapv with-refs %)))
+                                (messages/body-sections body items))
+                 events (submit sys actor labels :message/send
+                                (cond-> {:subject subject :sections sections}
+                                  urgency (assoc :urgency urgency)
+                                  (some? in_reply_to) (assoc :in-reply-to in_reply_to)))]
+             (str "Told the operator (message " (:seq (first (filter #(= "message/created" (:type %)) events))) ").")))}
 
    "cards"
    {:class :read
@@ -1154,7 +1181,7 @@
     (reduce (fn [args k]
               (cond-> args
                 (string? (get args k)) (update k #(or (parse-long (str/trim %)) %))))
-            input [:memo :fact :event :version :limit :entry :card :item :row :column :seen])
+            input [:memo :fact :event :version :limit :entry :card :item :row :column :seen :in_reply_to])
     input))
 
 (defn parse-envelope
