@@ -134,7 +134,9 @@
     (= (boolean expected) (:trusted (verdict raw)))))
 
 (deftest the-generator-makes-both-kinds
-  (let [xs (gen/sample gen-mail 400)]
+  ;; Seeded, so the count is the same every run: unseeded, a run now and
+  ;; then made 19 of one kind and failed.
+  (let [xs (map #(gen/generate gen-mail (mod % 100) %) (range 400))]
     (is (< 20 (count (filter :expected xs)) 380))))
 
 (defspec no-unverified-mail-is-ever-trusted-whatever-its-bytes 500
