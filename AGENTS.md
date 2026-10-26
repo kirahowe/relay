@@ -6,7 +6,7 @@ This file is for agents working on the relay repo. The role instructions that re
 
 Work in a jj workspace under `~/code/projects/.next/`, or another directory outside the live checkout. Never work in `~/code/projects/relay` itself: launchd's `relay.tick` runs that checkout every minute against Kira's live data.
 
-Never read or write `~/Sync/relay` or `~/.config/relay`. Test with artificial data and pass an explicit `--data <dir>` to every relay command. Commit in your workspace's own chain of changes. Do not push and do not move `main`.
+Never read or write `~/Sync/relay` or `~/.config/relay`. Test with artificial data and pass an explicit `--data <dir>` to every relay command. Commit in your workspace's own chain of changes and land verified, reviewed work on `main`. Do not push.
 
 ## What to work on
 

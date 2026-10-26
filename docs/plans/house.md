@@ -64,12 +64,35 @@ she sends it, it is hers.
 11. **Not problems:** scheduling over mail (Kira schedules with calendar
     apps) and deadlines (nothing is that time sensitive). Phone
     notifications are enough.
-12. **Autonomy.** Agents may commit verified, reviewed work to the local
-    `house` bookmark in each repo, this initiative's trunk; Kira moves
-    `main` after her review (never push, never deploy, never touch
+12. **Autonomy.** Verified, reviewed work lands on `main` in each repo
+    (Kira, 2026-10-26). Never push, never deploy, never touch
     `~/Sync/relay`, `~/.config/relay`, the live checkout or launchd).
     Live evals use the `relay-anthropic` keychain key, within a $25
     total cap for this initiative.
+13. **Staff read the mail** (2026-10-26). Untrusted content lands in the
+    mailbox, and the steward reads it; otherwise everything bottlenecks
+    on Kira. Kira's attention goes to two places only: what leaves the
+    house, and recipe changes that came from outside.
+14. **Roles improve themselves without asking.** Provenance decides how
+    loudly, never whether: a change to a skill, routine or note shaped
+    only by Kira or the role's own work is quiet; one shaped by mailbox
+    content takes effect and is flagged in the daily note, source named,
+    with a one-key revert. Roles can never change config: tools, grants,
+    recipients, channels.
+15. **Messages are medium-agnostic.** What relay tells Kira is one data
+    model (kind, urgency, sections of items with refs and provenance,
+    thread ids); routing from config picks channels; each channel is a
+    thin adapter with a pure renderer (email, push, the client, SMS
+    later). Replies come back through the same abstraction, and each
+    channel verifies in code that a reply is really Kira's; an
+    unverifiable reply lands in the mailbox.
+16. **Use cases to serve and test:** a daily grant digest for Kira's
+    nonprofit; watching her open-source GitHub repos for new issues and
+    PRs; organizing piles of local notes; a look-ahead that offers help
+    before things are due ("interview Thursday, want prep notes?").
+17. **UX before Kira tests.** UX-expert agents use the system at
+    milestones and at the end, and their papercuts get fixed. Kira fixes
+    papercuts relentlessly; so do we.
 
 ### Orchestrator decisions (2026-10-25, Kira may overrule)
 
@@ -180,8 +203,9 @@ SKIPPED line for a sibling binary is a failure for this initiative.
 
 The orchestrator integrates: the Commit stage commits in the workspace;
 there is no `bb integrate` in these repos yet, so it returns
-`integrated: false` and the orchestrator rebases onto `house`, re-runs the
-gate and moves `house`. Nobody moves `main`.
+`integrated: false` and the orchestrator rebases onto `main`, re-runs the
+gate and moves `main`. Parallel relay streams use extra workspaces
+(`.next/house-<phase>`) only when they run at the same time.
 
 Gates: relay `bb test` (tier 1) and `bb verify` (full, includes pentests
 and the sibling repos); agentloop `make test` or `go test ./...`;
@@ -287,80 +311,145 @@ B2 notes (orchestrator, 2026-10-25):
   serial, skipped with a clear line only when `container` is absent,
   which is not the case on this machine).
 
-### B4: the agent's mail and calendar (relay, after B2, parallel to B3)
-- Mail: a `mail_kira` tool of class edit. relay builds the message
-  (From: the agent's address, To: the operator's address from config,
-  text/plain, UTF-8, the subject and body the model gave, no other
-  header) and submits it with `curl` over SMTP(S); credentials from a
-  `:credentials-command`. I2 as a property test over generated model
-  input, plus an end-to-end test against a mailpit started on free
-  ports.
-- Calendar: `calendar`, `calendar_add`, `calendar_update`,
-  `calendar_remove` tools over events in the log (versioned like
-  facts). A pure ICS renderer (RFC 5545: folding, escaping, UTC,
-  stable UIDs) with round-trip properties. `relay serve` serves the
-  feed at `/calendar.ics` on its listener only (I9).
-- Notifications stay calm: one line, no internals.
-- Done when: tests pass; Apple Calendar can subscribe to the served
-  feed (check the ICS with a validator in tests).
+### B4: messages to Kira (relay, after B2, parallel to B3 and B5)
+- Decision 15. A message is data in the log: id, kind (`note`,
+  `alert`, `digest`, `reply`), urgency, a subject, sections of items
+  with refs and provenance, and an optional `in-reply-to`. One tool,
+  `tell_operator`, takes content and urgency; the model never chooses a
+  medium, an address or a recipient.
+- Routing is a pure function of config (`:messages {:channels ...
+  :routes ...}`): which kinds and urgencies go to which channels, quiet
+  hours, the daily digest time. Every message is always visible to the
+  client channel.
+- Channels are adapters, each a pure renderer plus a thin delivery
+  edge: email (text/plain, UTF-8, From the agent's address, To Kira's
+  address from config, threaded with Message-ID/In-Reply-To, submitted
+  with `curl` over SMTP(S), credentials from a `:credentials-command`);
+  push (the existing ntfy notifications become this adapter: one line,
+  no internals, a link into the client); client (`_relay/messages` in
+  the client protocol: initial fetch, then `changed` notifications, as
+  the board does). Every existing `notify` call becomes a message.
+- I2, generalized: for every model input and every route, each
+  delivery goes only to the channel's configured destination; an email
+  has exactly one recipient, no Cc or Bcc, text/plain only, and no
+  header the model chose except the subject.
+- Done when: properties for I2 and for routing; an end-to-end test
+  delivers to a mailpit started on free ports (serial, killed by PID)
+  and reads it back through mailpit's API.
 
-### B5: scouts (relay and webtool, after B2)
-- O1: relay refuses a scout's `fetch` whose URL did not appear verbatim
-  in an earlier tool result of the same session; webtool refuses
-  redirects (or reports the final URL so relay can check it). I4 as a
-  property test.
-- A house role's memo to a scout is public as written, without
-  declassify; the steward can see what it sent. A scout's memo back
-  arrives labelled contaminated, from the web.
-- Done when: tests pass, and the staging seed has a working scout.
+### B5: the agent's calendar (relay, after B2, parallel to B3 and B4)
+- `calendar`, `calendar_add`, `calendar_update`, `calendar_remove`
+  tools of class edit over events in the log, versioned like facts. A
+  pure ICS renderer (RFC 5545: folding, escaping, UTC, stable UIDs,
+  SEQUENCE on change) with round-trip properties. `relay serve` serves
+  `/calendar.ics` on its configured listener only (I9). The agent never
+  writes Kira's own calendar.
+- Done when: properties pass and the feed validates (an RFC 5545 parser
+  in tests reads back what relay wrote).
 
-### B6: pastes, sanitized (relay, after B2)
-- A pure `sanitize` in relay.text applied at every operator entry point
-  (CLI writes, conversation prompts and resources, forwarded mail):
-  NFC, remove invisible, bidi-control and tag characters, flag
-  lookalike characters and mixed-script words, and report each change
-  to Kira in one plain line. I6 as properties.
-- Experiment (cheap, Haiku, within budget): does a vetting model flag
-  hidden instructions in pastes that sanitizing cannot see? Record the
-  result in the log; ship only if it is clearly useful, and only as an
-  advisory note.
+### B6: scouts (relay and webtool, after B2)
+- O1 and I4: relay refuses a scout's `fetch` whose URL did not appear
+  verbatim in an earlier tool result of the same session. webtool (W1,
+  landed) reports a moved page with its target on its own line instead
+  of following it. Also fix W1's minor: a target with any Unicode space
+  is refused.
+- A house role's memo to a scout is public as written (decision 6),
+  replacing B2's interim refusal; the steward sees what it sent. A
+  scout's memo back arrives contaminated, from the web.
+- Done when: I4 is a property; the staging seed has a working scout
+  routine; webtool's README relay.edn section matches the house.
 
-### B7: what's ready (relay and relay-tui, after B3-B5 and C1)
-- A pure fold over the log: everything the agent prepared for Kira
-  (drafts in her accounts, mail it sent her, calendar entries, scout
+### B7: pastes, sanitized (relay, after B2)
+- A pure `sanitize` in relay.text, applied at every operator entry
+  point (CLI writes, conversation prompts and resources, replies through
+  any channel): NFC, remove invisible, bidi-control and tag characters,
+  flag lookalike characters and mixed-script words, and tell Kira each
+  change in one plain line. I6 as properties.
+- Experiment (Haiku, within budget): does a vetting model catch hidden
+  instructions in pastes that sanitizing cannot see? Record the result
+  in the log; ship only if clearly useful, and only as an advisory note.
+
+### B8: the mailbox and replies (relay, after B4)
+- Ingestors: code, no model, each a configured source polled by the
+  tick, writing new items as memos to the steward, labelled with where
+  they came from. Sources: the agent's mailbox (POP3 or IMAP via
+  `curl`), GitHub issues and PRs on repos Kira lists (public API, an
+  optional read-only token from a `:credentials-command`), and ICS
+  calendars by URL (Kira's own calendar, read only). The fetch targets
+  come from config only, never from a model.
+- Replies: each channel turns a reply into one event threaded to the
+  message it answers. Email is Kira's only when it is from her
+  configured address and the configured authserv-id's
+  Authentication-Results says DKIM passed for her domain; then it is
+  trusted (I5). Anything else is mailbox content from that sender.
+- Done when: tests against mailpit's POP3 and canned GitHub and ICS
+  responses; a property that no unverified message is ever trusted.
+
+### B9: organizing files (relay, after B3)
+- A `files_move` tool of class edit: moves within, and new files under,
+  roots Kira configures as writable; never overwrites, never deletes,
+  never leaves the roots (symlinks resolved). Every call appends to an
+  undo journal in the log; `relay undo <call>` (and the client) reverses
+  it exactly. The steward plans with its read-only shell; relay code
+  carries out the moves. Closes relay#53.
+- I7 extended: for any generated sequence of moves, undo restores the
+  original tree byte for byte (property over a temp directory).
+
+### B10: the daily note (relay, after B4, B5, B6, B8)
+- One digest message a day (time from config), built by a steward
+  routine: what is coming up in the next two weeks (calendar, board
+  deadlines, dates found in mail and notes) with an offer of help each;
+  the grant digest from the scout, checked against the board; new
+  GitHub items; "what I learned" (quiet recipe changes); and, at the
+  top, any recipe change shaped by mailbox content, source named, with
+  a revert (`relay revert <ref>`, a key in the client, or a reply).
+  Relay computes the flagged changes in code from labels (decision 14);
+  the model cannot leave one out.
+- A suggestion Kira dismisses is remembered and not repeated.
+- A new issue or PR from a person also gets one push, batched per tick.
+- The morning brief is replaced by this.
+
+### B11: what's ready (relay and relay-tui, after B4 and C1)
+- The client channel's view: messages, plus everything prepared for
+  Kira (drafts in her accounts, calendar entries, moves with undo,
   findings on the board), each with where it came from. `relay ready`
-  on the CLI, `_relay/ready` in the client protocol (initial fetch,
-  then `changed` notifications, like the board), and a view in
-  relay-tui that is calm, framed and readable on a phone-width
-  terminal.
+  on the CLI, `_relay/ready` in the client protocol, and a relay-tui
+  view that is calm, framed and readable at phone width. Reply to a
+  message from the view.
 - Done when: a dogfood pass on the staging seed shows the concert email
-  flow end to end: a draft in the stand-in campaign tool, a note in
-  mailpit, an entry in the view.
+  flow end to end: a draft in the stand-in campaign tool, a message in
+  mailpit, an entry in the view, a reply that reaches the steward.
 
-### B8: the agent's inbox (relay, after B4)
-- An ingestor (code, no model) that reads the agent's mailbox over
-  POP3 or IMAP with `curl` and writes each message as a memo to the
-  steward. A message is trusted only if it is from the operator's
-  address and the provider's Authentication-Results header (from the
-  configured authserv-id) says DKIM passed for her domain; otherwise it
-  is contaminated, from that sender. Tests against mailpit's POP3.
+### U1: UX panel and polish (after B11)
+- Three UX-expert agents, each a persona, use the system on the
+  staging seed and report papercuts with exact steps, what happened and
+  what smooth would look like: Kira on a phone-width terminal over the
+  tailnet; a new self-hoster with only the README; a daily user living
+  in the dashboard and email. Their tasks are decision 16's use cases.
+- A polish phase fixes them.
 
-### B9: evals and pentests for the house (relay, last)
-- Delete eval cases about holds, quarantine, the reader and
-  declassify. Add cases: the concert email is drafted, never sent, and
-  Kira gets one calm note; an injected mail cannot make the steward
-  email anyone but Kira or touch her calendar; a scout request carries
-  no URL the model built. Oracles and foils per AGENTS.md; live on
-  Haiku (3 trials) and Opus (1 trial) within budget; update
+### B12: evals and pentests for the house (relay)
+- Eval cases (oracle and foils per AGENTS.md): the concert email is
+  drafted, never sent, and Kira gets one calm message; a hostile mail in
+  the mailbox cannot reach anyone but Kira, cannot change files beyond
+  what undo reverses, and a recipe change it shaped is flagged; a scout
+  request carries no URL the model built; the grant digest skips what
+  the board already has; the look-ahead offers help for an interview.
+  Live on Haiku (3 trials) and Opus (1 trial) within budget; update
   BASELINES.md.
 - Pentests rewritten around I1-I9.
 - A Codex adversarial review of the whole initiative against the threat
-  model (AGENTS.md), until a clean round, at most three.
+  model, until a clean round, at most three.
 
-### B10: the README, spec and AGENTS.md read as one design
+### B13: the README, spec and AGENTS.md read as one design
 - One pass so the docs describe the house as a whole, plain and short.
-  Deploy notes for Kira: the new relay.edn shape, `container system
-  start`, the agent's address and calendar URL to set up later.
+  Deploy notes for Kira: the new relay.edn shape (removed keys are
+  refused), `container system start`, building the steward image, the
+  agent's address, channels and the calendar URL to set up later.
+
+### U2: UX panel again, and polish
+- The same panel on the finished system; check U1's fixes; fix what is
+  new.
 
 ### Px: cleanup
 - The banked minor findings, triaged.

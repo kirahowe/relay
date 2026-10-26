@@ -3,7 +3,7 @@
  :plan "docs/plans/house.md"
  :plan-log "docs/plans/log/"
  :conventions "AGENTS.md"
- :trunk "house"
+ :trunk "main"
  :commit "commitp"
  :gate ["bb" "test"]
  :full-gate ["bb" "verify"]
