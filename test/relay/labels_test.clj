@@ -41,7 +41,8 @@
                                  :tools {"fetch" {:class :read :labels ["contaminated"]
                                                   :description "Fetch a page." :command ["true"]}
                                          "search" {:class :egress :labels ["contaminated"]
-                                                   :description "Search the web." :command ["true"]}}
+                                                   :description "Search the web." :command ["true"]
+                                                   :protocol :envelope :queries ["query"] :parameters {:type "object" :properties {:query {:type "string"}}}}}
                                  :grants {"hub" {:may-add true :tools ["fetch"]}
                                           "scout" {:public true :tools ["search"]}}}))
 
@@ -160,8 +161,12 @@
       (let [[who labels to-n to-operator?] args
             [actor labels] (writer w who labels)
             to (if to-operator? "operator" (nth-or (roles w) to-n))
-            [w subj] (mark w labels (content? w actor))
-            [w body] (mark w labels (content? w actor))]
+            ;; A house role's memo to the scout is public as written
+            ;; (decision 6): its text keeps every label but private.
+            as-written? (and actor (not= "operator" actor) (not= public-role actor) (= public-role to))
+            labels-written (if as-written? (core/remove-private labels) labels)
+            [w subj] (mark w labels-written (and (not as-written?) (content? w actor)))
+            [w body] (mark w labels-written (and (not as-written?) (content? w actor)))]
         (run w actor labels :memo/send {:to to :subject (str "About " subj) :body (str "Please " body)}))
 
       :close
@@ -344,9 +349,11 @@
               :when (or (core/private? (:labels e)) (seq private))]
           [:public-event (:seq e) (:type e) (:labels e) private])
         ;; Only the operator marks anything public; a role's call can
-        ;; never set it on an item another role wrote.
+        ;; never set it on an item another role wrote. The one exception
+        ;; is a house role's own memo to the scout, public as written.
         (for [e (:events w)
-              :when (and (:public e) (not (#{"operator" "dispatcher" public-role} (:actor e))))]
+              :when (and (:public e) (not (#{"operator" "dispatcher" public-role} (:actor e)))
+                         (not (and (= "memo/sent" (:type e)) (= public-role (get-in e [:data :to])))))]
           [:public-by (:seq e) (:actor e)]))))
 
 (defn- read-calls

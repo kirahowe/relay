@@ -83,6 +83,12 @@
 
 (defn private? [labels] (boolean (some #{private-label} labels)))
 
+(defn remove-private
+  "`labels` without private: for text made public as written, which keeps
+  the rest of its provenance."
+  [labels]
+  (union (remove #{private-label} labels)))
+
 (defn item-labels
   "What reading one item of relay content (a memo, a version of a fact or
   doc, a note, a journal entry, a routine) adds: its writers' labels, and
@@ -1487,9 +1493,18 @@
     (reject! :invalid (str role " is a public role, so " (str/lower-case what) " for it needs --public. "
                            public-means))))
 
+(defn- sent-to-by?
+  "Whether `role` was sent a public memo by `sender` that it may be
+  shown: then it knows the sender's id, and may answer it."
+  [state role sender]
+  (boolean (some #(and (= role (:to %)) (= sender (:from %)) (shown-to-public? % (memo-labels state %)))
+                 (vals (:memos state)))))
+
 (defmethod decide* :memo/send [{:keys [state actor] :as tx} {{:keys [to subject body]} :args}]
-  ;; A public role knows only the roles whose text the operator wrote.
-  (when (and (public-actor? tx) (not= operator to) (not (role-text-public? state to)))
+  ;; A public role knows only the roles whose text the operator wrote, and
+  ;; those that wrote to it.
+  (when (and (public-actor? tx) (not= operator to) (not (role-text-public? state to))
+             (not (sent-to-by? state actor to)))
     (reject! :not-found (str "There is no role called " to ".")))
   (when-not (or (= operator to) (active-role? state to))
     (reject! :not-found (str "There is no role called " to ".") (id-labels state to)))
@@ -1498,13 +1513,26 @@
     (when (str/includes? subject "\n") (reject! "A memo's subject is one line."))
     (when (> (count subject) 200) (reject! "A memo's subject is at most 200 characters."))
     (operator-public! tx to "A memo")
-    ;; A public role is shown only public text. A memo from inside the
-    ;; house would carry the operator's things out to it, so until scouts
-    ;; take requests (B5) none is sent.
-    (when (and (not= operator actor) (public-role? (:config tx) to) (not (:public tx)))
+    (cond
+      ;; A scout's memo comes from the web, whatever its session has read
+      ;; so far.
+      (public-actor? tx)
+      (send-memo tx {:from actor :to to :subject subject :body body} [contaminated-label])
+      ;; A house role's memo to a scout is public as written (decision 6):
+      ;; the role chose what to put in it, and nobody signs it off. Its
+      ;; session's other labels stay as provenance.
+      (and (active-role? state actor) (not= operator actor) (public-role? (:config tx) to))
+      (do (when (private? (id-labels state actor))
+            (reject! :forbidden (str to " works on the open web and is never shown a name written in private,"
+                                     " as " actor "'s was, so the memo was not sent.")))
+          (-> (send-memo (assoc tx :public true :labels (remove-private (:labels tx)))
+                         {:from actor :to to :subject subject :body body})
+              (assoc :public (:public tx) :labels (:labels tx))))
+      (and (not= operator actor) (public-role? (:config tx) to) (not (:public tx)))
       (reject! :forbidden (str to " works on the open web, and a memo from " actor " could carry your"
-                               " private things to it, so it was not sent.")))
-    (send-memo tx {:from actor :to to :subject subject :body body})))
+                               " private things to it, so it was not sent."))
+      :else
+      (send-memo tx {:from actor :to to :subject subject :body body}))))
 
 (defmethod decide* :memo/close [{:keys [actor] :as tx} {{:keys [memo outcome]} :args}]
   (let [m (open-memo! tx memo)]

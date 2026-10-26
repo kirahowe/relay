@@ -27,7 +27,9 @@
                :default-harness :agentloop
                :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent/agentloop"}}
                :tools {"draft" {:class :edit :labels [] :description "Save a draft." :command ["true"]}
-                       "web" {:class :egress :labels ["contaminated"] :description "Search." :command ["true"]}}
+                       "web" {:class :egress :labels ["contaminated"] :description "Search." :command ["true"]
+                              :protocol :envelope :queries ["query"]
+                              :parameters {:type "object" :properties {:query {:type "string"}} :required ["query"]}}}
                :grants {"hub" {:may-add true :tools ["draft"]} "scout" {:public true :tools ["web"]}}})
 
 (def cfg (config/resolve-config settings))
@@ -130,14 +132,67 @@
         (is (every? #(= #{:labels} (set (keys %))) (vals (:tools p))))
         (is (nil? (:forbid_labels p)))))))
 
-(deftest a-memo-from-the-house-to-a-scout-is-refused-plainly
-  (let [w (run (world) "hub" :memo/send {:to "scout" :subject "Look up the hall" :body "Please."})]
-    (is (= :forbidden (:rejected w)))
-    (is (str/includes? (:message w) "was not sent"))
-    (is (not (re-find #"(?i)label|contaminat|declassif|quarantin|hold" (:message w)))))
-  (testing "the operator's own, written public, goes"
+(deftest a-house-role-s-request-to-a-scout-goes-as-written
+  (let [w (run (world) "hub" :memo/send {:to "scout" :subject "Look up the hall" :body "Please."}
+               {:labels ["private"]})
+        m (first (core/unread-memos (:state w) "scout"))]
+    (is (nil? (:rejected w)))
+    (is (:public m) "decision 6: no sign-off, and the scout is shown it")
+    (is (= [] (:labels m))))
+  (testing "the operator's own, written public, goes too"
     (is (nil? (:rejected (run (world) "operator" :memo/send {:to "scout" :subject "Hall" :body "Look it up."}
                               {:public true}))))))
+
+(deftest an-egress-tool-is-one-relay-runs
+  (let [mcp (fn [protocol]
+              (-> settings
+                  (assoc :mcp-servers (if (= :mcp-http protocol)
+                                        {"svc" {:url "https://mcp.example.com/mcp"}}
+                                        {"svc" {:command ["svc"]}}))
+                  (assoc-in [:tools "web"] {:protocol protocol :server "svc" :tool "fetch" :class :egress
+                                            :labels ["contaminated"]})))]
+    (doseq [protocol [:mcp-stdio :mcp-http]]
+      (let [p (problem (mcp protocol))]
+        (is (str/includes? (str p) "an :egress tool of an MCP server") (pr-str protocol))))
+    (testing "a public role may still have a remote tool that only reads"
+      (is (nil? (problem (assoc-in (mcp :mcp-http) [:tools "web" :class] :read)))))))
+
+(deftest an-egress-tool-takes-only-what-relay-can-check
+  (let [web (fn [tool] (assoc-in settings [:tools "web"]
+                                 (merge {:class :egress :labels ["contaminated"] :description "Fetch." :command ["web"]}
+                                        tool)))
+        params (fn [props] {:type "object" :properties props})]
+    (testing "a url, numbers, yes-or-no values and the listed queries"
+      (is (nil? (problem (web {:protocol :envelope :parameters (params {:url {:type "string"}})}))))
+      (is (nil? (problem (web {:protocol :envelope :queries ["query"]
+                               :parameters (params {:query {:type "string"} :count {:type "integer"}
+                                                    :fresh {:type "boolean"} :weight {:type "number"}})})))))
+    (testing "a command given the model's arguments is refused, since relay cannot read them"
+      (doseq [tool [{} {:protocol :plain}]]
+        (is (str/includes? (str (problem (web tool))) "must be an :envelope tool") (pr-str tool))))
+    (testing "an envelope tool whose properties relay does not know"
+      (is (str/includes? (str (problem (web {:protocol :envelope}))) "must be an :envelope tool"))
+      (is (str/includes? (str (problem (web {:protocol :envelope :parameters {:type "object"}})))
+                         "must be an :envelope tool")))
+    (testing "free text it was not told goes to a trusted service"
+      (doseq [props [{:host {:type "string"}}
+                     {:url {:type "string"} :query {:type "string"}}
+                     {:url {:type "array" :items {:type "string"}}}
+                     {:opts {:type "object"}}
+                     {:query {}}]]
+        (is (str/includes? (str (problem (web {:protocol :envelope :parameters (params props)})))
+                           "nor listed in :queries")
+            (pr-str props))))
+    (testing ":queries names string parameters other than url"
+      (doseq [q [["url"] ["count"] ["nope"] "query" [:query]]]
+        (is (str/includes? (str (problem (web {:protocol :envelope :queries q
+                                               :parameters (params {:url {:type "string"} :query {:type "string"}
+                                                                    :count {:type "integer"}})})))
+                           "has :queries")
+            (pr-str q))))
+    (testing "and only an :egress tool has :queries"
+      (is (str/includes? (str (problem (assoc-in settings [:tools "draft" :queries] ["x"])))
+                         "which only an :egress tool has")))))
 
 (def digest-a (apply str (repeat 64 "a")))
 (def digest-b (apply str (repeat 64 "b")))

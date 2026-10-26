@@ -26,7 +26,8 @@
   {:timezone "UTC"
    :default-harness :agentloop
    :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent/agentloop"}}
-   :tools {"search" {:class :egress :labels ["contaminated"] :description "Search the web." :command ["true"]}
+   :tools {"search" {:class :egress :labels ["contaminated"] :description "Search the web." :command ["true"]
+                     :protocol :envelope :queries ["query"] :parameters {:type "object" :properties {:query {:type "string"}}}}
            "lookup" {:class :read :labels [] :protocol :envelope :description "Look something up."
                      :command [fixture "private"] :parameters {:type "object"}}
            "rem-read" {:class :read :labels ["private"] :description "Read reminders." :command ["true"]}}
@@ -124,23 +125,61 @@
 
 ;; --- memos to a public role
 
-(deftest a-memo-from-the-house-to-a-public-role-is-refused
-  (let [w (world)]
-    (is (re-find #"was not sent" (refusal #(run w "hub" :memo/send {:to "scout" :subject "Find grants for my thesis"
-                                                                    :body "My supervisor is Dr Secret."}
-                                                ["contaminated" "private"]))))
-    (is (empty? (core/unread-memos (:state w) "scout")) "nothing was sent")
-    (testing "the role is not shown it, told of it, or woken for it"
+(deftest a-memo-from-the-house-to-a-public-role-is-public-as-written
+  (let [w (run (world) "hub" :memo/send {:to "scout" :subject "Find arts grants"
+                                         :body "Open ones for a small choir, this spring."}
+               ["contaminated" "private"])
+        m (first (core/unread-memos (:state w) "scout"))]
+    (testing "it is public, and keeps the rest of its provenance"
+      (is (:public m))
+      (is (= ["contaminated"] (:labels m)))
+      (is (= ["contaminated"] (:labels (first (:last w))))))
+    (testing "the scout is shown it and woken for it"
+      (is (= [m] (core/deliverable-memos (:state w) cfg "scout")))
+      (is (str/includes? (:content (read-as w "scout" "inbox" {})) "small choir"))
+      (is (some #{"scout"} (core/roles-to-wake (:state w) cfg (:now w)))))
+    (testing "the wake's prompt holds nothing private"
+      (let [request (wake-request w "scout")]
+        (is (str/includes? (:prompt request) "small choir"))
+        (is (not (core/private? (get-in request [:policy :labels])))))))
+  (testing "the sender sees that it went out as written"
+    (let [dir (str (fs/create-temp-dir {:prefix "relay-scout-memo"}))]
+      (try
+        (log/init! dir)
+        (let [sys {:data-dir dir :config cfg :clock (constantly t0)}]
+          (doseq [c [{:type :role/add :actor "operator" :public true :args {:id "hub" :title "Hub" :instructions "Run relay."}}
+                     {:type :role/add :actor "operator" :public true :args {:id "scout" :title "Scout" :instructions "Look."}}]]
+            (inbound/submit! sys c))
+          (let [{:keys [ok]} (tools/call! sys "hub" "memo_send" {:to "scout" :subject "Grants" :body "Look."} [])]
+            (is (re-find #"public as you wrote it" ok))
+            (is (not (re-find #"(?i)label|contaminat|private" ok)))))
+        (finally (fs/delete-tree dir)))))
+  (testing "a name written in private never reaches a scout as a sender"
+    (let [w (-> (world) (run "hub" :role/add {:id "lawyer-for-the-divorce" :title "L" :instructions "x"} ["private"]))]
+      (is (re-find #"was not sent" (refusal #(run w "lawyer-for-the-divorce" :memo/send {:to "scout" :subject "s" :body "b"}))))))
+  (testing "a memo an older relay left waiting is never shown, and the operator may close it"
+    (let [w (run-before (world) "hub" :memo/send {:to "scout" :subject "Old" :body "Secret."} ["private"])
+          id (:id (first (core/unread-memos (:state w) "scout")))]
+      (is (some? id))
+      (is (empty? (core/deliverable-memos (:state w) cfg "scout")))
       (is (= "Nothing is waiting for you." (:content (read-as w "scout" "inbox" {}))))
-      (is (empty? (core/roles-to-wake (:state w) cfg (:now w)))))
-    (testing "a memo an older relay left waiting is never shown, and the operator may close it"
-      (let [w (run-before (world) "hub" :memo/send {:to "scout" :subject "Old" :body "Secret."} ["private"])
-            id (:id (first (core/unread-memos (:state w) "scout")))]
-        (is (some? id))
-        (is (empty? (core/deliverable-memos (:state w) cfg "scout")))
-        (is (= "Nothing is waiting for you." (:content (read-as w "scout" "inbox" {}))))
-        (is (re-find #"There is no memo" (refusal #(run w "scout" :memo/close {:memo id :outcome "x"}))))
-        (is (nil? (refusal #(run w "operator" :memo/close {:memo id :outcome "Not for a scout."}))))))))
+      (is (re-find #"There is no memo" (refusal #(run w "scout" :memo/close {:memo id :outcome "x"}))))
+      (is (nil? (refusal #(run w "operator" :memo/close {:memo id :outcome "Not for a scout."})))))))
+
+(deftest a-scout-s-memo-back-comes-from-the-web
+  (let [w (-> (world)
+              (run "operator" :role/add {:id "steward" :title "Steward" :instructions "Keep house."})
+              (run "steward" :memo/send {:to "scout" :subject "Grants" :body "Find three."} ["private"]))]
+    (testing "a scout knows a role whose text is private only once it has written to the scout"
+      (is (nil? (refusal #(in-wake w "scout" (fn [w] (run w "scout" :memo/send {:to "steward" :subject "Found" :body "Three."} []))))))
+      (is (re-find #"no role called" (refusal #(in-wake (-> (world) (run "operator" :role/add {:id "steward" :title "S" :instructions "x"}))
+                                                       "scout" (fn [w] (run w "scout" :memo/send {:to "steward" :subject "s" :body "b"} [])))))))
+    (testing "its memo is labelled as from the web even from a session that read nothing"
+      (let [w (in-wake w "scout" #(run % "scout" :memo/send {:to "steward" :subject "Found" :body "Three."} []))
+            back (first (core/unread-memos (:state w) "steward"))]
+        (is (= ["contaminated"] (:labels back)))
+        (is (:public back))
+        (is (some #(str/includes? % "[from outside]") (render/memo java.time.ZoneOffset/UTC back)))))))
 
 (deftest a-public-role-s-memos-and-its-own-writes-are-public
   (let [w (in-wake (world) "scout"
@@ -153,8 +192,9 @@
     (is (:public (first (core/unread-memos s "hub"))))
     (is (:public (get-in s [:notes "scout" "plan"])))
     (testing "a role's input never makes anything public"
-      (is (re-find #"was not sent" (refusal #(run* (world) {:type :memo/send :actor "hub" :labels [] :public true
-                                                             :args {:to "scout" :subject "s" :body "b"}})))))
+      (is (not (:public (first (core/unread-memos (:state (run* (world) {:type :memo/send :actor "hub" :labels [] :public true
+                                                                          :args {:to "hub" :subject "s" :body "b"}}))
+                                                  "hub"))))))
     (testing "a call from a session that began before the role was public is not public"
       (let [w (-> (world)
                   (run-before "operator" :memo/send {:to "scout" :subject "s" :body "b"})
