@@ -131,9 +131,12 @@
   ;; with Brave Search and reads the top results, at most 5. It is :egress
   ;; because the query goes out to Brave, so only a public role may have
   ;; it. An :egress tool is an :envelope tool whose parameters relay
-  ;; knows: relay checks a `url` against what the scout's session was
-  ;; shown, and :queries lists the free text that goes only to a service
-  ;; you trust as you trust the model provider, here the search query.
+  ;; knows, and it either fetches or searches. A fetch tool takes a `url`,
+  ;; which relay checks against what the scout's session was shown. A
+  ;; search tool takes no url, and :queries lists its free text, which
+  ;; goes only to a search service you trust as you trust the model
+  ;; provider, here Brave. relay refuses an :egress tool with both a url
+  ;; and free text, since it could post what a scout was told.
   ;; webtool.json names the Brave key's command:
   ;;   "search": {"backend": "brave",
   ;;              "api_key_command": ["security" "find-generic-password" "-s" "relay-brave" "-w"]}

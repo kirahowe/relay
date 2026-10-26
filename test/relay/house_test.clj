@@ -192,7 +192,63 @@
             (pr-str q))))
     (testing "and only an :egress tool has :queries"
       (is (str/includes? (str (problem (assoc-in settings [:tools "draft" :queries] ["x"])))
-                         "which only an :egress tool has")))))
+                         "which only an :egress tool has")))
+    (testing "it fetches or it searches, never both: free text never goes to an address the scout chose"
+      (is (str/includes? (str (problem (web {:protocol :envelope :queries ["body"]
+                                             :parameters (params {:url {:type "string"} :body {:type "string"}})})))
+                         "both a url and :queries"))
+      (is (str/includes? (str (problem (web {:protocol :envelope :queries ["query"]
+                                             :parameters (params {:url {:type "string"} :query {:type "string"}})})))
+                         "both a url and :queries")))
+    (testing "and one that does neither is refused too"
+      (doseq [props [{} {:count {:type "integer"}} {:fresh {:type "boolean"}}]]
+        (is (str/includes? (str (problem (web {:protocol :envelope :parameters (params props)})))
+                           "neither a url nor :queries")
+            (pr-str props)))
+      (is (str/includes? (str (problem (web {:protocol :envelope :queries []
+                                             :parameters (params {:count {:type "integer"}})})))
+                         "neither a url nor :queries")))))
+
+;; An egress tool, judged by its shape alone, independently of
+;; relay.config: a fetch tool takes a string url and otherwise only numbers
+;; and yes-or-no values; a search tool lists its string parameters in
+;; :queries, takes no url, and otherwise only numbers and yes-or-no values.
+
+(def ^:private scalar-types #{"integer" "number" "boolean"})
+
+(defn- fetch-shape? [{:keys [queries parameters]}]
+  (let [props (:properties parameters)]
+    (and (empty? queries)
+         (= "string" (get-in props [:url :type]))
+         (every? (fn [[k v]] (or (= :url k) (scalar-types (:type v)))) props))))
+
+(defn- search-shape? [{:keys [queries parameters]}]
+  (let [props (:properties parameters)]
+    (and (vector? queries) (seq queries)
+         (not (contains? props :url))
+         (every? (fn [[k v]] (if (some #{(name k)} queries) (= "string" (:type v)) (scalar-types (:type v))))
+                 props)
+         (every? #(= "string" (get-in props [(keyword %) :type])) queries))))
+
+(def gen-egress-tool
+  (gen/let [names (gen/vector-distinct (gen/elements [:url :query :body :text :count :fresh :opts :items]) {:max-elements 5})
+            types (gen/vector (gen/elements ["string" "integer" "number" "boolean" "object" "array"]) 5)
+            queries (gen/one-of [(gen/return nil)
+                                 (gen/fmap vec (gen/vector-distinct (gen/elements ["url" "query" "body" "text" "count"])
+                                                                    {:max-elements 3}))])]
+    (cond-> {:class :egress :labels ["contaminated"] :protocol :envelope :description "Web." :command ["web"]
+             :parameters {:type "object" :properties (zipmap names (map (fn [t] {:type t}) types))}}
+      queries (assoc :queries queries))))
+
+(defspec a-public-role-loads-only-with-fetch-and-search-tools 300
+  (prop/for-all [tool gen-egress-tool]
+    (let [loads (nil? (problem (assoc-in settings [:tools "web"] tool)))]
+      (and (= loads (boolean (or (fetch-shape? tool) (search-shape? tool))))
+           ;; a tool that could send free text to an address never loads
+           (or (not loads)
+               (not (and (contains? (get-in tool [:parameters :properties]) :url)
+                         (some (fn [[k v]] (and (not= :url k) (= "string" (:type v))))
+                               (get-in tool [:parameters :properties])))))))))
 
 (def digest-a (apply str (repeat 64 "a")))
 (def digest-b (apply str (repeat 64 "b")))
@@ -448,6 +504,14 @@
         (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "clerk" :title "C" :instructions "x"}})
         (inbound/submit! sys {:type :doc/put :actor "clerk" :labels ["contaminated"] :args {:path "web.md" :content nasty}})
         (inbound/submit! sys {:type :doc/put :actor "clerk" :args {:path "mine.md" :content "mine"}})
+        (testing "a scout's memo in the inbox is from the web"
+          (inbound/submit! sys {:type :role/add :actor "operator" :public true
+                                :args {:id "scout" :title "S" :instructions "x"}})
+          (inbound/submit! sys {:type :memo/send :actor "scout" :public true :labels ["contaminated"]
+                                :args {:to "operator" :subject "Found three" :body "See https://grants.example.org/"}})
+          (let [inbox (str/join "\n" (:out (relay data "inbox")))]
+            (is (str/includes? inbox "[from the web] Found three"))
+            (is (not (str/includes? inbox "https://grants")))))
         (let [shown (str/join "\n" (:out (relay data "doc" "web.md")))]
           (is (str/includes? shown "[from outside]"))
           (is (not (str/includes? shown "contaminated")))

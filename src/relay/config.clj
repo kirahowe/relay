@@ -415,13 +415,17 @@
   "Why relay.edn's `tool` cannot be an :egress tool, or nil. relay holds a
   scout to the addresses it was shown (plan O1, I4) by checking each call
   before it runs, and it can do that only for a call it runs and can
-  read: an :envelope tool whose parameters it knows. A `url` parameter is
-  checked whole. Free text in any other parameter could carry an address
-  with no scheme, or a host name, which relay cannot tell from words, so
-  an :egress tool may take free text only in the parameters the operator
-  lists in :queries, text that goes to a service trusted as the model
-  provider is, such as a web search. Its other parameters are numbers or
-  yes-or-no values. Pure."
+  read: an :envelope tool whose parameters it knows.
+
+  An :egress tool is one of two shapes, so that what a scout writes never
+  goes to an address it chose. A fetch tool takes a string `url`, checked
+  whole, and otherwise only numbers and yes-or-no values. A search tool
+  takes no url, and its free text is in the parameters the operator lists
+  in :queries, text that goes only to the search service the tool is set
+  up for, trusted as the model provider is. A scout can hold what a house
+  role wrote to it (decision 6), so a tool that sends free text to an
+  address (a web form, a post) could publish it; such a tool has both a
+  url and free text, and relay refuses it. Pure."
   [tool-name {:keys [class protocol parameters queries] :as tool}]
   (let [props (into {} (map (fn [[k v]] [(name k) v]) (:properties parameters)))
         why (fn [& parts] (apply str "Tool " tool-name " in relay.edn " parts))]
@@ -446,17 +450,27 @@
       (why "has :queries " (pr-str queries) ". It lists the names of string parameters, other than url,"
            " whose text goes to a service you trust as you trust the model provider, such as [\"query\"].")
 
+      (and (seq queries) (contains? props "url"))
+      (why "is an :egress tool with both a url and :queries. An :egress tool either fetches a page (a url,"
+           " and besides it only numbers or yes-or-no values) or searches (its :queries text goes to a search"
+           " service you trust, and it takes no url). A tool that sends text to an address could publish"
+           " what a scout was told.")
+
       :else
-      (when-let [[p] (first (for [[p schema] (sort-by key props)
-                                  :when (not (if (or (= "url" p) (some #{p} queries))
-                                               (= "string" (:type schema))
-                                               (#{"integer" "number" "boolean"} (:type schema))))]
-                              [p]))]
-        (why "is an :egress tool, and its parameter " p " is neither a string url, nor a number or"
-             " yes-or-no value, nor listed in :queries. relay can hold a scout to the addresses it was"
-             " shown only in a url argument. List a parameter in :queries only when its text goes to a"
-             " service you trust as you trust the model provider, such as a web search, never to one"
-             " that publishes it.")))))
+      (or
+       (when-let [[p] (first (for [[p schema] (sort-by key props)
+                                   :when (not (if (or (= "url" p) (some #{p} queries))
+                                                (= "string" (:type schema))
+                                                (#{"integer" "number" "boolean"} (:type schema))))]
+                               [p]))]
+         (why "is an :egress tool, and its parameter " p " is neither a string url, nor a number or"
+              " yes-or-no value, nor listed in :queries. relay can hold a scout to the addresses it was"
+              " shown only in a url argument. List a parameter in :queries only when its text goes to a"
+              " service you trust as you trust the model provider, such as a web search, never to one"
+              " that publishes it."))
+       (when (and (empty? queries) (not (contains? props "url")))
+         (why "is an :egress tool with neither a url nor :queries. An :egress tool either fetches a page,"
+              " taking a string url, or searches, naming its search text in :queries."))))))
 
 (def removed-tool-keys
   "Tool settings relay no longer has: no call is held for the operator,
