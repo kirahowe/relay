@@ -470,11 +470,13 @@
 (defn calendar-feed
   "Every event as relay.ics takes it: the current version, :sequence (how
   many changes it has had), :created and :modified (when its first and
-  last versions were recorded) and :removed-at."
+  last versions were recorded), :removed-at, and :labels, so the feed
+  breaks the links in text outside text shaped. A version keeps the
+  labels of the one it changed, so the current one's say it all."
   [state]
   (vec (for [[id {:keys [versions]}] (sort-by key (:calendar state))
              :let [v (peek versions)]]
-         (assoc (select-keys v [:title :start :end :start-date :end-date :location :description])
+         (assoc (select-keys v [:title :start :end :start-date :end-date :location :description :labels])
                 :id id :sequence (dec (count versions))
                 :created (:recorded-at (first versions)) :modified (:recorded-at v)
                 :removed-at (when (:removed v) (:recorded-at v))))))

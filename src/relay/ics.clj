@@ -11,6 +11,11 @@
     - TEXT values escape backslash, semicolon, comma and newline, and
       drop every control, format or invisible code point, so text a model
       wrote cannot start another property or hide what it says.
+    - An event whose labels say outside text shaped it (an outsider's
+      mail, a web page) has every link in its text broken, as a message
+      to the operator has: a calendar app makes links live, and one could
+      carry the operator's data out. Hidden characters go first, so none
+      can split a link where the breaking would not see it.
     - Times are UTC. An all-day event is a DATE: DTSTART;VALUE=DATE is
       its first day and DTEND;VALUE=DATE the day after its last, so a
       calendar app shows it as a whole day wherever it is.
@@ -131,17 +136,26 @@
 (defn- property [name value]
   (fold-line (str name ":" value)))
 
-(defn- text-property [name value]
-  (property name (escape-text value)))
+(defn field-text
+  "The text of one field of an event with `labels`: clean-text, and with
+  every link broken (relay.text/defang) when the labels say an outsider
+  may have written it."
+  [labels s]
+  (let [t (clean-text s)]
+    (if (text/contaminated? labels) (text/defang t) t)))
+
+(defn- text-property
+  ([name value] (property name (escape-text value)))
+  ([name labels value] (property name (escape-text (field-text labels value)))))
 
 (defn event-lines
   "One event's VEVENT, as unfolded-property strings (each folded already).
   The event is {:id :title :start :end :location :description :sequence
-  :created :modified :removed-at}, times as Instants. :end, :location
+  :created :modified :removed-at :labels}, times as Instants. :end, :location
   and :description may be nil. A :removed-at makes it cancelled. An
   all-day event has :start-date and :end-date too, LocalDates, the first
   day and the day after the last, and is written with those."
-  [{:keys [id title start end start-date end-date location description sequence created modified removed-at]}]
+  [{:keys [id title start end start-date end-date location description sequence created modified removed-at labels]}]
   (concat
    ["BEGIN:VEVENT"
     (property "UID" (uid id))
@@ -152,9 +166,9 @@
     (if start-date (property "DTSTART;VALUE=DATE" (date start-date)) (property "DTSTART" (utc start)))]
    (cond start-date [(property "DTEND;VALUE=DATE" (date end-date))]
          end [(property "DTEND" (utc end))])
-   [(text-property "SUMMARY" title)]
-   (when-not (str/blank? location) [(text-property "LOCATION" location)])
-   (when-not (str/blank? description) [(text-property "DESCRIPTION" description)])
+   [(text-property "SUMMARY" labels title)]
+   (when-not (str/blank? location) [(text-property "LOCATION" labels location)])
+   (when-not (str/blank? description) [(text-property "DESCRIPTION" labels description)])
    [(property "STATUS" (if removed-at "CANCELLED" "CONFIRMED"))
     "END:VEVENT"]))
 

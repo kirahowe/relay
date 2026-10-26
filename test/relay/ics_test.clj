@@ -385,3 +385,56 @@
     (is (str/includes? text "X-WR-CALNAME:Agenda\\, mine\r\n"))
     (is (empty? (read-events text)))
     (is (str/starts-with? text "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n"))))
+
+;; --- outside text (Codex R1): an event a session wrote after reading
+;; outside text cannot put a live link in the operator's calendar app.
+
+(def gen-link
+  (gen/fmap (fn [[scheme host path q]] (str scheme "://" host path q))
+            (gen/tuple (gen/elements ["https" "http" "HTTPS" "Http"])
+                       (gen/elements ["evil.example" "exfil.example.org" "10.0.0.1" "a.b.icu" "xn--e1afmkfd.xn--p1ai"])
+                       (gen/elements ["" "/" "/collect" "/c/d.php"])
+                       (gen/elements ["" "?data=SECRET" "?d=a%20b&e=f"]))))
+
+(def gen-linked-text
+  "Text with links in it, between hostile pieces, and hidden characters
+  that could split a link from defang's sight."
+  (gen/fmap #(apply str %)
+            (gen/vector (gen/one-of [gen-link (gen/elements nasty) gen/string-alphanumeric
+                                     (gen/elements [" " "\u200b" "\u2060" "\u00ad" "\ufeff"])])
+                        0 12)))
+
+(def gen-labelled-event
+  (gen/let [e gen-event
+            title gen-linked-text
+            location (gen/one-of [(gen/return nil) gen-linked-text])
+            description (gen/one-of [(gen/return nil) gen-linked-text])
+            labels (gen/elements [[] ["private"] ["contaminated"] ["contaminated" "mail:dana@riverbend.test"]
+                                  ["mail:dana@riverbend.test" "private"] ["files:downloads" "private"]])]
+    (assoc e :title title :location location :description description :labels labels :removed-at nil)))
+
+(defn- live-link? [s] (boolean (re-find #"(?i)https?://" (str s))))
+
+(defspec an-outside-events-text-holds-no-live-link-and-a-clean-ones-is-unchanged 200
+  (prop/for-all [e gen-labelled-event]
+    (let [[b] (read-events (ics/render {:now before-all :events [e]}))
+          outside? (some #(or (= "contaminated" %) (re-matches #"[a-z]+:.+" %)) (:labels e))
+          fields (fn [x] [(:title x) (:location x) (:description x)])
+          shown (fn [s] (when-not (str/blank? s) (ics/clean-text s)))]
+      (if outside?
+        (and (not-any? live-link? (fields b))
+             ;; and nothing hidden is left in it
+             (= (fields b) (map #(some-> % ics/clean-text) (fields b))))
+        (= (fields b) [(ics/clean-text (:title e)) (shown (:location e)) (shown (:description e))])))))
+
+(deftest an-outside-events-link-is-defanged-in-every-text-field
+  (let [link "https://evil.example/collect?data=SECRET"
+        e {:id 1 :title (str "Call " link) :location (str "ht\u200btps://evil.example/x") :description (str "See " link)
+           :start now :sequence 0 :created now :modified now :labels ["contaminated" "mail:dana@riverbend.test"]}
+        [b] (read-events (ics/render {:now now :events [e]}))]
+    (is (= "Call hxxps://evil[.]example/collect?data=SECRET" (:title b)))
+    (is (= "hxxps://evil[.]example/x" (:location b)) "a hidden character is taken out before the link is broken")
+    (is (= "See hxxps://evil[.]example/collect?data=SECRET" (:description b)))
+    (testing "an event a clean session wrote keeps its link"
+      (let [[b] (read-events (ics/render {:now now :events [(assoc e :labels ["private"])]}))]
+        (is (= (str "Call " link) (:title b)))))))
