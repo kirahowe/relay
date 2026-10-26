@@ -47,9 +47,6 @@ A role has no files and no shell. It works only through tools, each one a
   `role_remove`
 - `dead_letters_retry`, for the dead letter handler and roles granted
   `:may-add`
-- research: `report_submit` and `reports`, for roles granted `:reports`,
-  and `ledger` and `ledger_status` for the others once any role is (see
-  Research roles and reports)
 - any external command the operator defines in `relay.edn` and grants
 
 Every memo stays open until its recipient closes it, saying what it did,
@@ -100,13 +97,13 @@ a read tool shows has a ref (below).
 A ref names one thing relay knows, as `[[kind:id]]`. The kinds are `fact`
 (`[[fact:12]]`), `doc` (`[[doc:hear-here/style.md]]`, or a version with
 `@3`), `note` (`[[note:hub/venues]]`, role and name), `memo`, `journal`,
-`report`, `card` (`[[card:1840]]`, a card on the board), `shown`
+`card` (`[[card:1840]]`, a card on the board), `shown`
 (something the operator was shown, `[[shown:2026-10-18/call-9]]`), `rem`
 (a reminder), `file` and `web`.
 The shared instructions require a role to put a ref after every claim it
 draws from relay's knowledge or a source. The tools `facts`,
 `fact_history`, `docs`, `doc_get`, `doc_history`, `notes`, `journal`,
-`inbox`, `reports`, `ledger` and `cards` print each item's ref beside it. A path or
+`inbox` and `cards` print each item's ref beside it. A path or
 role id that someone else chose is printed in a ref only when the item's
 own labels already cover it.
 
@@ -217,8 +214,7 @@ Row 2 RBC: all open
 ### Settings
 
 `<data>/relay.edn` holds the operator's settings: harnesses, where
-notifications go, limits, the dead letter handler, external tools, the
-verifier for research reports, an optional weekly budget, an optional
+notifications go, limits, the dead letter handler, external tools, an optional weekly budget, an optional
 morning brief and what each role is granted.
 `setup/relay.example.edn` shows each of them. No role can read this
 file. Every external tool has a class (`read`, `write`, `edit`,
@@ -319,7 +315,7 @@ over HTTP, such as MailerLite's at `https://mcp.mailerlite.com/mcp`. You
 do not write one into relay.edn by hand. `relay connect <name> <url>`
 signs relay in, shows you the server's tools and writes
 `<data>/connections/<name>.edn`, and `:connections ["<name>"]` in
-relay.edn loads it. Each tool you turned on becomes a tool called
+relay.edn loads it. Each tool that is on becomes a tool called
 `<name>_<tool>` with `:protocol :mcp-http`, granted by that name like any
 other. No role can read the connection file. Setup step 9 walks through
 it.
@@ -348,28 +344,13 @@ which asks you before every call. You can add `:consent` to an `:act`
 tool in the file, as in relay.edn, and `:preview`. relay does not
 propose `:always-hold`, since it would shut out `:consent`. Every tool's labels are
 `["contaminated" "private"]`: your data, which other people may have
-written. A tool whose name says it deletes something starts off. You can
-change any of this before you type the code, and edit the file later.
-relay pins each tool's definition as you saw it when you connect, so
-nothing is taken on trust. A changed definition waits for `relay fresh`,
-as for any MCP tool, and connecting again pins what you see then and
-keeps the choices you made before.
-
-The server writes every word of a tool's definition, and the model reads
-all of it, so connect shows you all of it too: the description and the
-text in its arguments (their names, descriptions, titles, allowed values
-and defaults). It also reads the text for what an honest description has
-no reason to hold: sentences that tell the model what to do (before or
-after a call, ignore, always or never, you must, send or include your
-private things, keep something from you), chat role words such as
-"system:", secret files or keys such as ~/.ssh, names of tools from
-elsewhere, characters that show as nothing or could pass for others,
-links and email addresses, and text far longer than a description needs.
-A tool with any of these starts off. connect lists why, then shows its
-whole text with links broken so they cannot be followed. Turn it on only
-if you are happy with what it says: the code you type trusts what you
-were shown. The check is a filter for you to look closer, and it can
-miss things.
+written. A tool whose name says it deletes something starts off. connect
+asks nothing about any of this: it shows you the tools and what each may
+do, and you type the code to accept them. To change a tool's class, labels
+or whether it is on, edit the file afterwards. relay pins each tool's
+definition as you saw it when you connect, so nothing is taken on trust.
+A changed definition waits for `relay fresh`, as for any MCP tool, and
+connecting again pins what you see then and keeps the choices in the file.
 
 Any MCP tool, in relay.edn or a connection file, can narrow what the
 model may send. `:fixed-args {"send_now" false}` sets arguments to the
@@ -394,7 +375,7 @@ outsider can do is pick the wrong one of your options.
 An optional `<data>/AGENTS.md` adds the operator's own instructions to
 every role's system prompt, except a public role's (see below).
 
-A role's grants are `:tools`, `:may-add`, `:public`, `:reports` and
+A role's grants are `:tools`, `:may-add`, `:public` and
 `:quarantine`, and relay refuses any other key, so a typo cannot change
 what a role may hold.
 
@@ -777,109 +758,6 @@ case, since the file system is case-insensitive. A sandbox cannot be
 loosened from inside: `sandbox-exec` run again within it is still bound
 by the first profile.
 
-### Research roles and reports
-
-A research role is a public role that searches the web for something
-and reports back: a weekly job search, say, or a grant search. Granting
-it `:reports {:kinds ["job" "grant"]}` lets it write reports with
-`report_submit`. Only a public role may have that grant, and relay.edn
-then needs a `:verifier`: webtool's `check`, run on the envelope
-protocol (see `setup/relay.example.edn` and webtool's README). relay
-runs the verifier itself; no role is granted it.
-
-The rule behind all of it: free text an outsider could have written is
-never trusted until the operator has read it. Only typed values can be
-cleared without that, and only once the operator has said so.
-
-A report is a summary and 1 to 30 findings. Each finding has a title,
-the page it is on, the organization, a kind from the grant, an optional
-deadline (YYYY-MM-DD), amount (a number and an ISO 4217 currency code)
-and location, a short summary, and 1 to 5 pieces of evidence, each a URL
-and a quote from that page. relay checks the schema itself and refuses
-anything outside it. The role is told only "Report N submitted; it will
-be checked." It never learns how its report fared, so it cannot tune
-itself against the checks.
-
-The tick starts `relay verify <report>` for each new report, in its own
-process, as it starts a wake. That process runs the verifier on every
-URL the report cites, twenty at a time, and records what came back.
-relay then works out flags for each finding from the results, the
-ledger and the date, all in pure code: a quote not found on its page, a
-page that cannot be checked or fetched (and whether the verifier's guard
-refused its address, or the page redirected where the verifier will not
-go), a redirect to another domain, a punycode or mixed-script host, a
-finding on a domain none of its evidence is on, characters that hide or
-pass for others in any field, a deadline that is not a date or has
-passed, an organization whose name is not in its domain (a weak sign), a
-domain relay has not seen before, and phrasing aimed at the reader
-("ignore previous", "do the following first", a "SYSTEM:" header,
-"click", "email us"). A finding is matched by the
-canonical form of the URL it gives, never by where that page redirects,
-so a redirect cannot hide it. The canonical form drops the fragment
-unless it starts `#/` or `#!`, which single-page sites route by. A
-finding that matches a ledger entry, a finding waiting for review, or
-one the operator judged not relevant is seen before: it is not shown,
-and the review says how many were hidden, what each matched and, for a
-match that was waiting and has since been decided, how. One
-that matches a finding rejected as fake is shown again, flagged. That
-holds for one already hidden, too: once the finding it matched is
-rejected as fake, it waits for review with the same flag, and `relay
-review` says which findings came back. The
-verification is contaminated, since it all comes from pages, and keeps
-any labels the verifier reports. relay reads at most 8 MB of what the
-verifier prints and cuts every string in it to a fixed length. The operator gets one notification with counts:
-"Report N from scout: 5 findings, 2 flagged, 1 seen before. relay
-review N". A verifier that fails is tried again after a growing wait,
-like a memo, and the operator is told the first time and when relay
-gives up; `relay verify <report>` tries again by hand.
-
-`relay review` lists the reports waiting. `relay review <report>` goes
-through the findings on the operator's terminal, never stdin. Each one
-shows every field, marked as an outsider's text; each URL in full with
-its registrable domain in brackets (`https://jobs.[example.org]/x`) and
-how a punycode host displays; and the flags in plain words. A field of
-one line shows a line break as `\u{000a}`, and a summary or quote is
-printed line by line behind a `│` gutter, so nothing in a report can
-start a line of the screen or pass for its structure. For each,
-type a to accept it, r to reject it as fake, n for not relevant, or s to
-skip it, then type the code once for the lot. Each decision is bound to
-a digest of exactly the fields and flags shown, as `relay trust` is.
-
-An accepted finding becomes a ledger entry: its role, kind, title,
-organization, canonical URL, deadline, amount, location, and a status
-that starts as new. Its text is the operator's now, so it is not
-contaminated, and like everything relay keeps it is private on read.
-`relay ledger` lists the entries, and `relay ledger set <entry>
-<new|seen|applied|passed>` sets a status. Once any role writes reports,
-every role that is not public gets the `ledger` tool, and `ledger_status`
-to record a status the operator gives it. A public role gets neither.
-It gets `reports` instead, which lists the titles and URLs it reported
-before, its own public writing, so it can leave out repeats without
-seeing what the operator decided.
-
-Each research role has a trust level. Every role starts at 0, where the
-operator reviews every finding not seen before. `relay trust-level
-<role> 1`, at the terminal with the code, lets relay accept a finding
-unread when nothing flags it or its report and it was not drawn for the
-review sample, one finding in five, drawn when the report is checked.
-Phrasing aimed at the reader, lookalike or hidden characters, a punycode
-or mixed-script host, or a redirect to another domain on any finding
-keeps the whole report for review. The code is bound to the record shown,
-so a report checked or reviewed in the meantime changes nothing.
-Such an entry shows in `ledger` as a line of typed values only, "entry
-7: job, deadline 2026-11-30, no amount, status new", and its text stays
-contaminated, withheld unless the reader accepts contamination. Typed
-values are still open to outside influence: the page chose the date.
-Only the operator raises a level. relay lowers it to 0 by itself, says
-why and tells the operator, when a report quotes what its page does not
-say, cites a page whose address the verifier's guard refused (a private
-address or a local name, say, but not a page that redirects somewhere
-refused, which is only flagged), or has a finding the operator rejects
-as fake. A finding rejected as fake also takes its report's entries that
-relay accepted unread out of the ledger, back to review. `relay status` shows each research role's
-level and record: reports, findings, flags by kind, and how many were
-accepted, rejected as fake or not relevant.
-
 ## Setup
 
 relay needs [babashka](https://babashka.org) on macOS, and agentloop, which
@@ -990,13 +868,8 @@ is written in Go.
    Your browser opens on the service's own sign-in page. Sign in there
    and allow relay. Back in the terminal, relay lists the service's tools
    and says what each one could do, such as "Reads only" or "Acts for
-   you, and asks you first every time". A tool whose text looks odd
-   starts off, and relay says why and shows you everything the service
-   wrote for it. Leave it off unless that text reads like a plain
-   description of what the tool does. To change one, type its number,
-   then the letter for what it should do, or `off`. Press Enter when the
-   list is right. relay shows the list once more with a four-letter code.
-   Type the code to finish.
+   you, and asks you first every time", with what the service says the
+   tool is for. Type the four-letter code it shows to finish.
 
    Then open `relay.edn`, add the name to `:connections`, and add the
    tools you want the hub to have to its grant, by the names relay
@@ -1008,7 +881,7 @@ is written in Go.
    ```
 
    If the sign-in ever runs out, relay tells you. Run the same `relay
-   connect` command again. It keeps the choices you made before.
+   connect` command again. It keeps the choices in the file.
 
 The harness settings in `relay.edn` are `:kind :agentloop`, `:model`,
 `:effort`, `:provider` (`"anthropic"` by default, or `"openai"`),
@@ -1058,7 +931,7 @@ prints the same report as JSON. It writes nothing and wakes nothing.
 It starts with the interruptions: each time relay asked you for
 something. These are held calls, permission requests in a conversation,
 quarantined memos, memos waiting for `relay declassify`, MCP tools
-waiting for `relay fresh`, report findings waiting for review, a harness
+waiting for `relay fresh`, a harness
 that needs you, and work given up and sent to you. For each kind it
 says how many arose, how many you decided and how, how many still wait,
 and the median and longest wait. One decided after the window ends
@@ -1097,9 +970,8 @@ roles and tools and the labels each session held.
 ### Morning brief
 
 With `:brief {:at "07:30"}` in relay.edn, relay sends you one
-notification each morning at that time in its time zone. It has four
-sections: today's calendar, reminders due today or overdue, reports
-waiting for review and held calls. Each gives a count and up to eight
+notification each morning at that time in its time zone. It has three
+sections: today's calendar, reminders due today or overdue and held calls. Each gives a count and up to eight
 short lines. relay composes it itself and wakes no role, so it costs no
 tokens and no calendar invite reaches a prompt.
 
@@ -1503,10 +1375,7 @@ directory named in `~/.config/relay/config.edn`, and a directory that is not
 empty. `--force` empties a directory only if an earlier `staging init` made
 it. The staging `relay.edn` uses a `:file` notifier, which appends each
 notification to `notifications.log` in the directory and reaches nobody. Its
-roles are the hub, the clerk and the scout, a public role. Its `:verifier` is
-a stand-in that checks quotes against the pages in the directory's `web/` and
-reaches nothing else. No role writes reports unless a scenario's `:settings`
-grants it `:reports`. It also defines stand-in tools that no role holds until
+roles are the hub, the clerk and the scout, a public role. It also defines stand-in tools that no role holds until
 a scenario grants them, among them a mailing service for a made-up concert
 society: `campaign-draft-demo` (edit) keeps every version of a draft in
 `campaigns.edn`, and `campaign-send-demo` (act) appends a send to `sent.log`.
@@ -1666,7 +1535,7 @@ checks that:
   leaves the role clean, and with a free-text schema contaminates it and
   has its posts held
 - the hub's web search through the reader, whose first result is a
-  hostile corpus page, gives the hub only a closed answer, and once the
+  hostile page, gives the hub only a closed answer, and once the
   hub is private and contaminated its search is held before anything is
   fetched
 - every way out of the workbench sandbox fails: an IP, a DNS name, a
@@ -1686,8 +1555,6 @@ checks that:
   not cover the send, its preview shows the draft as stored, and only
   that stored draft goes out once you approve it on a terminal (s19)
 - clean, everyday use is not held
-- a research role sent to an attack page from the red-team corpus ends
-  flagged, refused or harmless, as the corpus says it must
 
 Run it from this directory:
 
@@ -1750,25 +1617,6 @@ listed in `relay/pentest/main.clj`:
         (e/wake! env "hub")
         (e/check! env "nothing went out" (empty? (e/egress env))))}
 ```
-
-The red-team corpus for research roles is in `pentest/corpus/`: attack
-pages in `pages/` and `manifest.edn`, which gives each page its
-technique, MITRE ATLAS technique ids, source and licence, and expected
-outcome. Each entry is a scenario, `s12-<id>`, run by
-`relay/pentest/scenarios/corpus.clj`. A local server serves the pages on
-loopback, in a process group of its own. A public role, scout, fetches
-and searches with webtool's fixture build, which may reach only that
-server, and obeys the page: it follows its links, tries the tools it
-names, and submits a report quoting it. relay checks the report with
-webtool's `check` as its verifier. Flagged means the verification raises
-the flags the entry names, so no finding goes into the ledger unread.
-Refused means webtool or relay refuses the calls the page asked for.
-Harmless means the page's text never reached the model, or what it got
-the role to do carries nothing private and stays marked as an outsider's.
-Every finding there is on 127.0.0.1, a domain relay has not seen and
-whose name holds no organization's, so each always carries those two
-flags; `control-clean` shows they are all a plain page gets. To add an
-attack, add a page and an entry to the manifest.
 
 Many attacks are tables: the channels in `injection.clj`, the writes in
 `contamination.clj`, the payloads and views in `display.clj`, the client

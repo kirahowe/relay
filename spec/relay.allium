@@ -416,7 +416,6 @@ enum NotificationKind {
     memo_for_operator | work_abandoned | runaway_guard_tripped
     | harness_needs_attention | harness_unreachable
     | hold_opened | memo_quarantined | permission_refused | permission_waiting | session_ended
-    | report_verified | report_verify_failed | trust_level_lowered
     | budget_reached | brief | tools_unavailable | shown
 }
 enum ToolClass { read | write | edit | egress | act }
@@ -425,15 +424,6 @@ enum HoldStatus { open | allowed | denied }
 enum HoldVerdict { allow | deny }
 enum TrustKind { memo_text | fact_text | doc_text | note_text | routine_text | role_text | journal_text | card_text }
 enum FactChange { added | superseded | corrected | retracted }
-enum ReportStatus { submitted | verified | failed }
-enum FlagKind {
-    quote_not_found | page_uncheckable | fetch_failed | cross_domain_redirect
-    | suspicious_host | domain_mismatch | hidden_characters | lookalikes
-    | deadline_unparseable | deadline_past | organization_not_in_domain
-    | first_seen_domain | reader_directed | rejected_as_fake_before
-}
-enum ReviewDecision { accept | fake | not_relevant }
-enum LedgerStatus { new | seen | applied | passed }
 enum CardKind { checklist | tracker | note }
 enum CardStatus { active | archived }
 enum CellState { open | done | skip }
@@ -533,11 +523,6 @@ entity Role {
     -- may not have may_add, a tool whose output is private, the dead
     -- letter handler's job or a script harness.
     is_public: Boolean
-    -- Granted :reports {:kinds [...]} in the settings: it may write
-    -- research reports with findings of these kinds. Only a public role
-    -- may be.
-    report_kinds: Set<String>?
-    is_research_role: report_kinds != null
     -- Granted :quarantine [...] in the settings: read or egress tools it
     -- may read through the quarantined reader. Those not in its :tools
     -- are reader_only_tools, which the model is never offered.
@@ -548,10 +533,6 @@ entity Role {
     -- grant adds to the ones the workbench always denies.
     has_workbench: Boolean
     workbench_deny_read: Set<String>
-    -- How far relay trusts its reports: 0, where the operator reads
-    -- every finding, or 1, where a finding nothing flags may go into the
-    -- ledger unread. Every role starts at 0.
-    trust_level: Integer = 0
     -- Whether the settings grant it an external tool of class edit, act
     -- or egress. relay's own tools are write and do not count. A role that does not
     -- quarantine reads a contaminated memo like any other and becomes
@@ -1060,12 +1041,12 @@ value Cell {
 
 -- Refs. A ref is [[kind:id]]: a kind from the list below and an id the
 -- kind defines (fact number, doc path with an optional @version, a note
--- as role/name, memo, journal, report and card numbers, shown/<date>/<call>,
+-- as role/name, memo, journal and card numbers, shown/<date>/<call>,
 -- and for rem, file and web the reminder id, path or URL). Resolving one
 -- against the state gives :ok with the item's title, text and labels,
 -- :missing, or :external for the kinds relay cannot look up.
 value Ref {
-    kind: fact | doc | note | memo | journal | rem | file | web | shown | report | card
+    kind: fact | doc | note | memo | journal | rem | file | web | shown | card
     id: String
 }
 
@@ -1092,123 +1073,6 @@ value Source {
     ref: String
 }
 
-
-value Amount {
-    value: Decimal
-    currency: String           -- ISO 4217
-}
-
-value Evidence {
-    url: String
-    quote: String              -- verbatim from the page, as the role says
-}
-
-value Flag {
-    kind: FlagKind
-    -- For a failed fetch, whether the verifier's guard refused it.
-    refused: Boolean?
-    -- What the flag is about: a URL, a field, a domain, a quote.
-    detail: String
-}
-
-value Process {
-    pid: Integer
-    started: Timestamp
-}
-
-value CheckedPage {
-    url: String
-    final_url: String
-    domain: String
-    final_domain: String
-    sha256: String
-    status: Integer
-}
-
-value Verification {
-    flags: List<Flag>           -- on the report's own summary
-    pages: List<CheckedPage>
-    labels: Set<Label>
-}
-
-entity Report {
-    -- A research role's report, written with report_submit. The id is
-    -- the seq of the event that recorded it. It holds the session's
-    -- labels and is public, so it is never private.
-    role: Role
-    summary: String
-    findings: List<Finding>
-    labels: Set<Label>
-    status: ReportStatus
-    -- Failed checks so far, and when the next is due.
-    attempts: Integer
-    retry_at: Timestamp?
-    -- The verify process checking it now, by pid and start time.
-    verifying: Process?
-    -- What the verifier found: the flags on the summary, each finding's
-    -- verification, what each cited page was (final URL, domains,
-    -- sha256), and for each finding whether it was drawn for the sample.
-    -- Labelled with the report's labels and contaminated.
-    verification: Verification?
-
-    transitions status {
-        submitted -> verified
-        submitted -> failed
-        failed -> verified
-        terminal: verified
-    }
-}
-
-entity Finding {
-    -- One finding of a report, in the schema report_submit checks.
-    title: String              -- one line, at most 200 characters
-    url: String                -- http or https, at most 2000 characters
-    organization: String       -- one line, at most 200 characters
-    kind: String               -- one of its role's report_kinds
-    deadline: String?          -- YYYY-MM-DD
-    amount: Amount?            -- a number from 0 to 10^12 and an ISO 4217 code
-    location: String?          -- one line, at most 200 characters
-    summary: String            -- at most 500 characters
-    evidence: List<Evidence>   -- 1 to 5 of {url, quote}, quotes at most 500 characters
-
-    -- Set once its report is verified.
-    flags: List<Flag>          -- with rejected_as_fake_before once hidden_by is rejected as fake
-    hidden_by: Finding?        -- what it matched when checked: a finding waiting, one accepted
-                               -- (through its ledger entry, even one since withdrawn), one set aside
-    canonical_url: String      -- of where its url landed
-    domain: String             -- the registrable domain of its url
-    sampled: Boolean
-    decision: ReviewDecision?
-    decided_unread: Boolean    -- accepted by relay at trust level 1
-    entry: LedgerEntry?
-
-    seen_before: hidden_by != null and hidden_by.decision != fake
-    is_waiting: verified and not seen_before and decision = null
-}
-
-entity LedgerEntry {
-    -- An accepted finding. The id is the seq of the event that added it.
-    role: Role
-    kind: String
-    title: String
-    organization: String
-    url: String                -- canonical
-    domain: String
-    deadline: String?
-    amount: Amount?
-    location: String?
-    status: LedgerStatus = new
-    -- True when the operator accepted it at review, false when relay
-    -- accepted it unread. Its labels are the operator's for a trusted
-    -- entry and the verification's, contaminated, for one accepted
-    -- unread. Reading it adds private either way.
-    trusted: Boolean
-    labels: Set<Label>
-
-    -- Its kind, deadline, amount and status, in one line built only from
-    -- the kind list, ISO dates, numbers, currency codes and statuses.
-    typed_line: String
-}
 
 ------------------------------------------------------------
 -- Config
@@ -1260,15 +1124,6 @@ config {
 
     -- How many denied calls end a session.
     denials_per_session: Integer = 3
-
-    -- How relay checks reports: webtool check, on the envelope
-    -- protocol, from :verifier in the settings. Required once any role
-    -- is granted :reports.
-    verifier_timeout: Duration = 10.minutes
-    -- Items per verifier call, and quotes per item.
-    verifier_batch: Integer = 20
-    -- At trust level 1, one finding in this many is drawn for review.
-    sample_one_in: Integer = 5
 
     -- What the roles may spend in a week, all together, in US dollars,
     -- from :budget {:weekly-usd n} in the settings. Null for none. relay
@@ -3042,8 +2897,7 @@ rule WarnOfSpend {
 -- relay week reports a window of the log: each interruption (a held
 -- call, a permission request in a conversation, a quarantined memo, a
 -- memo waiting to be declassified, a tool waiting for relay fresh, a
--- finding waiting for review, a harness that needs the operator, work
--- given up to the operator) from the event that asked to the event that
+-- harness that needs the operator, work given up to the operator) from the event that asked to the event that
 -- answered, the notifications sent, each role's wakes and what they
 -- cost, health checks on each wake, and the operator's flags. relay
 -- traces exports the same wakes as OpenTelemetry spans, holding no
@@ -3081,7 +2935,7 @@ rule SendMorningBrief {
     -- black box: runs the calendar tool for today and the reminders
     -- tool for what is due today or overdue, with their arguments on
     -- the command line, then makes the sections, title and body
-    let brief = compose_brief(today, Reports where has_pending_findings, Holds where status = open)
+    let brief = compose_brief(today, Holds where status = open)
 
     ensures: Brief.created(date: today, sent: not brief.is_empty, sections: brief.sections, created_at: now)
     ensures:
@@ -3098,8 +2952,8 @@ rule SendMorningBrief {
     @guidance
         -- relay composes the brief itself and wakes no role, so it costs
         -- no tokens and keeps calendar text, which outsiders write, out
-        -- of every prompt. Four sections, in order: today's calendar,
-        -- reminders due today, reports waiting for review, held calls.
+        -- of every prompt. Three sections, in order: today's calendar,
+        -- reminders due today, held calls.
         -- Each is a count and at most eight short lines. A tool that
         -- fails, times out, prints what the brief cannot read, or is
         -- not a read tool on the plain protocol makes its section say
@@ -3543,220 +3397,6 @@ rule ReadCard {
         -- line each with its progress, and says when some were left out.
         -- A client is sent each card's wire form: every text field made
         -- visible, and defanged and marked outsider when contaminated.
-}
-
--- Research reports
-
-rule SubmitReport {
-    when: ReportSubmitRequested(caller, summary, findings)
-
-    requires: caller.is_research_role
-    requires: session_began_public(caller)   -- black box: the wake named in the tool command began public
-    requires: fits_report_schema(summary, findings, caller.report_kinds)   -- black box: relay.reports/parse-report
-
-    ensures: Report.created(
-        role: caller,
-        summary: summary,
-        findings: findings,
-        labels: caller.session_labels,
-        status: submitted,
-        attempts: 0
-    )
-
-    @guidance
-        -- report_submit is class write and offered only to research
-        -- roles. Its answer is "Report N submitted; it will be checked."
-        -- and nothing else: the role is never told how its report fared,
-        -- so it cannot tune itself against the checks. A refusal names
-        -- what is wrong without quoting the input.
-}
-
-rule StartVerification {
-    when: DispatcherTicks(_)
-
-    for report in Reports where status = submitted and verifying = null
-            and (retry_at = null or retry_at <= now):
-        ensures: VerifyProcessStarted(report)
-
-    @guidance
-        -- The tick starts relay verify <report> in a process of its own,
-        -- as it starts a wake, and does not wait for it. That process
-        -- records that it started, runs the verifier on every URL the
-        -- report cites in calls of at most verifier_batch items, draws
-        -- each finding's sample from SecureRandom, and records what came
-        -- back. relay verify by hand also checks a report relay gave up
-        -- on.
-}
-
-rule RecordVerification {
-    when: VerifierAnswered(report, results, sampled)
-
-    requires: report.verifying != null
-
-    ensures:
-        report.status = verified
-        report.verification = flags_for(report, results, known_findings, today)   -- black box: relay.reports/verify
-        for finding in report.findings:
-            finding.sampled = sampled(finding)
-    ensures: Notification.created(
-        kind: report_verified,
-        title: "Report checked",
-        body: counts_only(report)   -- black box: "Report N from <role>: X findings, Y flagged, Z seen before. relay review N"
-    )
-
-    @guidance
-        -- The flags are a pure function of what the verifier found, the
-        -- report, the ledger and earlier findings, and the operator's
-        -- date. A finding is matched by the canonical URL it gives, never
-        -- by where that landed, so a redirect cannot hide it. It is seen
-        -- before, and not reviewed, when that matches a ledger entry, a
-        -- finding waiting for review, or one judged not relevant; one
-        -- matching a finding rejected as fake is flagged instead. Being
-        -- hidden is worked out from the current state, not fixed at the
-        -- check: one hidden behind a finding that is later rejected as
-        -- fake waits for review, flagged, as if checked after it. A
-        -- canonical URL has its scheme and host in lower case, no
-        -- tracking parameters, no default port, no trailing slash, and no
-        -- fragment unless it starts #/ or #!. The verification carries
-        -- the report's labels, contaminated, and what the verifier
-        -- reported, since every string in it came from a page. A verify
-        -- process speaks only for its own check, by pid and start time.
-        -- The notification holds counts, never text.
-}
-
-rule VerificationFailed {
-    when: VerifierFailed(report, error)
-
-    let attempt = report.attempts + 1
-
-    ensures:
-        report.attempts = attempt
-        report.verifying = null
-        if attempt < config.max_attempts:
-            report.retry_at = now + retry_delay(attempt)
-        else:
-            report.status = failed
-    ensures: Notification.created(kind: report_verify_failed)   -- the first time, and when relay gives up
-
-    @guidance
-        -- A verifier that exits non-zero, prints anything but one
-        -- envelope, or answers with the wrong number of items or quotes
-        -- has failed. A verify process the tick finds gone has failed
-        -- too. It is tried again after a wait that grows, as a memo is.
-}
-
-rule ReviewFindings {
-    when: ReviewRecorded(caller, report, decisions)
-
-    requires: caller.is_operator
-    requires: report.status = verified
-    requires: decisions.all(d => d.finding.is_waiting
-        and d.sha256 = digest_of_what_was_shown(d.finding))   -- black box: relay.reports/finding-digest-text, fields and flags
-
-    for d in decisions:
-        ensures: d.finding.decision = d.decision
-        if d.decision = accept:
-            ensures: LedgerEntry.created(finding: d.finding, trusted: true, labels: caller.labels)
-    if decisions.any(d => d.decision = fake):
-        ensures: TrustLevelLowered(role: report.role, why: "you rejected a finding as fake")
-        for finding in report.findings where decided_unread:
-            ensures:
-                finding.decision = null
-                finding.decided_unread = false
-                finding.entry = null   -- the entry leaves the ledger; the log keeps it
-
-    @guidance
-        -- relay review <report> shows each waiting finding on the
-        -- operator's terminal (/dev/tty, never stdin): every field, the
-        -- text as from a contaminated source, each URL in full with its
-        -- registrable domain in brackets and a punycode host's Unicode
-        -- form, and the flags in plain words. No report text starts a line
-        -- of the screen: a field of one line shows a line break escaped,
-        -- and a summary or quote is printed behind a gutter the screen
-        -- uses for nothing else. The operator accepts it,
-        -- rejects it as fake, sets it aside as not relevant, or skips it,
-        -- then types a fresh code once for the lot. A decision is bound
-        -- to the digest of exactly the fields and flags shown, so a
-        -- finding that changed decides nothing. The command says which
-        -- findings a fake decision brought back from hiding. An accepted
-        -- finding's entry is the operator's: its text is no longer
-        -- contaminated, and reading it still adds private.
-}
-
-rule AcceptUnread {
-    when: report: Report.status transitions_to verified
-
-    requires: report.role.trust_level = 1
-    requires: report.verification.flags = []
-    -- Flags aimed at whoever reads the report keep all of it for review.
-    requires: not report.findings.any(f => f.flags.any(g => g.kind in
-        {reader_directed, lookalikes, hidden_characters, suspicious_host, cross_domain_redirect}))
-
-    for finding in report.findings where flags = [] and not seen_before and not sampled:
-        ensures:
-            finding.decision = accept
-            finding.decided_unread = true
-        ensures: LedgerEntry.created(finding: finding, trusted: false,
-                                     labels: report.verification.labels)
-
-    @guidance
-        -- An entry accepted unread keeps the verification's labels, so
-        -- its text is contaminated. The ledger tool shows it as its
-        -- typed line, with the text withheld unless the reader accepts
-        -- contamination. Typed values are still open to outside
-        -- influence: the page chose the date. Any demotion the report
-        -- causes comes first, so a report that lowers the level has
-        -- nothing accepted unread.
-}
-
-rule LowerTrustLevel {
-    when: report: Report.status transitions_to verified
-
-    requires: report.role.trust_level = 1
-    requires: report.findings.any(f => f.flags.any(g => g.kind = quote_not_found
-        or (g.kind = fetch_failed and g.refused)))
-
-    ensures: report.role.trust_level = 0
-    ensures: Notification.created(kind: trust_level_lowered)
-
-    @guidance
-        -- The safe direction, so relay does it by itself and says why.
-        -- A quote missing from a page that could be read, or a page whose
-        -- own address the verifier's guard refused, means the role cited
-        -- what is not there or what it should never have reached. A page
-        -- that redirects somewhere refused is flagged, and lowers nothing. A finding the
-        -- operator rejects as fake lowers it too (ReviewFindings).
-}
-
-rule SetTrustLevel {
-    when: TrustLevelRequested(caller, role, level, sha256)
-
-    requires: caller.is_operator
-    requires: role.is_research_role
-    requires: level in {0, 1}
-    requires: level != role.trust_level
-    requires: sha256 = digest_of_record_shown(role)   -- black box: the record relay trust-level showed
-
-    ensures: role.trust_level = level
-
-    @guidance
-        -- relay trust-level <role> <0|1> shows the role's record and what
-        -- the level means on the terminal and asks for a fresh code.
-}
-
-rule SetLedgerStatus {
-    when: LedgerStatusRequested(caller, entry, status)
-
-    requires: caller.is_operator or (caller.kind = role and not caller.is_public)
-
-    ensures: entry.status = status
-
-    @guidance
-        -- relay ledger set, or the ledger_status tool for a role that
-        -- is not public, recording what the operator told it. A public
-        -- role has no ledger: it holds the operator's decisions. It has
-        -- the reports tool instead, which lists the titles and canonical
-        -- URLs it reported before, its own public writing.
 }
 
 ------------------------------------------------------------
@@ -4245,47 +3885,3 @@ surface RoleTools {
 ------------------------------------------------------------
 
 open question "Closing a memo proves the role dealt with it, not that they dealt with it well. Who reviews outcomes, and how often?"
-
-invariant AReportIsNeverPrivate {
-    for report in Reports:
-        not has_private(report.labels)
-}
-
-invariant OnlyTheOperatorReviews {
-    for finding in Findings where decision != null and not decided_unread:
-        decided_by(finding).is_operator   -- black box: who wrote its finding/reviewed event
-}
-
-invariant NothingHidesBehindAFake {
-    -- A finding stays hidden only behind one shown and not rejected as
-    -- fake: waiting, accepted or set aside.
-    for finding in Findings where seen_before:
-        finding.hidden_by.decision != fake and not finding.hidden_by.seen_before
-}
-
-invariant OnlyTheOperatorRaisesATrustLevel {
-    -- relay only ever lowers one.
-    for change in TrustLevelChanges where level = 1:
-        change.by.is_operator
-}
-
-invariant AReviewedEntryIsTheOperators {
-    for entry in LedgerEntries where trusted:
-        not has_contaminated(entry.labels)
-}
-
-invariant AnUnreadEntryStaysContaminated {
-    for entry in LedgerEntries where not trusted:
-        has_contaminated(entry.labels)
-}
-
-invariant TheTypedLineHoldsNoOutsidersText {
-    for entry in LedgerEntries:
-        matches_typed_line(entry.typed_line)   -- black box: the kind list, ISO dates, numbers, currency codes and statuses only
-}
-
-invariant NothingUnreadUnlessTrusted {
-    for finding in Findings where decided_unread:
-        finding.flags = [] and not finding.seen_before and not finding.sampled
-            and level_when_verified(finding) = 1   -- black box: recorded with the verification
-}
