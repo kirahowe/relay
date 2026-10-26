@@ -411,6 +411,53 @@
       (problem! (str "The MCP server " n " in relay.edn gives none of :tools. Name a tool from it, or"
                      " remove it.")))))
 
+(defn egress-problem
+  "Why relay.edn's `tool` cannot be an :egress tool, or nil. relay holds a
+  scout to the addresses it was shown (plan O1, I4) by checking each call
+  before it runs, and it can do that only for a call it runs and can
+  read: an :envelope tool whose parameters it knows. A `url` parameter is
+  checked whole. Free text in any other parameter could carry an address
+  with no scheme, or a host name, which relay cannot tell from words, so
+  an :egress tool may take free text only in the parameters the operator
+  lists in :queries, text that goes to a service trusted as the model
+  provider is, such as a web search. Its other parameters are numbers or
+  yes-or-no values. Pure."
+  [tool-name {:keys [class protocol parameters queries] :as tool}]
+  (let [props (into {} (map (fn [[k v]] [(name k) v]) (:properties parameters)))
+        why (fn [& parts] (apply str "Tool " tool-name " in relay.edn " parts))]
+    (cond
+      (and (contains? tool :queries) (not= :egress class))
+      (why "has :queries, which only an :egress tool has.")
+
+      (not= :egress class) nil
+
+      (mcp-tool? tool)
+      (why "is an :egress tool of an MCP server. relay checks every :egress call before it runs, and"
+           " agentloop calls an MCP server itself, so an :egress tool must be an :envelope tool relay runs.")
+
+      (or (not= :envelope protocol) (not (map? (:properties parameters))))
+      (why "is an :egress tool, which must be an :envelope tool with :parameters that list its"
+           " properties. relay can hold a scout to the addresses it was shown only in a `url` argument"
+           " it can read, so it does not run a command given the model's arguments as an :egress tool.")
+
+      (not (or (nil? queries)
+               (and (vector? queries) (every? string? queries)
+                    (every? #(and (not= "url" %) (= "string" (get-in props [% :type]))) queries))))
+      (why "has :queries " (pr-str queries) ". It lists the names of string parameters, other than url,"
+           " whose text goes to a service you trust as you trust the model provider, such as [\"query\"].")
+
+      :else
+      (when-let [[p] (first (for [[p schema] (sort-by key props)
+                                  :when (not (if (or (= "url" p) (some #{p} queries))
+                                               (= "string" (:type schema))
+                                               (#{"integer" "number" "boolean"} (:type schema))))]
+                              [p]))]
+        (why "is an :egress tool, and its parameter " p " is neither a string url, nor a number or"
+             " yes-or-no value, nor listed in :queries. relay can hold a scout to the addresses it was"
+             " shown only in a url argument. List a parameter in :queries only when its text goes to a"
+             " service you trust as you trust the model provider, such as a web search, never to one"
+             " that publishes it.")))))
+
 (def removed-tool-keys
   "Tool settings relay no longer has: no call is held for the operator,
   so there is nothing to hold, consent to or preview."
@@ -456,6 +503,7 @@
       (throw (ex-info (str "Tool " tool-name " has :parameters, which an :envelope tool may give as a"
                            " JSON Schema object, {:type \"object\" ...}.")
                       {:tool tool-name :relay/usage true})))
+    (when-let [why (egress-problem tool-name tool)] (problem! why))
     (when-not (or (nil? (:timeout-seconds tool)) (pos-int? (:timeout-seconds tool)))
       (throw (ex-info (str "Tool " tool-name " has :timeout-seconds " (pr-str (:timeout-seconds tool))
                            "; it must be a positive whole number.")

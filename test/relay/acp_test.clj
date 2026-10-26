@@ -344,7 +344,7 @@
 (deftest tool-kinds-come-from-classes-and-name-what-removes
   (let [config {:tools {"r" {:class :read :labels [] :description "d" :command ["true"]}
                         "w" {:class :write :labels [] :description "d" :command ["true"]}
-                        "e" {:class :egress :labels [] :description "d" :command ["true"]}
+                        "e" {:class :egress :labels [] :description "d" :command ["true"] :protocol :envelope :queries ["query"] :parameters {:type "object" :properties {:query {:type "string"}}}}
                         "d" {:class :edit :labels [] :description "d" :command ["true"]}}
                 ;; Public, since only a public role's session may be
                 ;; built with an egress tool (tools/manifest).

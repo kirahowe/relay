@@ -405,7 +405,8 @@
     (spit (str data "/relay.edn")
           (pr-str {:timezone "UTC" :default-harness :a
                    :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}}
-                   :tools {"search" {:class :egress :labels ["contaminated"] :description "Search." :command ["true"]}}
+                   :tools {"search" {:class :egress :labels ["contaminated"] :description "Search." :command ["true"]
+                                       :protocol :envelope :queries ["query"] :parameters {:type "object" :properties {:query {:type "string"}}}}}
                    :grants {"scout" {:public true :tools ["search"]}}}))
     (try
       (let [sys (inbound/system data)]

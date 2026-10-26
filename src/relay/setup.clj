@@ -121,6 +121,7 @@
        "                :labels [\"contaminated\"]\n"
        "                :protocol :envelope\n"
        "                :timeout-seconds 150\n"
+       "                :queries [\"query\"]\n"
        "                :description \"Search the web and read the top results.\"\n"
        "                :parameters " (pr-str web-tool-parameters) "\n"
        "                :command " (pr-str [bin "--config" webtool-file "ask"]) "}}\n"

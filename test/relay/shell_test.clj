@@ -22,7 +22,8 @@
   {:timezone "UTC"
    :default-harness :agentloop
    :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent/agentloop"}}
-   :tools {"web" {:class :egress :labels ["contaminated"] :description "Search." :command ["true"]}}
+   :tools {"web" {:class :egress :labels ["contaminated"] :description "Search." :command ["true"]
+                  :protocol :envelope :queries ["query"] :parameters {:type "object" :properties {:query {:type "string"}}}}}
    :house {:mounts ["/Users/someone/notes"]}
    :grants {"hub" {:shell true} "scout" {:public true :tools ["web"]}}})
 

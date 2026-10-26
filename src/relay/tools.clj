@@ -38,7 +38,8 @@
             [relay.messages :as messages]
             [relay.moves :as moves]
             [relay.refs :as refs]
-            [relay.shell :as shell])
+            [relay.shell :as shell]
+            [relay.shown :as shown])
   (:import (java.time Instant LocalTime)
            (java.time.format DateTimeFormatter)))
 
@@ -237,10 +238,17 @@
 
    "memo_send"
    {:class :write
-    :description "Send a memo to a role, or to `operator`. The subject is one line; put the ask in it. The body must stand on its own for a reader with no memory of your work."
+    :description (str "Send a memo to a role, or to `operator`. The subject is one line; put the ask in it."
+                      " The body must stand on its own for a reader with no memory of your work. A memo to a"
+                      " role that works on the open web, a scout, is public as you write it: put in only what"
+                      " may leave the house.")
     :parameters (obj {:to text :subject text :body text} "to" "subject" "body")
     :run (fn [sys actor labels args]
-           (str "Sent memo " (created-memo (submit sys actor labels :memo/send args)) " to " (:to args) "."))}
+           (let [id (created-memo (submit sys actor labels :memo/send args))]
+             (str "Sent memo " id " to " (:to args) "."
+                  (when (and (not (config/public? (:config sys) actor)) (config/public? (:config sys) (:to args)))
+                    (str " " (:to args) " works on the open web, so this memo is public as you wrote it:"
+                         " the subject and body above are what went out.")))))}
 
    "memo_close"
    {:class :write
@@ -1005,7 +1013,8 @@
                 (core/public-role? config role-id)
                 (conj (str "You are a public role: you may search and browse the web, so you are shown only what"
                            " is public, and whatever you write is public. The operator's private things never"
-                           " reach you."))
+                           " reach you. You may fetch only an address that a search or a page showed you in this"
+                           " session, given exactly as it was shown."))
                 :always
                 (conj (if (seq external)
                         (str "Beyond relay's own tools, the operator has granted you: "
@@ -1125,6 +1134,25 @@
       (dissoc result :display)
       result)))
 
+(defn- egress-call!
+  "Runs a call of an :egress tool, which only a public role has, under the
+  fetch rule (relay.shown, plan O1 and I4): every address in it must have
+  appeared verbatim in an earlier :egress result of the same session, or
+  it never runs. What it returns is kept as shown to that session before
+  the model sees it. The refusal is fixed text, quoting nothing of the call."
+  [sys state role-id tool-name tool args labels wake]
+  (let [data-dir (:data-dir sys)
+        wakes (when data-dir (shown/session-wakes state role-id wake))
+        seen (if (seq wakes) (shown/read-shown data-dir role-id wakes) "")]
+    (if-let [why (shown/refusal seen args)]
+      (do (binding [*out* *err*]
+            (println (str "relay refused " tool-name " for " role-id ": an address it was not shown")))
+          {:error why :labels []})
+      (let [result (refuse-private sys role-id tool-name (run-tool sys role-id tool args labels))]
+        (when (and (:ok result) (seq wakes))
+          (shown/record! data-dir role-id (first wakes) (:ok result)))
+        result))))
+
 (defn call!
   "Runs one tool call for a role, made by a session holding `labels`, and
   returns {:ok text :labels} or {:error text :labels}: the text to give
@@ -1159,7 +1187,9 @@
         (if-let [problem (input-problem (:parameters tool) args)]
           {:error problem :labels []}
           (binding [*call-id* call-id *wake* wake]
-            (refuse-private sys role-id tool-name (run-tool sys role-id tool args labels))))))))
+            (if (= :egress (:class tool))
+              (egress-call! sys state role-id tool-name tool args labels wake)
+              (refuse-private sys role-id tool-name (run-tool sys role-id tool args labels)))))))))
 
 ;; --- the envelope a harness sends for each call
 
