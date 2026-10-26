@@ -30,9 +30,9 @@ undo, the agent's own calendar, the ready view and replies.
    <new relay>/bin/relay --data <live data> status
    ```
 
-   It names the first problem and stops. The new relay refuses settings
-   the old one requires (`:notify` above all), so one file cannot please
-   both. Fix the problems in a copy, not in the live file, and check the
+   It lists every problem it finds, numbered, each with its fix. The
+   new relay refuses settings the old one requires (`:notify` above
+   all), so one file cannot please both. Fix the problems in a copy, not in the live file, and check the
    copy in a scratch directory that holds only it:
 
    ```sh
@@ -44,7 +44,8 @@ undo, the agent's own calendar, the ready view and replies.
    ```
 
    Repeat until it prints the status. With no log there it cannot check
-   role names; that check comes after the deploy (step 4 below).
+   role names, and it says so; that check comes after the deploy (step 4
+   below). Do not run `relay init` there.
 
 2. Make these changes in the copy. Each removed setting and its
    replacement is in README's Upgrading table:
@@ -60,6 +61,8 @@ undo, the agent's own calendar, the ready view and replies.
    | `:reader`, `:workbench` | a harness | remove them |
    | `:class :act` | a tool | `:class :edit` for a tool that only drafts, or remove the tool |
    | `:always-hold`, `:consent`, `:preview` | a tool | remove them |
+   | an `:egress` tool with a free-text parameter, such as the old `"web"` with `query` | a tool | name the parameter in `:queries`, such as `:queries ["query"]`, and grant the tool to the scout only |
+   | a calendar or mail tool labelled `contaminated`, such as the old `"cal"` | a role's `:tools` | take it off hub: your calendar now comes in through `:ingest` |
 
    Your main role is `hub`, and the new default is `"steward"`, so name
    it in both places:
@@ -98,12 +101,24 @@ undo, the agent's own calendar, the ready view and replies.
    grant. Add `:files` only for folders you want it to tidy.
 
    ```clojure
-   :house {:mounts ["/Users/kira/notes"]}
+   :house {:mounts [{:path "/Users/kira/notes" :trusted true}]}
    :grants {"hub" {:may-add true :tools [...] :shell true}}
    ```
 
-   relay refuses a mount that is, holds or sits inside the data
-   directory, your home directory or a place for secrets.
+   `:trusted true` says the folder holds only your own writing. A plain
+   path counts as outside text: what hub reads there is marked as coming
+   from outside, and a change it shapes is flagged in the daily note.
+   Leave it off for a folder such as Downloads.
+
+   relay refuses to mount your home directory itself or a folder that
+   holds it, and the data directory or a place for secrets, or anything
+   inside them. Folders inside your home directory, such as
+   `/Users/kira/notes`, are fine.
+
+   Take the old `"cal"` tool, and any other tool labelled
+   `contaminated`, off hub's `:tools`. A tool's label has no source, so
+   everything hub writes after a call to it is marked as drawing on that
+   tool, and your calendar now comes in through `:ingest` below.
 
    The scout's tools: only a public role may have an `egress` tool, and
    an `egress` tool must be an `:envelope` tool with `:parameters`, that
@@ -141,6 +156,12 @@ undo, the agent's own calendar, the ready view and replies.
 
 ## The deploy
 
+From here on, `bin/relay` means the live checkout's
+(`~/code/projects/relay/bin/relay`), and every command names your live
+data directory with `--data <live data>`, so neither another relay on
+PATH nor `~/.config/relay/config.edn` decides which relay runs on which
+data.
+
 `bb deploy` as usual. Its last step is `relay status` against your live
 data, and the live `relay.edn` is still the old one, so that step
 fails. The deploy says that only `relay status` failed, gives the `rm`
@@ -161,7 +182,7 @@ window for the rest:
 5. One-time steps, still paused:
 
    ```sh
-   relay house build            # the steward's shell image; needs the network
+   bin/relay --data <live data> house build   # the steward's shell image; needs the network
    security add-generic-password -a "$USER" -s relay-brave -w   # the Brave Search key, if not there yet
    ```
 
@@ -178,24 +199,24 @@ window for the rest:
    it holds hub's old title and instructions:
 
    ```sh
-   relay --data <live data> log --json > ~/relay-log-before-house.jsonl
+   bin/relay --data <live data> log --json > ~/relay-log-before-house.jsonl
    ```
 
    Give hub the new text. It stays private: hub may write to the scout
    all the same, and the scout learns only hub's id, so it can answer:
 
    ```sh
-   relay update hub --title "<hub's title>" --instructions < setup/steward.md
+   bin/relay --data <live data> update hub --title "<hub's title>" --instructions < setup/steward.md
    ```
 
    Add a scout, and the daily note's skill and routine for hub. The
    routine text names the skill's path, so point it at hub's:
 
    ```sh
-   relay add scout --public --title Scout --reports-to hub < setup/scout.md
-   relay put skills/hub/daily-note.md < setup/daily-note/skill.md
+   bin/relay --data <live data> add scout --public --title Scout --reports-to hub < setup/scout.md
+   bin/relay --data <live data> put skills/hub/daily-note.md < setup/daily-note/skill.md
    sed 's|skills/steward/|skills/hub/|' setup/daily-note/routine.md \
-     | relay routine hub daily-note --schedule "daily 07:10"
+     | bin/relay --data <live data> routine hub daily-note --schedule "daily 07:10"
    ```
 
    If an older role did research with reports, it has nothing to do now;
@@ -208,12 +229,17 @@ window for the rest:
    bb service start
    ```
 
-7. Subscribe to the agent's calendar: `relay calendar url` prints the
+7. Subscribe to the agent's calendar: `bin/relay --data <live data> calendar url` prints the
    address, with a token that opens the calendar and nothing else. Add it
    in your calendar app as a subscription.
 
-8. To see the first note without waiting: `relay routine run daily-note`,
-   then `relay note`, then `relay note now`.
+8. To see the first note without waiting:
+
+   ```sh
+   bin/relay --data <live data> routine run hub daily-note
+   bin/relay --data <live data> note
+   bin/relay --data <live data> note now
+   ```
 
 ## Later, as ops
 
@@ -258,7 +284,7 @@ seen:
 `message/replied`, `ingest/polled`, `ingest/failed`,
 `prepared/recorded`, `tool/broken`, `tool/working`,
 `settings/misnamed`, `digest/composed`, `digest/part-written`,
-`change/reverted`, `offer/declined`, `offer/outcome`,
+`change/reverted`, `offer/accepted`, `offer/declined`, `offer/outcome`,
 `suggestion/dismissed`, `github/announced`, `calendar/added`,
 `calendar/changed`, `calendar/removed`, `files/moving`, `files/moved`,
 `files/undone`.
@@ -287,11 +313,12 @@ from inside the window:
 1. Put `~/relay.edn.old` back as `<live data>/relay.edn`.
 2. Run `bb rollback`. It rebuilds the old relay, runs `relay status`
    and lifts the pause.
-3. Straight away, with the old relay, undo step 5:
+3. Straight away, with the old relay (`bin/relay` in the live
+   checkout, now rolled back), undo step 5:
 
    ```sh
-   relay unroutine hub daily-note
-   relay remove scout
+   bin/relay --data <live data> unroutine hub daily-note
+   bin/relay --data <live data> remove scout
    ```
 
 4. Give hub its old title and instructions back. They are in the last
@@ -305,7 +332,7 @@ from inside the window:
    jq -rs '[.[] | select((.type == "role/added" or .type == "role/updated")
                          and .data.id == "hub" and .data.title != null)]
            | last | .data.title' ~/relay-log-before-house.jsonl
-   relay update hub --title "<the title it printed>" --instructions < ~/hub-old.md
+   bin/relay --data <live data> update hub --title "<the title it printed>" --instructions < ~/hub-old.md
    ```
 
    Read `~/hub-old.md` before you run the update. Add `--public` only

@@ -205,9 +205,15 @@ relay does not assume a memo was handled because you ran and stopped.
 
 Close a memo with `memo_close` when you have done what it asks, or handed
 it on by memo to someone who will, and say in a sentence or two what you
-did. Block it with `memo_block` when you cannot: you lack a tool or
-access, the request makes no sense, or it needs a decision that is not
-yours. Say why and what would unblock you. A blocked memo goes to the steward,
+did. When the memo is the operator's own request, that outcome is what
+they read: relay sends it to them as a quiet reply to their request, and
+your final words in the wake reach no one. So write it for them, plain
+and complete, with the answer to anything they asked in it ("Sorted the
+notes into four folders; the scraps are in unsorted/"). If you tell them
+about the request with `tell_operator` instead, give the memo's number
+as `memo`, and relay will not send the outcome as well. Block it with
+`memo_block` when you cannot: you lack a tool or access, the request
+makes no sense, or it needs a decision that is not yours. Say why and what would unblock you. A blocked memo goes to the steward,
 which will sort it out or ask the operator.
 
 Close only what you have done. A memo you leave open is given back to you
@@ -294,12 +300,15 @@ plainly, and never name roles, tools or labels. relay itself lists, at
 the top, every change that text from outside shaped and anything it
 could not check, and you cannot leave one out. Every part appears every
 day, saying so when it has nothing. When the operator answers the note,
-you get the answer as a memo, unless it said nothing but "revert", "not"
-and "drop": relay does those itself and answers. "not 2" says no to item
-2's offer and keeps the item; "drop 2" removes the item for good. When a
-memo comes, relay has already done any of those in it, so act only on
-the rest. When the operator takes up an offer and you do the work,
-record where it stands with `offer_outcome`, under the item's key
+you get the answer as a memo, unless it said nothing but "revert", "yes",
+"not" and "drop": relay does those itself and answers. "not 2" says no
+to item 2's offer and keeps the item; "drop 2" removes the item for
+good. "yes 2" takes up item 2's offer: you get a memo from the operator
+whose subject starts "Yes:", quoting the item and its offer, which is
+their request to do it now. When a memo comes, relay has already done
+any of those in it, so act only on the rest. When the operator takes up
+an offer and you do the work, record where it stands with
+`offer_outcome`, under the item's key
 ("Prep outline ready in docs, three figures missing"). The next note
 then says where it stands instead of offering the same help again.
 

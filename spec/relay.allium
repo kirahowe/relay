@@ -367,11 +367,13 @@ enum MessageKind { note | alert | digest | reply }
 enum Urgency { low | normal | high }
 -- What relay was telling, for its own records; the operator never sees
 -- it. A notification an older relay recorded folds into a message with
--- its kind as the origin and nothing left to deliver.
+-- its kind as the origin and nothing left to deliver, as history: done
+-- (resolved), so it is not ready for the operator, and a reply to it is
+-- refused, since what it asked about (a held call, a report) is gone.
 enum MessageOrigin {
     told | memo_for_operator | work_abandoned | runaway_guard_tripped
     | harness_needs_attention | harness_unreachable
-    | budget_reached | brief | daily_note | daily_note_acted | github_news
+    | budget_reached | brief | daily_note | daily_note_acted | github_news | request_done
     | tools_unavailable | tool_changed | shown
     | session_forbidden | result_refused | public_role_cannot_run | public_role_can_run
     | turn_unrecorded | conversation_line_dropped | ingest_failing | tool_broken
@@ -869,8 +871,8 @@ entity NoteItem {
     keys: List<String>           -- for dismiss: the suggestion's keys
     offer: String?               -- for dismiss: the offer it showed, if any
     -- What was done with it, from this note or any other that numbers
-    -- the same change or keys.
-    done: reverted | dismissed | declined | null
+    -- the same change or keys; accepted from this note only.
+    done: reverted | dismissed | declined | accepted | null
 }
 
 entity RecipeChange {
@@ -1485,6 +1487,7 @@ rule ReplyToAMessage {
     requires: message.told_by != null or message.origin = daily_note
         -- a role told her; relay's own messages have nobody to answer,
         -- except the daily note, whose writer (config.daily_note_role) hears it
+    requires: not message.from_older_relay   -- history, not to be answered
     requires: text.length > 0
 
     ensures: message.replies = message.replies + Reply(channel: channel, text: text, created_at: now)
@@ -1502,10 +1505,13 @@ rule ReplyToAMessage {
     if message.origin = daily_note:
         ensures: NoteReplyActedOn(message: message, text: text, channel: channel)
             -- what the reply asks for ("revert N", "not N", "drop N") is
-            -- done (RevertChange, DeclineOffer, DismissSuggestion), and
-            -- relay answers once in the thread with what it did, on the
-            -- reply's own channel only (the client alone for a reply from
-            -- the client). When the reply says nothing but "revert N",
+            -- done (RevertChange, AcceptOffer, DeclineOffer,
+            -- DismissSuggestion), and relay answers once in the thread
+            -- with what it did, on the reply's own channel only (the
+            -- client alone for a reply from the client). When everything
+            -- it asked was done, that answer is history (resolved): the
+            -- note shows each item done in place, and Ready gets no new
+            -- item. When the reply says nothing but "revert N", "yes N",
             -- "not N" and "drop N", no memo is sent: relay has done all
             -- it asks.
 
@@ -1698,8 +1704,28 @@ rule CloseMemo {
         memo.outcome = outcome
         memo.closed_at = now
         memo.retry_at = null
+    -- The operator's own request, closed by the role it went to: what
+    -- came of it is her answer.
+    if memo.sender = operator and not caller.is_operator and not caller.is_public
+       and not memo.is_reply and not told_about(caller.role, memo):
+        ensures: Message.created(
+            origin: request_done,
+            kind: reply,
+            urgency: low,
+            subject: "Re: " + memo.subject,
+            sections: [outcome],
+            told_by: caller.role,
+            created_at: now,
+            deliveries: route(this, now)
+        )
 
     @guidance
+        -- A reply memo (the operator's answer to a message) is answered
+        -- with tell_operator, so its close says nothing more; nor does
+        -- the close of a memo the role already told her about with
+        -- tell_operator naming it (its memo). A message that names no
+        -- memo stands for none. The message carries the memo's labels
+        -- with the closer's.
         -- The operator closes their own memos once dealt with, so their
         -- inbox only ever holds what is waiting. Closing is how a role
         -- says "I did this". It can happen during a wake or in a
@@ -1770,6 +1796,8 @@ rule TellOperatorOfTheirRequest {
     when: letter: DeadLetter.created
 
     requires: letter.memo.sender = operator
+    -- A role that told her itself, naming the memo, has said it.
+    requires: not told_about(letter.memo.recipient, letter.memo)
 
     ensures: Message.created(
         origin: work_abandoned,
@@ -1800,6 +1828,8 @@ rule EscalateToOperator {
     -- Told already by TellOperatorOfTheirRequest, directly or for the
     -- request a dead letter's memo is about.
     requires: request_of(letter.memo).sender != operator
+    -- Or by the role itself, naming the memo.
+    requires: not told_about(letter.memo.recipient, letter.memo)
 
     ensures: Message.created(
         origin: work_abandoned,
@@ -2828,7 +2858,7 @@ rule TellOperator {
     -- tell_operator: a house role tells the operator something. It
     -- gives the content and the urgency; it never chooses a medium, an
     -- address or a recipient.
-    when: TellOperator(role, subject, sections, urgency, in_reply_to)
+    when: TellOperator(role, subject, sections, urgency, in_reply_to, memo)
 
     requires: role.status = active
     requires: not role.is_public
@@ -2836,7 +2866,10 @@ rule TellOperator {
 
     @guidance
         -- The subject is one line. in_reply_to names a message relay
-        -- sent, or nothing.
+        -- sent, or nothing. memo names a memo sent to the role that this
+        -- tells what came of, or nothing; told_about(role, memo) holds
+        -- once such a message exists, and relay then says nothing more
+        -- when the memo is closed or blocked.
 
     ensures: Message.created(
         origin: told,
@@ -3066,6 +3099,9 @@ rule MakeDailyNote {
     requires: config.daily_note_at != null
     requires: now >= due_at
     requires: last = null or last.date < today
+    -- Its writer may still be reading what came in: the note waits while
+    -- it works or has memos open, for an hour past its time at most.
+    requires: now >= due_at + 60.minutes or not note_writer_busy()
 
     ensures: DailyNote.created(date: today, sent: flagged.any or parts.any or github.any or problems.any,
                                flagged: flagged, created_at: now)
@@ -3109,8 +3145,15 @@ rule MakeDailyNote {
         -- text. A day's note is due from its time until the day ends;
         -- a day with no tick past its time has none. relay note now
         -- makes the day's note at once when the day has none yet, or
-        -- only one that was not sent; it records nothing when there is
+        -- only one that was not sent, or one made before the writer had
+        -- written ahead and now it has; it records nothing when there is
         -- nothing to say, so an empty note never uses up the day.
+        -- ahead with nothing written says the writer has not gone
+        -- through the calendar yet, never that nothing is coming up.
+        -- The note's text holds no channel's wording: each channel says
+        -- how to act on its items for its medium (a reply word in mail
+        -- whose replies relay reads, a command at the command line,
+        -- nothing in a push or the client, which shows its keys).
 }
 
 rule RecordRecipeChange {
@@ -3173,6 +3216,28 @@ rule DeclineOffer {
     @guidance
         -- Later notes show any item with one of its keys without its
         -- offer, and the writer is shown the offers declined.
+}
+
+rule AcceptOffer {
+    when: OperatorAccepts(note, n)
+    -- relay accept <n>, _relay/messages/act with op accept, or a reply
+    -- "yes N" from any channel.
+    requires: numbered_item(note, n).offer != null
+    requires: numbered_item(note, n).done = null
+    ensures: numbered_item(note, n).done = accepted
+    ensures: Memo.created(
+        sender: operator,
+        recipient: Role{id: config.daily_note_role},
+        subject: "Yes: " + numbered_item(note, n).offer,
+        body: numbered_item(note, n).text,   -- and the offer, and to record offer_outcome under its key
+        sent_at: now,
+        status: unread,
+        attempts: 0
+    )
+
+    @guidance
+        -- The memo wakes the writer to do what it offered. It is her
+        -- request, so trusted, and it carries the item's labels.
 }
 
 rule RecordOfferOutcome {

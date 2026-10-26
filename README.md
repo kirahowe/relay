@@ -44,14 +44,27 @@ relay needs [babashka](https://babashka.org) on macOS, and agentloop,
 which is written in Go. The steward's shell needs Apple's `container`
 (Docker or Podman on Linux).
 
-1. Clone [agentloop](https://github.com/kirahowe/agentloop) next to this
-   repository and build it: `make -C ../agentloop build`. relay runs the
-   harness's `:bin` when it is set, else `../agentloop/bin/agentloop`,
-   else the first `agentloop` on your PATH, and `relay init` writes the
-   one it found into relay.edn as an absolute `:bin`. To keep it
-   elsewhere, set `:bin` in the harness settings. When agentloop will not
-   start, the alert and `relay status` name the binary that ran, and an
-   agentloop older than relay is named as such: rebuild it.
+1. Clone [agentloop](https://github.com/kirahowe/agentloop),
+   [relay-tui](https://github.com/kirahowe/relay-tui) (the dashboard) and
+   [webtool](https://github.com/kirahowe/webtool) (the scout's web
+   search) next to this repository, and build them:
+
+   ```sh
+   make -C ../agentloop build
+   make -C ../relay-tui build
+   make -C ../webtool build
+   ```
+
+   relay runs the harness's `:bin` when it is set, else
+   `../agentloop/bin/agentloop`, else the first `agentloop` on your PATH,
+   and `relay init` writes the one it found into relay.edn as an
+   absolute `:bin`. It does the same for the dashboard: it writes the
+   relay-tui built next to it (else the first on your PATH) as an
+   absolute `:client`, so an older relay-tui on your PATH never opens in
+   its place. To keep either elsewhere, set `:bin` in the harness
+   settings or `:client` at the top of relay.edn. When agentloop will
+   not start, the alert and `relay status` name the binary that ran, and
+   an agentloop older than relay is named as such: rebuild it.
 2. Choose a data directory and initialize it:
 
    ```sh
@@ -128,11 +141,20 @@ which is written in Go. The steward's shell needs Apple's `container`
    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/relay.tick.plist
    ```
 
+   `relay status` says when the tick has never run, or has not run for
+   20 minutes, so a job that failed to load does not go unnoticed.
+
+   Install the relay service the same way, from
+   `setup/launchd/relay.serve.plist`: it keeps conversations going while
+   the dashboard is closed, and serves the agent's calendar (see The
+   relay service).
+
    Then run `bin/relay` to open the dashboard and talk to your steward.
 5. Turn on what you want in `relay.edn`. Each is a section that starts
    with `;;`: remove the `;;` and fill in the placeholders. `relay status`
-   checks the file and names the first problem, and the tick refuses to
-   run with a broken one and sends you an alert saying why.
+   checks the file and lists every problem it finds, numbered, each with
+   its fix, and the tick refuses to run with a broken one and sends you
+   an alert saying why.
    - Mail to you: an `:email` channel in `:messages`, and a route that
      names it (see Messages to you).
    - The agent's mailbox, your GitHub repositories and your calendar:
@@ -313,7 +335,11 @@ A role uses `tell_operator` to tell you something. It gives the content
 and the urgency, and nothing else: relay.edn alone decides where the
 message goes. A role that works on the web cannot use it; it reports
 back by memo. A memo to `operator` and relay's own alerts become
-messages too.
+messages too. When a role closes a request of yours (`relay memo`), what
+it says came of it reaches you as a low-urgency reply to that request,
+routed like any other message, unless the role already told you in the
+same wake. When a role told you itself why it stopped, relay does not
+send a second message about the same work.
 
 ### What is ready for you
 
@@ -484,7 +510,11 @@ copies); and that header says `dkim=pass` with a single `header.d`,
 your address's domain. Another method's pass (`bimi`, `spf`) does not
 count. relay reads the headers strictly. A bare CR or LF, a
 header it cannot parse, or a second header with that authserv-id makes
-the mail an outsider's. Without `:authserv-id`, no mail is trusted.
+the mail an outsider's. Without `:authserv-id`, no mail is trusted:
+`relay status` says so, and mail from relay no longer asks you to reply
+to it. To find your provider's authserv-id, open any mail the agent's
+address received and read its `Authentication-Results:` header. The
+first word, before the `;`, is the id.
 
 A verified mail that answers one relay sent you (its `In-Reply-To` or
 `References` holds that message's Message-ID) becomes a reply on the
@@ -517,7 +547,11 @@ is short and has up to five parts:
 
 The role named in `:role` writes the last four with its
 `daily_note_write` tool, usually from a routine that runs shortly
-before the note's time. `daily_note_draft` shows it what it has
+before the note's time. When the note is due and that role is still at
+work, or has memos open (its routine's run, a new calendar), the note
+waits for it, an hour at most. Until the role has written Coming up,
+that part says it has not gone through your calendar yet, never that
+nothing is coming up. `daily_note_draft` shows it what it has
 written, the items you dropped, the offers you said no to, what came of
 offers it followed up and the changes since the last note. When you
 take up an offer and it does the work, it records where that stands
@@ -532,7 +566,9 @@ steward write its parts now, `relay note` shows the note as it would go
 out, and `relay note now` makes today's note and sends it. A note sent
 that way is the day's note, so the next one comes tomorrow. A note with
 nothing to say is not sent and does not use up the day: run `relay note
-now` again once the steward has written its parts. `relay
+now` again once the steward has written its parts. A note made before
+the steward wrote Coming up can be made again the same way once it
+has. `relay
 routine run [<role>] <name>` runs any routine at once, as the tick runs
 it when it comes due, and wakes its role to do it.
 
@@ -547,18 +583,29 @@ you end up with the version from before all of them, never one that
 another of those changes wrote. A new role or a removed one is listed
 with no number: removing a role is for good, since its name is never
 used again, so relay will not do it as an undo, and a removed role
-cannot come back. To say no to an item's offer of help, reply "not 2",
+cannot come back. To take up an item's offer of help, reply "yes 2",
+use the client, or run `relay accept 2`: the note's writer gets a memo
+from you asking it to do what it offered, and is woken for it. To say
+no to an item's offer of help, reply "not 2",
 use the client, or run `relay decline 2`. The item stays, in this note
 and later ones, without that offer. To remove an item for good, reply
 "drop 2", use the client, or run `relay dismiss 2`. relay records it,
 drops it from every later note, and shows it to the note's writer so it
 is not suggested again. "not" on an item with no offer changes nothing:
-relay says the item has no offer and that "drop" removes it. A mailed reply is acted on only when it is verified as
+relay says the item has no offer and that "drop" removes it. Each
+refusal names what to do in the words of where you are: a command at
+the command line, a word to reply with in mail. How to act on the items
+is said the same way: a mail whose replies relay reads ends with the
+reply words, `relay note` and `relay ready <n>` with the commands, and
+a push says nothing of it, since nobody can answer a push. A mailed reply is acted on only when it is verified as
 yours (see "The mailbox and other sources"); one from the client is
 yours already. relay answers once, in the thread, on the channel the
 reply came through: a reply in the client gets its answer in the client,
-and nothing is pushed. A reply that says only "revert", "not" and
-"drop" goes to nobody else. One that says more also goes to the note's
+and nothing is pushed. `relay reply` prints that answer, and exits 1
+when something it asked could not be done. When everything was done,
+the answer stays in the thread but is not a new item in Ready, since
+the note shows each item done in place. A reply that says only
+"revert", "yes", "not" and "drop" goes to nobody else. One that says more also goes to the note's
 writer. The note then marks each item done, and so does every other
 note that has the same item, whichever note or command did it. `relay changes` lists the latest
 changes, each with its number in a note. A change no note numbered has
@@ -574,9 +621,10 @@ The first note looks back one day. A note with nothing to say is not
 sent. The log records each day's note, sent or not, as a
 `digest/composed` event.
 
-A new issue or pull request a person opens on a repository in
-`:ingest` also gets a push of its own: all of those that arrive in one
-tick go as one message. A bot's items do not.
+With a daily note, a new issue or pull request a person opens on a
+repository in `:ingest` waits for the note, which lists it. Without
+one, those that arrive in one tick go as one push. A bot's items never
+do.
 
 ### The dashboard
 
@@ -719,8 +767,14 @@ cannot send a header, or as `Authorization: Bearer <token>`. A request
 without it gets a bare 401, and one with an `Origin` the listener does
 not allow a bare 403. `relay calendar url` prints the URL to subscribe
 to, with this Mac's tailnet name from `tailscale status` (or give it
-with `--host <name>`). Add it in your calendar app as a calendar
-subscription. The feed's token changes when the listener's does.
+with `--host <name>`; `127.0.0.1` gives the plain http address on this
+Mac). It then asks for the feed once, and says when relay serve is not
+running or the port is not published on your tailnet yet, with the
+`tailscale serve` command that publishes it. Add it in your calendar
+app as a calendar subscription. The feed's token changes when the
+listener's does. Your calendar app shows the calendar under
+`:calendar {:name "..."}` in relay.edn, else the `:from-name` of your
+email channel, else Agenda.
 
 ### Spend
 
@@ -997,7 +1051,8 @@ Row 2 RBC: all open
 
 `<data>/relay.edn` holds the operator's settings: harnesses, where
 messages go, limits, the dead letter handler, external tools, an optional weekly budget, an optional
-daily note and what each role is granted.
+daily note, an optional name for the agent's calendar
+(`:calendar {:name "..."}`) and what each role is granted.
 `setup/relay.example.edn` shows each of them. No role can read this
 file. Every external tool has a class (`read`, `write`, `edit` or
 `egress`) and the labels its output carries (see below), and
