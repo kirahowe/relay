@@ -39,17 +39,22 @@
 
 (defn memo
   "One memo, as the operator's inbox shows it. One from outside is marked
-  so and its URLs broken."
-  [zone {:keys [id from subject body sent-at labels]}]
-  (concat
-   ["" (str "[" id "] " (text/for-operator labels subject))
-    (str "    from " from ", " (local sent-at zone))]
-   (text/block labels body)))
+  so and its URLs broken: as from the web when `from-web?` says its sender
+  works on the web, a scout, and otherwise as from outside."
+  ([zone m] (memo zone m {}))
+  ([zone {:keys [id from subject body sent-at labels]} {:keys [from-web?]}]
+   (let [where (when (and from-web? (from-web? from)) :web)]
+     (concat
+      ["" (str "[" id "] " (text/for-operator labels subject where))
+       (str "    from " from ", " (local sent-at zone))]
+      (text/block labels body where)))))
 
-(defn inbox [zone memos]
-  (if (empty? memos)
-    ["Nothing waiting."]
-    (mapcat #(memo zone %) memos)))
+(defn inbox
+  ([zone memos] (inbox zone memos {}))
+  ([zone memos opts]
+   (if (empty? memos)
+     ["Nothing waiting."]
+     (mapcat #(memo zone % opts) memos))))
 
 (defn- open-memo [zone {:keys [id subject attempts retry-at]}]
   (format "    open  [%d] %s%s" id subject

@@ -172,3 +172,12 @@
                         (is (= {:exit 1 :out (str/split-lines cli/usage)} (cli/execute ["--data" data "nonsense"])))))]
         (is (= "" printed)))
       (finally (fs/delete-tree dir)))))
+
+(deftest a-memo-from-a-scout-is-marked-as-from-the-web
+  (let [m {:id 4 :from "scout" :subject "Found" :body "Three grants." :sent-at t0 :labels ["contaminated"]}
+        web? #{"scout"}]
+    (is (some #(= "[4] [from the web] Found" %) (render/memo utc m {:from-web? web?})))
+    (is (some #(= "  [from the web]" %) (render/inbox utc [m] {:from-web? web?})))
+    (testing "from a house role that read the web, it is only from outside"
+      (is (some #(= "[4] [from outside] Found" %) (render/memo utc (assoc m :from "hub") {:from-web? web?})))
+      (is (some #(= "[4] [from outside] Found" %) (render/memo utc m))))))

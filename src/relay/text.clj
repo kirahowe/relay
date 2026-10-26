@@ -7,8 +7,9 @@
                 so text cannot rewrite the terminal or hide what it says.
     defang      breaks URLs and domains so a tap or click cannot follow
                 them.
-    for-operator  defang, with a [from outside] marker, for text whose
-                labels say an outsider may have written it. The edge
+    for-operator  defang, with a marker saying where it came from ([from
+                the web], [from a mail by x], or [from outside]), for
+                text whose labels say an outsider may have written it. The edge
                 that shows text applies visible to it once, last.
 
     sanitize    cleans what the operator pastes, at the entry (see
@@ -116,8 +117,8 @@
 (defn contaminated? [labels] (boolean (some #{"contaminated"} labels)))
 
 (def outside-marker
-  "What marks text from outside for the operator: where it came from, in
-  plain words, never the name of a label."
+  "What marks text from outside for the operator when relay knows no more
+  of where it came from: plain words, never the name of a label."
   "[from outside]")
 
 (defn source-words
@@ -146,15 +147,29 @@
   [labels]
   (if-let [w (source-words labels)] (str "[" (defang w) "]") outside-marker))
 
+(defn outside-marker-for
+  "The marker for text from outside, saying where it came from when relay
+  knows: `:web` for what a scout brought back, {:mail address} for a mail
+  from that sender, and otherwise what the labels say (marker). A sender's
+  address is an outsider's text, so it is defanged and can hold no bracket
+  or line break that would end the marker early."
+  [labels from]
+  (let [addr (when (map? from) (str/trim (str/replace (str (:mail from)) #"[\s\[\]]+" " ")))]
+    (cond (= :web from) "[from the web]"
+          (seq addr) (str "[from a mail by " (defang addr) "]")
+          :else (marker labels))))
+
 (defn for-operator
   "Text for the operator from a source with these labels: from outside
-  defanged and marked. It is not yet visible: the edge that shows it (the
-  command line, a push) applies visible, exactly once, since visible is
-  not idempotent (it doubles a backslash)."
-  [labels s]
-  (if (contaminated? labels)
-    (str (marker labels) " " (defang s))
-    (str s)))
+  defanged and marked, saying where it came from when `from` says
+  (outside-marker-for). It is not yet visible: the edge that shows it
+  (the command line, a push) applies visible, exactly once, since visible
+  is not idempotent (it doubles a backslash)."
+  ([labels s] (for-operator labels s nil))
+  ([labels s from]
+   (if (contaminated? labels)
+     (str (outside-marker-for labels from) " " (defang s))
+     (str s))))
 
 (def gutter
   "What every line of untrusted multi-line text is shown behind. Nothing
@@ -168,11 +183,12 @@
   headed by a [from outside] line of the screen's own, which covers the
   whole block. Not yet visible: the edge applies visible-line to each
   line. The one helper for showing a role's or an outsider's text."
-  [labels s]
-  (let [bad (contaminated? labels)
-        t (if bad (defang (str s)) (str s))]
-    (vec (concat (when bad [(str "  " (marker labels))])
-                 (map #(str gutter %) (str/split t #"\n" -1))))))
+  ([labels s] (block labels s nil))
+  ([labels s from]
+   (let [bad (contaminated? labels)
+         t (if bad (defang (str s)) (str s))]
+     (vec (concat (when bad [(str "  " (outside-marker-for labels from))])
+                  (map #(str gutter %) (str/split t #"\n" -1)))))))
 
 (def ^:private scripts
   "The scripts whose letters most often pass for one another's."

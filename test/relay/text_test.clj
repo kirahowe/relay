@@ -287,3 +287,19 @@
   (is (= "[from outside] x" (text/for-operator ["contaminated" "mail:not-an-address"] "x"))
       "a mail label that is no address is never shown as one")
   (is (= "[from GitHub, owner/repo] x" (text/for-operator ["contaminated" "github:owner/repo"] "x"))))
+
+(deftest the-marker-says-where-outside-text-came-from
+  (testing "from the web, from a mail, or from outside when relay does not know"
+    (is (= "[from the web]" (text/outside-marker-for [] :web)))
+    (is (= "[from a mail by stranger@example[.]com]" (text/outside-marker-for [] {:mail "stranger@example.com"})))
+    (is (= "[from outside]" (text/outside-marker-for [] nil)))
+    (is (= "[from outside]" (text/outside-marker-for [] {:mail ""}))))
+  (testing "a sender's address cannot close the marker or bring a line of its own"
+    (let [m (text/outside-marker-for [] {:mail "a] [b\nc@x.example"})]
+      (is (= 1 (count (re-seq #"\]" (str/replace m "[.]" "")))))
+      (is (not (str/includes? m "\n")))))
+  (testing "for-operator and block use it, and only for text from outside"
+    (is (= "[from the web] see hxxps://a[.]example" (text/for-operator ["contaminated"] "see https://a.example" :web)))
+    (is (= "mine" (text/for-operator [] "mine" :web)))
+    (is (= ["  [from the web]" "  │ hi"] (text/block ["contaminated"] "hi" :web)))
+    (is (= ["  │ hi"] (text/block [] "hi" :web)))))

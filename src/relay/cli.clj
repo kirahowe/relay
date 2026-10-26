@@ -433,7 +433,8 @@ id public too.")
         lines (fn [ls] {:exit 0 :out ls})]
     (case cmd
       "status" (lines (render/status (state) zone ((:clock sys)) (:config sys) (pause/recovery-lines (pause-file opts))))
-      "inbox" (lines (render/inbox zone (core/unread-memos (state) core/operator)))
+      "inbox" (lines (render/inbox zone (core/unread-memos (state) core/operator)
+                                   {:from-web? #(config/public? (:config sys) %)}))
       "memo" (let [[to] more
                    body (or (:message opts) (stdin-text))]
                (when-not to (fail! "usage: relay memo <to> -s <subject> [-m <body>]"))
