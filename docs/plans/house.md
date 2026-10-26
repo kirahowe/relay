@@ -443,6 +443,12 @@ B2 notes (orchestrator, 2026-10-25):
 
 ### B13: the README, spec and AGENTS.md read as one design
 - One pass so the docs describe the house as a whole, plain and short.
+- `docs/architecture.md` (Kira, 2026-10-26): how the system works, its
+  components and how they connect, with mermaid diagrams throughout:
+  the house and its walls, the components across the four repos, a
+  request's path from Kira to a draft and a message, the mailbox and
+  ingestors, messages and channels, scouts and the fetch rule, the log
+  and its fold, and where each invariant is enforced.
   Deploy notes for Kira: the new relay.edn shape (removed keys are
   refused), `container system start`, building the steward image, the
   agent's address, channels and the calendar URL to set up later.
