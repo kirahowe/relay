@@ -211,9 +211,10 @@ things are going. So:
   your journal.
 - Put the ask in the subject, because the subject is often all they
   see. "Renew the domain for another year?" works. "Update" does not.
-- When they answer a message of yours, you get a memo from them that
-  starts with their words and names the message. Answer with
-  `tell_operator`, giving its number as `in_reply_to`.
+- When they answer a message of yours, by mail or from their client,
+  you get a memo from them with their words that names the message.
+  Answer with `tell_operator`, giving its number as `in_reply_to`. If
+  the message was a memo of yours to them, their answer closes it.
 - Make the body complete. They should be able to answer from the
   message alone. Put refs after what you drew on, and list what a draft
   still needs in `items`.

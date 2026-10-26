@@ -101,6 +101,18 @@
   [s]
   (clip-cp (squeeze-line s) subject-limit))
 
+(defn reply-memo
+  "The memo the operator's answer to message `parent` becomes, whatever
+  channel brought it: {:from :subject :body}. `how` says how it came (\"by
+  mail\"), and `text` is her answer, cleaned where it came in. The role
+  reads it as a memo from her and answers with tell_operator."
+  [parent how text]
+  {:from "operator"
+   :subject (clip-subject (str "Re: " (:subject parent)))
+   :body (str "The operator answered your message \"" (clip-cp (squeeze-line (:subject parent)) 150) "\" " how ":\n\n"
+              text
+              "\n\nTo answer back, use tell_operator with in_reply_to " (:id parent) ".")})
+
 (defn item
   "An item from text, or from {:text :refs :labels}."
   [x]

@@ -808,12 +808,15 @@ ready view (`_relay/ready` in `docs/client-protocol.md`), and a change
 reaches it without asking.
 
 To answer a message, `relay reply <message> -m <text>` (the client does
-the same from the view). The reply is yours, so it is trusted. It is
-recorded against the message, and the role that wrote the message gets a
-memo from you quoting it and naming the message, which wakes it. It
-answers with `tell_operator`, giving the message's number as
-`in_reply_to`, and the thread shows both. A message relay wrote itself
-(an alert, the digest) has nobody to answer.
+the same from the view). The reply is yours, so it is trusted, and it is
+cleaned like a paste. It goes the same way as a mail reply from your
+verified address: it is recorded against the message, and the role that
+wrote the message gets a memo from you quoting it and naming the message,
+which wakes it. When the message was a memo to you, that memo is closed
+as answered, so it no longer waits in your inbox. The role answers with
+`tell_operator`, giving the message's number as `in_reply_to`, and the
+thread shows both. A message relay wrote itself (an alert, the digest)
+has nobody to answer.
 
 relay learns what a role prepared by reading the session after a wake or
 a conversation turn. For every call that was allowed and ended without an
@@ -935,7 +938,8 @@ the mail an outsider's. Without `:authserv-id`, no mail is trusted.
 A verified mail that answers one relay sent you (its `In-Reply-To` or
 `References` holds that message's Message-ID) becomes a reply on the
 message's thread, and a memo in your words to the role that sent the
-message, without the quoted text at the end. Any other verified mail
+message, without the quoted text at the end. It is the same path as a
+reply from the client, so a memo it answers is closed too. Any other verified mail
 reaches the source's role as yours. A reply that is not verified is
 mailbox content: it joins no thread, and the memo says it could not be
 confirmed.

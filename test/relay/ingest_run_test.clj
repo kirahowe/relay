@@ -148,7 +148,9 @@
           (testing "the operator's verified reply is theirs, threaded to the message, to the role that asked"
             (is (= "clerk" (:to kira)))
             (is (= "operator" (:from kira)))
-            (is (= [] (:labels kira)))
+            (is (= (vec (:labels msg)) (vec (:labels kira)))
+                "nothing from outside: only the labels of the message whose subject it quotes")
+            (is (not (core/contaminated? (:labels kira))))
             (is (str/includes? (:body kira) "The Old Hall, café included."))
             (is (= ["The Old Hall, café included."] (map :text (:replies (core/message state (:id msg)))))))
           (testing "a forged one is mailbox content, and joins no thread"

@@ -27,6 +27,7 @@
             [clojure.string :as str]
             [relay.ics-feed :as ics-feed]
             [relay.mailbox :as mailbox]
+            [relay.messages :as messages]
             [relay.text :as text])
   (:import (java.time Instant ZoneId)))
 
@@ -284,11 +285,10 @@
     (if (:trusted verdict)
       (operators-own
        (if parent
-         {:from "operator" :labels [] :reply-to (:id parent)
-          :subject (one-line (str "Re: " (:subject parent)) 200)
-          :body (str "The operator answered your message \"" (one-line (:subject parent) 150) "\" by mail:\n\n"
-                     (clip (mailbox/without-quoted-tail text) text-limit)
-                     (attachments-text attachments))}
+         (assoc (messages/reply-memo parent "by mail"
+                                     (str (clip (mailbox/without-quoted-tail text) text-limit)
+                                          (attachments-text attachments)))
+                :labels [] :reply-to (:id parent))
          {:from "operator" :labels []
           :subject subject
           :body (str "The operator sent this to your mailbox from their own address.\n\n"

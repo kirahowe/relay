@@ -301,7 +301,10 @@
   (let [{:keys [command error]} (workspace/reply-command (params-of msg))]
     (if error
       (refuse h rid -32602 error)
-      (submit h command {:kind :reply :rid rid}))))
+      ;; The operator's answer is cleaned like anything she types (B7),
+      ;; and the answer says what changed.
+      (let [{:keys [value notes]} (text/sanitize-input (:args command))]
+        (submit h (assoc command :args value) {:kind :reply :rid rid :notes notes})))))
 
 (defn- cards-request [h rid msg]
   (let [cid (:conn (record h rid))
@@ -975,7 +978,7 @@
                         {:kind :ignore})))))
       :reply
       (cond
-        ok (answer h rid {})
+        ok (answer h rid (cond-> {} (seq (:notes continuation)) (assoc "notes" (vec (:notes continuation)))))
         :else (refuse h rid -32000 (or message "relay refused it.")))
       :card-op (card-op-result h continuation result)
       :ignore h)))

@@ -257,9 +257,12 @@ The client's view of what is ready (`relay.ready`, `_relay/ready`) is a
 fold over the same state: messages, with everything else prepared for the
 operator, each item saying where it came from in plain words. A message
 that a role told the operator can be answered from it. `_relay/reply`
-(and `relay reply` on the command line) records a `reply/received` event
-against the message, with `channel: "client"`, and sends the role a memo
-from the operator that quotes the reply and names the message. The role
+(and `relay reply` on the command line) cleans the text like a paste and
+takes the same path as a verified mail reply (`relay.core/record-reply`):
+a `message/replied` event on the message, with `channel: "client"`, and a
+memo from the operator to the role that quotes the reply and names the
+message. When the message was a memo to the operator, that memo is
+closed as answered. The role
 answers with `tell_operator` and `in_reply_to`, which threads as before.
 `docs/client-protocol.md` has the wire forms.
 

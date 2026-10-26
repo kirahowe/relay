@@ -181,12 +181,17 @@ command line instead.
 - Params: `{"inReplyTo": int, "text": string}`: the number of a message
   (an item's `replyTo`) and the operator's answer, at most 4000
   characters. Anything else is refused (-32602).
-- Answer: `{}`, once relay has recorded the reply. The reply is the
-  operator's own (a client channel is the operator's hand): relay records
-  it against the message (`replies` on its item, and every subscribed
-  connection is sent the item changed) and sends the role that wrote the
-  message a memo from the operator, quoting it and saying which message it
-  answers. The role answers with `tell_operator` and `in_reply_to`.
+- Answer: `{}`, once relay has recorded the reply, with `"notes"` (a
+  list of plain lines) when relay cleaned the text first: the reply is
+  cleaned like anything the operator pastes (`relay.text/sanitize-input`).
+  The reply is the operator's own (a client channel is the operator's
+  hand), so it takes the same path as a verified mail reply: a
+  `message/replied` event on the message (`replies` on its item, and every
+  subscribed connection is sent the item changed), and a memo from the
+  operator to the role that wrote the message, quoting it and saying which
+  message it answers. When the message was a memo to the operator, that
+  memo is closed as answered. The role answers with `tell_operator` and
+  `in_reply_to`.
 - Errors: -32000 with relay's reason: no such message, a message relay
   wrote itself ("there is nobody to answer it"), or a role that is gone.
 - relay-tui: `a` or Enter on a message in the ready view, then Enter

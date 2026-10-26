@@ -20,6 +20,7 @@
             [relay.ready :as ready]
             [relay.render :as render]
             [relay.test-support :as support]
+            [relay.text :as text]
             [relay.workspace :as workspace])
   (:import (java.time Instant ZoneId)))
 
@@ -318,8 +319,11 @@
     (testing "recorded against the message"
       (is (= ["Make it shorter, please."] (mapv :text (:replies m))))
       (is (= "client" (:channel (first (:replies m)))))
-      (is (= (:seq (first (filter #(= "reply/received" (:type %)) (:events w)))) (:rev m))
-          "the client is told it changed"))
+      (is (= (:seq (first (filter #(= "message/replied" (:type %)) (:events w)))) (:rev m))
+          "the client is told it changed")
+      (is (= {:message id :memo (:id memo) :channel "client" :text "Make it shorter, please."}
+             (:data (first (filter #(= "message/replied" (:type %)) (:events w)))))
+          "the same event a verified mail reply makes"))
     (testing "a memo from the operator to the role, saying what it answers"
       (is (= ["operator" "clerk" "Re: Concert email is drafted"] ((juxt :from :to :subject) memo)))
       (is (str/includes? (:body memo) "Make it shorter, please."))
@@ -355,11 +359,23 @@
   (let [w (-> (seed) (ct/run "clerk" :memo/send {:to "operator" :subject "Draft: concert email" :body "It is saved."}))
         m (first (filter #(= "memo-for-operator" (:origin %)) (vals (:messages (:state w)))))
         item (first (filter #(= (:id m) (:message %)) (items w)))
+        _ (is (= [(:memo m)] (map :id (core/unread-memos (:state w) core/operator))) "it waits for her")
         w (ct/run w "operator" :message/reply {:in-reply-to (:id m) :text "Thanks."})
         memo (last (sort-by :id (vals (:memos (:state w)))))]
     (is (= (:id m) (:reply-to item)) "the memo's sender is who answers")
     (is (nil? (:rejected w)))
-    (is (= ["operator" "clerk"] ((juxt :from :to) memo)))))
+    (is (= ["operator" "clerk"] ((juxt :from :to) memo)))
+    (testing "her answer closes the memo, so it no longer waits in her inbox"
+      (is (empty? (core/unread-memos (:state w) core/operator)))
+      (let [closed (core/memo (:state w) (:memo m))]
+        (is (= [:read "Answered: Thanks." "operator"] ((juxt :status :outcome :closed-by) closed))))
+      (is (some #{"Operator's inbox: 0 open"} (render/status (:state w) (ZoneId/of "UTC") (:now w) ct/cfg []))
+          "relay status says nothing is open for her"))
+    (testing "a second answer is still threaded, and closes nothing again"
+      (let [w (ct/run w "operator" :message/reply {:in-reply-to (:id m) :text "One more thing."})]
+        (is (nil? (:rejected w)))
+        (is (= 2 (count (:replies (core/message (:state w) (:id m))))))
+        (is (empty? (filter #(= "memo/closed" (:type %)) (:last w))))))))
 
 ;; --- relay ready
 
@@ -469,6 +485,26 @@
       (doseq [params [{:text "x"} {:inReplyTo "1" :text "x"} {:inReplyTo 1} {:inReplyTo 1 :text "x" :extra 1}]]
         (let [[_ fx] (ht/say h 1 (ht/req 8 "_relay/reply" params))]
           (is (= -32602 (get-in (first (ht/writes fx 1)) ["error" "code"])) (pr-str params)))))))
+
+(deftest the-hub-cleans-a-reply-like-a-paste
+  (let [w (told-w)
+        h (-> (ht/live) (assoc :state (hub-state w)) (ht/opened 2))
+        id (msg-id w)
+        [h2 fx] (ht/say h 1 (ht/req 7 "_relay/reply" {:inReplyTo id :text "Ok\u200b, send it \u202eto everyone"}))
+        [submit] (ht/submits fx)]
+    (is (= "Ok, send it to everyone" (get-in submit [:command :args :text])))
+    (let [[_ fx] (ht/run h2 {:event :submit-result :ok true})
+          notes (get-in (first (ht/writes fx 1)) ["result" "notes"])]
+      (is (= ["Removed 1 invisible character from what you pasted."
+              "Removed 1 text-direction character from what you pasted."] notes)
+          "the answer says what changed"))))
+
+(defspec a-reply-from-the-client-is-submitted-cleaned 200
+  (prop/for-all [t (gen/fmap str/join (gen/vector (gen/elements ["a" " " "\u200b" "\u202e" "\u2028" "e\u0301" "\uDB40\uDC41" "Ok"]) 1 20))]
+    (let [h (-> (ht/live) (assoc :state (hub-state (told-w))) (ht/opened 2))
+          [_ fx] (ht/say h 1 (ht/req 7 "_relay/reply" {:inReplyTo 1 :text t}))
+          sent (get-in (first (ht/submits fx)) [:command :args :text])]
+      (= sent (:text (text/sanitize t)) (:text (text/sanitize sent))))))
 
 ;; --- from a session to the view, through the shell
 

@@ -1343,29 +1343,33 @@ rule NotifyOperatorOfMemo {
 }
 
 rule ReplyToAMessage {
-    when: MessageReplied(caller, message, text)
+    -- The one path for the operator's answer to a message, whatever
+    -- channel brought it: the client channel (_relay/reply, relay reply)
+    -- or her verified mail (OperatorMail). Each channel checks in code
+    -- that the reply is hers and cleans the text (sanitize) first.
+    when: MessageReplied(message, channel, text)
 
-    requires: caller.is_operator
     requires: message.told_by != null   -- a role told her; relay's own messages have nobody to answer
-    requires: message.told_by.is_active
-    requires: text.length > 0 and text.length <= 4000   -- not blank
+    requires: text.length > 0
 
-    ensures: message.replies = message.replies + Reply(channel: "client", text: text, created_at: now)
+    ensures: message.replies = message.replies + Reply(channel: channel, text: text, created_at: now)
     ensures: Memo.created(
-        from: caller,
-        to: message.told_by,
+        from: operator,
+        to: message.told_by,   -- for mail, the source's role when that one is gone or public
         subject: "Re: " + message.subject,
         body: text,   -- and a line naming the message, and tell_operator's in_reply_to
         sent_at: now,
         status: unread,
         attempts: 0
     )
+    if message.memo != null and message.memo.to = operator and message.memo.status = unread:
+        ensures: message.memo.status = read   -- answered; closed by the operator
 
     @guidance
         -- The reply is the operator's own, so the memo is trusted (I5). It
-        -- carries the labels of the subject it quotes. The client channel
-        -- is _relay/reply; B8 gives every channel the same rule once it
-        -- knows the reply is hers.
+        -- carries the labels of the message whose subject it quotes. From
+        -- the client channel the role must still be active and not
+        -- public, and the reply is at most 4000 characters.
 }
 
 rule RecordWhatWasPrepared {
@@ -2660,9 +2664,10 @@ rule OperatorMail {
     when: IngestPolled(source, items, keys, cursor)
 
     for mail in items where verified(mail):
-        ensures: Memo.sent(to: reply_role(mail) ?? source.to, from: operator, labels: {})
         if answers(mail) != null:
-            ensures: MessageReplied(answers(mail), channel, text)
+            ensures: MessageReplied(answers(mail), channel, text)   -- ReplyToAMessage sends the memo
+        else:
+            ensures: Memo.sent(to: source.to, from: operator, labels: {})
 
     @guidance
         -- answers(mail) is the message whose Message-ID relay made

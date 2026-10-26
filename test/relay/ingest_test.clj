@@ -164,6 +164,24 @@
         (is (= [{"text" "The venue is the Old Hall." "outsider" false}]
                (map #(get % "text") (get (channels/wire kept) "replies"))))))))
 
+(deftest a-verified-reply-to-a-memo-closes-the-memo
+  ;; One path for replies (relay.core/record-reply): answering, by mail,
+  ;; the message a memo to her became marks that memo answered, as an
+  ;; answer from the client channel does.
+  (let [w (-> (seed) (run "dispatcher" :wake/start {:role "clerk"})
+              (run "clerk" :memo/send {:to "operator" :subject "Which venue?" :body "Old Hall or the Annex?"}))
+        msg (val (last (sort-by key (:messages (:state w)))))
+        mid (channels/message-id msg agent-address)
+        _ (is (= 1 (count (core/unread-memos (:state w) "operator"))))
+        w (receive (advance w 600) "r9" (mail "From: kira@example.org" verified "Subject: Re: Which venue?" (str "In-Reply-To: " mid)))
+        [m] (memos w)]
+    (is (nil? (:rejected w)) (:why w))
+    (is (= "clerk" (get-in m [:data :to])) "the memo's sender hears the answer")
+    (is (str/includes? (get-in m [:data :body]) (str "in_reply_to " (:id msg))))
+    (is (= 1 (count (of-type w "message/replied"))))
+    (is (empty? (core/unread-memos (:state w) "operator")) "the memo no longer waits for her")
+    (is (= "operator" (:closed-by (core/memo (:state w) (:memo msg)))))))
+
 (deftest a-reply-that-is-not-verified-is-mailbox-content
   (let [[w msg] (told-by-clerk)
         mid (channels/message-id msg agent-address)]

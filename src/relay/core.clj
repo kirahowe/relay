@@ -1100,17 +1100,6 @@
                                        :id seq :at (inst at) :role actor :labels (union labels)))
       (assoc-in [:prepared-calls (str (:tool data) "/" (:call data))] seq)))
 
-;; The operator's answer to a message, from a channel. It is threaded to
-;; the message it answers, which the client then shows as answered.
-(defmethod evolve* "reply/received" [state {:keys [seq at data]}]
-  (let [{:keys [in-reply-to channel text]} data]
-    (if (get-in state [:messages in-reply-to])
-      (-> state
-          (update-in [:messages in-reply-to :replies] (fnil conj [])
-                     {:id seq :at (inst at) :channel channel :text text})
-          (assoc-in [:messages in-reply-to :rev] seq))
-      state)))
-
 (defn- fact-version [{:keys [seq at actor labels public]} change {:keys [topic text valid-from valid-to]}]
   {:seq seq :recorded-at (inst at) :actor actor :change change :labels (union labels) :public (true? public)
    :topic topic :text text :valid-from (inst valid-from) :valid-to (inst valid-to)})
@@ -2300,11 +2289,12 @@
   (get-in state [:ingest source] {:seen {}}))
 
 (defn- reply-role
-  "Who hears the operator's reply to a message: the role that sent the
-  message when it is still active and not public, else the source's
-  role."
-  [state config {:keys [role]} fallback]
-  (if (and role (active-role? state role) (not (config/public? config role))) role fallback))
+  "Who hears the operator's reply to a message: the role that told it
+  (message-author) when it is still active and not public, else
+  `fallback`."
+  [state config m fallback]
+  (let [role (message-author state m)]
+    (if (and role (active-role? state role) (not (config/public? config role))) role fallback)))
 
 (defn- email-channel-for
   "The name of the email channel whose :to is `address`."
@@ -2313,6 +2303,34 @@
                      :when (= :email (:kind ch))
                      :when (= (str/lower-case (str (:to ch))) address)]
                  n))))
+
+;; Replies: the one path for the operator's answer to a message, whatever
+;; channel brought it (mail here, the client channel in :message/reply).
+
+(defn- answered-memo
+  "Closes the memo to the operator that message `parent` came from, if it
+  is still open: she has answered it, so it no longer waits for her."
+  [{:keys [state actor] :as tx} parent text]
+  (let [m (some->> (:memo parent) (memo state))]
+    (if (and m (= operator (:to m)) (= :unread (:status m)))
+      (-> (assoc tx :actor operator)
+          (emit "memo/closed" {:memo (:id m) :outcome (str "Answered: " (messages/clip-subject text))})
+          (assoc :actor actor))
+      tx)))
+
+(defn- record-reply
+  "The operator's answer to message `parent`, verified as hers by the
+  channel it came through: a memo from her to `to`, the role that hears
+  it, and a message/replied event on the message's thread. The memo
+  quotes the message's subject, so it carries the message's labels. The
+  memo she was told the message from, if any, is closed."
+  [tx parent to memo channel text]
+  (let [tx (with-public tx false
+             #(send-memo % {:from operator :to to :subject (:subject memo) :body (:body memo)}
+                         (union (:labels memo) (:labels parent))))]
+    (-> tx
+        (emit "message/replied" {:message (:id parent) :memo (last-id tx) :channel channel :text text})
+        (answered-memo parent text))))
 
 (defn- record-mail
   "One mail that came in: a memo to the source's role, and when it is the
@@ -2324,16 +2342,13 @@
         parent (some->> (ingest/thread-target msg (:messages state) (ingest/agent-domains config))
                         (message state))
         memo (ingest/mail-memo msg verdict parent {:partial partial :size size})
-        reply? (and (:trusted verdict) parent)
-        to (if reply? (reply-role state config parent (:to src)) (:to src))
-        tx (with-public tx false
-             #(send-memo % {:from (:from memo) :to to :subject (:subject memo) :body (:body memo)}
-                         (:labels memo)))]
+        reply? (and (:trusted verdict) parent)]
     (if reply?
-      (emit tx "message/replied" {:message (:id parent) :memo (last-id tx)
-                                  :channel (email-channel-for config (:from verdict))
-                                  :text (ingest/reply-text msg)})
-      tx)))
+      (record-reply tx parent (reply-role state config parent (:to src)) memo
+                    (email-channel-for config (:from verdict)) (ingest/reply-text msg))
+      (with-public tx false
+        #(send-memo % {:from (:from memo) :to (:to src) :subject (:subject memo) :body (:body memo)}
+                    (:labels memo))))))
 
 (defn- record-github
   "A memo for every items-per-memo of each repository's fresh items. None
@@ -2414,10 +2429,11 @@
 
 (def reply-limit 4000)
 
-(defmethod decide* :message/reply [{:keys [state actor] :as tx} {{:keys [in-reply-to text]} :args}]
-  ;; The operator answers a message from a channel. It is recorded as a
-  ;; reply to that message, and goes to the role that told her as a memo
-  ;; from her, so it is trusted (I5) and the role is woken to answer.
+(defmethod decide* :message/reply [{:keys [state config actor] :as tx} {{:keys [in-reply-to text]} :args}]
+  ;; The operator answers a message from the client channel, which is
+  ;; authenticated (the tailnet), so it is hers. It takes the same path
+  ;; as her verified mail (record-reply). The entry point cleaned the
+  ;; text (relay.text/sanitize-input).
   (when-not (= operator actor)
     (reject! :forbidden "Only the operator answers a message."))
   (let [m (or (message state in-reply-to) (reject! :not-found (str "There is no message " in-reply-to ".")))
@@ -2425,18 +2441,11 @@
         text (require-text text "A reply")]
     (when-not role
       (reject! :invalid "That message came from relay itself, so there is nobody to answer it."))
-    (when-not (active-role? state role)
+    (when-not (= role (reply-role state config m nil))
       (reject! :not-found (str "The one who told you that is no longer here.")))
     (when (> (count text) reply-limit)
       (reject! :invalid (str "A reply is at most " reply-limit " characters.")))
-    (operator-public! tx role "A reply")
-    (-> tx
-        (emit "reply/received" {:channel "client" :in-reply-to in-reply-to :text text})
-        (send-memo {:from operator :to role
-                    :subject (messages/clip-subject (str "Re: " (:subject m)))
-                    :body (str text "\n\nThis answers your message " in-reply-to ". To answer back, use"
-                               " tell_operator with in_reply_to " in-reply-to ".")}
-                   (:labels m)))))
+    (record-reply tx m role (messages/reply-memo m "from relay's client" text) "client" text)))
 
 (defmethod decide* :prepared/record [{:keys [state] :as tx} {{:keys [call tool title where preview]} :args}]
   ;; Written as the role whose session made the call, with the labels
