@@ -1399,12 +1399,12 @@ rule SendAHouseMemoToAPublicRole {
         -- with no sign-off. The role chose what to put in it, and is
         -- told that it went out as written. It keeps its other labels
         -- and its sources, so a request shaped by a mail still says
-        -- where it came from. A role
-        -- whose id was written in private cannot send one, since the
-        -- scout would be shown its name: "<to> works on the open web
-        -- and is never shown a name written in private, as <role>'s
-        -- was, so the memo was not sent." A private memo to a public
-        -- role from an older log stays unseen by it.
+        -- where it came from. A role whose id, title and instructions
+        -- were written in private may still send one. The memo is
+        -- public as written, its sender's id with it, so the scout
+        -- learns that id and may answer it; it is shown nothing else of
+        -- that role. A private memo to a public role from an older log
+        -- stays unseen by it.
 }
 
 rule SendAPublicRoleMemo {
@@ -1593,9 +1593,9 @@ rule RefuseWhatAPublicRoleMayNotHold {
         -- other role's session may carry the operator's unlabelled
         -- AGENTS.md; a wake of it whose own text the operator did not
         -- write, or whose prompts would hold private; a doc it would
-        -- write over that it cannot see; and a memo to it from a house
-        -- role whose own id was written in private
-        -- (SendAHouseMemoToAPublicRole).
+        -- write over that it cannot see. A house role's memo to it is
+        -- public as written, and shows it the sender's id and nothing
+        -- else of that role (SendAHouseMemoToAPublicRole).
         -- Its reads show only public items, the roles whose text the
         -- operator wrote, and docs whose path was chosen in public, and
         -- leave out everything else without a trace: a fact, doc or memo it cannot see does
@@ -1785,7 +1785,8 @@ rule TellOperatorOfTheirRequest {
 
     @guidance
         -- The operator asked for it, so they hear at once, once: the
-        -- reason in a line and the relay retry that tries again. The
+        -- reason in a line and the relay retry that tries again, unless
+        -- the recipient was removed, which no retry can bring back. The
         -- handler still gets the dead letter (EscalateToHandler), and
         -- its report says the operator was told.
 }
@@ -3194,7 +3195,7 @@ rule DismissSuggestion {
 
 rule AnnounceGitHubItems {
     when: DispatcherTicks(lost_wakes)
-    let news = new_person_items()   -- black box: items an ingest poll found new, opened by a person (user type User, not a bot)
+    let news = new_person_items()   -- black box: items an ingest poll found new, opened by a person (user type User, not a bot) other than the source's :github-login, the operator's own
     requires: news.count > 0
     requires: config.daily_note_at = null
     ensures: Message.created(origin: github_news, kind: note, urgency: low, sections: by_repository(news))
@@ -3387,8 +3388,10 @@ rule UndoMove {
         -- each empty folder is removed that call made for a step now
         -- back, or that another call made for a step now back and that
         -- holds a target this undo put back, unless an earlier undo
-        -- removed it or kept it for something new, or a later call not
-        -- undone yet moved something out of it. Each removal, and each
+        -- removed it or kept it for something new, a later call not
+        -- undone yet moved something out of it, or a step not undone
+        -- yet, of that call or a later one, moved something into it.
+        -- Each removal is named, relative to the granted folder. Each removal, and each
         -- folder kept because something new is in it, is recorded on
         -- the call that made the folder.
     ensures: call.undone = call.undone + back + by_hand
@@ -3406,8 +3409,11 @@ rule UndoMove {
     @guidance
         -- Each step is checked on its own. A step that cannot go back
         -- stays where it is and is named with why, relative to the
-        -- granted folder, and the rest go back. When none can, undo says
-        -- why and touches nothing. A folder it made that holds something
+        -- granted folder, and the rest go back. A step a later call has
+        -- touched names that call: undoing it first lets this one go
+        -- back. When none can, undo says why and touches nothing; after
+        -- part of the call went back, it says nothing more went back. A
+        -- client is sent the reasons alone, and gives its own headline. A folder it made that holds something
         -- new is kept. files_moves shows the actor its calls, with what
         -- was put back.
         -- The operator asks for it with relay undo or, from the ready

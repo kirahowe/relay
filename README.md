@@ -68,7 +68,10 @@ which is written in Go. The steward's shell needs Apple's `container`
    prints the Brave Search API key, which is used only to send searches
    to Brave; answer `none` to leave the web out. Enter takes each
    suggestion, and nothing is written until you have seen the whole
-   `relay.edn` and said yes.
+   `relay.edn` and said yes. Run over a `relay.edn` you wrote yourself,
+   it checks the file, writes nothing, and when the log has no roles yet
+   prints the commands that add the steward and its daily note (and a
+   scout, when the file has a public role).
 
    The `relay.edn` it writes has everything else relay can do in it,
    turned off with `;;` and with placeholders: mail to you, the agent's
@@ -267,8 +270,11 @@ relay, set both to it. Until you do, work another role cannot finish
 comes to you instead, roles are told a steward that is not there, and a
 phone conversation that names no role has no one to talk to; `relay
 status` says so, and the tick sends you one alert, which ends once the
-names match. `relay init` now writes `:dead-letter-handler` out, so a
-later change of default cannot move yours. A role granted `:shell` needs
+names match. `relay status` also says when `:daily-note :role` names a
+role that is not there, and when a role is granted `:shell` but the
+shell has no image yet (`relay house build` makes it). `relay init`
+now writes `:dead-letter-handler` out, so a later change of default
+cannot move yours. A role granted `:shell` needs
 a `:house` section.
 
 A plain path in `:house :mounts` now counts as outside text, so every
@@ -385,7 +391,10 @@ and to nobody else: relay submits it with `curl` over SMTP, with exactly
 one recipient, no Cc or Bcc, as plain UTF-8 text. The subject is the
 only part a role writes that becomes a header, and it is encoded on one
 line. A reply threads to the message it answers with `In-Reply-To`.
-`:url` is `smtps://` for a real server; plain `smtp://` is taken only to
+`:url` is `smtps://host:465` for a server that speaks TLS from the start,
+or `smtp://host:587` for one that starts it with STARTTLS, as most
+providers do. relay tells curl to require TLS (`--ssl-reqd`), so a server
+that will not start it gets nothing. Unencrypted `smtp://` is used only to
 this machine (`127.0.0.1` or `localhost`), such as a local relay or
 mailpit in tests. The password is what `:credentials-command` prints. It
 goes to curl on stdin at each send, so it is on no command line.
@@ -438,7 +447,10 @@ polls each one. relay.edn's `:ingest` alone says what to fetch:
   repositories. The token is optional and should be read-only.
   `:api-url` points at another GitHub API, such as GitHub Enterprise's
   (`https://github.example.com/api/v3`); it is `https://api.github.com`
-  unless you set it.
+  unless you set it. `:github-login` is your own GitHub login: issues
+  and pull requests you opened yourself are not news, so they get no
+  push and no line in the daily note. They still reach the steward's
+  memo.
   Every item a poll returns gets a memo, 50 to a memo, since the next
   poll starts after them.
 - `:ics` reads a calendar feed, such as your own calendar's private
@@ -1138,7 +1150,8 @@ A role's grants are `:tools`, `:may-add`, `:public`, `:shell` and
 `:files`, and relay refuses any other key, so a typo cannot change what
 a role may hold. relay.edn's top-level keys are checked the same way: a
 key relay does not know is refused, with the one you most likely meant
-(see Upgrading).
+(see Upgrading). So are a tool's: `:comand` in a tool is refused with
+"Did you mean :command?".
 
 ### What you paste
 
@@ -1150,8 +1163,12 @@ those, turns unusual line separators into line breaks, puts the text in
 Unicode's standard form (NFC), and tells you each change in one line,
 such as `Removed 3 invisible characters from what you pasted.` A word that
 mixes alphabets (a Cyrillic "а" inside a Latin word) is kept and
-flagged. Printable ASCII is never touched, and cleaning a text twice
-changes nothing more.
+flagged; past three such words, one line counts the rest ("2 more words
+may not be what they look like."). A zero-width joiner or variation
+selector inside an emoji sequence stays, so a family emoji or a red
+heart arrives whole; anywhere else it is removed, including between
+letters, even circled or squared ones such as Ⓐ. Printable ASCII is
+never touched, and cleaning a text twice changes nothing more.
 
 This happens in the command line's writes (`relay memo`, `put`, `add`,
 `fact`, `card`, `wake --note` and the rest, with the lines on stderr), in
@@ -1367,14 +1384,20 @@ move of the call on its own, exactly. A file you changed since (edited,
 moved again, or something new where it was) stays where it is, and undo
 names it, relative to your folder, with why and what to do: an edited
 file says where it came from, so you can move it back yourself and keep
-your edits. A file a later move has touched, at either end, stays until you
-undo that move first. The rest go back. When nothing could go back, nothing changed. A
+your edits. A file a later move has touched, at either end, stays, and
+undo names that move: undoing it first lets this one go back. The rest go
+back. When nothing could go back, nothing changed; asked again after part
+of a move went back, undo says nothing more went back from it. A
 file you moved back to where it came from yourself counts as put back.
 `relay undo <move> <file>...` puts back only the files named, as `relay
 moves` shows them. Undo removes the folders moves made once they are
-empty, but only those holding what this undo put back. A folder a move
+empty, but only those holding what this undo put back, and only once every
+move into the folder is undone, by the call that made it or a later one.
+It names each folder it removed, relative to your folder. A folder a move
 made that now holds something of yours is kept, and no later undo
-removes it. The role that made the move gets a memo
+removes it. A move partly undone reads "2 of 3 still moved (1 put
+back)", with the files still moved listed first, and "Left empty" names
+only the folders nothing has gone back into since. The role that made the move gets a memo
 saying what you put back, and `files_moves` shows it its moves as they
 stand. Each call is also in `relay ready`, with what moved where and the
 `relay undo` that puts it back; the client's ready view undoes it with
@@ -1439,9 +1462,11 @@ or wake note for a public role is refused without it. A memo to a public
 role from a house role is public as written: nobody signs it off, and
 the house role is told that what it wrote went out. It keeps the rest of
 its sources, so a request shaped by a mail still says where it came
-from. A role whose own id was written in private cannot send one,
-since the scout would see its name. A private memo of that kind from an
-older log stays unseen by the public role until the operator closes it.
+from. A role whose own id, title and instructions were written in
+private may still send one: the scout is shown the memo and the sender's
+id, so it can answer, and nothing else of that role. A private memo of
+that kind from an older log stays unseen by the public role until the
+operator closes it.
 A memo a public role sends is always from outside, and from the web,
 even from a session that has not read the web yet. A public role may answer any role
 that sent it a memo it was shown.
@@ -1819,18 +1844,19 @@ These are for you to run, not an agent. Run `bb deploy` from a relay working
 copy that has no changes:
 
 ```sh
-bb deploy [--relay <dir>] [--agentloop <dir>] [--relay-tui <dir>] [--bookmark main] [--record <file>] [--data <dir>] [--paused-externally]
+bb deploy [--relay <dir>] [--agentloop <dir>] [--relay-tui <dir>] [--webtool <dir>] [--bookmark main] [--record <file>] [--data <dir>] [--paused-externally]
 bb rollback                        # same flags
 ```
 
 The paths default to the live checkouts under `~/code/projects` and must be
-three different directories. `--data` defaults to the data directory in
+four different directories. `--data` defaults to the data directory in
 `~/.config/relay/config.edn` and must be a relay data directory (it needs
 `relay.edn` and a `log` directory), since it is how the deploy sees running
 wakes. A deploy names the
 commit `main` points to in each repository and uses only those commits from
 then on. It builds them in fresh jj workspaces in a temporary directory and
-runs `bb test` there (the mock scenarios too), lists what it will do, and asks you
+runs `bb test` there (the mock scenarios too) after building agentloop,
+relay-tui and webtool from the same commits, lists what it will do, and asks you
 to type a code on the terminal.
 
 After you confirm, it pauses relay: while
@@ -1838,9 +1864,14 @@ After you confirm, it pauses relay: while
 and `relay status` shows the file's path, why it is there and how to lift it
 (`rm '<path>'`, and `bb rollback` when a deploy made it). It waits until no wake or tick is running (read
 from the live log, which `--data` must point at, and from markers the ticks
-leave), writes a record, and for each checkout runs `jj new <commit>`, builds
-agentloop and relay-tui with `make build`, and finally runs `relay status`
-against that data directory. Just before it moves a checkout it looks at it
+leave), writes a record, and for each checkout runs `jj new <commit>` and builds
+agentloop, relay-tui and webtool with `make build`. When the live `relay.edn`
+has `:house`, it then builds the steward's image with `relay house build`
+against that data directory. It checks `container system status` first; if
+Apple's container system is not running, it says so and how to start it
+(`container system start`), and does not start it. A missing or failed image
+build does not fail the deploy; the message gives the command to run once the
+system is up. Finally it runs `relay status` against that data directory. Just before it moves a checkout it looks at it
 again, and it stops if anything changed since the plan or jj cannot read it.
 It refuses to start if any checkout has changes in its working copy or sits on
 a merge. When it all works it removes the pause file. If a step fails after a
@@ -1864,7 +1895,9 @@ end. `bb rollback` reads the latest deploy record that moved a checkout, or
 that failed after touching one, and that no finished rollback has undone. It
 moves each checkout back with `jj new <previous>`, but only if the checkout is
 still where that deploy left it; a deploy that failed in a rebuild without
-moving anything is undone by rebuilding in place. It rebuilds, runs `relay
+moving anything is undone by rebuilding in place. A checkout the record does
+not name (webtool, in a record from before deploys moved it) is left alone.
+A rollback does not rebuild the steward's image. It rebuilds, runs `relay
 status`, and lifts the pause. Run it again and it undoes the deploy before. Every run writes its first record before it
 pauses relay, so if one is killed before it touched anything (while waiting for
 wakes, say), `bb rollback` sees that and only lifts the pause; nothing is moved.
