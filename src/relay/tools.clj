@@ -614,10 +614,11 @@
    {:class :read
     :grant :daily-note
     :description (str "What you have written so far for the next daily note, by part; the suggestions the"
-                      " operator turned down, which you must not suggest again; and the changes to how"
-                      " roles work (skills, routines, notes, roles) since the last note. The quiet ones"
-                      " are yours to describe under learned. relay lists the ones shaped by outside text"
-                      " itself, at the top of the note.")
+                      " operator dropped, which you must not suggest again; the offers they said no to,"
+                      " whose items stay without the offer; what came of offers you followed up"
+                      " (offer_outcome); and the changes to how roles work (skills, routines, notes,"
+                      " roles) since the last note. The quiet ones are yours to describe under learned."
+                      " relay lists the ones shaped by outside text itself, at the top of the note.")
     :parameters (obj {})
     :read (fn [{:keys [state config now]} _ _]
             (let [written (core/written-parts state)
@@ -625,7 +626,9 @@
                   flagged (set (map :seq (digest/flagged changes since)))
                   shown (filter #(or (flagged (:seq %)) (not (#{"operator" "dispatcher"} (:actor %))))
                                 (filter #(> (:seq %) since) changes))
-                  dismissed (take-last 50 (sort-by :seq (vals (:dismissed state))))]
+                  dismissed (take-last 50 (sort-by :seq (vals (:dismissed state))))
+                  declined (take-last 50 (sort-by :seq (vals (:declined state))))
+                  outcomes (take-last 30 (sort-by :seq (vals (:offer-outcomes state))))]
               (show (concat
                      [(item "For the next daily note:" [])]
                      (for [part digest/parts
@@ -643,6 +646,20 @@
                                    (str/join "\n" (map #(str "  - " (:text %)) dismissed)))
                               "The operator has turned nothing down.")
                             (apply core/content-labels (map :labels dismissed)))
+                      (item (if (seq declined)
+                              (str "The operator said no to these offers. Keep the item when it still"
+                                   " applies, with no offer like it:\n"
+                                   (str/join "\n" (map #(str "  - " (:text %) ": " (:offer %)) declined)))
+                              "The operator has said no to no offer.")
+                            (apply core/content-labels (map :labels declined)))
+                      (item (if (seq outcomes)
+                              (str "What came of offers you followed up, by the item's key. Say where each"
+                                   " stands in place of offering it again:\n"
+                                   (str/join "\n" (map #(str "  - " (:key %) ": " (:outcome %) " ("
+                                                           (local-time config (:at %)) ")")
+                                                        outcomes)))
+                              "You have recorded no outcome of an offer.")
+                            (apply core/content-labels (map :labels outcomes)))
                       (item (if (seq shown)
                               (str "Changes to how roles work since the last note:\n"
                                    (str/join "\n" (for [c shown]
@@ -680,6 +697,21 @@
              (str "Saved " kept " item" (when-not (= 1 kept) "s") " for " part "."
                   (when (pos? dropped)
                     (str " Left out " dropped " the operator turned down before.")))))}
+
+   "offer_outcome"
+   {:class :write
+    :grant :daily-note
+    :description (str "Record what came of an offer of help in the daily note, once you have followed it up:"
+                      " the operator said yes and you did the work, or it is half done. `key` is the item's"
+                      " key in the note; `outcome` is one line that says where it stands, such as \"Prep"
+                      " outline ready in docs, three figures missing\". daily_note_draft shows it, so the"
+                      " next note says where things stand instead of offering the same help again.")
+    :parameters (obj {:key {:type "string" :description "The item's key, as you gave it in daily_note_write."}
+                      :outcome {:type "string" :description "Where it stands, one short line."}}
+                     "key" "outcome")
+    :run (fn [sys actor labels args]
+           (let [e (first (submit sys actor labels :offer/outcome (select-keys args [:key :outcome])))]
+             (str "Recorded what came of " (get-in e [:data :key]) ".")))}
 
    "cards"
    {:class :read
@@ -1089,10 +1121,29 @@
             (throw (ex-info "Each move is {\"from\": ..., \"to\": ...}, and nothing else." {})))
           (moves/move-files! sys actor labels (vec moves) {:session-wake *wake* :sources *sources*}))})
 
+(def moves-shown
+  "How many of its move calls files_moves shows a role."
+  10)
+
+(def files-moves-tool
+  "`files_moves`, for a role granted :files: its own files_move calls as
+  they are now, what moved where in full paths and what the operator put
+  back, so a role asked to put some of it back uses the record and does
+  not guess."
+  {:class :read
+   :description (str "Your own file moves, newest last: what each moved where, in full paths, and which"
+                     " moves the operator has put back since. Read it before you move anything back, or"
+                     " before you tell the operator what you did with their files.")
+   :parameters (obj {})
+   :read (fn [{:keys [state]} actor _]
+           (let [calls (filter #(= actor (:actor %)) (core/move-calls state))]
+             {:content (moves/moves-text calls moves-shown)
+              :labels (apply core/union [core/private-label] (map :labels (take-last moves-shown calls)))}))})
+
 (defn offered
   "The tools a role is offered, by name: relay's own, less those that need a
-  grant it lacks, plus `sh` for a role granted :shell and `files_move` for
-  one granted :files, plus the external
+  grant it lacks, plus `sh` for a role granted :shell and `files_move` and
+  `files_moves` for one granted :files, plus the external
   tools it is granted. None at all for a role on a :script harness."
   [config role-id & [{:keys [script?]}]]
   (if script?
@@ -1115,7 +1166,7 @@
              {"sh" (shell-tool config)})
            (when-let [roots (and (not (config/public? config role-id))
                                  (seq (:files (config/grants config role-id))))]
-             {"files_move" (files-tool (vec roots))})
+             {"files_move" (files-tool (vec roots)) "files_moves" files-moves-tool})
            (into {} (map external-tool (select-keys (:tools config) tools)))))))
 
 (defn grants-summary

@@ -2,7 +2,8 @@
   "Organizing files (relay.files, relay.moves): what relay.edn may grant,
   the walls a move keeps (never overwrite, never delete, never leave the
   writable folders, links resolved), the log's record of every call, and
-  undo, which is exact or refuses and touches nothing. I7 extended: for
+  undo, move by move: each move goes back exactly, or stays where it is
+  and is named. I7 extended: for
   any generated tree and sequence of calls, undoing them all restores the
   tree byte for byte."
   (:require [babashka.fs :as fs]
@@ -200,7 +201,7 @@
         (is (= 0 (:exit r)) (pr-str r))
         (is (re-find #"put back 2 of 2.*Removed 2 empty folder" (first (:out r)))))
       (is (= before (snapshot *dir*)))
-      (is (= [{:call call :steps [0 1] :removed [(str root "/Taxes/2025/Returns") (str root "/Bank")]}]
+      (is (= [{:call call :steps [0 1] :removed [{:call call :path (str root "/Taxes/2025/Returns")} {:call call :path (str root "/Bank")}]}]
              (mapv :data (events sys "files/undone"))))
       (is (= [["contaminated" "private"]] (mapv :labels (events sys "files/undone")))
           "what undo removed names the operator's folders, so it keeps the call's labels"))
@@ -336,6 +337,121 @@
           (is (re-find #"T25 has changed since" (str/join "\n" (:refused (undo call)))))
           (is (= before (snapshot *dir*))))))))
 
+(deftest undo-removes-only-the-folders-tied-to-what-it-puts-back
+  (let [{:keys [sys root]} (world! *dir*)
+        d (str root "/Downloads")
+        call! (fn [moves] (move sys moves) (:seq (last (events sys "files/moving"))))]
+    (testing "a folder kept for something new, emptied later by Kira, is not swept by an unrelated undo"
+      (let [c3 (call! [{:from (str d "/confirmation.pdf") :to (str root "/New/confirmation.pdf")}])]
+        (spit (str root "/New/mine.txt") "mine")
+        (is (re-find #"Kept New: something new is in it" (str/join "\n" (:ok (moves/undo! sys c3)))))
+        (fs/delete (str root "/New/mine.txt"))
+        (let [c7 (call! [{:from (str d "/statement-oct.pdf") :to (str root "/Bank/s.pdf")}])
+              r (moves/undo! sys c7)]
+          (is (fs/directory? (str root "/New")) "Kira's empty New stays")
+          (is (not (fs/exists? (str root "/Bank"))) "the folder move 7 made goes")
+          (is (= [{:call c7 :path (str root "/Bank")}] (:removed (:data (last (events sys "files/undone"))))))
+          (is (re-find #"Removed 1 empty folder " (first (:ok r)))))))
+    (testing "a folder recreated after an undo removed it, recorded under another call, stays"
+      (fs/delete (str root "/New"))
+      (let [a (call! [{:from (str d "/confirmation.pdf") :to (str root "/New/c.pdf")}])
+            b (call! [{:from (str d "/statement-oct.pdf") :to (str root "/New/s.pdf")}])]
+        (is (:ok (moves/undo! sys a)))
+        (is (fs/directory? (str root "/New")) "move b's file is still in it")
+        (is (:ok (moves/undo! sys b)))
+        (is (not (fs/exists? (str root "/New"))) "empty once b is back, so the folder a made goes")
+        (is (= [{:call a :path (str root "/New")}] (:removed (:data (last (events sys "files/undone")))))
+            "recorded against the call that made it")
+        (fs/create-dirs (str root "/New"))
+        (let [c (call! [{:from (str d "/confirmation.pdf") :to (str root "/Other/c.pdf")}])]
+          (is (:ok (moves/undo! sys c)))
+          (is (fs/directory? (str root "/New")) "the folder Kira made again stays"))))
+    (testing "a folder kept for a later move, emptied by Kira's hand, is not swept by an unrelated undo"
+      (fs/delete (str root "/New"))
+      (let [a (call! [{:from (str d "/confirmation.pdf") :to (str root "/New/c.pdf")}])
+            _ (call! [{:from (str d "/statement-oct.pdf") :to (str root "/New/s.pdf")}])]
+        (is (:ok (moves/undo! sys a)))
+        (fs/move (str root "/New/s.pdf") (str root "/s.pdf"))
+        (let [c (call! [{:from (str d "/confirmation.pdf") :to (str root "/Other/c.pdf")}])]
+          (is (:ok (moves/undo! sys c)))
+          (is (fs/directory? (str root "/New")) "only an undo that puts something back from it removes it"))))))
+
+(deftest undo-keeps-a-folder-a-later-call-took-something-out-of
+  (let [{:keys [sys root]} (world! *dir*)
+        d (str root "/Downloads")
+        original (snapshot *dir*)
+        call! (fn [moves] (move sys moves) (:seq (last (events sys "files/moving"))))
+        ;; The move that goes back is the one that made new/.
+        c1 (call! [{:from (str d "/statement-oct.pdf") :to (str root "/new/s.pdf")}
+                   {:from (str d "/confirmation.pdf") :to (str root "/new/c.pdf")}])
+        c2 (call! [{:from (str root "/new/c.pdf") :to (str root "/b/c.pdf")}])]
+    (let [r (moves/undo! sys c1)]
+      (is (re-find #"put back 1 of 2" (first (:ok r))))
+      (is (some #(str/includes? % (str "Move " c2 " has moved new/c.pdf since. relay undo " c2 " first")) (:ok r)))
+      (is (fs/directory? (str root "/new")) "move 2's undo puts c.pdf back in new"))
+    (is (:ok (moves/undo! sys c2)))
+    (is (:ok (moves/undo! sys c1)))
+    (is (= original (snapshot *dir*)))))
+
+(deftest undo-leaves-what-a-later-move-put-back-in-its-place
+  ;; Moved away and back by later calls, the file looks unchanged, but it
+  ;; is the later call's to put back: undoing the first call early must
+  ;; not take it, or that call's undo has nothing left to undo.
+  (let [{:keys [sys root]} (world! *dir*)
+        original (snapshot *dir*)
+        call! (fn [moves] (move sys moves) (:seq (last (events sys "files/moving"))))
+        c1 (call! [{:from (str root "/Downloads/confirmation.pdf") :to (str root "/a.pdf")}])
+        c2 (call! [{:from (str root "/a.pdf") :to (str root "/b.pdf")}])
+        c3 (call! [{:from (str root "/b.pdf") :to (str root "/a.pdf")}])]
+    (let [r (moves/undo! sys c1)]
+      (is (re-find (re-pattern (str "Move " c3 " has moved a.pdf since")) (str/join "\n" (:refused r)))))
+    (doseq [c [c3 c2 c1]] (is (:ok (moves/undo! sys c)) (str "undo " c)))
+    (is (= original (snapshot *dir*)))
+    (testing "nor take the old place a later move needs to put something back in"
+      (let [c1 (call! [{:from (str root "/Downloads/confirmation.pdf") :to (str root "/x/c.pdf")}])
+            c2 (call! [{:from (str root "/Downloads/statement-oct.pdf") :to (str root "/Downloads/confirmation.pdf")}])
+            c3 (call! [{:from (str root "/Downloads/confirmation.pdf") :to (str root "/s.pdf")}])]
+        (let [r (moves/undo! sys c1)]
+          (is (str/includes? (str/join "\n" (:refused r))
+                             (str "Move " c3 " has moved something at Downloads/confirmation.pdf since. relay undo " c3
+                                  " first, then relay undo " c1 " puts x/c.pdf back."))))
+        (doseq [c [c3 c2 c1]] (is (:ok (moves/undo! sys c)) (str "undo " c)))
+        (is (= original (snapshot *dir*)))))))
+
+(deftest undo-never-removes-a-folder-an-earlier-undo-removed
+  (let [{:keys [sys root]} (world! *dir*)
+        d (str root "/Downloads")
+        _ (move sys [{:from (str d "/confirmation.pdf") :to (str root "/F/c.pdf")}
+                     {:from (str d "/statement-oct.pdf") :to (str root "/G/s.pdf")}])
+        c (:seq (last (events sys "files/moving")))]
+    (is (:ok (moves/undo! sys c #{0})))
+    (is (not (fs/exists? (str root "/F"))))
+    (fs/create-dirs (str root "/F"))
+    (is (:ok (moves/undo! sys c #{1})))
+    (is (fs/directory? (str root "/F")) "Kira made F again; it is hers")
+    (is (not (fs/exists? (str root "/G"))))))
+
+(deftest a-refused-undo-says-where-the-file-came-from-and-what-to-do
+  (let [{:keys [sys root]} (world! *dir*)
+        _ (fs/create-dirs (str root "/old stuff"))
+        _ (spit (str root "/old stuff/grant-3.md") "# Grant 3\n")
+        _ (move sys [{:from (str root "/old stuff/grant-3.md") :to (str root "/grants/grant-3.md")}])
+        c (:seq (last (events sys "files/moving")))]
+    (spit (str root "/grants/grant-3.md") "a line of Kira's\n" :append true)
+    (let [lines (:refused (moves/undo! sys c))
+          text (str/join "\n" lines)]
+      (is (str/includes? text "grants/grant-3.md has changed since it was moved there. It came from old stuff/grant-3.md; move it back there yourself to keep your edits."))
+      (is (not (str/includes? text "Once each is as the move left it")))
+      (is (not (str/includes? text root)) "paths relative to the granted folder"))
+    (testing "moved back by hand, it counts as put back, by Kira"
+      (fs/move (str root "/grants/grant-3.md") (str root "/old stuff/grant-3.md"))
+      (let [{:keys [ok]} (moves/undo! sys c)]
+        (is (some #(str/includes? % "old stuff/grant-3.md: you put it back") ok) (pr-str ok)))
+      (is (= [0] (:undone (core/move-call (inbound/current-state sys) c))))
+      (is (= "# Grant 3\na line of Kira's\n" (slurp (str root "/old stuff/grant-3.md"))) "nothing moved")
+      (is (not (fs/exists? (str root "/grants"))) "the folder the move made, empty now, goes")
+      (is (re-find #"already undone" (try (moves/undo! sys c) "" (catch clojure.lang.ExceptionInfo e (ex-message e))))))))
+
 (deftest a-call-relay-never-finished-says-to-check-by-hand
   (let [{:keys [sys root]} (world! *dir*)
         e (inbound/submit! sys {:type :files/start :actor "steward" :labels []
@@ -421,8 +537,10 @@
 (defn- contents [snap] (sort (keep (fn [[_ [k c]]] (when (= :file k) c)) snap)))
 
 (defn- a-change-stops-undo?
-  "Edits, adds or removes one file in what the last call moved, checks that
-  undo then refuses and touches nothing, and puts the change back."
+  "Edits, adds or removes one file in what the last call's first move
+  moved, checks that undo then leaves that move where it is, untouched,
+  and puts back every other (refusing, and touching nothing, when there
+  is no other), and puts the change back."
   [sys dir call change]
   (let [{:keys [moves done]} (core/move-call (inbound/current-state sys) call)
         to (:to (moves (:index (first done))))
@@ -440,18 +558,30 @@
       :remove (fs/delete file)
       :add (spit added "new"))
     (let [before (snapshot dir)
+          rel (subs to (inc (count dir)))
+          at-to (fn [snap] (into {} (filter #(or (= rel (key %)) (str/starts-with? (key %) (str rel "/"))) snap)))
+          changed (at-to before)
           r (moves/undo! sys call)
-          ok (and (:refused r) (= before (snapshot dir)))]
+          after (snapshot dir)
+          undone (set (:undone (core/move-call (inbound/current-state sys) call)))
+          ok (and (not (undone (:index (first done))))
+                  (= changed (at-to after)))
+          ok (if (= 1 (count done))
+               (and ok (:refused r) (= before after))
+               (and ok (:ok r) (= (set (map :index (rest done))) undone)))]
       (case change
         :edit (spit file content)
         :remove (spit file content)
         :add (fs/delete added))
       ok)))
 
-(defspec undoing-every-call-restores-the-tree-byte-for-byte 60
+(defspec undoing-every-call-restores-the-tree-byte-for-byte 200
   (prop/for-all [tree gen-tree
                  calls gen-calls
-                 change (gen/elements [:edit :add :remove])]
+                 change (gen/elements [:edit :add :remove])
+                 ;; Which moves of the first call to put back early, on
+                 ;; their own, before the rest.
+                 early (gen/vector gen/boolean 2)]
     (let [dir (str (fs/real-path (fs/create-temp-dir {:prefix "relay-files-prop"})))]
       (try
         (build! dir tree)
@@ -469,7 +599,15 @@
               ;; A change since the last call stops its undo, which then
               ;; touches nothing.
               stops (or (empty? made) (a-change-stops-undo? sys dir (peek made) change))
-              undos (mapv #(moves/undo! sys %) (reverse made))]
+              ;; Moves put back one by one: each goes back or is left
+              ;; where it is, never half.
+              _ (when-let [c (first made)]
+                  (let [left (core/move-steps-left (core/move-call (inbound/current-state sys) c))
+                        only (set (keep (fn [[s e]] (when e (:index s))) (map vector left early)))]
+                    (when (seq only) (moves/undo! sys c only))))
+              undos (vec (for [c (reverse made)
+                               :when (seq (core/move-steps-left (core/move-call (inbound/current-state sys) c)))]
+                           (moves/undo! sys c)))]
           (and
            ;; Nothing outside the folder changed, and no file was lost or
            ;; overwritten: the same contents are all still there.
@@ -567,3 +705,116 @@
       (is (= -32602 (get-in (first (ht/writes fx 1)) ["error" "code"])) (pr-str params))
       (is (empty? (filter #(= :undo (:effect %)) fx))))))
 
+
+;; --- undo, move by move (U1e)
+
+(defn- three-moves!
+  "Moves three downloads into folders the call makes; the call's number."
+  [sys root]
+  (move sys [{:from (str root "/Downloads/confirmation.pdf") :to (str root "/Filed/confirmation.pdf")}
+             {:from (str root "/Downloads/statement-oct.pdf") :to (str root "/Filed/statement.pdf")}
+             {:from (str root "/Downloads/todo.txt") :to (str root "/Notes/todo/todo.txt")}])
+  (:seq (last (events sys "files/moving"))))
+
+(deftest undo-puts-back-every-move-it-can-and-names-the-rest
+  (let [{:keys [sys root]} (world! *dir*)
+        _ (spit (str root "/Downloads/todo.txt") "buy milk")
+        before (snapshot *dir*)
+        call (three-moves! sys root)]
+    (spit (str root "/Notes/todo/todo.txt") "buy milk\nand eggs")
+    (let [{:keys [ok refused summary]} (moves/undo! sys call)
+          text (str/join "\n" ok)]
+      (is (nil? refused))
+      (is (= "Put back 2 of 3 files." summary))
+      (is (re-find #"put back 2 of 3" (first ok)))
+      (is (str/includes? text "Not put back:"))
+      (is (str/includes? text "Notes/todo/todo.txt has changed since it was moved there.")
+          "named relative to the folder she granted")
+      (is (not (str/includes? text (str *dir*))) "never the full path")
+      (is (str/includes? text "It came from Downloads/todo.txt; move it back there yourself to keep your edits.")
+          "where it came from, and a next step that keeps her edit")
+      (is (= "filed 2025" (slurp (str root "/Downloads/confirmation.pdf"))))
+      (is (= "buy milk\nand eggs" (slurp (str root "/Notes/todo/todo.txt"))) "the edited file stays as she left it")
+      (is (not (fs/exists? (str root "/Filed"))) "a folder the move made is removed once it is empty again"))
+    (testing "once the file is as the move left it, undo puts back the rest"
+      (spit (str root "/Notes/todo/todo.txt") "buy milk")
+      (let [{:keys [ok]} (moves/undo! sys call)]
+        (is (re-find #"put back 1 of 1.*Removed 2 empty folders" (first ok))))
+      (is (= before (snapshot *dir*))))))
+
+(deftest undo-takes-the-files-to-put-back-by-name
+  (let [{:keys [sys root]} (world! *dir*)
+        _ (spit (str root "/Downloads/todo.txt") "buy milk")
+        call (three-moves! sys root)
+        undo (fn [& args] (try (cli/execute (into ["--data" (:data-dir sys) "undo" (str call)] args))
+                               (catch clojure.lang.ExceptionInfo e {:error (ex-message e)})))]
+    (is (re-find #"did not move Downloads/nope.txt" (:error (undo "Downloads/nope.txt"))) "a name it did not move")
+    (is (re-find #"no option --except" (:error (undo "--except" "Notes/todo/todo.txt"))) "an unknown option")
+    (is (= 3 (count (core/move-steps-left (core/move-call (inbound/current-state sys) call)))) "and nothing moved")
+    (let [r (undo "Notes/todo/todo.txt" (str root "/Filed/statement.pdf"))]
+      (is (= 0 (:exit r)) (pr-str r))
+      (is (re-find #"put back 2 of 2" (first (:out r)))))
+    (is (= "buy milk" (slurp (str root "/Downloads/todo.txt"))))
+    (is (= "bank october" (slurp (str root "/Downloads/statement-oct.pdf"))))
+    (is (= "filed 2025" (slurp (str root "/Filed/confirmation.pdf"))) "the one not named stays")
+    (is (not (fs/exists? (str root "/Notes"))) "the folders made for the files put back are gone")
+    (is (fs/exists? (str root "/Filed")) "the one still holding a moved file stays")
+    (is (re-find #"already back" (:error (undo "Notes/todo/todo.txt"))))
+    (is (re-find #"put back 1 of 1" (first (:out (undo)))) "the rest")
+    (is (not (fs/exists? (str root "/Filed"))))))
+
+(deftest a-move-says-which-folders-it-left-empty
+  (let [{:keys [sys root]} (world! *dir*)]
+    (fs/create-dirs (str root "/old stuff"))
+    (spit (str root "/old stuff/archive1.md") "old")
+    (let [r (move sys [{:from (str root "/old stuff/archive1.md") :to (str root "/archive/archive1.md")}])
+          call (:seq (last (events sys "files/moving")))]
+      (is (str/includes? (:ok r) (str "These folders are empty now, and relay leaves them: " root "/old stuff")))
+      (is (fs/exists? (str root "/old stuff")) "relay never removes it")
+      (is (= [(str root "/old stuff")] (:emptied (core/move-call (inbound/current-state sys) call))))
+      (is (some #{"Left empty: old stuff"} (:lines (move-item sys call))) "the operator sees it, relative")
+      (is (some #{"  Left empty: old stuff"} (:out (cli/execute ["--data" (:data-dir sys) "moves"]))))
+      (testing "undo fills it again, so it is no longer said"
+        (is (:ok (moves/undo! sys call)))
+        (is (not-any? #(str/starts-with? % "Left empty") (:lines (move-item sys call))))))
+    (testing "a granted folder is never called empty"
+      (let [r (move sys [{:from (str root "/Downloads/confirmation.pdf") :to (str root "/c.pdf")}
+                         {:from (str root "/Downloads/statement-oct.pdf") :to (str root "/s.pdf")}])]
+        (is (str/includes? (:ok r) (str root "/Downloads")) "Downloads is a folder inside the granted one")
+        (is (not (str/includes? (:ok r) (str root ","))))))))
+
+(deftest the-role-hears-when-the-operator-undoes-its-move
+  (let [{:keys [sys root]} (world! *dir*)
+        _ (move sys [{:from (str root "/Downloads/confirmation.pdf") :to (str root "/Taxes/c.pdf")}] ["mail:eve@example.net"])
+        call (:seq (last (events sys "files/moving")))]
+    (is (empty? (events sys "memo/sent")) "moving tells nobody")
+    (moves/undo! sys call)
+    (let [[m & more] (events sys "memo/sent")]
+      (is (nil? more) "one memo")
+      (is (= {:from "dispatcher" :to "steward"} (select-keys (:data m) [:from :to])))
+      (is (= (str "The operator undid move " call) (get-in m [:data :subject])))
+      (is (str/includes? (get-in m [:data :body]) (str root "/Taxes/c.pdf → " root "/Downloads/confirmation.pdf")))
+      (is (str/includes? (get-in m [:data :body]) "files_moves"))
+      (is (every? (set (:labels m)) ["private" "mail:eve@example.net"]) "it names her files, as the move did"))
+    (testing "files_moves shows the role its record, put back marked"
+      (let [r (tools/call! sys "steward" "files_move" {:moves [{:from (str root "/Downloads/statement-oct.pdf") :to (str root "/s.pdf")}]} [] "c2" nil)
+            _ (is (nil? (:error r)))
+            {:keys [ok labels]} (tools/call! sys "steward" "files_moves" {} [] "c3" nil)]
+        (is (str/includes? ok (str "Move " call)))
+        (is (str/includes? ok "all put back by the operator"))
+        (is (str/includes? ok (str root "/Downloads/confirmation.pdf → " root "/Taxes/c.pdf (put back)")))
+        (is (str/includes? ok (str root "/Downloads/statement-oct.pdf → " root "/s.pdf")))
+        (is (every? (set labels) ["private" "mail:eve@example.net"]))))
+    (testing "only a role granted folders has it, and it shows only its own"
+      (is (contains? (tools/offered (:config sys) "steward") "files_moves"))
+      (is (not (contains? (tools/offered (:config sys) "clerk") "files_moves"))))))
+
+(deftest a-refused-undo-names-files-relative-to-the-folder
+  (let [{:keys [sys root]} (world! *dir*)
+        _ (move sys [{:from (str root "/Downloads/statement-oct.pdf") :to (str root "/Bank/statement.pdf")}])
+        call (:seq (last (events sys "files/moving")))]
+    (spit (str root "/Bank/statement.pdf") "edited")
+    (let [msg (get-in (client-undo sys call) ["error" "message"])]
+      (is (str/includes? msg "Bank/statement.pdf has changed since it was moved there."))
+      (is (not (str/includes? msg (str *dir*)))))
+    (is (empty? (events sys "memo/sent")) "nothing put back, so nothing to tell")))

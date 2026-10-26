@@ -32,10 +32,13 @@
   Every call is two events in the log: files/moving before anything moves,
   with what the call asked for, and files/moved after, with what it did and
   a fingerprint of each thing moved (sizes and SHA-256 of the content).
-  Both carry the session's labels and private. `relay undo <call>` puts
-  everything back only when every moved thing is still where the call left
-  it, unchanged, and nothing has taken its old place; otherwise it says
-  what changed and touches nothing (I7).
+  Both carry the session's labels and private. files/moved also names the
+  folders the call left empty, which relay never removes. `relay undo
+  <call> [<file>...]` puts back each move on its own: one whose moved
+  thing is still where the call left it, unchanged, with nothing in its
+  old place, goes back; any other stays where it is and is named with
+  why, relative to the granted folder (I7). The role that made the call
+  is told by memo, and files_moves shows it its record.
 
   Within one call no move may touch a path another move touches (the same
   path, or one inside the other), so the moves of a call do not depend on
@@ -166,19 +169,44 @@
     (vec (rest (reductions (fn [acc part] (str acc "/" part)) b parts)))))
 
 (defn undo-problem
-  "Why one done step cannot be put back, or nil. `w` is what the edge
-  found now: at the step's target :to-kind, :to-fingerprint and
-  :to-parent-real; at its source :from-exists, :from-parent-kind and
-  :from-parent-real."
-  [{:keys [from to]} fingerprint {:keys [to-kind to-fingerprint to-parent-real from-exists
-                                         from-parent-kind from-parent-real]}]
-  (cond
-    (nil? to-kind) (str "Nothing is at " to " any more.")
-    (not= to-parent-real (parent-of to)) (str (parent-of to) " is not the folder it was.")
-    (not= fingerprint to-fingerprint) (str to " has changed since it was moved there.")
-    from-exists (str "Something new is at " from ".")
-    (not= "dir" from-parent-kind) (str "The folder " (parent-of from) " is gone.")
-    (not= from-parent-real (parent-of from)) (str (parent-of from) " is not the folder it was.")))
+  "Why one done step cannot be put back, with what to do about it, or nil.
+  `w` is what the edge found now: at the step's target :to-kind,
+  :to-fingerprint and :to-parent-real; at its source :from-exists,
+  :from-parent-kind and :from-parent-real. `show` is how a path reads to
+  whoever is told (relay.move-view/shower); the full path when not given.
+  `again` is the command that tries again, such as \"relay undo 10\"."
+  ([step fingerprint w] (undo-problem step fingerprint w str "relay undo"))
+  ([{:keys [from to]} fingerprint {:keys [to-kind to-fingerprint to-parent-real from-exists
+                                          from-parent-kind from-parent-real]} show again]
+   (let [came (str "It came from " (show from))]
+     (cond
+       (nil? to-kind) (str "Nothing is at " (show to) " any more. " came
+                           "; once it is back there, relay counts it as put back.")
+       (not= to-parent-real (parent-of to)) (str (show (parent-of to)) " is not the folder it was, so relay"
+                                                 " leaves " (show to) " alone. " came "; check it by hand.")
+       (not= fingerprint to-fingerprint) (str (show to) " has changed since it was moved there. " came
+                                              "; move it back there yourself to keep your edits.")
+       from-exists (str "Something new is at " (show from) ", where " (show to) " came from. Move the new one"
+                        " away and " again " puts " (show to) " back.")
+       (not= "dir" from-parent-kind) (str "The folder " (show (parent-of from)) " is gone, so " (show to)
+                                          " cannot go back to " (show from) ". Make the folder again and "
+                                          again " puts it back.")
+       (not= from-parent-real (parent-of from)) (str (show (parent-of from)) " is not the folder it was, so relay"
+                                                     " will not put " (show to) " back in it. Check it by hand.")))))
+
+(defn back-by-hand?
+  "Whether a step undo-problem stops is back where it came from all the
+  same: nothing is at its target, the same kind of thing is at its
+  source in the folder it was in, and no move relay has not undone put
+  anything there (`pending`, the targets of those moves). The operator
+  moved it back, perhaps after editing it, so undo counts it as put back
+  and moves nothing."
+  [{:keys [from to]} fingerprint {:keys [to-kind from-kind from-parent-kind from-parent-real]} pending]
+  (and (nil? to-kind)
+       (= (:kind fingerprint) from-kind)
+       (= "dir" from-parent-kind)
+       (= from-parent-real (parent-of from))
+       (not (some #(or (under? % from) (under? from %)) (remove #{to} pending)))))
 
 (defn removable-dirs
   "The folders a call made, deepest first, for undo to remove when empty."
@@ -193,25 +221,31 @@
        " none if one is refused: nothing is overwritten or deleted, a move whose target exists is"
        " refused, and the folders a target needs are made. Within one call no two moves may touch the"
        " same path or one inside another; rename a folder and fill it in separate calls. Plan with sh"
-       " first, where these folders show when they are mounted. The operator can undo a whole call."))
+       " first, where these folders show when they are mounted. relay never removes a folder a move"
+       " leaves empty; it says which. The operator can undo any move, and files_moves shows your record"
+       " of them, with what was undone."))
 
 (defn move-line [{:keys [from to]}] (str "  " from " → " to))
 
 (defn moved-text
-  "What the steward is told after a call."
-  [call moves done stopped]
-  (str/join "\n"
-            (concat [(str (if stopped "Moved " "Moved all ") (count done) " of " (count moves)
-                          (when stopped (str ", then stopped: " stopped))
-                          ". This is move " call "; the operator can undo it with relay undo " call ".")]
-                    (map #(move-line (moves (:index %))) done))))
+  "What the steward is told after a call: what moved, and the folders it
+  left empty, which relay does not remove."
+  ([call moves done stopped] (moved-text call moves done stopped nil))
+  ([call moves done stopped emptied]
+   (str/join "\n"
+             (concat [(str (if stopped "Moved " "Moved all ") (count done) " of " (count moves)
+                           (when stopped (str ", then stopped: " stopped))
+                           ". This is move " call "; the operator can undo it with relay undo " call ".")]
+                     (map #(move-line (moves (:index %))) done)
+                     (when (seq emptied)
+                       [(str "These folders are empty now, and relay leaves them: " (str/join ", " emptied) ".")])))))
 
 (defn calls-lines
   "relay moves: each call, newest last, with what it moved and what is undone."
   [calls zone]
   (if (empty? calls)
     ["No files have been moved."]
-    (mapcat (fn [{:keys [id actor at moves done undone status stopped roots]}]
+    (mapcat (fn [{:keys [id actor at moves done undone status stopped roots emptied]}]
               (let [undone (set undone)
                     stamp (.format (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm")
                                   (.atZone ^java.time.Instant at zone))]
@@ -226,7 +260,8 @@
                         (if (= :moving status)
                           (map move-line moves)
                           ;; One line per file, relative to the granted folder.
-                          (map #(str "  " %) (rest (:lines (move-view/view roots (for [{:keys [index]} done] [index (moves index)]) undone))))))))
+                          (map #(str "  " %) (move-view/file-lines roots (for [{:keys [index]} done] [index (moves index)])
+                                                                   undone emptied))))))
             calls)))
 
 ;; --- the edges: what is on the disk
@@ -340,6 +375,18 @@
               [removed (cond-> kept (kind d) (conj d))]))
           [[] []] (removable-dirs dirs)))
 
+(defn emptied
+  "The folders the `froms` of a call were in that are empty now, by real
+  path: relay never removes them, so whoever moved them is told. A
+  granted folder itself is never counted: it stays whatever it holds."
+  [froms roots]
+  (vec (sort (distinct (for [f froms
+                             :let [d (parent-of f)]
+                             :when (and (not (some #{d} roots))
+                                        (= "dir" (kind d)) (= d (real d))
+                                        (empty? (try (fs/list-dir d) (catch java.io.IOException _ [::unknown]))))]
+                         d)))))
+
 (defn make-dirs!
   "Makes the folders a target needs, adding each one made to the atom
   `made`. One that exists already, made by an earlier move of the call,
@@ -383,6 +430,7 @@
    :to-fingerprint (fingerprint to)
    :to-parent-real (real (parent-of to))
    :from-exists (some? (kind from))
+   :from-kind (kind from)
    :from-parent-kind (kind (parent-of from))
    :from-parent-real (real (parent-of from))})
 

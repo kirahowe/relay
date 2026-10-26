@@ -153,6 +153,10 @@
    ;; next one, by part; the suggestions the operator turned down, by
    ;; key; and new GitHub items from people, for the tick's push.
    :daily {} :daily-parts {} :dismissed {} :github-news []
+   ;; Offers of help in the note the operator said no to, by key (the
+   ;; item stays; its offer does not come back), and what came of offers
+   ;; the note's writer followed up, by the item's key.
+   :declined {} :offer-outcomes {}
    ;; Every label any event has carried, which bounds what a session that
    ;; could read anything in relay may have seen.
    :seen-labels []
@@ -1346,15 +1350,32 @@
 (defmethod evolve* "files/moved" [state {:keys [at labels data] :as event}]
   (update-in state [:moves (:call data)]
              #(-> % (assoc :status :moved :done (vec (:done data)) :stopped (:stopped data)
+                           ;; The folders it left empty, which relay never removes.
+                           :emptied (vec (:emptied data))
                            :finished-at (inst at))
                   (update :labels union labels)
                   (update :sources (fn [ss] (provenance/sources (concat ss (event-sources event))))))))
 
+(defn- folders-by-call
+  "The folders of a files/undone event's `entries`, by the call that made
+  each: {:call :path} maps, or bare paths, which are the undone call's."
+  [call entries]
+  (for [e entries] (if (map? e) [(:call e) (:path e)] [call e])))
+
 (defmethod evolve* "files/undone" [state {:keys [at data]}]
-  (update-in state [:moves (:call data)]
-             #(-> % (update :undone (comp vec sort distinct concat) (:steps data))
-                  (update :removed into (:removed data))
-                  (assoc :undone-at (inst at) :undo-stopped (:stopped data)))))
+  ;; What undo removed, or kept because something new was in it, goes on
+  ;; the call that made the folder, so no later undo sweeps it again.
+  (let [mark (fn [state field entries]
+               (reduce (fn [state [k d]]
+                         (cond-> state (get-in state [:moves k]) (update-in [:moves k field] (fnil conj []) d)))
+                       state (folders-by-call (:call data) entries)))]
+    (-> state
+        (update-in [:moves (:call data)]
+                   #(-> % (update :undone (comp vec sort distinct concat) (:steps data))
+                        (update :by-hand (comp vec sort distinct concat) (:by-hand data))
+                        (assoc :undone-at (inst at) :undo-stopped (:stopped data))))
+        (mark :removed (:removed data))
+        (mark :kept (:kept data)))))
 
 (defmethod evolve* "note/written" [state {:keys [seq at data labels public]}]
   (let [{:keys [owner name text]} data]
@@ -2931,6 +2952,20 @@
         (assoc-in [:messages message :rev] (:next-seq state)))
     state))
 
+(defn- touch-notes
+  "Moves the rev of every daily note that numbers an item `numbers?`
+  says is done now, so a client is sent each such note again: an item
+  done from one note reads as done in every note that has it."
+  [state numbers?]
+  (reduce (fn [st [id m]]
+            (if (and (= "daily-note" (:origin m)) (some numbers? (:numbered m)))
+              (assoc-in st [:messages id :rev] (:next-seq state))
+              st))
+          state (:messages state)))
+
+(defn- numbers-keys? [ks]
+  (let [ks (set ks)] (fn [{:keys [op keys]}] (and (= "dismiss" op) (some ks keys)))))
+
 (defmethod evolve* "brief/composed" [state {:keys [seq data]}]
   (assoc state :daily {:date (:date data) :seq seq}))
 
@@ -2947,7 +2982,19 @@
 (defmethod evolve* "suggestion/dismissed" [state {:keys [seq at data labels]}]
   (-> (reduce (fn [st k] (assoc-in st [:dismissed k] {:text (:text data) :seq seq :at (inst at) :labels (union labels)}))
               state (:keys data))
+      (touch-notes (numbers-keys? (:keys data)))
       (acted (:message data) (:n data) "dismissed")))
+
+(defmethod evolve* "offer/declined" [state {:keys [seq at data labels]}]
+  (-> (reduce (fn [st k] (assoc-in st [:declined k] {:text (:text data) :offer (:offer data) :seq seq :at (inst at)
+                                                      :labels (union labels)}))
+              state (:keys data))
+      (touch-notes (numbers-keys? (:keys data)))
+      (acted (:message data) (:n data) "declined")))
+
+(defmethod evolve* "offer/outcome" [state {:keys [seq at actor data labels]}]
+  (assoc-in state [:offer-outcomes (:key data)] {:key (:key data) :outcome (:outcome data) :by actor
+                                                 :seq seq :at (inst at) :labels (union labels)}))
 
 (defn- mark-undo
   "Marks the change an undo made, the event `put` (change/reverted's
@@ -2962,6 +3009,7 @@
 (defmethod evolve* "change/reverted" [state {:keys [data]}]
   (-> state
       (update :reverted (fnil conj #{}) (:change data))
+      (touch-notes (fn [{:keys [op change]}] (and (= "revert" op) (= change (:change data)))))
       (mark-undo (:put data) (:change data))
       (acted (:message data) (:n data) "reverted")))
 
@@ -3025,10 +3073,20 @@
   (let [{:keys [since changes]} (note-changes state now)]
     (digest/compose {:date date :changes changes :since since :written (written-parts state)
                      :dismissed (set (keys (:dismissed state)))
+                     :declined (set (keys (:declined state)))
                      :github (:github-news state)
                      :github? (boolean (some #(= :github (:kind (val %))) (:ingest config)))
                      :problems (problem-lines state config)
                      :grant-search (grant-search state config since)})))
+
+(defmethod decide* :offer/outcome [{:keys [config actor] :as tx} {{:keys [key outcome]} :args}]
+  ;; What came of an offer the note made, as its writer followed it up, so
+  ;; the next look-ahead knows the work is done or where it stands.
+  (caller-role! tx)
+  (when-not (= actor (digest/role-of config))
+    (reject! :forbidden (str actor " does not write the daily note.")))
+  (when-let [why (digest/outcome-problem key outcome)] (reject! why))
+  (emit tx "offer/outcome" {:key (digest/slug key) :outcome (messages/squeeze-line outcome)}))
 
 (defmethod decide* :digest/compose [{:keys [state config now] :as tx} {{:keys [date]} :args}]
   ;; Recorded once a day under the log's lock, so two ticks cannot both
@@ -3168,20 +3226,59 @@
       (emit "suggestion/dismissed" {:keys (vec keys) :text text :message (:id m) :n n} labels)
       (assoc :actor (:actor tx) :labels (:labels tx) :public (:public tx))))
 
+(defn- decline! [tx m {:keys [n keys text offer labels]}]
+  (-> tx
+      (assoc :actor operator :labels [] :public false)
+      (emit "offer/declined" {:keys (vec keys) :text text :offer offer :message (:id m) :n n} labels)
+      (assoc :actor (:actor tx) :labels (:labels tx) :public (:public tx))))
+
+(defn item-done
+  "What has been done with numbered item `entry` of daily note `m`, from
+  any note or command: \"reverted\" once its change was undone,
+  \"dismissed\" once it, or the same suggestion in another note, was
+  dropped, \"declined\" once its offer was turned down; else nil."
+  [state m {:keys [n op change keys offer]}]
+  (let [here (get-in m [:acted n])]
+    (cond
+      (#{"reverted" "dismissed"} here) here
+      (and (= "revert" op) (contains? (or (:reverted state) #{}) change)) "reverted"
+      (and (= "dismiss" op) (some #(contains? (:dismissed state) %) keys)) "dismissed"
+      here here
+      (and (= "dismiss" op) offer (some #(contains? (:declined state) %) keys)) "declined")))
+
+(defn note-acted
+  "What has been done with each numbered item of daily note `m`, from any
+  note or command: {n done} (item-done)."
+  [state m]
+  (into (or (:acted m) {}) (for [e (:numbered m) :let [d (item-done state m e)] :when d] [(:n e) d])))
+
+(def done-words
+  "How what was done with a note's item reads."
+  {"reverted" "undone" "dismissed" "dropped" "declined" "turned down"})
+
 (defn- act-on-note
-  "Does what item `n` of daily note `m` offers: undoes its change or
-  drops its suggestion. `op`, when given, is what the operator asked
-  for, which must be what the item offers."
-  [tx m n op]
-  (let [{item-op :op :as item} (numbered! m n)]
-    (when (and op (not= op item-op))
+  "Does what the operator asked of item `n` of daily note `m`: undoes its
+  change (revert), says no to its offer (decline: the item stays), or
+  drops it for good (dismiss). `op`, when given, must fit what the item
+  offers; nil does what it offers. Declining an item with no offer is
+  refused and changes nothing: a casual no must not drop a reminder for
+  good, so only drop does."
+  [{:keys [state] :as tx} m n op]
+  (let [{item-op :op :as item} (numbered! m n)
+        op (or op item-op)]
+    (when (and (= "decline" op) (= "dismiss" item-op) (nil? (:offer item)))
+      (reject! :invalid (str "Item " n " has no offer to turn down. Reply \"drop " n "\" to remove it.")))
+    (when-not (or (= op item-op) (and (= "decline" op) (= "dismiss" item-op)))
       (reject! :invalid (if (= "revert" item-op)
                           (str "Item " n " is a change. Reply \"revert " n "\" to undo it.")
-                          (str "Item " n " is a suggestion. Reply \"not " n "\" to drop it."))))
-    (when-let [done (get-in m [:acted n])]
-      (reject! :invalid (str "Item " n " was " done " already.")))
-    (case item-op
+                          (str "Item " n " is a suggestion. Reply \"not " n "\" to say no to its offer, or \"drop "
+                               n "\" to remove it."))))
+    (when-let [done (item-done state m item)]
+      (when-not (and (= "declined" done) (= "dismiss" op))
+        (reject! :invalid (str "Item " n " was " (done-words done) " already."))))
+    (case op
       "revert" (revert! tx (:change item) {:message (:id m) :n n})
+      "decline" (decline! tx m item)
       "dismiss" (dismiss! tx m item))))
 
 (defn- operator-act! [{:keys [actor]}]
@@ -3206,7 +3303,7 @@
   ;; client, the command line, or a reply.
   (operator-act! tx)
   (when-not (integer? n) (reject! "Name the item by its number in the note."))
-  (when-not (or (nil? op) (#{"revert" "dismiss"} op)) (reject! "op is revert or dismiss."))
+  (when-not (or (nil? op) (#{"revert" "decline" "dismiss"} op)) (reject! "op is revert, decline or dismiss."))
   (let [m (if (some? message)
             (note-message! state message)
             (or (latest-note state) (reject! :not-found "There is no daily note yet.")))]
@@ -3214,13 +3311,14 @@
 
 (defn acted-line
   "What relay did with item `n` of daily note `m`, in plain words: the
-  undo or the drop it made (digest/undone-line, digest/dropped-line),
-  read from `state`, the state after it."
+  undo, the no to its offer or the drop it made (digest/undone-line,
+  declined-line, dropped-line), read from `state`, the state after it."
   [state m n]
-  (let [{:keys [op change text labels]} (first (filter #(= n (:n %)) (:numbered m)))]
-    (if (= "revert" op)
-      (digest/undone-line (recipe-change-by-seq state change))
-      (digest/dropped-line text labels))))
+  (let [{:keys [op change text offer labels]} (first (filter #(= n (:n %)) (:numbered m)))]
+    (cond
+      (= "revert" op) (digest/undone-line (recipe-change-by-seq state change))
+      (= "declined" (get-in state [:messages (:id m) :acted n])) (digest/declined-line text offer labels)
+      :else (digest/dropped-line text labels))))
 
 (defn- act-on-reply
   "Acts on what the operator's reply to a daily note asks for (relay.
@@ -3610,7 +3708,7 @@
 (defn- fingerprint? [f]
   (and (map? f) (#{"file" "dir"} (:kind f))))
 
-(defmethod decide* :files/finish [{:keys [state actor] :as tx} {{:keys [call done stopped]} :args}]
+(defmethod decide* :files/finish [{:keys [state actor] :as tx} {{:keys [call done stopped emptied]} :args}]
   (let [c (move-call state call)]
     (when-not (and c (= actor (:actor c)))
       (reject! :not-found (str "There is no move " call " by " actor ".")))
@@ -3622,12 +3720,47 @@
                                  (vector? (:created %)) (every? move-path? (:created %)))
                            done)
                    (apply < -1 (map :index done))
-                   (or (nil? stopped) (string? stopped)))
+                   (or (nil? stopped) (string? stopped))
+                   (or (nil? emptied) (and (vector? emptied) (every? move-path? emptied))))
       (reject! :invalid (str "What move " call " did is not well formed.")))
-    (emit tx "files/moved" (cond-> {:call call :done done} stopped (assoc :stopped stopped))
+    (emit tx "files/moved" (cond-> {:call call :done done}
+                             stopped (assoc :stopped stopped)
+                             (seq emptied) (assoc :emptied emptied))
           (:labels c))))
 
-(defmethod decide* :files/undo [{:keys [state actor] :as tx} {{:keys [call steps removed stopped]} :args}]
+(def undo-memo-lines
+  "The most moves a memo about an undo lists one by one."
+  20)
+
+(defn- undo-memo
+  "The memo telling the role that made move call `c` what the operator
+  put back (`steps`, indexes), so it does not report a state that is
+  gone. Full paths: the role works with them, and files_moves shows the
+  rest."
+  [c steps]
+  (let [moves (:moves c)
+        left (count (move-steps-left c))
+        n (count steps)]
+    {:subject (str "The operator undid move " (:id c))
+     :body (str/join "\n"
+                     (concat [(str "The operator put back " n (if (= 1 n) " file" " files")
+                                   " from your move " (:id c) ", so they are where they were before it:")]
+                             (for [i (take undo-memo-lines steps) :let [{:keys [from to]} (moves i)]]
+                               (str "  " to " → " from))
+                             (when (> n undo-memo-lines)
+                               [(str "  and " (- n undo-memo-lines) " more.")])
+                             [""
+                              (str (if (pos? left)
+                                     (str left (if (= 1 left) " file stays" " files stay") " where you moved them. ")
+                                     "")
+                                   "files_moves shows the record. When you speak of these files, say they were"
+                                   " put back. Nothing else needs doing.")]))}))
+
+(defn- folder-entries? [state entries]
+  (and (vector? entries)
+       (every? #(and (map? %) (move-call state (:call %)) (move-path? (:path %))) entries)))
+
+(defmethod decide* :files/undo [{:keys [state actor] :as tx} {{:keys [call steps removed kept by-hand stopped]} :args}]
   (when-not (= operator actor)
     (reject! :forbidden "Only the operator undoes a move."))
   (let [c (move-call state call)
@@ -3636,11 +3769,28 @@
     (when-not (= :moved (:status c))
       (reject! :invalid (str "Move " call " never finished, so relay cannot undo it.")))
     (when-not (and (vector? steps) (every? left steps) (apply distinct? -1 steps)
-                   (vector? removed) (every? move-path? removed)
+                   (folder-entries? state removed)
+                   (or (nil? kept) (folder-entries? state kept))
+                   (or (nil? by-hand) (and (vector? by-hand) (every? (set steps) by-hand)))
                    (or (nil? stopped) (string? stopped)))
       (reject! :invalid (str "What undoing move " call " did is not well formed.")))
-    (emit tx "files/undone" (cond-> {:call call :steps steps :removed removed} stopped (assoc :stopped stopped))
-          (:labels c))))
+    (let [tx (emit tx "files/undone" (cond-> {:call call :steps steps :removed removed}
+                                       (seq kept) (assoc :kept kept)
+                                       (seq by-hand) (assoc :by-hand by-hand)
+                                       stopped (assoc :stopped stopped))
+                   (:labels c))
+          role (:actor c)]
+      ;; The role that made the move hears of it, so it does not tell
+      ;; anyone about files that are no longer where it put them.
+      (if (and (seq steps) (active-role? (:state tx) role))
+        (let [{:keys [subject body]} (undo-memo (move-call (:state tx) call) steps)]
+          (-> (send-memo (assoc tx :actor dispatcher :labels [])
+                         {:from dispatcher :to role :subject subject :body body}
+                         ;; It quotes the call's paths, so it carries the
+                         ;; call's sources.
+                         (:labels c) (:sources c))
+              (assoc :actor (:actor tx) :labels (:labels tx))))
+        tx))))
 
 (def ^:private note-name-pattern #"[a-z0-9][a-z0-9-]{0,47}")
 

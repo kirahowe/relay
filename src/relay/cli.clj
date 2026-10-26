@@ -161,9 +161,9 @@ Every command needs the data directory, from --data <dir> or from the file
                                       that server, renewing it when needed
                                       (agentloop runs this)
   relay moves                         the files roles moved, each call with its number
-  relay undo <move>                   put back what one call moved, when nothing has
-                                      changed since; otherwise say what changed and
-                                      touch nothing
+  relay undo <move> [<file>...]       put back what one call moved, or only the
+                                      files named (as relay moves shows them);
+                                      a file changed since stays, and is named
   relay house build|up|down|remove|status
                                       the steward's shell, from relay.edn's :house:
                                       build its image (this needs the network),
@@ -179,8 +179,11 @@ Every command needs the data directory, from --data <dir> or from the file
                                       <note>) flags, by its number there
   relay revert c<k>                   undo any other change, by the handle relay
                                       changes gives it
-  relay dismiss <item> [<note>]       drop a suggestion of the latest daily note
-                                      (or of note <note>) for good
+  relay decline <item> [<note>]       say no to the offer of help in an item of the
+                                      latest daily note (or of note <note>); the
+                                      item stays, and the offer does not come back
+  relay dismiss <item> [<note>]       drop an item of the latest daily note (or
+                                      of note <note>) for good
   relay calendar url [--host <name>]  the address to subscribe to the agent's
                                       calendar at, in your calendar app; it opens
                                       the calendar and nothing else
@@ -770,9 +773,18 @@ id public too.")
       "house" (house! sys more)
       "calendar" (calendar! sys more opts)
       "moves" (lines (files/calls-lines (core/move-calls (state)) zone))
-      "undo" (let [id (some-> (first more) parse-long)]
-               (when-not id (fail! "usage: relay undo <move>, a number from relay moves"))
-               (let [{:keys [ok refused]} (moves/undo! sys id)]
+      "undo" (let [[n & names] more
+                   id (some-> n parse-long)
+                   usage "usage: relay undo <move> [<file>...], a number from relay moves, and the files of it to put back"]
+               (when-not id (fail! usage))
+               (when-let [flag (or (some->> (keys (dissoc opts :data :pause-file)) sort first name (str "--"))
+                                   (first (filter #(str/starts-with? % "-") names)))]
+                 (fail! (str "relay undo has no option " flag ". " usage)))
+               (let [only (when (seq names)
+                            (let [c (or (core/move-call (state) id) (fail! (str "There is no move " id ". relay moves lists them.")))
+                                  {:keys [only error]} (moves/steps-named c names)]
+                              (or only (fail! error))))
+                     {:keys [ok refused]} (moves/undo! sys id only)]
                  (if ok (lines ok) (apply result 1 refused))))
       "poll" (let [said (ingest-run/poll-now! sys (first more))]
                (dispatch/announce-github! sys)
@@ -787,12 +799,12 @@ id public too.")
                                                (or (:tail opts) 30))))
       ;; An item's number in the daily note, the one a reply and the client
       ;; use: the latest note's, or the note named after it.
-      "dismiss"
+      ("dismiss" "decline")
       (let [[n note] more
             k (some-> n parse-long)
             m (some-> note parse-long)]
-        (when-not k (fail! "usage: relay dismiss <item> [<note>], an item's number in the daily note"))
-        (submit! sys :digest/act (cond-> {:n k :op "dismiss"} m (assoc :message m)))
+        (when-not k (fail! (str "usage: relay " cmd " <item> [<note>], an item's number in the daily note")))
+        (submit! sys :digest/act (cond-> {:n k :op cmd} m (assoc :message m)))
         (let [st (state)
               msg (if m (core/message st m) (core/latest-note st))]
           (result 0 (text/visible-line (core/acted-line st msg k)))))

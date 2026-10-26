@@ -312,6 +312,12 @@
       (and (contains? params "limit") (not (and (integer? limit) (<= 1 limit max-messages-limit))))
       (str "_relay/messages takes a limit from 1 to " max-messages-limit "."))))
 
+(defn- note-wire
+  "A message's wire form, a daily note's items marked done by whatever
+  note or command did them (core/note-acted)."
+  [state m]
+  (channels/wire (cond-> m (seq (:numbered m)) (assoc :acted (core/note-acted state m)))))
+
 (defn messages-answer
   "The _relay/messages answer: the newest messages as wire forms, newest
   first, and the log's rev."
@@ -319,7 +325,7 @@
   {"rev" (log-rev state)
    "messages" (->> (vals (:messages state)) (sort-by :id >)
                    (take (or (get params "limit") default-messages-limit))
-                   (mapv channels/wire))})
+                   (mapv #(note-wire state %)))})
 
 (defn messages-changed
   "The _relay/messages/changed params for a subscriber last sent the
@@ -327,7 +333,7 @@
   first. Nil when there is none."
   [state rev]
   (when-let [ms (seq (filter #(> (:rev %) rev) (sort-by :id (vals (:messages state)))))]
-    {"rev" (log-rev state) "messages" (mapv channels/wire ms)}))
+    {"rev" (log-rev state) "messages" (mapv #(note-wire state %) ms)}))
 
 ;; --- ready: what relay prepared and told the operator (relay.ready)
 ;;
@@ -387,14 +393,17 @@
 (defn messages-act-command
   "What a _relay/messages/act asks for, as the :digest/act command relay
   submits, or {:error why}: item `item` of the daily note `message`,
-  undone (a change) or dropped (a suggestion), as the item offers. It is
+  undone (a change) or dropped (a suggestion), as the item offers, or,
+  with op \"decline\", its offer turned down and the item kept. It is
   the operator's, with no labels."
   [params]
-  (let [{:strs [message item]} params
-        unknown (sort (remove #{"message" "item"} (keys params)))]
+  (let [{:strs [message item op]} params
+        unknown (sort (remove #{"message" "item" "op"} (keys params)))]
     (cond
-      (seq unknown) {:error (str "_relay/messages/act has no parameter " (str/join ", " unknown) ". It takes message and item.")}
+      (seq unknown) {:error (str "_relay/messages/act has no parameter " (str/join ", " unknown) ". It takes message, item and op.")}
       (not (integer? message)) {:error "_relay/messages/act needs a message, by number."}
       (not (integer? item)) {:error "_relay/messages/act needs an item, by its number in the message."}
+      (and (contains? params "op") (not (#{"revert" "decline" "dismiss"} op)))
+      {:error "_relay/messages/act takes op revert, decline or dismiss."}
       :else {:command {:type :digest/act :actor core/operator :labels [] :public false
-                       :args {:message message :n item}}})))
+                       :args (cond-> {:message message :n item} op (assoc :op op))}})))
