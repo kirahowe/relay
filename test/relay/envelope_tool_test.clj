@@ -4,6 +4,9 @@
   (:require [babashka.fs :as fs]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [clojure.test.check.clojure-test :refer [defspec]]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]
             [relay.config :as config]
             [relay.inbound :as inbound]
             [relay.log :as log]
@@ -41,6 +44,28 @@
         (is (= "The input needs question." (:error (tools/call! sys "clerk" "mail" {} [] "c")))))
       (testing "the policy and the harness see the configured schema"
         (is (= schema (:parameters (first (filter #(= "mail" (:name %)) (tools/manifest (:config sys) "clerk")))))))))) 
+
+(deftest an-envelope-tool-is-given-only-the-class-labels
+  ;; Regression (U1): a scout that had answered a request shaped by a
+  ;; calendar carried ics:calendar, relay passed it on, and webtool refused
+  ;; every later search ("labels must be among contaminated, private").
+  (with-tools {"mail" (tool "echo")}
+    (fn [sys]
+      (is (= "asked When? with [\"contaminated\"] as toolu_8"
+             (:ok (tools/call! sys "clerk" "mail" {:question "When?"}
+                               ["contaminated" "ics:calendar" "mail:stranger@example.com"] "toolu_8")))))))
+
+(def ^:private any-label
+  (gen/one-of [(gen/elements ["private" "contaminated"])
+               (gen/fmap #(str "mail:" % "@example.com") (gen/not-empty gen/string-alphanumeric))
+               (gen/fmap #(str "ics:" %) (gen/not-empty gen/string-alphanumeric))
+               gen/string]))
+
+(defspec envelope-labels-are-always-among-the-classes 300
+  (prop/for-all [labels (gen/vector any-label 0 8)]
+    (let [sent (tools/envelope-call-labels labels)]
+      (and (every? #{"private" "contaminated"} sent)
+           (= (set sent) (set (filter #{"private" "contaminated"} labels)))))))
 
 (deftest anything-but-one-exact-envelope-is-a-plain-failure
   (with-tools (into {} (for [m ["exit" "two" "dup" "case" "extra" "badlabel" "noisy"]] [m (tool m)]))

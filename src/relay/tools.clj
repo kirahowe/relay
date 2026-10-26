@@ -922,6 +922,15 @@
            :else {:out (:out result) :labels (vec labels)}))
        (catch Exception e (failed (str "could not start: " (ex-message e)) "" ""))))))
 
+(defn envelope-call-labels
+  "The labels an envelope tool is given with a call: only the class labels
+  (private and contaminated) of the session's `labels`. Labels naming where
+  something came from (ics:calendar, mail:x@example.com) are provenance
+  relay keeps for itself; a tool outside relay has no use for them, and
+  one that knows only the classes would refuse the call."
+  [labels]
+  (core/union (filter core/label-names labels)))
+
 (defn- run-envelope-tool
   "Runs an envelope tool: the call on stdin, one result envelope on stdout.
   Anything else (a failure, a timeout, output that is not exactly one
@@ -937,7 +946,7 @@
   (let [failed (fn [why out err]
                  (binding [*out* *err*] (println (str tool-name ": " why)) (print err out) (flush))
                  (throw (ex-info (str "The tool " tool-name " failed.") {:relay/labels static})))
-        result (try (run-limited (vec command) (strict/generate {:input args :labels labels :call_id (str *call-id*)})
+        result (try (run-limited (vec command) (strict/generate {:input args :labels (envelope-call-labels labels) :call_id (str *call-id*)})
                                  timeout-ms {:bytes? true})
                     (catch Exception e (failed (str "could not start: " (ex-message e)) "" "")))]
     (if (= ::timeout result)
