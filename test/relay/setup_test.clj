@@ -41,6 +41,14 @@
     (is (string? (:timezone settings)))
     (is (map? (config/load-config dir)))))
 
+(deftest the-agentloop-found-is-written-as-an-absolute-bin
+  ;; Regression (U1): an older agentloop on PATH ran in place of the one
+  ;; built beside relay.
+  (let [{:keys [settings]} (create ["" "" "" "" "" "" "" "y"] {:agentloop "/opt/relay/agentloop/bin/agentloop"})]
+    (is (= "/opt/relay/agentloop/bin/agentloop" (get-in settings [:harnesses :agentloop :bin]))))
+  (let [{:keys [settings]} (create ["" "" "" "" "" "" "" "y"])]
+    (is (not (contains? (get-in settings [:harnesses :agentloop]) :bin)) "none found, none written")))
+
 (deftest nothing-is-written-without-a-yes
   (doseq [answer ["" "n" "no" "sure" nil]]
     (let [{:keys [written settings io]} (create ["" "" "" "" "" "" "" answer])]

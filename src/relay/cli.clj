@@ -254,7 +254,10 @@ id public too.")
       :else
       (if-let [settings (setup/create! {:ask (fn [prompt] (print prompt) (flush) (read-line))
                                         :say println
-                                        :webtool (setup/webtool-bin)}
+                                        :webtool (setup/webtool-bin)
+                                        ;; Written as an absolute :bin, so no other
+                                        ;; agentloop on PATH runs in its place.
+                                        :agentloop (some-> (agentloop/agentloop-bin {}) fs/absolutize str)}
                                        file)]
         (do (log/init! dir)
             (let [web (:web settings)

@@ -74,6 +74,35 @@
   (testing "the deadline"
     (is (= ["ran" true] ((juxt :outcome :crashed) (classify nil :exit "timeout"))))))
 
+(deftest an-agentloop-older-than-relay-is-named
+  ;; Regression (U1): an older agentloop on PATH refused a source label
+  ;; with "policy.labels: unknown label", and relay said only that it did
+  ;; not start.
+  (doseq [stderr ["agentloop: policy.labels: unknown label \"ics:calendar\"\n"
+                  "agentloop: unknown field \"display_ref_prefix\"\n"]]
+    (let [{:keys [outcome said]} (classify nil :exit 2 :stderr stderr :bin "/opt/old/agentloop")]
+      (is (= "needs-attention" outcome))
+      (is (= (str "agentloop at /opt/old/agentloop is too old for this relay; rebuild it"
+                  " (make -C ../agentloop build) or set :bin in relay.edn.")
+             said))))
+  (testing "any other refusal is not called too old"
+    (is (nil? (agentloop/too-old "/x" "agentloop: run has no prompt")))
+    (is (nil? (agentloop/too-old "/x" "agentloop: the field \"consent\" was removed: ...")))))
+
+(deftest the-sibling-build-comes-before-path
+  (let [dir (fs/create-temp-dir {:prefix "relay-bin"})
+        relay (fs/path dir "relay" "bin" "relay")
+        sibling (fs/path dir "agentloop" "bin" "agentloop")
+        before (System/getProperty "relay.bin")]
+    (doseq [f [relay sibling]] (fs/create-dirs (fs/parent f)) (spit (str f) "#!/bin/sh\n") (fs/set-posix-file-permissions f "rwxr-xr-x"))
+    (System/setProperty "relay.bin" (str relay))
+    (try
+      (is (= (str (fs/real-path sibling)) (str (fs/real-path (agentloop/agentloop-bin {})))))
+      (is (= "/given/agentloop" (agentloop/agentloop-bin {:bin "/given/agentloop"})) ":bin wins")
+      (finally
+        (if before (System/setProperty "relay.bin" before) (System/clearProperty "relay.bin"))
+        (fs/delete-tree dir)))))
+
 (deftest reading-the-outcome-line
   (let [text (str (json/generate-string {:seq 1 :type "run_started"}) "\n"
                   "not json\n"

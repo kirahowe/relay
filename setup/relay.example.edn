@@ -8,7 +8,7 @@
  {:agentloop {:kind :agentloop
               :model "claude-opus-5-5"
               :effort "medium"          ; low, medium, high, xhigh or max
-              ;; :bin "/path/to/agentloop"   ; default: PATH, then ../agentloop/bin
+              ;; :bin "/path/to/agentloop"   ; default: ../agentloop/bin, then PATH
               ;; :retry {:retries 2 :backoff-seconds 2 :max-wait-seconds 30}
               ;; Stops one hung tool call from eating the whole wake.
               ;; :tool-timeout-seconds 300

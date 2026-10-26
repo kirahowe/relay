@@ -46,11 +46,12 @@ which is written in Go. The steward's shell needs Apple's `container`
 
 1. Clone [agentloop](https://github.com/kirahowe/agentloop) next to this
    repository and build it: `make -C ../agentloop build`. relay runs the
-   harness's `:bin` when it is set, else the first `agentloop` on your
-   PATH, else `../agentloop/bin/agentloop`. An older `agentloop` on your
-   PATH therefore wins over the one you just built; set `:bin` to be sure
-   which one runs. When agentloop will not start, the alert and `relay
-   status` name the binary that ran.
+   harness's `:bin` when it is set, else `../agentloop/bin/agentloop`,
+   else the first `agentloop` on your PATH, and `relay init` writes the
+   one it found into relay.edn as an absolute `:bin`. To keep it
+   elsewhere, set `:bin` in the harness settings. When agentloop will not
+   start, the alert and `relay status` name the binary that ran, and an
+   agentloop older than relay is named as such: rebuild it.
 2. Choose a data directory and initialize it:
 
    ```sh
@@ -274,8 +275,8 @@ and `--untrusted` are gone too: nothing waits for you, and what you
 write is yours.
 
 To update relay itself, pull this repository and agentloop, rebuild
-agentloop with `make -C ../agentloop build` (or the copy your `:bin` or
-PATH names, which relay runs first), and run `relay house build`
+agentloop with `make -C ../agentloop build` (or the copy your `:bin`
+names, which relay runs first), and run `relay house build`
 if you use the shell, since its image may have changed. The tick picks
 up the new code at its next run. (Deploy and rollback, under
 Development, is how relay's author runs it on her own machine.)

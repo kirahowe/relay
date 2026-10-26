@@ -88,8 +88,9 @@
                                        #"\s+")})]
     {:timezone zone
      :default-harness :agentloop
-     :harnesses {:agentloop {:kind :agentloop :provider provider :model model :effort effort
-                             :api-key-command (str/split api-key #"\s+")}}
+     :harnesses {:agentloop (cond-> {:kind :agentloop :provider provider :model model :effort effort
+                                     :api-key-command (str/split api-key #"\s+")}
+                              (:agentloop io) (assoc :bin (:agentloop io)))}
      :messages messages
      :web web}))
 
@@ -181,7 +182,7 @@
   blocks (optional-blocks) to write turned on instead, for tests."
   ([settings webtool-file] (render settings webtool-file #{}))
   ([{:keys [timezone harnesses messages web]} webtool-file on]
-   (let [{:keys [provider model effort api-key-command]} (:agentloop harnesses)]
+   (let [{:keys [provider model effort api-key-command bin]} (:agentloop harnesses)]
      (switch-blocks
       (str ";; relay's settings, written by `relay init`. Only you edit this file; no\n"
            ";; role can read it. A line that starts with ;; inside a section is off:\n"
@@ -196,6 +197,7 @@
            "              :provider " (pr-str provider) "\n"
            "              :model " (pr-str model) "\n"
            "              :effort " (pr-str effort) "\n"
+           (when bin (str "              :bin " (pr-str bin) "\n"))
            "              :api-key-command " (pr-str api-key-command) "}}\n\n"
            " ;; The steward: the role you talk to, which reads the mailbox, writes\n"
            " ;; the daily note and hears about work another role could not finish.\n"
@@ -317,7 +319,9 @@
   "Interviews the operator, shows the file and writes it to `file` only on
   a yes. Returns the settings when it was written, else false. With the web, webtool.json is
   shown and written beside it, unless one is there already, which is
-  kept. `io` may give :webtool, the webtool binary to suggest."
+  kept. `io` may give :webtool, the webtool binary to suggest, and
+  :agentloop, the agentloop binary found, which is written as the
+  harness's absolute :bin."
   [{:keys [ask say] :as io} file]
   (say "relay needs a few settings. Press Enter to take the suggestion in brackets.\n")
   (let [settings (interview io)

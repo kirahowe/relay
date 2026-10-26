@@ -25,9 +25,14 @@
   by relay killing it (exit \"timeout\"), is reported as :cut-short, so the
   next wake resumes its session.
 
-  The binary is found in this order: :bin, then `agentloop` on PATH, then
+  The binary is found in this order: :bin, then
   `../agentloop/bin/agentloop` beside this repository (what `make -C
-  ../agentloop build` makes).
+  ../agentloop build` makes), then `agentloop` on PATH. The sibling build
+  comes before PATH so that an older agentloop installed elsewhere never
+  runs in place of the one built for this relay. `relay init` writes the
+  binary it found as an absolute :bin. When agentloop refuses a request
+  for a field or label it does not know, it is older than this relay, and
+  the run says so (too-old).
 
   Each wake writes request.json in its run directory and runs
   `agentloop run request.json`. The model gets relay's tools and nothing
@@ -78,13 +83,23 @@
   (some-> (System/getProperty "relay.bin") fs/real-path fs/parent fs/parent str))
 
 (defn agentloop-bin
-  "The agentloop binary: :bin, else `agentloop` on PATH, else the sibling
-  checkout's build. Nil when there is none."
+  "The agentloop binary: :bin, else the sibling checkout's build, else
+  `agentloop` on PATH. Nil when there is none."
   [{:keys [bin]}]
   (or bin
-      (some-> (fs/which "agentloop") str)
       (let [sibling (some-> (repo-root) (fs/path ".." "agentloop" "bin" "agentloop"))]
-        (when (and sibling (fs/executable? sibling)) (str (fs/normalize sibling))))))
+        (when (and sibling (fs/executable? sibling)) (str (fs/normalize sibling))))
+      (some-> (fs/which "agentloop") str)))
+
+(defn too-old
+  "What to tell the operator when agentloop refused the request because it
+  does not know a field or a label this relay sends, which means the
+  binary is older than this relay; nil for any other stderr. Pure."
+  [bin stderr]
+  (when (and (string? stderr)
+             (re-find #"agentloop: .*\bunknown (field|label)\b" stderr))
+    (str "agentloop at " (or bin "agentloop") " is too old for this relay; rebuild it"
+         " (make -C ../agentloop build) or set :bin in relay.edn.")))
 
 ;; --- reading a run back
 
@@ -207,8 +222,10 @@
       ;; worst. It says nothing about the harness, so nothing is paused.
       (= ::unreadable outcome) (report "ran" :crashed true :said "agentloop's outcome could not be read.")
       ;; Nothing ran on this machine, so the model service is not to blame.
-      ;; The binary is named: agentloop on PATH wins over the sibling
-      ;; checkout's build, so it may not be the one the operator built.
+      ;; The binary is named, in case it is not the one the operator built.
+      ;; An agentloop that refuses a field or label relay sends is older
+      ;; than this relay, and the run says so.
+      (and (nil? outcome) (too-old bin stderr)) (report "needs-attention" :local true :said (too-old bin stderr))
       (nil? outcome) (report "needs-attention" :local true
                              :said (if (and (number? exit) (> exit 128))
                                      (str "agentloop was killed (exit " exit ") before it finished. "
@@ -329,7 +346,7 @@
   "No API key command: set :api-key-command for the agentloop harness in relay.edn.")
 
 (def ^:private no-bin
-  "agentloop not found: set :bin, put agentloop on PATH, or run `make -C ../agentloop build`.")
+  "agentloop not found: run `make -C ../agentloop build`, or set :bin in relay.edn.")
 
 (defn request-tool
   "One tool as the request names it. A command tool gives its description
