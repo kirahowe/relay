@@ -15,6 +15,7 @@
   (:require [clojure.string :as str]
             [relay.cards :as cards]
             [relay.config :as config]
+            [relay.ics :as ics]
             [relay.schedule :as schedule]
             [relay.search :as search]
             [relay.skills :as skills]
@@ -88,7 +89,7 @@
 
 (def empty-state
   {:roles {} :memos {} :routines {} :wakes {} :dead-letters {} :harnesses {}
-   :notifications {} :guards {} :facts {} :notes {} :journals {} :docs {} :cards {}
+   :notifications {} :guards {} :facts {} :notes {} :journals {} :docs {} :cards {} :calendar {}
    ;; Every label any event has carried, which bounds what a session that
    ;; could read anything in relay may have seen.
    :seen-labels []
@@ -351,6 +352,61 @@
   other every one."
   [state q {:keys [public]}]
   (facts state (assoc q :public-only (boolean public))))
+
+;; The agent's calendar. An event is versioned like a fact: adding it writes
+;; its first version, every change a new one with the labels of what the
+;; writer had seen, and removing it a last one that says so. No version is
+;; dropped, so the log still answers for what the calendar said before.
+;; relay.ics renders the events; the feed carries only what is here, and
+;; only roles write here (calendar-writer!), never the operator.
+
+(def calendar-limit
+  "How many events the feed may carry at once: live ones that have not been
+  over for long, and removed ones still listed as cancelled (ics/listed?).
+  A runaway session cannot fill the feed, by adding or by adding and
+  removing."
+  1000)
+
+(defn calendar-event
+  "An event as it stands now: its current version with :id, or nil."
+  [state id]
+  (when-let [e (get-in state [:calendar id])]
+    (assoc (peek (:versions e)) :id id)))
+
+(defn calendar-removed? [event] (boolean (:removed event)))
+
+(defn calendar-events
+  "The calendar's events as they stand now, by start and then id. Without
+  :all, only live ones that have not ended by :as-of (default the last
+  event's time); with :all, every one, removed ones included."
+  [state {:keys [as-of all]}]
+  (let [as-of (or as-of (:last-at state))]
+    (->> (keys (:calendar state))
+         (keep #(calendar-event state %))
+         (filter #(or all (and (not (calendar-removed? %))
+                               (or (nil? as-of) (after? (or (:end %) (:start %)) as-of)))))
+         (sort-by (juxt :start :id))
+         vec)))
+
+(declare calendar-feed)
+
+(defn calendar-listed-count
+  "How many events the feed carries at `now`: what counts toward
+  calendar-limit."
+  [state now]
+  (count (ics/listed now (calendar-feed state))))
+
+(defn calendar-feed
+  "Every event as relay.ics takes it: the current version, :sequence (how
+  many changes it has had), :created and :modified (when its first and
+  last versions were recorded) and :removed-at."
+  [state]
+  (vec (for [[id {:keys [versions]}] (sort-by key (:calendar state))
+             :let [v (peek versions)]]
+         (assoc (select-keys v [:title :start :end :location :description])
+                :id id :sequence (dec (count versions))
+                :created (:recorded-at (first versions)) :modified (:recorded-at v)
+                :removed-at (when (:removed v) (:recorded-at v))))))
 
 (defn notes [state owner] (vec (sort-by :name (vals (get-in state [:notes owner])))))
 
@@ -977,6 +1033,29 @@
     (add-version state fact (cond-> (assoc (fact-version event (if retracted :retracted :corrected) data)
                                            :why why :superseded-by superseded-by)
                               retracted (assoc :retracted true)))))
+
+(defn- calendar-version [{:keys [seq at actor labels]} change {:keys [title start end location description why]}]
+  {:seq seq :recorded-at (inst at) :actor actor :change change :labels (union labels)
+   :title title :start (inst start) :end (inst end) :location location :description description
+   :why why :removed (= change :removed)})
+
+(defn- add-calendar-version [state id version]
+  (update-in state [:calendar id :versions] (fnil conj []) version))
+
+(defmethod evolve* "calendar/added" [state {:keys [seq data] :as event}]
+  (add-calendar-version state seq (calendar-version event :added data)))
+
+(defmethod evolve* "calendar/changed" [state {:keys [data] :as event}]
+  (add-calendar-version state (:event data) (calendar-version event :changed data)))
+
+(defmethod evolve* "calendar/removed" [state {:keys [data] :as event}]
+  (let [old (peek (get-in state [:calendar (:event data) :versions]))]
+    ;; It still says what the last version said.
+    (add-calendar-version state (:event data)
+                          (calendar-version event :removed
+                                            (assoc (select-keys old [:title :start :end :location :description])
+                                                   :why (:why data)
+                                                   :start (some-> (:start old) str) :end (some-> (:end old) str))))))
 
 (defmethod evolve* "note/written" [state {:keys [seq at data labels public]}]
   (let [{:keys [owner name text]} data]
@@ -2196,6 +2275,100 @@
       (if (:removed v)
         (emit tx "doc/removed" {:path path} (:labels v))
         (emit tx "doc/put" {:path path :content (:content v)} (:labels v))))))
+
+;; calendar
+
+(defn- calendar-writer!
+  "Only a role writes the calendar. It is the agent's own; the operator's
+  is never written, and the feed carries only what a role wrote (I9). A
+  public role has no calendar at all."
+  [{:keys [actor] :as tx}]
+  (when (#{operator dispatcher} actor)
+    (reject! :forbidden "The calendar is the agent's own. relay never writes the operator's calendar."))
+  (when (public-actor? tx)
+    (reject! :forbidden "A public role has no calendar.")))
+
+(defn- event-title [s]
+  (let [t (require-text s "An event's title")]
+    (when (> (count t) 200) (reject! :invalid "An event's title is at most 200 characters."))
+    t))
+
+(defn- event-note
+  "A location or description: trimmed, nil when blank."
+  [s what limit]
+  (let [t (when-not (blank? s) (str/trim s))]
+    (when (and t (> (count t) limit))
+      (reject! :invalid (str "An event's " what " is at most " limit " characters.")))
+    t))
+
+(defn- event-time
+  "A start or end as an Instant a calendar can write: from 1970 to 9999."
+  [config s what]
+  (let [t (world-time config s what)]
+    (when (and t (not (<= 1970 (.getYear (.atZone t java.time.ZoneOffset/UTC)) 9999)))
+      (reject! :invalid (str "An event's " what " must be between the years 1970 and 9999.")))
+    t))
+
+(defn- calendar-live! [state id]
+  (let [e (calendar-event state id)]
+    (when-not e (reject! :not-found (str "There is no event " id ".")))
+    (when (calendar-removed? e) (reject! :invalid (str "Event " id " was removed.")))
+    e))
+
+(defn- event-span!
+  "Checks that an event ends after it starts."
+  [start end]
+  (when-not (after? end start)
+    (reject! :invalid "An event must end after it starts.")))
+
+(defn- calendar-room!
+  "Checks that the feed has room for one more event."
+  [state now]
+  (when (>= (calendar-listed-count state now) calendar-limit)
+    (reject! :invalid (str "The calendar holds " calendar-limit " events already. Wait for old ones to"
+                           " drop off, or remove some."))))
+
+(defmethod decide* :calendar/add [{:keys [state config now] :as tx}
+                                  {{:keys [title start end location description]} :args}]
+  (calendar-writer! tx)
+  (calendar-room! state now)
+  (let [start (or (event-time config start "start") (reject! :invalid "An event needs a start."))
+        end (or (event-time config end "end") (.plusSeconds start 3600))]
+    (event-span! start end)
+    (emit tx "calendar/added" {:title (event-title title) :start (str start) :end (str end)
+                               :location (event-note location "location" 200)
+                               :description (event-note description "description" 2000)})))
+
+(defmethod decide* :calendar/update [{:keys [state config now] :as tx}
+                                     {{:keys [event title start end location description why]} :args :as command}]
+  (calendar-writer! tx)
+  (let [cur (calendar-live! state event)
+        args (:args command)
+        given (fn [k] (contains? args k))
+        new-start (if-not (blank? start) (event-time config start "start") (:start cur))
+        new-end (if-not (blank? end) (event-time config end "end") (:end cur))
+        changed {:title (if (blank? title) (:title cur) (event-title title))
+                 :start new-start :end new-end
+                 :location (if (given :location) (event-note location "location" 200) (:location cur))
+                 :description (if (given :description) (event-note description "description" 2000) (:description cur))}]
+    (when (= changed (select-keys cur [:title :start :end :location :description]))
+      (reject! :invalid (str "Event " event " already says that. Give only what changes.")))
+    (when (and (blank? end) (not (after? new-end new-start)))
+      (reject! :invalid "The new start is not before the event's end. Give the end too."))
+    (event-span! new-start new-end)
+    ;; Moving an event that fell off the feed back onto it adds one.
+    (when (and (not (ics/listed? now (assoc cur :removed-at nil)))
+               (ics/listed? now {:start new-start :end new-end}))
+      (calendar-room! state now))
+    (emit tx "calendar/changed" (cond-> (assoc changed :event event :start (str new-start) :end (str new-end))
+                                  (not (blank? why)) (assoc :why (str/trim why)))
+          (:labels cur))))
+
+(defmethod decide* :calendar/remove [{:keys [state] :as tx} {{:keys [event why]} :args}]
+  (calendar-writer! tx)
+  (let [cur (calendar-live! state event)]
+    (emit tx "calendar/removed" (cond-> {:event event} (not (blank? why)) (assoc :why (str/trim why)))
+          (:labels cur))))
 
 (def ^:private note-name-pattern #"[a-z0-9][a-z0-9-]{0,47}")
 

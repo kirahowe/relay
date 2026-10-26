@@ -122,6 +122,28 @@
 (defn- new-fact [events]
   (:seq (first (filter #(#{"fact/added" "fact/superseded"} (:type %)) events))))
 
+(defn- event-when
+  "When an event is, in the operator's zone: the date and times, with the
+  end's date only when it is another day."
+  [config {:keys [start end]}]
+  (let [z #(.atZone ^Instant % (config/zone config))
+        fmt #(.format (z %1) (DateTimeFormatter/ofPattern %2))]
+    (str (fmt start "yyyy-MM-dd HH:mm") " to "
+         (if (= (.toLocalDate (z start)) (.toLocalDate (z end)))
+           (fmt end "HH:mm")
+           (fmt end "yyyy-MM-dd HH:mm")))))
+
+(defn- fmt-event [config {:keys [id title location description removed] :as e}]
+  (str "Event " id (when removed ", removed") ", " (event-when config e) "\n  " title
+       (when location (str "\n  at " location))
+       (when description (str "\n  " (str/replace description #"\n" "\n  ")))))
+
+(defn- event-args [args]
+  (select-keys args [:event :title :start :end :location :description :why]))
+
+(defn- new-event [events]
+  (:seq (first (filter #(= "calendar/added" (:type %)) events))))
+
 (defn- doc-ref
   "The ref to show beside a doc version a read returns, or nil. The path
   is text whoever first wrote the doc chose, so it is shown only when
@@ -149,6 +171,12 @@
   it sees (I3)."
   [state config actor]
   (core/public-caller? state config actor *wake*))
+
+(defn- no-calendar!
+  "A public role has no calendar: for it there is no such tool."
+  [state config actor]
+  (when (public-reader? state config actor)
+    (throw (ex-info "You have no tool called calendar." {}))))
 
 (def builtin
   "relay's own tools, by name."
@@ -328,6 +356,57 @@
     :run (fn [sys actor labels args]
            (submit sys actor labels :fact/correct (fact-args args))
            (str (if (:retract args) "Retracted" "Corrected") " fact " (:fact args) "."))}
+
+   "calendar"
+   {:class :read
+    :grant :private
+    :description (str "Read your calendar: the events you have put on it, which the operator subscribes to."
+                      " With no arguments, the events that have not ended yet. `as_of` asks from another"
+                      " time; `all` lists every event, past and removed ones too. Each event shows its"
+                      " number, which calendar_update and calendar_remove take.")
+    :parameters (obj {:as_of world-time :all flag})
+    :read (fn [{:keys [state config now]} actor {:keys [as_of all]}]
+            (no-calendar! state config actor)
+            (let [found (core/calendar-events state {:all all :as-of (or (core/world-time config as_of "as_of") now)})]
+              (if (empty? found)
+                "Your calendar has no events."
+                (show (for [e found] (item (fmt-event config e) (core/item-labels e))) "\n"))))}
+
+   "calendar_add"
+   {:class :edit
+    :grant :private
+    :description (str "Put an event on your own calendar, which the operator subscribes to. It is never"
+                      " the operator's calendar: nothing here invites anyone or changes their appointments."
+                      " `start` and `end` are local times (2026-10-14 09:00) or ISO instants; with no"
+                      " `end` the event lasts an hour. Anything you change later is kept as a version.")
+    :parameters (obj {:title text :start world-time :end world-time :location text :description text}
+                     "title" "start")
+    :run (fn [sys actor labels args]
+           (str "Added event " (new-event (submit sys actor labels :calendar/add (event-args args))) "."))}
+
+   "calendar_update"
+   {:class :edit
+    :grant :private
+    :description (str "Change an event on your own calendar. Give only what changes; an empty `location`"
+                      " or `description` clears it. Say `why` when it is not obvious. The calendar app"
+                      " sees the new version, and the earlier ones are kept.")
+    :parameters (obj {:event {:type "integer" :description "The event's number."}
+                      :title text :start world-time :end world-time :location text :description text :why text}
+                     "event")
+    :run (fn [sys actor labels args]
+           (submit sys actor labels :calendar/update (event-args args))
+           (str "Changed event " (:event args) "."))}
+
+   "calendar_remove"
+   {:class :edit
+    :grant :private
+    :acp-kind "delete"
+    :description (str "Take an event off your own calendar. The calendar app is told it is cancelled, and"
+                      " the record is kept.")
+    :parameters (obj {:event {:type "integer" :description "The event's number."} :why text} "event")
+    :run (fn [sys actor labels args]
+           (submit sys actor labels :calendar/remove (event-args args))
+           (str "Removed event " (:event args) "."))}
 
    "note_write"
    {:class :write
@@ -1049,7 +1128,7 @@
     (reduce (fn [args k]
               (cond-> args
                 (string? (get args k)) (update k #(or (parse-long (str/trim %)) %))))
-            input [:memo :fact :version :limit :entry :card :item :row :column :seen])
+            input [:memo :fact :event :version :limit :entry :card :item :row :column :seen])
     input))
 
 (defn parse-envelope
