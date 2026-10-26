@@ -154,9 +154,27 @@
             (is (re-find #"public as you wrote it" ok))
             (is (not (re-find #"(?i)label|contaminat|private" ok)))))
         (finally (fs/delete-tree dir)))))
-  (testing "a name written in private never reaches a scout as a sender"
-    (let [w (-> (world) (run "hub" :role/add {:id "lawyer-for-the-divorce" :title "L" :instructions "x"} ["private"]))]
-      (is (re-find #"was not sent" (refusal #(run w "lawyer-for-the-divorce" :memo/send {:to "scout" :subject "s" :body "b"}))))))
+  (testing "a role whose id, title and instructions were written in private may still write to a scout"
+    (let [w (-> (world)
+                (run "hub" :role/add {:id "clerk" :title "SECRET-TITLE" :instructions "SECRET-INSTRUCTIONS"} ["private"])
+                (run "clerk" :memo/send {:to "scout" :subject "Choir grants" :body "Find three."} ["private"]))
+          m (first (core/unread-memos (:state w) "scout"))]
+      (is (nil? (:rejected w)))
+      (is (:public m) "the memo is public as written")
+      (testing "the scout is shown the memo and the sender's id, so it can answer"
+        (is (= [m] (core/deliverable-memos (:state w) cfg "scout")))
+        (let [inbox (:content (read-as w "scout" "inbox" {}))]
+          (is (str/includes? inbox "Find three."))
+          (is (str/includes? inbox "clerk")))
+        (is (nil? (refusal #(in-wake w "scout" (fn [w] (run w "scout" :memo/send {:to "clerk" :subject "Found" :body "Three."} [])))))))
+      (testing "and nothing else of that role"
+        (let [request (wake-request w "scout")
+              roles (:content (read-as w "scout" "roles" {}))]
+          (is (not (core/private? (get-in request [:policy :labels]))))
+          (doseq [seen [(:prompt request) roles (:content (read-as w "scout" "inbox" {}))]]
+            (is (not (str/includes? seen "SECRET-TITLE")))
+            (is (not (str/includes? seen "SECRET-INSTRUCTIONS"))))
+          (is (not (str/includes? roles "clerk")) "it is not listed among the roles the scout knows")))))
   (testing "a memo an older relay left waiting is never shown, and the operator may close it"
     (let [w (run-before (world) "hub" :memo/send {:to "scout" :subject "Old" :body "Secret."} ["private"])
           id (:id (first (core/unread-memos (:state w) "scout")))]

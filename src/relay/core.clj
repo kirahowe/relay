@@ -558,9 +558,14 @@
 
 (defn memo-labels
   "What reading a memo addressed to you adds: its writers' labels, private
-  unless it is public, and the labels of its sender's id."
+  unless it is public, and the labels of its sender's id. A public memo is
+  public as written, its sender's id with it (decision 6): a house role
+  whose id was written in private may still write to a scout, which learns
+  that id so it can answer, and nothing else of the role."
   [state m]
-  (item-labels m (id-labels state (:from m))))
+  (if (:public m)
+    (item-labels m)
+    (item-labels m (id-labels state (:from m)))))
 
 (defn public-role?
   "Whether a role is public (relay.config/public?): a scout. Its sessions
@@ -1504,8 +1509,11 @@
            "blocked" (str "They said they could not do it:\n\n" (quote-block explanation))
            "never-closed" (str "They were woken for it " attempts " times and never closed it.")
            "recipient-removed" "Its recipient was removed before it was closed.")
-         "\n\nWork out why, then either fix the cause and run `relay retry " to
-         "`, or take it to the operator.\n\n## The memo\n\n**" subject "**\n\n" body
+         (if (= "recipient-removed" reason)
+           "\n\nGive the work to another role, or take it to the operator."
+           (str "\n\nWork out why, then either fix the cause and run `relay retry " to
+                "`, or take it to the operator."))
+         "\n\n## The memo\n\n**" subject "**\n\n" body
          (when-not (blank? transcript-tail)
            (str "\n\n## End of the last transcript\n\n```\n" transcript-tail "\n```")))))
 
@@ -1568,6 +1576,8 @@
         handler (:dead-letter-handler config)
         title (str to " could not finish \"" subject "\"")
         report (dead-letter-report state letter)
+        ;; A role that was removed cannot be retried.
+        retry (when-not (= "recipient-removed" (:reason letter)) (str "To try again, run relay retry " to "."))
         ;; The report quotes the memo, and what the role said about it.
         m (memo state (:memo letter))
         copied (union (memo-labels state m) (ids-labels state [(:from m) to]) (:labels letter))
@@ -1575,7 +1585,7 @@
         to-handler? (and handler (active-role? state handler) (not= handler to))
         tx (if operators?
              (tell tx "work-abandoned" "alert" "normal" (str "Could not finish \"" subject "\"")
-                   [(abandoned-why letter) (str "To try again, run relay retry " to ".")]
+                   (vec (remove nil? [(abandoned-why letter) retry]))
                    :role to :dead-letter letter-id :labels copied)
              tx)]
     (cond
@@ -1602,7 +1612,7 @@
         (tell tx "work-abandoned" "alert" "normal" (str "Could not finish \"" (original-subject subject) "\"")
               [(abandoned-why letter)
                (when-not nested? (str "What was asked:\n\n" (quote-block (:body m))))
-               (str "To try again, run relay retry " to ".")]
+               retry]
               :role to :dead-letter letter-id :labels copied)))))
 
 (defn- dead-letter
@@ -1813,14 +1823,13 @@
                  (conj (vec (:sources tx)) "search:web"))
       ;; A house role's memo to a scout is public as written (decision 6):
       ;; the role chose what to put in it, and nobody signs it off. Its
-      ;; session's other labels stay as provenance.
+      ;; session's other labels stay as provenance. The sender's id goes
+      ;; with it even when it was written in private (memo-labels), so the
+      ;; scout can answer; its title and instructions do not.
       (and (active-role? state actor) (not= operator actor) (public-role? (:config tx) to))
-      (do (when (private? (id-labels state actor))
-            (reject! :forbidden (str to " works on the open web and is never shown a name written in private,"
-                                     " as " actor "'s was, so the memo was not sent.")))
-          (-> (send-memo (assoc tx :public true :labels (remove-private (:labels tx)))
-                         {:from actor :to to :subject subject :body body})
-              (assoc :public (:public tx) :labels (:labels tx))))
+      (-> (send-memo (assoc tx :public true :labels (remove-private (:labels tx)))
+                     {:from actor :to to :subject subject :body body})
+          (assoc :public (:public tx) :labels (:labels tx)))
       (and (not= operator actor) (public-role? (:config tx) to) (not (:public tx)))
       (reject! :forbidden (str to " works on the open web, and a memo from " actor " could carry your"
                                " private things to it, so it was not sent."))
@@ -2869,7 +2878,7 @@
           ;; A new issue or pull request a person opened gets a push, all
           ;; of a tick's in one (:github/announce).
           people (when (= :github kind)
-                   (vec (for [[it st] fresh :when (= :new st) :when (ingest/person? it)]
+                   (vec (for [[it st] fresh :when (= :new st) :when (ingest/news? src it)]
                           (select-keys it [:repo :number :kind :title :user :url]))))]
       (if (or (seq new-seen) (seq gone) (not= cursor old-cursor) failing)
         (emit tx "ingest/polled" (cond-> {:source source :seen new-seen :gone gone :cursor cursor}

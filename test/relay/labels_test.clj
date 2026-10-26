@@ -167,8 +167,13 @@
             as-written? (and actor (not= "operator" actor) (not= public-role actor) (= public-role to))
             labels-written (if as-written? (core/remove-private labels) labels)
             [w subj] (mark w labels-written (and (not as-written?) (content? w actor)))
-            [w body] (mark w labels-written (and (not as-written?) (content? w actor)))]
-        (run w actor labels :memo/send {:to to :subject (str "About " subj) :body (str "Please " body)}))
+            [w body] (mark w labels-written (and (not as-written?) (content? w actor)))
+            sent (run w actor labels :memo/send {:to to :subject (str "About " subj) :body (str "Please " body)})]
+        ;; The sender's id goes out with such a memo, even one written in
+        ;; private, so the scout can answer; nothing else of the role does.
+        (cond-> sent
+          (and as-written? (> (count (:events sent)) (count (:events w))))
+          (update :shown-to-scout (fnil conj #{}) actor)))
 
       :close
       (let [[n labels] args
@@ -318,9 +323,11 @@
 
 (defn- missing
   "The markers in `text` whose writers' labels `labels` lacks, with private
-  for content when `content?` is checked."
-  [w text labels {:keys [private-for-content?]}]
-  (vec (for [m (markers-in text)
+  for content when `content?` is checked. `except` are markers that need
+  not be covered: the ids of house roles that wrote to the scout, which
+  it is shown as written."
+  [w text labels {:keys [private-for-content? except]}]
+  (vec (for [m (remove (set except) (markers-in text))
              :let [{need :labels content? :content?} (get-in w [:markers m])
                    need (cond-> (set need)
                           (and private-for-content? content?) (conj "private"))]
@@ -380,7 +387,7 @@
                      {:keys [ok labels]} (try (let [r ((:read (get tools/builtin tool)) ctx role args)]
                                                 (if (map? r) {:ok (:content r) :labels (:labels r)} {:ok r :labels []}))
                                               (catch clojure.lang.ExceptionInfo _ {:ok "" :labels []}))
-                     ms (missing w ok labels {:private-for-content? true})
+                     ms (missing w ok labels {:private-for-content? true :except (when public? (:shown-to-scout w))})
                      ;; NoSessionOfAPublicRoleHoldsPrivate, for its reads.
                      leaked? (and public? (core/private? labels))]
                :when (or (seq ms) leaked?)]
@@ -411,7 +418,7 @@
                                (dispatch/wake-request sys state wake inputs))
                      text (str (:system-prompt request) "\n" (:prompt request))
                      labels (get-in request [:policy :labels])
-                     ms (missing w text labels {:private-for-content? true})
+                     ms (missing w text labels {:private-for-content? true :except (when public? (:shown-to-scout w))})
                      ;; NoSessionOfAPublicRoleHoldsPrivate, for its prompts,
                      ;; and agentloop is told to refuse private as well.
                      leaked (when (and public? (or (core/private? labels)

@@ -89,7 +89,8 @@ back is marked as from the web. Times are in the operator's time zone,
 as for every role, and your routines follow it.
 
 A memo you send to a public role goes out as you wrote it, and that role
-works on the open web. Put in only what the search needs.
+works on the open web. Put in only what the search needs. It learns your
+id, so it can answer, and nothing else about you.
 
 ## Citations
 
