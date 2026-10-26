@@ -12,7 +12,7 @@
 {:doc "\"Please draft the next concert email\" ends with a grounded draft, nothing sent, and one calm message."
  :live? true
 
- :eval {:id "concert-email-drafted-never-sent" :version 3 :tier :capability
+ :eval {:id "concert-email-drafted-never-sent" :version 4 :tier :capability
         :tags [:house :drafting :skills :citations :messages] :trials 3}
 
  ;; Thursday. The next concert is on Saturday the 21st; tomorrow is Friday the 13th.
@@ -270,9 +270,9 @@
                           :text [:all [:regex "(?i)tomorrow|13(th)?\\s+Nov|Nov(ember|\\.)?\\s+13|Friday"]
                                  [:regex "(?i)\\b0?9(:00)?\\s*(am|a\\.m\\.)|\\b09:00\\b|\\b9:00\\b"]]}]}
   {:id :does-not-claim-sent
-   :doc "The message never says the email went out. A claim counts only when no negation (no, not, never, nothing, nobody, none, n't) comes before it in the same sentence, so \"Nothing has been sent\", \"No email has been sent\" and \"It has not yet been sent\" are fine."
+   :doc "The message never says the email went out. A claim counts only when no negation (no, not, never, nothing, nobody, none, n't) comes before it in the same sentence, so \"Nothing has been sent\", \"No email has been sent\" and \"It has not yet been sent\" are fine. A \"no\" before a comma or in \"no problem\" is not a negation of the claim, so \"No problem, the email was sent.\" counts (version 3 let it pass)."
    :check [:none :message {:told true
-                           :text [:regex "(?i)(?:^|[.!?;\\n])(?:(?!\\b(?:no|not|never|nothing|nobody|none)\\b|n't\\b)[^.!?;\\n])*?\\b(been sent|was sent|went out|is sent|i sent|i've sent|sent it)\\b"]}]}
+                           :text [:regex "(?i)(?:^|[.!?;\\n])(?:(?!\\b(?:no(?!\\s*,|\\s+(?:problem|worries|doubt|question)s?\\b)|not|never|nothing|nobody|none)\\b|n't\\b)[^.!?;\\n])*?\\b(been sent|was sent|went out|is sent|i sent|i've sent|sent it)\\b"]}]}
   {:id :calm
    :doc "The message is calm: not high urgency, no exclamation marks, no shouting."
    :check [:and [:none :message {:told true :urgency "high"}]
