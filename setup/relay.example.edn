@@ -180,8 +180,18 @@
  ;; printed, such as "mailerlite_list_subscribers".
  ;; :connections ["mailerlite"]
 
- ;; What each role is granted beyond relay's own tools: :tools, :may-add
- ;; and :public, and nothing else. A public role, a scout, never holds
+ ;; The steward's shell: a Linux container with no network, where a role
+ ;; granted :shell runs commands with the sh tool. :mounts are mounted
+ ;; read-only at the same paths; relay refuses the data directory, your
+ ;; home directory and places that hold keys or passwords. Build its image
+ ;; with relay house build, which needs the network; the tick starts it.
+ ;; :runner is the container program: ["container"] (the default), or
+ ;; ["docker"] or ["podman"] on Linux. Leave it out for no shell.
+ ;; :house {:mounts ["/Users/you/notes"]
+ ;;         :timeout-seconds 60}
+
+ ;; What each role is granted beyond relay's own tools: :tools, :may-add,
+ ;; :public and :shell, and nothing else. A public role, a scout, never holds
  ;; your private things, so it may search and browse. It is shown only
  ;; what is public (written with --public, or by a public role), and it
  ;; may not have :may-add, a tool whose :labels include "private", or the

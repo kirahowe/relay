@@ -346,7 +346,9 @@
                         "w" {:class :write :labels [] :description "d" :command ["true"]}
                         "e" {:class :egress :labels [] :description "d" :command ["true"]}
                         "d" {:class :edit :labels [] :description "d" :command ["true"]}}
-                :grants {"clerk" {:tools ["r" "w" "e" "d"] :may-add true}}}
+                ;; Public, since only a public role's session may be
+                ;; built with an egress tool (tools/manifest).
+                :grants {"clerk" {:tools ["r" "w" "e" "d"] :may-add true :public true}}}
         manifest (tools/manifest config "clerk")
         kinds (acp/tool-kinds manifest)]
     (is (= {"r" "read" "w" "edit" "e" "fetch" "d" "edit"} (select-keys kinds ["r" "w" "e" "d"])))

@@ -34,7 +34,8 @@
             [relay.harness :as harness]
             [relay.inbound :as inbound]
             [relay.json :as strict]
-            [relay.refs :as refs])
+            [relay.refs :as refs]
+            [relay.shell :as shell])
   (:import (java.time Instant LocalTime)
            (java.time.format DateTimeFormatter)))
 
@@ -896,10 +897,23 @@
   [state config role-id]
   (= :script (get-in config [:harnesses (keyword (core/harness-of state config role-id)) :kind])))
 
+(defn shell-tool
+  "The `sh` tool, for a role granted :shell: a command run in the steward's
+  shell (relay.shell), its output read back by the role itself. It changes
+  nothing outside the container, whose own files are all in memory."
+  [config]
+  {:class :read
+   :acp-kind "execute"
+   :description (shell/tool-description (:house config))
+   :parameters (obj {:command {:type "string" :description "The command, run with sh -c in /scratch."}}
+                    "command")
+   :run (fn [sys _ session-labels {:keys [command]}]
+          (shell/sh! (shell/context (:data-dir sys) (:config sys)) session-labels command))})
+
 (defn offered
   "The tools a role is offered, by name: relay's own, less those that need a
-  grant it lacks, plus the external tools it is granted. None at all for a
-  role on a :script harness."
+  grant it lacks, plus `sh` for a role granted :shell, plus the external
+  tools it is granted. None at all for a role on a :script harness."
   [config role-id & [{:keys [script?]}]]
   (if script?
     {}
@@ -913,6 +927,9 @@
                    ;; Cards are private only.
                    :private (not (config/public? config role-id))))]
     (merge (into {} (filter #(holds? (:grant (val %))) builtin))
+           (when (and (:shell (config/grants config role-id)) (:house config)
+                      (not (config/public? config role-id)))
+             {"sh" (shell-tool config)})
            (into {} (map external-tool (select-keys (:tools config) tools)))))))
 
 (defn grants-summary
@@ -958,14 +975,23 @@
   of relay's own tools an :acp-kind more exact than the class gives
   (relay.acp/tool-kinds)."
   [config role-id & [opts]]
+  (let [offered (offered config role-id opts)]
+    ;; relay.edn refuses these; this is the second line, at the one place
+    ;; every session's tools come from (plan O3, I1).
+    (when-not (config/public? config role-id)
+      (doseq [[n {:keys [class mcp]}] offered]
+        (when (or (= :egress class) (and (= :mcp-http (:protocol mcp)) (not (#{:read :edit} class))))
+          (throw (ex-info (str "relay will not start a session for " role-id " with " n
+                               ", which could send your things out of the house.")
+                          {:relay/usage true})))))
   (vec (for [[n {:keys [class description parameters acp-kind labels mcp]}]
-             (sort-by key (offered config role-id opts))]
+             (sort-by key offered)]
          (cond-> {:name n :class (name class) :description description :parameters parameters
                   :labels (vec labels)}
            acp-kind (assoc :acp-kind acp-kind)
            ;; An MCP tool: its server and the server's name for it. The
            ;; server gives the description and parameters.
-           mcp (-> (dissoc :description :parameters) (assoc :mcp mcp))))))
+           mcp (-> (dissoc :description :parameters) (assoc :mcp mcp)))))))
 
 (defn policy
   "agentloop's policy for a role's tools and a session seeded with

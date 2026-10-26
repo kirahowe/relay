@@ -20,6 +20,7 @@
             [relay.roster :as roster]
             [relay.serve :as serve]
             [relay.setup :as setup]
+            [relay.shell :as shell]
             [relay.text :as text]
             [relay.tools :as tools]
             [relay.traces :as traces]
@@ -119,6 +120,10 @@ Every command needs the data directory, from --data <dir> or from the file
   relay mcp-token <name> --url <url>  print an access token for a connection to
                                       that server, renewing it when needed
                                       (agentloop runs this)
+  relay house build|up|down|status    the steward's shell, from relay.edn's :house:
+                                      build its image (this needs the network),
+                                      start it, remove it, or say how it is (the
+                                      tick starts it when it is missing)
   relay tool --data <dir> --role <r> [--wake <w>] <name>
                                       run a role's tool call (harnesses use this)
 
@@ -377,6 +382,23 @@ id public too.")
             :client-id :string :url :string :open :string
             :item [:string] :row [:string] :column [:string] :state :string :seen :long :archived :boolean}})
 
+(defn- house!
+  "relay house build|up|down|status."
+  [sys [sub]]
+  (let [ctx #(shell/context (:data-dir sys) (:config sys))]
+    (case sub
+      "build" (let [{:keys [restarted]} (shell/build! (ctx))]
+                (result 0 (if restarted "Built the shell's image, and restarted the shell with it." "Built the shell's image.")))
+      "up" (result 0 (case (shell/up! (ctx)) :running "The shell is already running." :started "Started the shell."))
+      "down" (result 0 (case (shell/down! (ctx)) :stopped "Stopped the shell. Its scratch files are gone." :absent "The shell was not running."))
+      "status" (let [{:keys [running current image-present]} (shell/status (ctx))]
+                 (result 0 (cond
+                             (and running current) "The shell is running."
+                             running "The shell is running with older settings. relay house up restarts it."
+                             (not image-present) "The shell is not running, and its image is not built. Run relay house build."
+                             :else "The shell is not running. relay house up starts it.")))
+      (fail! "usage: relay house build|up|down|status"))))
+
 (defn- command
   "Runs one command with the data directory's system. Returns {:exit :out},
   :out being the lines to print."
@@ -502,6 +524,7 @@ id public too.")
                                       " conversations to " file ".")
                         problems))
       "tool" (run-tool sys (:role opts) (first more) (:wake opts))
+      "house" (house! sys more)
       "connect" (let [[n url] more
                       config (:config sys)]
                   (when-not (and n url)

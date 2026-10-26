@@ -21,6 +21,7 @@
             [relay.prompt :as prompt]
             [relay.refs :as refs]
             [relay.render :as render]
+            [relay.shell :as shell]
             [relay.tools :as tools]
             [relay.workspace :as workspace])
   (:import (java.time Duration Instant)))
@@ -834,6 +835,13 @@
          t (now sys state)]
      (doseq [n (core/notifications-to-push state t (.minus ^Instant t stale-after))]
        (inbound/deliver! sys {:seq (:id n) :data n}))
+     ;; Before any wake, so a role granted the shell finds it running.
+     ;; A shell that will not start stops nothing else: the reason goes
+     ;; to the tick's log, and `relay house status` says it.
+     (when (:house config)
+       (try (shell/up! (shell/context (:data-dir sys) config))
+            (catch Exception e
+              (binding [*out* *err*] (println "relay tick: the shell is not running:" (ex-message e))))))
      (let [roles (core/roles-to-wake state config t)]
        (doseq [r roles] (spawn! sys r))
        ;; Last, since it waits on cal and rem. A failure leaves the day's

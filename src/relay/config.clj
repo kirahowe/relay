@@ -6,7 +6,8 @@
   (:require [babashka.fs :as fs]
             [clojure.edn :as edn]
             [clojure.string :as str]
-            [relay.connections :as connections])
+            [relay.connections :as connections]
+            [relay.shell :as shell])
   (:import (java.time ZoneId)))
 
 (def tool-classes
@@ -134,7 +135,7 @@
 (def grant-keys
   "What a role can be granted. Anything else is refused, so a typo such as
   :pubic cannot leave a role able to hold private data."
-  #{:tools :may-add :public})
+  #{:tools :may-add :public :shell})
 
 (defn- check-grants
   "Checks each role's grants, and what a public role may not have. A public
@@ -143,7 +144,7 @@
   letters, which quote other roles' memos. A role that is not public, a
   house role, holds the operator's things, so it is granted no :egress
   tool: nothing it reads can leave the house by one."
-  [{:keys [tools grants dead-letter-handler harnesses default-harness]}]
+  [{:keys [tools grants dead-letter-handler harnesses default-harness] :as config}]
   (when-not (map? grants)
     (problem! "relay.edn has :grants that is not a map of role ids to grants."))
   (doseq [[role g] grants]
@@ -175,11 +176,28 @@
       (when (= :script (get-in harnesses [default-harness :kind]))
         (problem! (str "Role " role " is :public, and the default harness is a :script harness,"
                        " whose program can claim any labels. A public role needs agentloop."))))
+    (when-not (or (nil? (:shell g)) (boolean? (:shell g)))
+      (problem! (str "Role " role " has :shell " (pr-str (:shell g)) " in relay.edn; it must be true or false.")))
+    (when (true? (:shell g))
+      (when (:public g)
+        (problem! (str "Role " role " is :public, so it may not have :shell: the shell shows your files.")))
+      (when-not (contains? config :house)
+        (problem! (str "Role " role " has :shell, so relay.edn needs a :house section saying how the shell"
+                       " runs, such as {:mounts [\"/Users/you/notes\"]}.")))
+      (when (= :script (get-in harnesses [default-harness :kind]))
+        (problem! (str "Role " role " has :shell, and the default harness is a :script harness, which gets"
+                       " no tools. A role with the shell needs agentloop."))))
     (when-not (:public g)
       (doseq [t (distinct (:tools g))
-              :when (= :egress (get-in tools [t :class]))]
-        (problem! (str "Role " role " is granted " t ", an :egress tool, and only a public role may have"
-                       " one: " role " holds your things, which " t " could send out of the house."))))))
+              :let [{:keys [class protocol]} (get tools t)]]
+        (when (= :egress class)
+          (problem! (str "Role " role " is granted " t ", an :egress tool, and only a public role may have"
+                         " one: " role " holds your things, which " t " could send out of the house.")))
+        ;; What a house role gives a remote server goes into the
+        ;; operator's own account there, and nowhere else (I1).
+        (when (and (= :mcp-http protocol) (not (#{:read :edit} class)))
+          (problem! (str "Role " role " is granted " t ", a tool of a remote server, which a house role"
+                         " may have only as :read or :edit.")))))))
 
 (defn- check-budget
   "The optional :budget, a weekly amount in US dollars. relay only warns
@@ -447,6 +465,8 @@
              (some (fn [[_ g]] (or (seq (:tools g)) (:may-add g))) grants))
     (problem! (str "The default harness in relay.edn is a :script harness, which gets no tools,"
                    " so no role may be granted :tools or :may-add.")))
+  (when (contains? config :house)
+    (when-let [why (shell/settings-problem (:house config))] (problem! why)))
   (check-mcp config)
   (check-grants config)
   (check-budget config)
@@ -471,8 +491,15 @@
   (let [file (fs/path data-dir "relay.edn")]
     (when-not (fs/exists? file)
       (problem! (str data-dir " has no relay.edn. Run `relay init` to make one.")))
-    (resolve-config (connections/expand data-dir (edn/read-string (slurp (str file)))
-                                        {:classes tool-classes :labels label-names}))))
+    (let [config (resolve-config (connections/expand data-dir (edn/read-string (slurp (str file)))
+                                                     {:classes tool-classes :labels label-names}))]
+      ;; Where the files to mount may not be depends on this machine: the
+      ;; home directory and the data directory itself.
+      (when-let [why (shell/mounts-problem (:house config)
+                                           {:home (str (fs/real-path (System/getProperty "user.home")))
+                                            :data-dir (str (fs/real-path data-dir))})]
+        (problem! why))
+      config)))
 
 (defn zone ^ZoneId [config]
   (ZoneId/of (:timezone config)))
