@@ -31,7 +31,8 @@
   (let [{:keys [written settings dir]} (create ["" "" "" "" "" "" "" "y"])]
     (is written)
     (is (= {} (:tools settings)) "no webtool found, so no web")
-    (is (= {} (:grants settings)))
+    (is (= {"steward" {:may-add true}} (:grants settings)))
+    (is (= {:at "07:30" :role "steward"} (:daily-note settings)) "the daily note is on, written by the steward")
     (is (= {:channels {"push" {:kind :push :via :macos}} :routes [{:channels ["push"]}]} (:messages settings)))
     (is (= "anthropic" (get-in settings [:harnesses :agentloop :provider])))
     (is (= "claude-opus-5-5" (get-in settings [:harnesses :agentloop :model])))
@@ -79,9 +80,9 @@
     (is (= {:class :egress :labels ["contaminated"] :protocol :envelope}
            (select-keys web [:class :labels :protocol])))
     (is (= ["/opt/webtool/bin/webtool" "--config" webtool-file "ask"] (:command web)))
-    (is (= {"scout" {:public true :tools ["web"]}} (:grants settings))
+    (is (= {"steward" {:may-add true} "scout" {:public true :tools ["web"]}} (:grants settings))
         "the web sends searches out, so only a public role has it")
-    (is (= {"snapshot_dir" (str dir "/home/Library/Application Support/webtool/snapshots")
+    (is (= {"snapshot_dir" (str (fs/absolutize dir) "/webtool/snapshots")
             "search" {"backend" "brave" "api_key_command" setup/brave-key-command}}
            (json/parse-string (slurp webtool-file))))
     (is (= ["web"] (config/role-tools (config/load-config dir) "scout"))))
@@ -129,3 +130,77 @@
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #":budget is \{:weekly-usd 15\}"
                             (config/resolve-config (assoc complete :budget bad)))
           (pr-str bad)))))
+
+(defn- uncommented?
+  "Whether `on` is `off` with ;; removed from some lines and nothing else
+  changed: what turning a block on by hand does."
+  [off on]
+  (let [a (str/split-lines off) b (str/split-lines on)]
+    (and (= (count a) (count b))
+         (every? (fn [[x y]] (or (= x y) (= y (str/replace-first x #"^( *);; " "$1")))) (map vector a b)))))
+
+(deftest init-writes-every-section-commented-out-until-filled-in
+  (let [{:keys [dir]} (create ["" "" "" "" "" "" "" "y"])
+        text (slurp (str dir "/relay.edn"))]
+    (doseq [[what needle] [["mail to you" ";; \"mail\" {:kind :email"]
+                           ["the mailbox" ";; \"mailbox\""]
+                           ["GitHub" ";; \"repos\""]
+                           ["your calendar" ";; \"calendar\" {:kind :ics"]
+                           ["the shell" ";; :house {:mounts"]
+                           ["the shell's grant" ";; :shell true"]
+                           ["folders to tidy" ";; :files"]]]
+      (is (str/includes? text needle) what))
+    (is (= "steward" (:dead-letter-handler (edn/read-string text)))
+        "the steward is named, so a later default cannot move it")))
+
+(deftest each-commented-block-turns-on-by-itself-by-removing-its-semicolons
+  (let [settings (fn [messages web]
+                   {:timezone "UTC" :messages messages :web web
+                    :harnesses {:agentloop {:provider "anthropic" :model "m" :effort "medium" :api-key-command ["true"]}}})
+        reads (fn [text] (config/resolve-config (config/expand-paths (edn/read-string text) "/Users/you")))]
+    (doseq [messages [{:channels {"push" {:kind :push :via :macos}} :routes [{:channels ["push"]}]}
+                       {:channels {} :routes []}]
+            web [nil {:bin "/opt/webtool" :key-command ["true"]}]
+            on (concat (map hash-set setup/optional-blocks) [(set setup/optional-blocks)])]
+      (let [s (settings messages web)
+            off (setup/render s "/d/webtool.json")
+            text (setup/render s "/d/webtool.json" on)
+            where (pr-str on (keys (:channels messages)) (some? web))]
+        (is (not= off text) where)
+        (is (uncommented? off text) (str where ": only ;; is removed"))
+        (is (map? (reads text)) where)
+        (when (= #{:mail} on)
+          (is (= (cond-> [] (seq (:channels messages)) (conj {:channels ["push"]}) true (conj {:channels ["mail"]}))
+                 (get-in (reads text) [:messages :routes]))
+              "the mail route names only channels that are there"))))
+    (is (map? (reads (setup/render (settings {:channels {} :routes []} nil) "/d/webtool.json"))))))
+
+(deftest the-starter-roles-are-the-steward-and-with-the-web-a-scout
+  (let [texts {:steward "s" :scout "c" :skill "k" :routine "r"}
+        without (setup/starter-commands texts false)
+        with (setup/starter-commands texts true)]
+    (is (= [:role/add :doc/put :routine/write] (map :type without)))
+    (is (= "steward" (get-in (first without) [:args :id])))
+    (is (= "skills/steward/daily-note.md" (get-in (second without) [:args :path])))
+    (is (= {:owner "steward" :name "daily-note"} (select-keys (:args (nth without 2)) [:owner :name])))
+    (is (= {:id "scout" :public true} {:id (get-in (last with) [:args :id]) :public (:public (last with))}))
+    (is (:public (first with)) "the scout sees only public text, so it can find the steward")
+    (testing "the texts in setup/ are all there"
+      (is (every? string? (vals (setup/starter-texts (setup/repo-root))))))))
+
+(deftest init-ends-with-three-next-steps
+  (let [lines (setup/next-steps {:key-ok? false :provider "anthropic" :web? true :brave-ok? false :data-dir "/d"})
+        text (str/join "\n" lines)]
+    (is (str/includes? text "security add-generic-password -a \"$USER\" -s relay-anthropic -w"))
+    (is (str/includes? text "-s relay-brave -w"))
+    (is (= 3 (count (filter #(re-find #"^  \d\. " %) lines))))
+    (is (str/includes? text "/d/relay.edn")))
+  (let [text (str/join "\n" (setup/next-steps {:key-ok? true :web? false :data-dir "/d"}))]
+    (is (str/includes? text "key command works"))
+    (is (not (str/includes? text "Brave")))))
+
+(deftest a-key-command-is-checked-without-showing-the-key
+  (is (setup/command-works? ["echo" "secret"]))
+  (is (not (setup/command-works? ["false"])))
+  (is (not (setup/command-works? ["true"])) "printing nothing is no key")
+  (is (not (setup/command-works? ["/nonexistent/command"]))))

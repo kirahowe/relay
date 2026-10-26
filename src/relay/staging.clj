@@ -7,11 +7,11 @@
 
   The directory gets a relay.edn (Halifax time, the agentloop built beside
   this repository, the keychain key, and a :file notifier that reaches
-  nobody), a hub, a clerk that holds an :edit tool, a scout that searches
+  nobody), a steward, a clerk that holds an :edit tool, a scout that searches
   the real web with the webtool built beside this repository, and a few
   facts. The scout has a daily routine: a search for grants for the
-  Harbour Sound Society, a made-up community choir, sent to the hub. The
-  hub writes the daily note at 07:30, from its own daily-note routine
+  Harbour Sound Society, a made-up community choir, sent to the steward.
+  The steward writes the daily note at 07:30, from its own daily-note routine
   and skill. All
   of it is made up, and the web search needs the Brave key in the
   keychain as relay-brave. Scenarios and evals make their staging data
@@ -149,13 +149,13 @@
                 (concat (map #(stand-in (str data-dir) (str repo-root) (or bb-bin "bb") %)
                              (sort-by key stand-in-tools))
                         (when scout-web? (web-tools webtool-bin (str (fs/path data-dir "webtool.json"))))))
-   :grants {"hub" {:may-add true}
+   :grants {"steward" {:may-add true}
             "clerk" {:tools ["remind-demo"]}
             ;; A public role: shown only public text, never the operator's
             ;; private things, so it may have the web.
             "scout" (cond-> {:public true} scout-web? (assoc :tools ["web_search" "web_fetch"]))}}
-    ;; The daily note, which the hub writes the suggestions of.
-    daily-note? (assoc :daily-note {:at daily-note-at :role "hub"})))
+    ;; The daily note, which the steward writes the suggestions of.
+    daily-note? (assoc :daily-note {:at daily-note-at :role "steward"})))
 
 (defn render-settings
   "relay.edn's text for `settings`."
@@ -177,7 +177,7 @@
 (def scout-web-instructions
   (str "You are the scout, a public role in a staging copy of relay with made-up data.\n"
        "You look things up on the web with web_search and web_fetch. Fetch only addresses\n"
-       "a search or a page showed you, exactly as shown. Send what you find to hub in\n"
+       "a search or a page showed you, exactly as shown. Send what you find to steward in\n"
        "one memo, then close each memo saying what you did. Be brief.\n"))
 
 (def grant-search
@@ -186,85 +186,44 @@
   (str "Find grants that the Harbour Sound Society could apply for: a small, volunteer-run\n"
        "community choir in Halifax, Nova Scotia, a registered nonprofit with a budget under\n"
        "$50,000 a year. Search for open grants for community arts and choirs in Nova Scotia\n"
-       "and Canada, read the two or three most promising pages, and send hub one memo listing\n"
+       "and Canada, read the two or three most promising pages, and send steward one memo listing\n"
        "each grant you found: its name, the funder, the amount, the deadline and the address\n"
        "of the page. Leave out any whose deadline has passed. If you found none, say so.\n"))
 
-(def daily-note-routine
-  "The hub's daily routine, which writes its parts of the daily note
-  before relay sends it at daily-note-at."
-  (str "Write your parts of the operator's daily note, which relay sends at " daily-note-at ".\n"
-       "Follow your skill skills/hub/daily-note.md. In short: read daily_note_draft first, then\n"
-       "write each part with daily_note_write: ahead, grants, github and learned. Leave a part\n"
-       "empty when there is nothing worth saying. Close the memo saying how many items you wrote.\n"))
-
-(def daily-note-skill
-  "How the hub writes the daily note, kept as its skill."
-  (str "# Writing the daily note\n"
-       "\n"
-       "Use when: the daily-note routine runs, or you are about to write any part of the operator's daily note.\n"
-       "\n"
-       "The daily note is one calm, short message a day. relay adds changes shaped by outside\n"
-       "text at the top by itself; you write the rest with daily_note_write, one part at a time.\n"
-       "Start with daily_note_draft: it shows what you wrote so far, the suggestions the\n"
-       "operator turned down (never suggest those again), and the changes to how roles work\n"
-       "since the last note.\n"
-       "\n"
-       "## ahead: the next two weeks\n"
-       "\n"
-       "Look at what is coming up in the next 14 days, using the clock tool for dates:\n"
-       "- your own calendar (calendar);\n"
-       "- the operator's calendar, as calendar memos brought it in (keep a note of upcoming dates\n"
-       "  when such a memo arrives, so you still have them later);\n"
-       "- deadlines on the board's cards (cards);\n"
-       "- dates in mail and in your notes and facts (facts, notes).\n"
-       "Give one item per thing, soonest first, with its day and time in the text, and an offer\n"
-       "of help you could really do: \"Interview with Maple Co, Thu 29 Oct 10:00\" with the offer\n"
-       "\"Want prep notes?\". Give each a key that names the thing and stays the same every day,\n"
-       "such as maple-interview, so a suggestion the operator turned down stays down.\n"
-       "\n"
-       "## grants\n"
-       "\n"
-       "The scout sends a grant search each morning. List each grant that is still open and not\n"
-       "already on the board (check the cards first): its name, funder, amount and deadline, in\n"
-       "one line. Key each by funder and name.\n"
-       "\n"
-       "## github\n"
-       "\n"
-       "New issues and pull requests from the GitHub memos since the last note that are worth a\n"
-       "look, one line each with the repository and number.\n"
-       "\n"
-       "## learned\n"
-       "\n"
-       "The quiet changes daily_note_draft lists: what you changed in how you work, and why, in\n"
-       "plain words, one line each. Leave out the ones relay lists itself.\n"
-       "\n"
-       "## How it reads\n"
-       "\n"
-       "Plain and short. Never name roles, tools, labels or classes: say what the operator would\n"
-       "say. Nothing in it is urgent; anything that is goes to tell_operator instead.\n"))
+(defn setup-text
+  "A file under setup/ in the relay checkout at `root`: the steward's
+  instructions and its daily-note routine and skill, the same text a
+  self-hoster's relay init adds."
+  [root & path]
+  ;; A checkout without them (a test's bare root) takes this one's.
+  (let [f (first (filter fs/exists? (for [r [root (setup/repo-root)] :when r] (apply fs/path r "setup" path))))]
+    (when-not f
+      (throw (ex-info (str "relay cannot find setup/" (str/join "/" path) ".") {:relay/usage true})))
+    (slurp (str f))))
 
 (defn seed
   "The commands that put the artificial roles and facts in a new log. Pure.
-  `hub-instructions` is the text the hub runs on. With `scout-web?` the
-  hub's text is public, so that the scout may send it what it found, and
-  the scout has its daily grant search. With `daily-note?` the hub has
-  its daily-note routine and skill."
-  [hub-instructions & [{:keys [scout-web? daily-note?]}]]
+  `steward-instructions` is the text the steward runs on. With
+  `scout-web?` the steward's text is public, so that the scout may send it
+  what it found, and the scout has its daily grant search. With
+  `daily-note` ({:skill :routine}, their texts) the steward has its
+  daily-note routine and skill."
+  [steward-instructions & [{:keys [scout-web? daily-note]}]]
   (cond->
-   [(cond-> {:type :role/add :args {:id "hub" :title "Hub" :instructions hub-instructions}}
+   [(cond-> {:type :role/add :args {:id "steward" :title "Steward" :instructions steward-instructions}}
       scout-web? (assoc :public true))
-    {:type :role/add :args {:id "clerk" :title "Clerk" :reports-to "hub" :instructions clerk-instructions}}
-    {:type :role/add :public true :args {:id "scout" :title "Scout" :reports-to "hub"
+    {:type :role/add :args {:id "clerk" :title "Clerk" :reports-to "steward" :instructions clerk-instructions}}
+    {:type :role/add :public true :args {:id "scout" :title "Scout" :reports-to "steward"
                                          :instructions (if scout-web? scout-web-instructions scout-instructions)}}
     {:type :fact/add :args {:text "The staging office is closed on Mondays." :topic "office"}}
     {:type :fact/add :args {:text "The operator likes memos of three lines or fewer." :topic "preferences"}}
     {:type :fact/add :args {:text "The demo project is called Lighthouse." :topic "projects"}}]
     scout-web? (conj {:type :routine/write :public true
                       :args {:owner "scout" :name "grant-search" :schedule "daily 07:00" :instructions grant-search}})
-    daily-note? (into [{:type :doc/put :args {:path "skills/hub/daily-note.md" :content daily-note-skill}}
-                       {:type :routine/write
-                        :args {:owner "hub" :name "daily-note" :schedule "daily 07:10" :instructions daily-note-routine}}])))
+    daily-note (into [{:type :doc/put :args {:path "skills/steward/daily-note.md" :content (:skill daily-note)}}
+                      {:type :routine/write
+                       :args {:owner "steward" :name "daily-note" :schedule "daily 07:10"
+                              :instructions (:routine daily-note)}}])))
 
 ;; --- where it may go
 
@@ -365,7 +324,7 @@
   caller has just made empty itself. The clock is the real one unless
   :clock (a function returning an Instant) is given. :scout-web? true
   gives the scout the web and its routine, and :daily-note? true the
-  daily note with the hub's routine and skill, as `bb staging init`
+  daily note with the steward's routine and skill, as `bb staging init`
   does."
   [{:keys [repo-root force? check? clock scout-web? daily-note?] :as opts}]
   (let [dir (if (false? check?)
@@ -374,8 +333,10 @@
         root (str (fs/absolutize (or repo-root ".")))
         agentloop-bin (str (fs/normalize (fs/path root ".." "agentloop" "bin" "agentloop")))
         webtool-bin (str (fs/normalize (fs/path root ".." "webtool" "bin" "webtool")))
-        hub-file (fs/path root "setup" "hub.md")
-        hub (if (fs/exists? hub-file) (slurp (str hub-file)) "You are the operator's chief of staff. Be brief.")]
+        steward (setup-text root "steward.md")
+        daily-note (when daily-note?
+                     {:skill (setup-text root "daily-note" "skill.md")
+                      :routine (setup-text root "daily-note" "routine.md")})]
     (when (and force? (fs/directory? dir))
       (doseq [child (fs/list-dir dir)] (fs/delete-tree child)))
     (fs/create-dirs dir)
@@ -396,7 +357,7 @@
           (fs/copy f (fs/path dir "web" (fs/file-name f)) {:replace-existing true}))))
     (log/init! dir)
     (let [sys (inbound/system dir (cond-> {} clock (assoc :clock clock)))]
-      (doseq [command (seed hub {:scout-web? scout-web? :daily-note? daily-note?})]
+      (doseq [command (seed steward {:scout-web? scout-web? :daily-note daily-note})]
         (inbound/submit! sys (assoc command :actor "operator"))))
     dir))
 

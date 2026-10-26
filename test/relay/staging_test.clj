@@ -87,7 +87,7 @@
             (is (not-any? #(= :egress (get-in c [:tools % :class])) (config/role-tools c "clerk"))
                 "nothing the clerk holds can send anything out")))
         (testing "artificial roles and facts"
-          (is (= #{"hub" "clerk" "scout"} (set (core/active-role-ids state))))
+          (is (= #{"steward" "clerk" "scout"} (set (core/active-role-ids state))))
           (is (= 3 (count (:facts state)))))
         (testing "a scout with the web: webtool's search and fetch, beside this repository"
           (let [c (config/load-config made)]
@@ -106,19 +106,19 @@
             (is (= "daily 07:00" (:schedule r)))
             (is (:public r))
             (is (str/includes? (:instructions r) "Harbour Sound Society"))
-            (is (core/role-text-public? state "hub"))))
+            (is (core/role-text-public? state "steward"))))
         (testing "a daily note the hub writes, from its routine and skill"
           (let [c (config/load-config made)
-                r (core/routine state "hub" "daily-note")
-                skill (core/doc-version state "skills/hub/daily-note.md" {})]
-            (is (= {:at "07:30" :role "hub"} (:daily-note c)))
+                r (core/routine state "steward" "daily-note")
+                skill (core/doc-version state "skills/steward/daily-note.md" {})]
+            (is (= {:at "07:30" :role "steward"} (:daily-note c)))
             (is (= :active (:status r)))
             (is (= "daily 07:10" (:schedule r)) "before the note goes out")
             (is (str/includes? (:instructions r) "daily_note_write"))
             (is (= "Writing the daily note" (:title (relay.skills/parse (:content skill)))))
             (doseq [part ["ahead" "grants" "github" "learned"]]
               (is (str/includes? (:content skill) (str "## " part))))
-            (is (contains? (relay.tools/offered c "hub") "daily_note_write"))
+            (is (contains? (relay.tools/offered c "steward") "daily_note_write"))
             (is (empty? (relay.digest/flagged (core/recipe-changes state) 0))
                 "the operator's own seed is never flagged")))
         (testing "it is marked, so --force may empty it again"
@@ -147,9 +147,9 @@
         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not empty" (init! {:dir dir :home home}))))
       (testing "--force starts it afresh"
         (inbound/submit! (inbound/system dir) {:type :memo/send :actor "operator"
-                                               :args {:to "hub" :subject "Old" :body "x"}})
+                                               :args {:to "steward" :subject "Old" :body "x"}})
         (init! {:dir dir :home home :force? true})
-        (is (empty? (core/unread-memos (inbound/current-state (inbound/system dir)) "hub"))))
+        (is (empty? (core/unread-memos (inbound/current-state (inbound/system dir)) "steward"))))
       (testing "--force does not touch a directory staging did not make"
         (let [other (str home "/other")]
           (fs/create-dirs other)

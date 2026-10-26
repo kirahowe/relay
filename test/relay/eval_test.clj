@@ -278,30 +278,30 @@
       "a grant's other keys stay"))
 
 (deftest settings-may-open-a-mailbox-and-a-folder
-  (is (empty? (scenario/settings-problems {:mailbox "hub" :grants {"hub" {:files true}}})))
-  (is (empty? (scenario/settings-problems {:grants {"hub" {:tools ["campaign-draft-demo"] :files true}}})))
+  (is (empty? (scenario/settings-problems {:mailbox "steward" :grants {"steward" {:files true}}})))
+  (is (empty? (scenario/settings-problems {:grants {"steward" {:tools ["campaign-draft-demo"] :files true}}})))
   (is (seq (scenario/settings-problems {:mailbox "Hub Role"})) "a role id")
-  (is (seq (scenario/settings-problems {:grants {"hub" {:files ["/Users/kira"]}}})) "the folder is the runner's, not a path")
+  (is (seq (scenario/settings-problems {:grants {"steward" {:files ["/Users/kira"]}}})) "the folder is the runner's, not a path")
   (is (seq (scenario/settings-problems {:ingest {"x" {}}})) "no other relay.edn key")
   (let [merged (scenario/merge-settings (staging/settings {:data-dir "/s"})
-                                        {:mailbox "hub" :grants {"hub" {:files true}}} "/private/tmp/folder")]
-    (is (= ["/private/tmp/folder"] (get-in merged [:grants "hub" :files])))
-    (is (true? (get-in merged [:grants "hub" :may-add])) "a grant's other keys stay")
-    (is (= "hub" (get-in merged [:ingest scenario/mailbox-source :to])))
+                                        {:mailbox "steward" :grants {"steward" {:files true}}} "/private/tmp/folder")]
+    (is (= ["/private/tmp/folder"] (get-in merged [:grants "steward" :files])))
+    (is (true? (get-in merged [:grants "steward" :may-add])) "a grant's other keys stay")
+    (is (= "steward" (get-in merged [:ingest scenario/mailbox-source :to])))
     (testing "the mailbox is a valid source that is never due at the times cases run"
       (is (config/resolve-config merged))
       (is (= 1440 (get-in merged [:ingest scenario/mailbox-source :every-minutes]))))))
 
 (deftest a-folder-needs-files-and-a-mail-step-a-mailbox
   (let [base {:steps [{:tick 1}] :assert [[:has :wake {}]]}]
-    (is (empty? (scenario/problems (assoc base :settings {:grants {"hub" {:files true}}} :files {"a/b.txt" "x"}))))
-    (is (seq (scenario/problems (assoc base :settings {:grants {"hub" {:files true}}}))) ":files is needed")
+    (is (empty? (scenario/problems (assoc base :settings {:grants {"steward" {:files true}}} :files {"a/b.txt" "x"}))))
+    (is (seq (scenario/problems (assoc base :settings {:grants {"steward" {:files true}}}))) ":files is needed")
     (is (seq (scenario/problems (assoc base :files {"a.txt" "x"}))) "a folder without a grant")
-    (is (seq (scenario/problems (assoc base :settings {:grants {"hub" {:files true}}} :files {"../x" "y"}))))
-    (is (seq (scenario/problems (assoc base :settings {:grants {"hub" {:files true}}} :files {"/etc/x" "y"}))))
-    (is (empty? (scenario/problems (assoc base :settings {:mailbox "hub"} :steps [{:mail "From: a@b.example\n\nhi"}]))))
+    (is (seq (scenario/problems (assoc base :settings {:grants {"steward" {:files true}}} :files {"../x" "y"}))))
+    (is (seq (scenario/problems (assoc base :settings {:grants {"steward" {:files true}}} :files {"/etc/x" "y"}))))
+    (is (empty? (scenario/problems (assoc base :settings {:mailbox "steward"} :steps [{:mail "From: a@b.example\n\nhi"}]))))
     (is (seq (scenario/problems (assoc base :steps [{:mail "From: a@b.example\n\nhi"}]))) "no :mailbox")
-    (is (seq (scenario/problems (assoc base :settings {:mailbox "hub"} :steps [{:mail ""}]))))))
+    (is (seq (scenario/problems (assoc base :settings {:mailbox "steward"} :steps [{:mail ""}]))))))
 
 (deftest files-paths-resolve-under-the-folder
   (is (= {:moves [{:from "/f/Taxes" :to "/f/Shared/Taxes"}]}
