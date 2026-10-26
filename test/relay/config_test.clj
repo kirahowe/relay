@@ -164,3 +164,77 @@
   (is (= [{:path "/h/notes" :trusted true} "/h/Downloads"]
          (get-in (config/expand-paths {:house {:mounts [{:path "~/notes" :trusted true} "~/Downloads"]}} "/h")
                  [:house :mounts]))))
+
+;; --- every problem at once
+
+(def ^:private breakages
+  "Independent mistakes an old relay.edn may hold, each with a phrase of
+  its refusal."
+  [[#(assoc % :brief {:at "07:00"}) ":brief"]
+   [#(assoc % :chat-client ["x"]) ":chat-client"]
+   [#(assoc % :notify {}) ":notify"]
+   [#(assoc-in % [:harnesses :agentloop :workbench] {}) ":workbench"]
+   [#(assoc-in % [:tools "mail"] {:class :edit :labels [] :command ["true"] :consent true}) ":consent"]
+   [#(assoc-in % [:tools "pay"] {:class :act :labels [] :command ["true"]}) ":class :act"]
+   [#(assoc-in % [:grants "steward"] {:quarantine true}) ":quarantine"]
+   [#(assoc-in % [:grants "clerk"] {:tools ["send-mail"]}) "send-mail"]
+   [#(assoc % :max-attempts 0) ":max-attempts"]])
+
+(defspec every-problem-in-relay-edn-is-told-at-once 100
+  (prop/for-all [picked (gen/fmap (comp vec distinct) (gen/vector (gen/choose 0 (dec (count breakages))) 1 9))]
+    (let [settings (reduce (fn [s i] ((first (breakages i)) s)) complete picked)
+          e (try (config/resolve-config settings) nil (catch clojure.lang.ExceptionInfo e e))
+          msg (ex-message e)
+          problems (:problems (ex-data e))]
+      (and e (:relay/usage (ex-data e))
+           (= (count picked) (count problems))
+           (every? (fn [i] (some #(str/includes? % (second (breakages i))) problems)) picked)
+           (if (next problems)
+             (= (str/split-lines msg)
+                (cons (str "relay.edn has " (count problems) " things to change:")
+                      (map-indexed #(str (inc %1) ". " %2) problems)))
+             (= msg (first problems)))))))
+
+(deftest an-old-relay-edn-is-told-in-one-run
+  (let [settings (reduce (fn [s [f]] (f s)) complete breakages)
+        e (try (config/resolve-config settings) (catch clojure.lang.ExceptionInfo e e))
+        lines (str/split-lines (ex-message e))]
+    (is (= "relay.edn has 9 things to change:" (first lines)))
+    (is (str/starts-with? (second lines) "1. relay.edn has :brief"))
+    (is (= 10 (count lines)))))
+
+(deftest the-old-web-search-tool-is-told-its-one-line-fix
+  (let [msg (problem (-> complete
+                         (assoc-in [:tools "web"] {:class :egress :labels ["contaminated"] :protocol :envelope
+                                                   :command ["webtool"]
+                                                   :parameters {:type "object" :properties {:query {:type "string"}}}})
+                         (assoc-in [:grants "scout"] {:public true :tools ["web"]})))]
+    (is (str/starts-with? msg "Tool web in relay.edn sends query out as free text"))
+    (is (str/includes? msg "add :queries [\"query\"]"))))
+
+(deftest the-agents-calendar-has-a-name
+  (is (= "Agenda" (config/calendar-name (config/resolve-config complete))))
+  (is (= "Harbour" (config/calendar-name (config/resolve-config (assoc complete :calendar {:name "Harbour"})))))
+  (is (= "Pat's assistant"
+         (config/calendar-name (config/resolve-config
+                                (assoc complete :messages {:channels {"mail" {:kind :email :url "smtps://smtp.example.org:465"
+                                                                               :from "a@example.org" :from-name "Pat's assistant"
+                                                                               :to "p@example.org"}}
+                                                           :routes []}))))
+      "after the agent's mail, when it has one")
+  (doseq [bad [{:name ""} {:name "a\nb"} {:title "x"} "Harbour"]]
+    (is (str/includes? (str (problem (assoc complete :calendar bad))) ":calendar is") (pr-str bad))))
+
+(deftest a-check-that-crashes-never-lets-relay-edn-through
+  (let [collecting @#'config/collecting
+        crash #(throw (ClassCastException. "boom"))
+        refuse #(throw (ex-info "Fix :x." {:relay/usage true}))]
+    (testing "a crash alone is thrown as it is"
+      (is (thrown? ClassCastException (collecting [crash (constantly :value)]))))
+    (testing "a crash alongside a refusal reports the refusal"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^Fix :x\.$" (collecting [crash refuse]))))
+    (testing "a malformed tool that makes a check crash is refused, not accepted"
+      (is (thrown? Exception
+                   (config/resolve-config {:timezone "UTC" :default-harness :x
+                                           :harnesses {:x {:kind :agentloop :api-key-command ["true"]}}
+                                           :tools {"x" 5}}))))))

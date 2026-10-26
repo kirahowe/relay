@@ -98,6 +98,10 @@
  ;; so the note can say when the search did not run.
  ;; :daily-note {:at "07:30" :role "steward" :grants "scout/grant-search"}
 
+ ;; What your calendar app calls the agent's calendar. Without it, the
+ ;; email channel's :from-name, else Agenda.
+ ;; :calendar {:name "Harbour assistant"}
+
  ;; Tools beyond relay's own, each an external command given the call's
  ;; arguments after its own, with no -- in between: such a tool must
  ;; refuse flags in the model's part, as rem does. New tools

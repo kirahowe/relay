@@ -31,6 +31,17 @@
             sibling (some-> root (fs/path ".." "webtool" "bin" "webtool"))]
         (when (and sibling (fs/executable? sibling)) (str (fs/normalize sibling))))))
 
+(defn relay-tui-bin
+  "The dashboard to write into relay.edn's :client: the sibling
+  checkout's build, else `relay-tui` on PATH, as for agentloop, so a
+  stale one on PATH never runs in place of the build next to relay. Nil
+  when there is none."
+  []
+  (or (let [root (some-> (System/getProperty "relay.bin") fs/real-path fs/parent fs/parent)
+            sibling (some-> root (fs/path ".." "relay-tui" "bin" "relay-tui"))]
+        (when (and sibling (fs/executable? sibling)) (str (fs/normalize sibling))))
+      (some-> (fs/which "relay-tui") str)))
+
 (defn- webtool-problem [s]
   (when-not (or (= "none" s) (fs/absolute? s))
     "Give the full path to the webtool binary, or none."))
@@ -92,6 +103,7 @@
                                      :api-key-command (str/split api-key #"\s+")}
                               (:agentloop io) (assoc :bin (:agentloop io)))}
      :messages messages
+     :client (when (:relay-tui io) [(:relay-tui io)])
      :web web}))
 
 (defn webtool-config
@@ -181,7 +193,7 @@
   of lines turned off with ;; and placeholders to fill in. `on` names the
   blocks (optional-blocks) to write turned on instead, for tests."
   ([settings webtool-file] (render settings webtool-file #{}))
-  ([{:keys [timezone harnesses messages web]} webtool-file on]
+  ([{:keys [timezone harnesses messages web client]} webtool-file on]
    (let [{:keys [provider model effort api-key-command bin]} (:agentloop harnesses)]
      (switch-blocks
       (str ";; relay's settings, written by `relay init`. Only you edit this file; no\n"
@@ -202,6 +214,10 @@
            " ;; The steward: the role you talk to, which reads the mailbox, writes\n"
            " ;; the daily note and hears about work another role could not finish.\n"
            " :dead-letter-handler \"" steward "\"\n\n"
+           (when client
+             (str " ;; The dashboard bare `relay` opens, by its full path, so no other\n"
+                  " ;; relay-tui on PATH runs in its place.\n"
+                  " :client " (pr-str client) "\n\n"))
            " ;; What relay tells you goes to these channels; every message also\n"
            " ;; shows in the client. Mail to you comes from the agent's own address\n"
            " ;; and goes to no one else. To turn it on, fill in the addresses and the\n"

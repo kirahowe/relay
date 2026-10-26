@@ -69,7 +69,47 @@
    :grants {}
    :messages messages/default-settings})
 
-(defn- problem! [msg] (throw (ex-info msg {:relay/usage true})))
+(def ^:private ^:dynamic *problems*
+  "While validate runs, an atom collecting what is wrong, so relay.edn's
+  problems are told all at once rather than one per run."
+  nil)
+
+(defn- problem! [msg]
+  (if *problems*
+    (swap! *problems* conj msg)
+    (throw (ex-info msg {:relay/usage true}))))
+
+(defn problems-message
+  "One message for the operator from relay.edn's problems: the problem
+  itself when there is one, else a count and the problems numbered, one
+  to a line. Pure."
+  [problems]
+  (if (next problems)
+    (str/join "\n" (cons (str "relay.edn has " (count problems) " things to change:")
+                         (map-indexed (fn [i p] (str (inc i) ". " p)) problems)))
+    (first problems)))
+
+(defn- collecting
+  "Runs each of `steps` (functions of no arguments), collecting every
+  problem they find. A step stops at an exception, which counts as a
+  problem when it is relay's own refusal (ex-info); any other exception
+  is taken to follow from a problem already found, and is thrown only
+  when nothing else was. Returns the value of the last step, or throws
+  one refusal listing every problem (problems-message)."
+  [steps]
+  (let [found (atom [])
+        crash (atom nil)
+        value (binding [*problems* found]
+                (reduce (fn [_ step]
+                          (try (step)
+                               (catch clojure.lang.ExceptionInfo e (swap! found conj (ex-message e)) nil)
+                               (catch Exception e (swap! crash #(or % e)) nil)))
+                        nil steps))
+        problems (vec (distinct @found))]
+    (cond
+      (seq problems) (throw (ex-info (problems-message problems) {:relay/usage true :problems problems}))
+      @crash (throw @crash)
+      :else value)))
 
 (defn check-messages
   "Checks the :messages settings alone, throwing on the first problem, so
@@ -94,7 +134,7 @@
   #{:format :timezone :default-harness :harnesses :messages :ingest :client :tools :mcp-servers
     :connections :grants :dead-letter-handler :wake-timeout-minutes :max-attempts
     :retry-base-seconds :retry-ceiling-seconds :limit-probe-minutes :outage-patience-minutes
-    :runaway-wakes :runaway-window-minutes :house :budget :serve :daily-note})
+    :runaway-wakes :runaway-window-minutes :house :budget :serve :daily-note :calendar})
 
 (def settings-format
   "The :format relay init writes in relay.edn. Optional, but when it is
@@ -213,7 +253,7 @@
       (problem! (str "The grants for " role " in relay.edn name " (str/join " and " (map pr-str gone))
                      ", which relay no longer has. Remove " (if (next gone) "them" "it")
                      ". A role can be granted " (str/join ", " (sort (map str grant-keys))) ".")))
-    (when-let [unknown (seq (remove grant-keys (keys g)))]
+    (when-let [unknown (seq (remove (into grant-keys removed-grant-keys) (keys g)))]
       (problem! (str "The grants for " role " in relay.edn name " (str/join ", " (map pr-str (sort-by str unknown)))
                      ", which relay does not know. A role can be granted "
                      (str/join ", " (sort (map str grant-keys))) ".")))
@@ -327,6 +367,27 @@
         (cond-> config
           (get-in config [:serve :websocket])
           (update-in [:serve :websocket] #(merge websocket-defaults %))))))
+
+(defn- check-calendar
+  "The optional :calendar: {:name \"Harbour assistant\"}, what a calendar
+  app calls the agent's calendar when it subscribes."
+  [config]
+  (when (contains? config :calendar)
+    (let [{:keys [name] :as c} (:calendar config)]
+      (when-not (and (map? c) (= #{:name} (set (keys c))) (string? name)
+                     (not (str/blank? name)) (<= (count name) 60) (not (re-find #"[\r\n]" name)))
+        (problem! (str "relay.edn's :calendar is {:name \"...\"}, the name your calendar app shows for the"
+                       " agent's calendar: one line of up to 60 characters"
+                       (when (some? c) (str ", not " (pr-str c))) "."))))))
+
+(defn calendar-name
+  "What a calendar app calls the agent's calendar: :calendar :name, else
+  the name the agent's mail is from, else Agenda."
+  [config]
+  (or (get-in config [:calendar :name])
+      (first (sort (keep (fn [[_ ch]] (when (= :email (:kind ch)) (:from-name ch)))
+                         (get-in config [:messages :channels]))))
+      "Agenda"))
 
 (defn- check-daily-note
   "The optional :daily-note: {:at \"07:30\" :role \"steward\"}, the time
@@ -518,16 +579,22 @@
 
       :else
       (or
-       (when-let [[p] (first (for [[p schema] (sort-by key props)
-                                   :when (not (if (or (= "url" p) (some #{p} queries))
-                                                (= "string" (:type schema))
-                                                (#{"integer" "number" "boolean"} (:type schema))))]
-                               [p]))]
-         (why "is an :egress tool, and its parameter " p " is neither a string url, nor a number or"
-              " yes-or-no value, nor listed in :queries. relay can hold a scout to the addresses it was"
-              " shown only in a url argument. List a parameter in :queries only when its text goes to a"
-              " service you trust as you trust the model provider, such as a web search, never to one"
-              " that publishes it."))
+       (when-let [[p schema] (first (for [[p schema] (sort-by key props)
+                                          :when (not (if (or (= "url" p) (some #{p} queries))
+                                                       (= "string" (:type schema))
+                                                       (#{"integer" "number" "boolean"} (:type schema))))]
+                                      [p schema]))]
+         (if (and (= "string" (:type schema)) (not (contains? props "url")))
+           ;; The old web search tool: the fix is one line.
+           (why "sends " p " out as free text, and " p " is not listed in :queries. If it is a web search,"
+                " add :queries [" (pr-str p) "]; setup/relay.example.edn has the web tool. List a"
+                " parameter there only when its text goes to a service you trust as you trust the model"
+                " provider, never to one that publishes it.")
+           (why "is an :egress tool, and its parameter " p " is neither a string url, nor a number or"
+                " yes-or-no value, nor listed in :queries. relay can hold a scout to the addresses it was"
+                " shown only in a url argument. List a parameter in :queries only when its text goes to a"
+                " service you trust as you trust the model provider, such as a web search, never to one"
+                " that publishes it.")))
        (when (and (empty? queries) (not (contains? props "url")))
          (why "is an :egress tool with neither a url nor :queries. An :egress tool either fetches a page,"
               " taking a string url, or searches, naming its search text in :queries."))))))
@@ -552,83 +619,85 @@
            (str " Did you mean " guess "?")
            (str " A tool takes " (str/join ", " (map pr-str (sort known))) ".")))))
 
-(defn validate
-  "Returns the config, or throws describing the first problem found."
-  [{:keys [tools grants max-attempts] client :client :as config}]
-  (doseq [[k why] (sort-by key removed-keys) :when (contains? config k)] (problem! why))
-  (when-let [why (unknown-keys-problem config)] (problem! why))
-  (check-required config)
-  (check-messages (:messages config))
-  (when-let [why (ingest/settings-problem (:ingest config) #(true? (get-in config [:grants % :public])))]
-    (problem! why))
-  (when-not (and (sequential? client) (seq client)
-                 (every? #(and (string? %) (not (str/blank? %))) client))
-    (problem! (str "relay.edn has :client " (pr-str client)
-                   "; it must be a command, such as [\"relay-tui\"].")))
-  (doseq [[tool-name {:keys [class labels] :as tool}] tools]
-    (when-let [gone (seq (filter #(contains? tool %) (sort removed-tool-keys)))]
-      (problem! (str "Tool " tool-name " in relay.edn has " (str/join " and " (map pr-str gone))
-                     ", which relay no longer has: no call waits for you. Remove "
-                     (if (next gone) "them." "it."))))
-    ;; A misspelled key is refused, so :comand cannot leave a tool with
-    ;; no command, or :timeout-secs with the default. MCP keys on a plain
-    ;; tool are told apart in check-mcp.
-    (when-not (mcp-tool? tool)
-      (when-let [k (first (sort-by str (remove (into plain-tool-keys mcp-tool-keys) (keys tool))))]
-        (problem! (unknown-tool-key-problem tool-name k plain-tool-keys))))
-    (when (= :act class)
-      (problem! (str "Tool " tool-name " has :class :act, which relay no longer has: relay never acts as you."
-                     " Make it a drafting tool with :class :edit, or remove it.")))
+(defn- check-tool
+  "One tool of :tools, apart from what check-mcp says of MCP tools."
+  [tool-name {:keys [class labels] :as tool}]
+  (when-let [gone (seq (filter #(contains? tool %) (sort removed-tool-keys)))]
+    (problem! (str "Tool " tool-name " in relay.edn has " (str/join " and " (map pr-str gone))
+                   ", which relay no longer has: no call waits for you. Remove "
+                   (if (next gone) "them." "it."))))
+  ;; A misspelled key is refused, so :comand cannot leave a tool with
+  ;; no command, or :timeout-secs with the default. MCP keys on a plain
+  ;; tool are told apart in check-mcp.
+  (when-not (mcp-tool? tool)
+    (when-let [k (first (sort-by str (remove (into (into plain-tool-keys mcp-tool-keys) removed-tool-keys) (keys tool))))]
+      (problem! (unknown-tool-key-problem tool-name k plain-tool-keys))))
+  (if (= :act class)
+    (problem! (str "Tool " tool-name " has :class :act, which relay no longer has: relay never acts as you."
+                   " Make it a drafting tool with :class :edit, or remove it."))
     (when-not (tool-classes class)
-      (throw (ex-info (str "Tool " tool-name " needs a :class, one of "
-                           (sort (map name tool-classes)) ".")
-                      {:tool tool-name :relay/usage true})))
-    ;; Required, even when empty, so that leaving it out is never taken to
-    ;; mean the output is clean. A name relay does not know is refused, so
-    ;; a typo cannot drop a label.
-    (when-not (and (contains? tool :labels) (vector? labels)
-                   (every? #(and (string? %) (label-names %)) labels))
-      (throw (ex-info (str "Tool " tool-name " needs :labels, a vector of the labels its output"
-                           " always carries, from " (sort label-names) "; [] for none"
-                           (when (contains? tool :labels) (str ", not " (pr-str labels))) ".")
-                      {:tool tool-name :relay/usage true})))
-    (when-not (contains? #{nil :plain :envelope :mcp-stdio :mcp-http} (:protocol tool))
-      (throw (ex-info (str "Tool " tool-name " has :protocol " (pr-str (:protocol tool))
-                           "; it is :envelope, :mcp-stdio, :mcp-http, or left out for a command given its arguments.")
-                      {:tool tool-name :relay/usage true})))
-    (when (and (some? (:parameters tool)) (not (mcp-tool? tool))
-               (not (and (= :envelope (:protocol tool)) (map? (:parameters tool))
-                         (= "object" (get-in tool [:parameters :type])))))
-      (throw (ex-info (str "Tool " tool-name " has :parameters, which an :envelope tool may give as a"
-                           " JSON Schema object, {:type \"object\" ...}.")
-                      {:tool tool-name :relay/usage true})))
-    (when-let [why (egress-problem tool-name tool)] (problem! why))
-    (when-not (or (nil? (:timeout-seconds tool)) (pos-int? (:timeout-seconds tool)))
-      (throw (ex-info (str "Tool " tool-name " has :timeout-seconds " (pr-str (:timeout-seconds tool))
-                           "; it must be a positive whole number.")
-                      {:tool tool-name :relay/usage true}))))
-  ;; A :script harness runs a program that no policy watches, so its
-  ;; roles may not be granted tools that reach outside relay.
-  (when (and (= :script (get-in config [:harnesses (:default-harness config) :kind]))
-             (some (fn [[_ g]] (or (seq (:tools g)) (:may-add g))) grants))
-    (problem! (str "The default harness in relay.edn is a :script harness, which gets no tools,"
-                   " so no role may be granted :tools or :may-add.")))
-  (when (contains? config :house)
-    (when-let [why (shell/settings-problem (:house config))] (problem! why)))
-  (check-mcp config)
-  (check-grants config)
-  (check-budget config)
-  (check-daily-note config)
-  (doseq [[role {granted :tools}] grants
-          t granted]
-    (when-not (contains? tools t)
-      (throw (ex-info (str "Role " role " is granted tool " t ", which :tools does not define.")
-                      {:role role :tool t}))))
-  (when-not (and (integer? max-attempts) (pos? max-attempts))
-    (throw (ex-info ":max-attempts must be a positive integer." {})))
-  ;; Labels are kept as relay.core keeps them: sorted distinct strings.
-  (update (check-serve config) :tools update-vals
-          (fn [t] (update t :labels #(vec (sort (distinct %)))))))
+      (problem! (str "Tool " tool-name " needs a :class, one of "
+                     (sort (map name tool-classes)) "."))))
+  ;; Required, even when empty, so that leaving it out is never taken to
+  ;; mean the output is clean. A name relay does not know is refused, so
+  ;; a typo cannot drop a label.
+  (when-not (and (contains? tool :labels) (vector? labels)
+                 (every? #(and (string? %) (label-names %)) labels))
+    (problem! (str "Tool " tool-name " needs :labels, a vector of the labels its output"
+                   " always carries, from " (sort label-names) "; [] for none"
+                   (when (contains? tool :labels) (str ", not " (pr-str labels))) ".")))
+  (when-not (contains? #{nil :plain :envelope :mcp-stdio :mcp-http} (:protocol tool))
+    (problem! (str "Tool " tool-name " has :protocol " (pr-str (:protocol tool))
+                   "; it is :envelope, :mcp-stdio, :mcp-http, or left out for a command given its arguments.")))
+  (when (and (some? (:parameters tool)) (not (mcp-tool? tool))
+             (not (and (= :envelope (:protocol tool)) (map? (:parameters tool))
+                       (= "object" (get-in tool [:parameters :type])))))
+    (problem! (str "Tool " tool-name " has :parameters, which an :envelope tool may give as a"
+                   " JSON Schema object, {:type \"object\" ...}.")))
+  (when-let [why (egress-problem tool-name tool)] (problem! why))
+  (when-not (or (nil? (:timeout-seconds tool)) (pos-int? (:timeout-seconds tool)))
+    (problem! (str "Tool " tool-name " has :timeout-seconds " (pr-str (:timeout-seconds tool))
+                   "; it must be a positive whole number."))))
+
+(defn validate
+  "Returns the config, or throws one refusal that lists every problem
+  found (problems-message), with them as :problems in its data."
+  [{:keys [tools grants max-attempts] client :client :as config}]
+  (collecting
+   (concat
+    (for [[k why] (sort-by key removed-keys) :when (contains? config k)] #(problem! why))
+    [#(when-let [why (unknown-keys-problem config)] (problem! why))
+     #(check-required config)
+     #(check-messages (:messages config))
+     #(when-let [why (ingest/settings-problem (:ingest config) (fn [r] (true? (get-in config [:grants r :public]))))]
+        (problem! why))
+     #(when-not (and (sequential? client) (seq client)
+                     (every? (fn [a] (and (string? a) (not (str/blank? a)))) client))
+        (problem! (str "relay.edn has :client " (pr-str client)
+                       "; it must be a command, such as [\"relay-tui\"].")))]
+    (for [[tool-name tool] (sort-by (comp str key) tools)] #(check-tool tool-name tool))
+    ;; A :script harness runs a program that no policy watches, so its
+    ;; roles may not be granted tools that reach outside relay.
+    [#(when (and (= :script (get-in config [:harnesses (:default-harness config) :kind]))
+                 (some (fn [[_ g]] (or (seq (:tools g)) (:may-add g))) grants))
+        (problem! (str "The default harness in relay.edn is a :script harness, which gets no tools,"
+                       " so no role may be granted :tools or :may-add.")))
+     #(when (contains? config :house)
+        (when-let [why (shell/settings-problem (:house config))] (problem! why)))
+     #(check-mcp config)
+     #(check-grants config)
+     #(check-budget config)
+     #(check-daily-note config)
+     #(check-calendar config)
+     #(doseq [[role {granted :tools}] grants
+              t granted]
+        (when-not (contains? tools t)
+          (problem! (str "Role " role " is granted tool " t ", which :tools does not define."))))
+     #(when-not (and (integer? max-attempts) (pos? max-attempts))
+        (problem! ":max-attempts must be a positive integer."))
+     ;; Labels are kept as relay.core keeps them: sorted distinct strings.
+     #(update (check-serve config) :tools update-vals
+              (fn [t] (update t :labels (fn [ls] (vec (sort (distinct ls)))))))])))
 
 (defn resolve-config
   "Defaults overlaid with the operator's settings."
@@ -708,7 +777,14 @@
         (conj (said ":serve :websocket :default-role" (:default-role ws) (:default-role websocket-defaults)
                     "a phone conversation that names no role has no one to talk to" ":default-role"))
         (and note-role (not (ids note-role)))
-        (conj (said ":daily-note :role" note-role nil "nobody writes the daily note" ":role"))))))
+        (conj (said ":daily-note :role" note-role nil "nobody writes the daily note" ":role"))
+        ;; A source whose :to names no role is skipped by the tick.
+        true
+        (into (for [[n {:keys [to]}] (sort-by (comp str key) (:ingest config))
+                    :when (and (string? to) (not (ids to)))
+                    :let [guess (or (did-you-mean to ids) guess)]]
+                (str "The :ingest source " n " goes to " to ", which is not a role, so it is not checked."
+                     (when guess (str " Did you mean " guess "?")))))))))
 
 (defn load-config [data-dir]
   (let [file (fs/path data-dir "relay.edn")]
@@ -716,16 +792,22 @@
       (problem! (str data-dir " has no relay.edn. Run `relay init` to make one.")))
     (let [settings (read-settings (slurp (str file)))
           settings (if (map? settings) (expand-paths settings (System/getProperty "user.home")) settings)
-          config (resolve-config (connections/expand data-dir settings
-                                                     {:classes tool-classes :labels label-names}))]
-      ;; Where the files to mount, and the folders to organize, may not be
-      ;; depends on this machine: the home directory and the data
-      ;; directory itself.
-      (let [where {:home (str (fs/real-path (System/getProperty "user.home")))
-                   :data-dir (str (fs/real-path data-dir))}]
-        (when-let [why (or (shell/mounts-problem (:house config) where)
-                           (files/roots-problem config where))]
-          (problem! why)))
+          expanded (connections/expand data-dir settings {:classes tool-classes :labels label-names})
+          [config problems] (try [(resolve-config expanded) []]
+                                 (catch clojure.lang.ExceptionInfo e
+                                   (if-let [ps (:problems (ex-data e))] [nil ps] (throw e))))
+          ;; Where the files to mount, and the folders to organize, may not be
+          ;; depends on this machine: the home directory and the data
+          ;; directory itself. Told with the rest when relay.edn has other
+          ;; problems too.
+          where {:home (str (fs/real-path (System/getProperty "user.home")))
+                 :data-dir (str (fs/real-path data-dir))}
+          here (let [c (or config (merge defaults expanded))]
+                 (try (remove nil? [(shell/mounts-problem (:house c) where) (files/roots-problem c where)])
+                      (catch Exception _ [])))
+          all (vec (distinct (concat problems here)))]
+      (when (seq all)
+        (throw (ex-info (problems-message all) {:relay/usage true :problems all})))
       config)))
 
 (defn zone ^ZoneId [config]

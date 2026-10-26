@@ -52,6 +52,14 @@
   (let [{:keys [settings]} (create ["" "" "" "" "" "" "" "y"])]
     (is (not (contains? (get-in settings [:harnesses :agentloop]) :bin)) "none found, none written")))
 
+(deftest the-relay-tui-found-is-written-as-an-absolute-client
+  ;; Regression (U2): an older relay-tui on PATH opened as the dashboard.
+  (let [{:keys [settings dir]} (create ["" "" "" "" "" "" "" "y"] {:relay-tui "/opt/relay/relay-tui/bin/relay-tui"})]
+    (is (= ["/opt/relay/relay-tui/bin/relay-tui"] (:client settings)))
+    (is (= ["/opt/relay/relay-tui/bin/relay-tui"] (:client (config/load-config dir)))))
+  (let [{:keys [settings]} (create ["" "" "" "" "" "" "" "y"])]
+    (is (not (contains? settings :client)) "none found, none written")))
+
 (deftest nothing-is-written-without-a-yes
   (doseq [answer ["" "n" "no" "sure" nil]]
     (let [{:keys [written settings io]} (create ["" "" "" "" "" "" "" answer])]
