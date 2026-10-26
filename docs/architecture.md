@@ -1,466 +1,498 @@
 # How relay works
 
-This is the picture of the whole system: what the parts are, how they
-connect, and where the rules are enforced. It describes the house
-design in `docs/plans/house.md`. Where a part is built, the text says how
-it works. Where it is planned and not built yet, the diagram marks it
-dashed and the text says which phase brings it.
+This page describes the whole system as the code on `main` has it: the
+parts, how they connect, and where each rule is enforced. The README says
+how to use relay. `docs/messages.md`, `docs/house-shell.md` and
+`docs/client-protocol.md` go deeper into three of the parts below.
 
-Written as of phase B5 (the agent's calendar). Phase B13 rewrites this
-page for the finished system.
+## The house and its walls
 
-## The idea in one picture
+relay is a private house. Inside, the roles read everything relay keeps,
+your notes and files and the mail that comes in, and get on with the work
+without asking you. Nothing inside waits for an approval. What keeps you
+safe is the walls, and relay builds them in code:
 
-relay is a private house. Inside, the agent works freely: nothing is
-held, approved or quarantined. Safety comes from the walls. The walls
-are three: the agent holds no credential that can act as Kira, the
-steward's shell has no network, and the only things that leave the house
-go into Kira's own accounts or to Kira.
+- No tool can send, post, publish or pay as you. The tool classes are
+  `read`, `write`, `edit` and `egress`, and no class covers an action
+  others would see. `edit` changes only your own things, where nobody
+  else sees the change and you can undo it: a draft in your account, a
+  reminder, the agent's own calendar.
+- A house role (any role that is not public) is never given an `egress`
+  tool. The steward's shell runs in a container with no network.
+- Mail goes only to you, from the agent's own address.
+- Scouts, the public roles that search the web, are never shown anything
+  private, and they may fetch only an address the web showed them.
+
+This is everything that can leave the house, and how:
 
 ```mermaid
 flowchart LR
     kira(["Kira"])
 
-    subgraph house["The house"]
+    subgraph house["The house: your Mac"]
         direction TB
-        roles["Roles<br/>the steward and other house roles"]
-        log[("The log<br/>append-only events")]
-        roles <--> log
+        steward["The steward and other house roles"]
+        log[("The log")]
+        shell["The steward's shell<br/>container, --network none"]
+        steward <--> log
+        steward --> shell
     end
 
-    subgraph out["Leaves the house, in Kira's hands"]
-        direction TB
-        drafts["Drafts in her own accounts"]
-        cal["The agent's calendar feed"]
-        msg["Messages to Kira"]
+    subgraph scoutside["Public side"]
+        scout["Scouts<br/>see only public text"]
     end
 
-    scouts["Scouts<br/>public agents with web access,<br/>no private data"]
-    model["Model provider"]
+    model["Model provider<br/>prompts and replies"]
+    search["Search provider<br/>queries only"]
+    web["Web pages<br/>only addresses already shown"]
+    yours["Your own accounts<br/>drafts, edit tools only"]
+    mailout["Mail to you<br/>one recipient, plain text"]
+    push["Push to your phone<br/>one line"]
+    feed["The agent's calendar feed<br/>127.0.0.1, behind your tailnet"]
 
-    kira -->|"asks, pastes, replies"| roles
-    roles --> drafts
-    roles --> cal
-    roles --> msg
-    drafts -.->|"she reads it, then she sends it"| kira
-    cal -.->|"she subscribes"| kira
-    msg -.-> kira
-    roles <-->|"free text only"| scouts
-    roles <-->|"prompts and replies"| model
+    kira -->|"asks, pastes, replies"| steward
+    steward -->|"memo, public as written"| scout
+    scout -->|"memo back, marked from the web"| steward
+    steward --> model
+    scout --> model
+    scout --> search
+    scout --> web
+    steward --> yours
+    steward --> mailout
+    steward --> push
+    steward --> feed
+    mailout --> kira
+    push --> kira
+    feed -->|"you subscribe"| kira
+    yours -->|"you read it and send it yourself"| kira
 ```
 
-Three rules hold the walls up:
+The shell has no arrow out: it runs with `--network none` and sees your
+folders read-only. A house role's only ways out are the edges on the
+right, and each goes to you or into your own accounts. The scout's
+`egress` tools reach the search provider and web pages, under the fetch
+rule below.
 
-1. **Never as Kira.** No tool can send, post, publish or pay as her.
-   The class `act` does not exist. What the agent does outside relay
-   is class `edit`: something only Kira sees and she can undo.
-2. **No way out.** A house role is granted no `egress` tool. The
-   steward's shell runs with `--network none`.
-3. **Provenance, not gates.** Everything carries labels saying where it
-   came from. Labels are shown to Kira as plain words ("from outside: a
-   mail that says it is from stranger@example.com"). Nothing is withheld because of one, except
-   that a scout can never be shown anything private.
+Labels are provenance, not gates. Every event carries labels that say
+where its text came from (`private`, `contaminated`, and source labels
+such as `mail:dana@example.org`). They decide two things: a scout's
+session may never hold `private`, and they tell you where a thing came
+from. Nothing is held back or hidden because of a label.
 
-## The four repos
+## The four repos and their processes
 
 ```mermaid
 flowchart TB
-    subgraph relayrepo["relay (Clojure, Babashka)"]
-        direction TB
-        cli["cli: relay tick, serve, acp, tool, ..."]
-        core["core: pure rules<br/>decide and evolve"]
-        inbound["inbound: the one way in"]
-        logns["log: JSONL segments"]
-        tools["tools: the roles' tools"]
-        dispatch["dispatch: wakes"]
-        hub["hub: pure ACP hub"]
-        serve["serve: sockets and WebSocket"]
-        ics["ics: pure iCalendar renderer"]
+    subgraph relayrepo["relay, Clojure on babashka"]
+        tick["relay tick<br/>launchd, every minute"]
+        serve["relay serve<br/>launchd, always on"]
+        acp["relay acp<br/>bridge to relay serve"]
+        tool["relay tool NAME<br/>one call, as one role"]
+        cli["relay CLI<br/>status, memo, ready, reply, undo"]
     end
 
-    subgraph agentloop["agentloop (Go)"]
-        loop["Model loop with tools,<br/>labels and forbid_labels"]
+    subgraph agentloopRepo["agentloop, Go"]
+        al["agentloop run request.json<br/>model loop with tools"]
     end
 
-    subgraph tui["relay-tui (Go)"]
-        dash["Dashboard: roles,<br/>conversations, board"]
+    subgraph tuiRepo["relay-tui, Go"]
+        tui["relay-tui<br/>dashboard"]
     end
 
-    subgraph webtool["webtool (Go)"]
-        web["search, fetch, ask"]
+    subgraph webtoolRepo["webtool, Go"]
+        wt["webtool<br/>search and fetch for scouts"]
     end
 
-    dispatch -->|"request.json"| loop
-    loop -->|"relay tool NAME, envelope on stdin"| tools
-    loop -->|"HTTPS"| provider["Model provider"]
-    dash <-->|"ACP over stdio"| serve
-    phone["Phone client"] <-->|"ACP over WebSocket"| serve
-    tools -->|"external tool, envelope protocol"| web
-    cli --> inbound
-    tools --> inbound
-    dispatch --> inbound
-    inbound --> core
-    inbound --> logns
+    container["Apple container VM<br/>the steward's shell"]
+    ntfy["ntfy server<br/>pushes"]
+    smtp["Mail provider, or mailpit in tests<br/>SMTP out, POP3 in"]
+    provider["Model provider API"]
+    brave["Brave Search"]
+    phone["Phone ACP client<br/>over the tailnet"]
+    calapp["Calendar app"]
+
+    tick -->|"spawns a wake"| al
+    serve -->|"one conversation per role"| al
+    al -->|"HTTPS"| provider
+    al -->|"each tool call"| tool
+    tool -->|"envelope on stdin"| wt
+    wt --> brave
+    tool -->|"container exec"| container
+    tick -->|"container run"| container
+    tui -->|"stdio"| acp
+    acp -->|"Unix socket"| serve
+    phone -->|"WebSocket via tailscale serve"| serve
+    calapp -->|"GET /calendar.ics"| serve
+    tick -->|"curl"| smtp
+    tick -->|"push"| ntfy
+    cli --> tool
 ```
 
-| Repo | What it is | Knows about |
+| Process | Started by | What it does |
 |---|---|---|
-| relay | The rules, the log, the tools, the dispatcher, the hub and the service. | Everything below. |
-| agentloop | Runs a model in a loop with tools. Checks every call against the tools it was given and the labels policy. Never holds a call. | Nothing about Kira or roles. |
-| relay-tui | The terminal dashboard. Speaks ACP, so any ACP agent works as a plain chat. | Nothing about the log. |
-| webtool | Search, fetch and ask for public roles. Treats every URL as hostile. | Only its envelope protocol. |
+| `relay tick` | launchd (`setup/launchd/relay.tick.plist`), every minute | Ends lost wakes, fires routines, delivers messages that are due, starts the shell, polls the ingest sources, wakes every role with open memos, and sends the daily note (`relay.dispatch/tick!`). |
+| a wake | the tick, as `relay wake <role> --dispatched` | Writes `request.json` and runs `agentloop run` for one role (`relay.dispatch/wake!`). |
+| `relay serve` | launchd (`setup/launchd/relay.serve.plist`) | Holds live conversations and the clients attached to them, on a Unix socket under `~/.relay/run/` and, when configured, a WebSocket listener on 127.0.0.1 that also serves `/calendar.ics` (`relay.serve`). |
+| `relay acp` | relay-tui or any ACP client | Copies bytes between the client and `relay serve`, or runs the same hub in its own process when no service runs. |
+| `relay tool` | agentloop, once per call | Runs one tool call as the role named on its command line, with the session's labels from the envelope (`relay.tools/call!`). |
+| agentloop | a wake or a conversation | Runs the model with exactly the tools in the request. It holds no call and asks nobody. A public role's request carries `forbid_labels ["private"]`, which agentloop enforces. |
+| relay-tui | Kira | The dashboard: roles, conversations, the board and the ready view. |
+| webtool | `relay tool`, for a scout's `egress` call | Searches with Brave and fetches pages. It reports a redirect instead of following it. |
+| container VM | `relay house up`, the tick, or the first `sh` call | The steward's shell. One per data directory. |
+| ntfy, mail provider | Kira's setup | Carry pushes and mail. Tests use a stand-in ntfy and a mailpit they start on free ports. |
 
-## The log and its fold
+relay is a functional core with a thin shell. `relay.core` decides every
+command and folds every event, and it is pure. `relay.inbound`,
+`relay.log`, `relay.dispatch`, `relay.serve` and the tool edges do the IO.
 
-Everything relay knows is an event in an append-only log. The state is
-the log folded in order, so it can always be rebuilt and nothing is
-deleted. The two functions at the center are pure:
+## A request, from Kira to a draft and a message
 
-- `decide state command ctx` returns events, or refuses.
-- `evolve state event` folds one event into the state.
-
-Every change, from anyone, is a command submitted through
-`relay.inbound`. It is decided against the current state and appended in
-one step under the log's file lock, so two writers can never act on a
-state one of them has already changed.
-
-```mermaid
-flowchart LR
-    who["Kira at the CLI<br/>a role's tool call<br/>the dispatcher<br/>a client"] -->|"command"| submit["inbound/submit!"]
-    submit --> lock{{"log lock"}}
-    lock --> replay["replay: fold all events"]
-    replay --> decide["core/decide<br/>pure"]
-    decide -->|"refused"| reject["rejection with a reason"]
-    decide -->|"events"| append["append to log"]
-    append --> push["side effects after the append,<br/>such as a push"]
-    log[("log/*.jsonl")] --> replay
-    append --> log
-```
-
-Old logs always fold (I8). A removed feature's events stay in the log
-and fold to nothing, listed in `core/removed-event-kinds`.
-
-### Versioned things
-
-Facts, docs and now calendar events share one pattern: every change is
-a new version recorded at a time, with the labels of what its writer had
-seen. Removing something is also a version, so asking what relay knew
-before still gives the old answer.
-
-```mermaid
-stateDiagram-v2
-    direction LR
-    [*] --> Added: calendar_add
-    Added --> Changed: calendar_update
-    Changed --> Changed: calendar_update
-    Added --> Removed: calendar_remove
-    Changed --> Removed: calendar_remove
-    Removed --> [*]: history stays
-    note right of Added
-        SEQUENCE 0
-        UID from the event number
-    end note
-    note right of Changed
-        SEQUENCE rises by 1
-        per version
-    end note
-```
-
-## A wake: how a role does work
-
-Nothing runs between ticks. launchd runs `relay tick` once a minute. It
-brings the log up to date with the clock, fires routines that are due,
-and wakes every role with an open memo, each in its own process.
+Kira types "draft the next concert email" in relay-tui. The steward has a
+draft tool of class `edit` for her mailing service (a remote MCP tool from
+`relay connect`, or the staging stand-in `campaign-draft-demo`).
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant L as launchd
-    participant T as relay tick
-    participant D as dispatch
+    actor K as Kira
+    participant T as relay-tui
+    participant S as relay serve and its hub
     participant A as agentloop
     participant M as Model provider
     participant R as relay tool
-    participant I as inbound and log
+    participant D as Draft tool, edit class
+    participant L as inbound and the log
+    participant C as Channels
 
-    L->>T: every minute
-    T->>I: bring clock up to date, fire routines
-    T->>D: roles with open memos
-    D->>I: wake/start
-    D->>A: request.json: prompt, tool manifest, policy labels
-    loop until the role is done
-        A->>M: conversation so far
-        M-->>A: text or a tool call
-        A->>R: relay tool NAME with envelope on stdin
-        R->>I: command as that role, with the session's labels
-        I-->>R: result text and labels of what it shows
-        R-->>A: envelope result
-    end
-    A-->>D: transcript, outcome
-    D->>I: wake/end
+    K->>T: draft the next concert email
+    T->>S: session/prompt over relay acp
+    S->>S: sanitize the prompt, tell Kira what changed
+    S->>A: prompt, in the steward's conversation
+    A->>M: conversation so far
+    M-->>A: call the draft tool
+    A->>D: save a draft in Kira's account
+    D-->>A: where the draft is
+    M-->>A: call tell_operator
+    A->>R: tell_operator, envelope with the session's labels
+    R->>L: message/send as the steward
+    L->>L: core decides and routes, appends message/created
+    L->>C: deliver what is due now
+    C-->>K: mail from the agent's address, or a push
+    A-->>S: the turn ends
+    S->>L: record what the steward prepared, prepared/recorded
+    S-->>T: _relay/ready/changed with the draft and the message
+    K->>K: reads the draft and sends it herself
 ```
 
-The tools a role is offered depend on its grants in `relay.edn`. A call
-to a tool the role was not offered is refused, whatever the harness let
-through. A role on a `:script` harness gets no tools at all.
+The same request can come as a memo (`relay memo steward ...`). Then the
+tick wakes the steward, and a wake runs in its own process instead of the
+conversation. Everything after that is the same.
 
-## Conversations: Kira talking to a role
+relay learns what a role prepared by reading the session after the wake
+or turn (`relay.dispatch/store-prepared!`): every successful call to a
+tool of class `edit` that is not relay's own becomes a `prepared/recorded`
+event, which the ready view lists. It is a record of what happened; no
+step waits on it.
 
-`relay serve` keeps conversations going while no client is attached.
-Clients speak ACP to it: relay-tui over a Unix socket, a phone client
-over WebSocket. The hub is pure. `relay.serve` is the imperative shell
-around it, with one loop thread that owns the hub.
+## The log and its fold
+
+Everything relay knows is an event in an append-only log of JSONL files
+under `<data>/log/`. The state is the log folded in order. Two pure
+functions sit at the center: `relay.core/decide` takes the state and a
+command and returns events or a refusal, and `relay.core/evolve` folds
+one event into the state.
 
 ```mermaid
 flowchart LR
-    tui["relay-tui"] -->|"ACP, stdio"| bridge["relay acp bridge"]
-    bridge -->|"Unix socket<br/>mode 0600"| svc
-    phone["Phone client"] -->|"wss over tailnet"| ts["tailscale serve"]
-    ts -->|"127.0.0.1 only<br/>bearer token"| wsl["WebSocket listener"]
-    wsl --> svc
-
-    subgraph svc["relay serve"]
-        direction TB
-        loopthread["Loop thread owns the hub"]
-        hubp["relay.hub<br/>pure step function"]
-        conv["Conversation per role<br/>role's agent behind relay's proxy"]
-        loopthread <--> hubp
-        loopthread <--> conv
-    end
-
-    conv --> al["agentloop"]
+    who["Kira at the CLI<br/>a role's tool call<br/>the dispatcher<br/>a client"] -->|"command"| submit["relay.inbound/submit!"]
+    submit --> tx["relay.log/transact!<br/>under the file lock"]
+    tx --> replay["relay.core/replay<br/>fold every event"]
+    replay --> decide{"relay.core/decide<br/>pure"}
+    decide -->|"refused"| why["a rejection with a reason"]
+    decide -->|"events"| append["append with seq and time"]
+    append --> logfiles[("log/*.jsonl")]
+    logfiles --> replay
+    append --> after["after the append:<br/>deliver messages that are due"]
 ```
 
-## The calendar (phase B5)
+Every write, from anyone, goes through `submit!`. It is decided and
+appended in one step under the lock, so two writers never act on a state
+the other has already changed. Nothing is deleted. A fact, doc, note,
+routine or calendar event changes by a new version, and removing one is
+a version too.
 
-The agent has a calendar of its own, which Kira subscribes to in her
-calendar app. It is the whole of the agent's presence on a calendar.
-relay never writes hers.
+Old logs always fold (I8). Events that older relays wrote for machinery
+relay no longer has are listed in `relay.core/removed-event-kinds` and
+fold to nothing. A kind relay never wrote is still refused, so a log from
+a newer relay is not misread.
 
-### What writes it, and what cannot
+### Provenance: labels and sources
+
+relay keeps two records of where text came from.
+
+- Labels bound everything a session may have seen. A session starts with
+  the labels of its prompt and gains the labels of every result, and they
+  only grow. Everything it writes carries them. Reading relay's own
+  content adds `private`.
+- Sources are narrower: the outside text a session read directly in this
+  wake, which is the memos it was woken for and what its tool calls
+  returned (`relay.provenance/direct`). What sat in its prompt (notes,
+  skills, journal tail, fact topics, the board) does not count.
+
+Labels keep private text from a scout. Sources decide what Kira is told
+("Drew on: a mail from dana@example.org") and which recipe changes the
+daily note flags.
+
+```mermaid
+flowchart LR
+    subgraph entry["Entry points, relay.core/entry-points, I5"]
+        direction TB
+        op["Kira: command line, a conversation,<br/>her verified mail"] -->|"no labels: trusted"| sess
+        ing["An ingestor"] -->|"contaminated and a source label<br/>mail:, github:, ics:"| sess
+        sc["A scout's memo"] -->|"contaminated, from the web"| sess
+        tl["A tool's result"] -->|"the labels relay.edn gives the tool"| sess
+    end
+    sess["A session's labels<br/>only grow"] -->|"every write carries them"| ev["Events and versions"]
+    ev -->|"reading relay content adds private"| sess
+    sess -->|"what it read directly"| src["Sources"]
+    src --> shown["Shown to Kira in plain words"]
+    src --> flag["Flagged recipe changes"]
+    sess -->|"public role: forbid_labels private"| al["agentloop refuses<br/>a private result"]
+```
+
+## The mailbox and the ingestors
+
+Ingestors bring outside things in as memos to a role, usually the
+steward. They are code with no model. The tick polls each source in
+`:ingest` when it is due (`relay.ingest-run/poll-due!`), and relay.edn
+alone names what to fetch.
+
+```mermaid
+flowchart LR
+    subgraph sources["Sources in :ingest"]
+        pop["pop3: the agent's mailbox<br/>curl, new UIDLs only"]
+        gh["github: your repositories<br/>REST API, If-None-Match"]
+        ics["ics: a calendar by URL<br/>read only"]
+    end
+    pop --> parse["relay.mailbox<br/>parse, decode, verdict"]
+    parse --> verdict{"Kira's, verified?"}
+    verdict -->|"yes"| opmail["memo from operator<br/>trusted, sanitized"]
+    verdict -->|"no"| outmail["memo from dispatcher<br/>labelled mail:sender"]
+    gh --> ghmemo["one memo per repository<br/>labelled github:owner/repo"]
+    ics --> icsmemo["memo of new, changed, removed events<br/>labelled ics:source"]
+    opmail --> steward["The steward"]
+    outmail --> steward
+    ghmemo --> steward
+    icsmemo --> steward
+```
+
+A mail is Kira's only when `relay.mailbox/verdict` says so: one From
+header naming her address (the `:to` of an email channel), exactly one
+`Authentication-Results` header with the source's `:authserv-id`, and
+that header says `dkim=pass` with `header.d` her domain. Anything short
+of that is from outside, and a mail that names her address without
+passing is labelled `mail:unverified-operator`. Staff read the mail: the
+steward learns from it and does nothing it asks.
+
+## Messages, routing and channels
+
+Everything relay tells Kira is one message in the log: a kind (`note`,
+`alert`, `digest`, `reply`), an urgency, a subject, and sections of items
+with refs and provenance. A role makes one with `tell_operator`, which
+takes content and urgency only. relay's own alerts, memos to `operator`
+and the daily note are messages too.
+
+```mermaid
+flowchart LR
+    tell["tell_operator"] --> core
+    memo["memo to operator"] --> core
+    alert["relay's alerts"] --> core
+    note["the daily note"] --> core
+    core["relay.core decides<br/>relay.messages/route, pure"] --> created[("message/created<br/>with its deliveries")]
+    created --> now["relay.inbound<br/>delivers what is due now"]
+    created --> later["relay.dispatch/tick!<br/>quiet hours, digest time, retries"]
+    now --> email["email<br/>channels/email, mail/send!"]
+    now --> pushc["push<br/>channels/push, push/push!"]
+    later --> email
+    later --> pushc
+    created --> client["client channel<br/>_relay/messages, _relay/ready"]
+```
+
+Routing is a pure function of `:messages` in relay.edn, the message and
+the time: which channels a message goes to and when each delivery is
+due. Every message is always in the client channel. An email goes from
+the channel's `:from` to its `:to` with one recipient, plain text, and no
+header the model wrote except the subject (I2). `docs/messages.md` has
+the details.
+
+## Replies: one path
+
+Kira can answer a message from relay-tui's ready view, with `relay
+reply`, or by replying to the mail. Each channel checks in code that the
+reply is hers, then all of them take one path, `record-reply` in
+`relay.core`.
 
 ```mermaid
 flowchart TB
-    role["A house role<br/>calendar_add, calendar_update,<br/>calendar_remove<br/>class edit"] -->|"command"| decide{"core/decide<br/>calendar-writer!"}
-    op["Kira at the CLI"] -.->|"refused: not the agent"| decide
-    disp["The dispatcher"] -.->|"refused"| decide
-    pub["A public role (scout)"] -.->|"refused, and the tool is not offered"| decide
-    decide -->|"calendar/added<br/>calendar/changed<br/>calendar/removed"| log[("log")]
-    log --> fold["evolve: state :calendar<br/>id to versions"]
+    tui["relay-tui ready view<br/>_relay/reply"] --> clean1["sanitize"]
+    cli["relay reply N -m text"] --> clean1
+    mail["a mail reply"] --> v{"verified as Kira's<br/>and threaded to a message relay sent?"}
+    v -->|"yes"| clean2["sanitize, cut the quoted tail"]
+    v -->|"no"| box["mailbox content<br/>a memo from outside, no thread"]
+    clean1 --> rr["relay.core record-reply"]
+    clean2 --> rr
+    rr --> replied["message/replied on the thread"]
+    rr --> m["memo from operator to the role<br/>that wrote the message"]
+    rr --> close["a memo to Kira it answers is closed"]
+    rr --> acts["daily note: revert, not, drop<br/>done by relay itself"]
 ```
 
-That is invariant I9 on the writing side: the feed holds only events a
-role wrote. Kira's own calendar, read by an ingestor (relay.ingest), arrives as memos
-to the steward. It never becomes calendar events.
+The role answers with `tell_operator` and `in_reply_to`, so the thread
+shows both.
 
-### From a tool call to Kira's calendar app
+## Scouts and the fetch rule
+
+A scout is a public role. It is shown only public items, it may hold
+`egress` tools, and its session never holds `private`. A house role asks
+it for help with a memo, which is public as written: the scout sees only
+what the house role chose to write. The scout answers with a memo marked
+as from the web.
+
+What keeps that text from leaving in a URL is the fetch rule (I4). relay
+runs every `egress` call itself, so it sees each one first:
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Role as House role
-    participant Log as Log and state
-    participant Svc as relay serve listener
-    participant App as Kira's calendar app
-
-    Role->>Log: calendar_add "Dentist" (SEQUENCE 0)
-    App->>Svc: GET /calendar.ics with token
-    Svc->>Log: replay and take calendar-feed
-    Svc->>Svc: relay.ics/render, pure
-    Svc-->>App: 200 text/calendar, no-store
-    Role->>Log: calendar_update moves it (SEQUENCE 1)
-    App->>Svc: GET /calendar.ics
-    Svc-->>App: same UID, SEQUENCE 1: an update to the same event
-    Role->>Log: calendar_remove
-    App->>Svc: GET /calendar.ics
-    Svc-->>App: same UID, STATUS CANCELLED, SEQUENCE 2
-    Note over Svc,App: After 30 days a cancelled event is dropped from the feed
+    participant St as Steward
+    participant Sc as Scout's agentloop
+    participant R as relay tool
+    participant W as webtool
+    St->>Sc: memo: find grants for the choir
+    Sc->>R: web, a query only
+    R->>R: relay.shown/refusal: was every address in it shown before?
+    R->>W: search
+    W-->>R: results with page addresses
+    R->>R: relay.shown/record! keeps the result for this session
+    R-->>Sc: results
+    Sc->>R: fetch a page address copied from a result
+    R->>R: shown before, verbatim, so allowed
+    R->>W: fetch
+    W-->>R: the page, or a redirect reported with its target
+    Sc->>R: fetch an address it built
+    R-->>Sc: refused before it reaches the network
+    Sc->>St: memo back, labelled contaminated and from the web
 ```
 
-### The renderer
+Only results of `egress` tools count as shown. A memo from the steward
+comes through relay's own tools and never makes an address fetchable.
+relay.edn refuses an `egress` tool that relay cannot check: it must be an
+envelope tool with known parameters, and it either fetches a `url` or
+searches with free text named in `:queries`, never both.
 
-`relay.ics` takes data and returns text. It does no I/O and reads no
-clock except the `now` it is given. Properties it keeps, each tested
-against a parser written separately in the tests:
+## The steward's shell
+
+A house role granted `:shell` gets `sh`, which runs a command in a Linux
+container that relay keeps running for the data directory. relay builds
+every runner argument (`relay.shell/run-argv`): `--network none`, a
+read-only root, `/scratch` and `/tmp` in memory, and each `:house
+:mounts` path read-only. The model's code runs only there; agentloop
+stays on the host. What a command prints is `private` and carries the
+labels of every session that used scratch since the container started.
+`docs/house-shell.md` has the full picture.
+
+## The daily note and recipe changes
+
+A role improves its own skills, routines and notes without asking. The
+daily note tells Kira which of those changes text from outside shaped.
 
 ```mermaid
-flowchart LR
-    ev["Event map<br/>id, title, start, end,<br/>location, description,<br/>sequence, created,<br/>modified, removed-at"] --> clean["clean-text<br/>one kind of line break,<br/>drop hidden code points"]
-    clean --> esc["escape-text<br/>backslash, semicolon,<br/>comma, newline"]
-    esc --> prop["property lines<br/>UTC times, UID from id,<br/>DTSTAMP is last change"]
-    prop --> fold["fold-line<br/>75 octets, on a<br/>code point boundary"]
-    fold --> out["CRLF text<br/>VCALENDAR"]
+sequenceDiagram
+    autonumber
+    participant T as relay tick
+    participant St as Steward
+    participant L as Log
+    participant N as relay.digest
+    actor K as Kira
+    T->>St: 07:10, the daily-note routine fires a memo
+    St->>L: daily_note_write: ahead, grants, github, learned
+    T->>N: 07:30, compose the note
+    N->>L: recipe changes since the last note
+    N->>N: flagged: a role's change whose sources are outside
+    N->>L: digest/composed and message/created, kind digest
+    L-->>K: the note, flagged changes first, each numbered
+    K->>L: revert 1, by reply, client key or relay revert 1
+    L->>L: change/reverted, the old version written back
 ```
 
-| Property | How it is kept |
-|---|---|
-| Text cannot add a property or an event | Line breaks become `\n`; control, format, bidi and invisible code points are dropped; `\`, `;`, `,` are escaped. |
-| Lines fit | Every physical line is at most 75 octets, the leading space of a continuation included, and a break never falls inside a UTF-8 sequence. |
-| UTC | `DTSTART`, `DTEND`, `DTSTAMP`, `CREATED` and `LAST-MODIFIED` are all `...Z`, to the second. An all-day event's `DTSTART` and `DTEND` are `VALUE=DATE`: its first day and the day after its last. |
-| Stable UID | `relay-event-<id>@relay.invalid`, from the number of the event that added it. |
-| SEQUENCE rises | It is the number of versions minus one, so each change adds one. |
-| Same input, same bytes | `DTSTAMP` is the event's last change, not the request time, and events are sorted by id. |
-| Removed events | `STATUS:CANCELLED` for 30 days, then dropped. A live event is dropped 30 days after it ends. At most 1000 events are listed, removed ones included. A subscriber that polls less often than that would miss the removal, but the feed does not grow forever. |
+relay folds a recipe change from every event that writes a skill doc, a
+routine, a role's note or a role (`relay.core/recipe-changes`). A change
+is flagged when its sources name outside text (`relay.digest/flagged`),
+so the model cannot leave one out. A change shaped only by Kira or the
+role's own work is quiet and goes under "What I learned". Undoing puts
+back what the change replaced, and several undos of one thing end at the
+version before all of them. "not 2" turns down an offer and "drop 2"
+removes an item for good.
 
-### Where it is served
+## files_move and undo
 
-The feed is a second path on the existing WebSocket listener. There is
-no new listener and no new address.
+A house role granted `:files` gets `files_move`. The steward plans with
+its read-only shell, and relay's own code makes the moves on the host.
 
 ```mermaid
 flowchart TB
-    req["Request arrives on<br/>127.0.0.1:port"] --> parse["parse head"]
-    parse -->|"unreadable"| s400["400"]
-    parse --> isfeed{"GET exactly<br/>/calendar.ics ?"}
-    isfeed -->|"no"| upg["websocket decide:<br/>upgrade, or 404 / 403 / 401 / 400"]
-    isfeed -->|"yes"| origin{"Origin header?"}
-    origin -->|"not allowed"| s403["403, no body"]
-    origin -->|"none or allowed"| tok{"feed token in Authorization<br/>or in ?token= ?"}
-    tok -->|"missing or wrong"| s401["401, no body"]
-    tok -->|"matches"| feed["200 text/calendar"]
+    call["files_move call"] --> plan{"relay.files/plan<br/>every move checked first"}
+    plan -->|"a move would overwrite, delete, leave the folders,<br/>or move a link or a granted folder"| refuse["whole call refused, nothing moves"]
+    plan -->|"all allowed"| moving["files/moving recorded"]
+    moving --> move["relay.files/move!<br/>atomic renames, folders made"]
+    move --> moved["files/moved: what moved,<br/>fingerprints, folders made and emptied"]
+    moved --> ready["relay ready and the client:<br/>the move, with its undo"]
+    ready --> undo["relay undo N, or the client key"]
+    undo --> check{"relay.moves/undo!<br/>each file as the move left it?"}
+    check -->|"yes"| back["renamed back, empty folders it made removed"]
+    check -->|"changed since"| stay["stays, named with why"]
+    back --> undone["files/undone, and a memo to the role"]
+    stay --> undone
 ```
 
-The listener binds `127.0.0.1` only. Tailscale publishes it on the
-tailnet with TLS, as for the phone client. So the feed is reachable only
-where that listener is, and only with the feed's own token: HMAC-SHA256
-of a fixed text, keyed with the listener's token. That token opens the
-feed and nothing else, and the listener's token does not open the feed,
-so the URL a calendar app keeps and syncs to its provider never holds
-the key to the conversations. A calendar app cannot send a header, so
-the token may also ride in the URL. `relay calendar url` prints the URL.
-The comparison is constant-time, and a wrong token gets the same bare
-answer as no token.
+A move never overwrites, deletes or copies. Undoing every call in
+reverse order puts the tree back byte for byte, which a property test
+checks (I7).
 
-## Provenance: labels
+## The agent's calendar
 
-Labels are provenance. They are carried on every event and version and
-by every session. Two matter: `private` (read relay content) and
-`contaminated` (something an outsider could have written).
-
-```mermaid
-flowchart LR
-    subgraph entry["Entry points decide trust (I5)"]
-        direction TB
-        cmd["CLI, a conversation,<br/>mail from Kira's verified address"] -->|"no labels: trusted"| sess
-        ing["Ingestor or scout"] -->|"contaminated"| sess
-        tool["A tool's result"] -->|"the labels relay.edn gives the tool"| sess
-    end
-    sess["A session's labels<br/>only grow"] -->|"every write carries them"| ev["Events and versions"]
-    ev -->|"reading any relay content adds private"| sess
-    sess --> shown["Shown to Kira as<br/>where it came from"]
-    sess -->|"public role: forbid_labels private"| al["agentloop refuses<br/>a private result"]
-```
-
-What labels no longer do: hold, quarantine or withhold anything. They
-decide two things only: what a scout may be shown, and what provenance
-Kira sees.
-
-## Public roles and scouts
-
-A public role never holds private data. It may have `egress` tools such
-as web search. Four layers keep private out:
-
-1. relay shows it only public items (`facts`, `docs`, notes and so on).
-2. `relay.edn` refuses any grant of a tool whose output is private.
-3. Its session starts with `forbid_labels ["private"]`, enforced by
-   agentloop: a result carrying private never reaches the model.
-4. relay itself replaces any result that carries private with a
-   refusal and tells Kira which tool.
-
-Public roles have no calendar and no board: `calendar`, `cards` and the
-other private-only tools are not offered to them.
-
-A house role asks a scout for help with a memo, which is public as
-written: the scout sees only what the house role chose to put in it. The
-scout's reply is marked as from the web. What keeps that text from
-leaving in a URL the scout builds is the fetch rule (O1, I4), which
-`relay.shown` enforces in relay's tool command before an `egress` call
-runs:
-
-```mermaid
-flowchart LR
-    model["scout's model"] -->|"egress call"| tool["relay tool"]
-    tool --> check{"every address in it<br/>shown by an earlier<br/>egress result?"}
-    check -->|"no"| refuse["refused, fixed text,<br/>the tool never runs"]
-    check -->|"yes"| run["webtool search or fetch"]
-    run -->|"result"| record["kept under<br/>runs/role/wake/shown/"]
-    record -->|"result"| model
-```
-
-relay keeps its own record of what the web showed the session, rather
-than reading agentloop's session store, because relay sees each result
-before the model does, and because only `egress` results may count: the
-text of a memo from the steward comes through relay's own tools and must
-never make an address fetchable. A wake that resumes an interrupted
-session reads the record of the wakes it resumes. relay.edn refuses an
-`egress` tool of an MCP server, since agentloop would call it without
-relay seeing the call, and an `egress` tool that is not an `:envelope`
-tool with its parameters listed. An `egress` tool either fetches (a
-`url`, which relay checks, and otherwise only numbers and yes-or-no
-values) or searches (free text named in its `:queries`, which goes only
-to the search provider, and no `url`). A tool with both could send what
-the steward told a scout to an address the scout chose, so relay.edn
-refuses it. An address in a query must come at its end,
-exactly as shown, since webtool echoes the query back. webtool reports a
-redirect instead of following it, so its target is a new call under the
-same rule.
+Roles that are not public write the agent's own calendar with
+`calendar_add`, `calendar_update` and `calendar_remove`. Only a role can
+write it (`calendar-writer!` in `relay.core`), so the feed holds only
+what a role wrote. `relay serve` renders it with `relay.ics/render` and
+serves `/calendar.ics` on the WebSocket listener, which binds 127.0.0.1
+and is published on the tailnet by `tailscale serve`. The feed has its
+own token (`relay.websocket/feed-token`), which opens the calendar and
+nothing else. Kira's own calendar comes in only through an `:ics` ingest
+source and is never written.
 
 ## Where each invariant is enforced
 
-| | Invariant | Enforced in | Tested in |
-|---|---|---|---|
-| I1 | No way out of the house | `config` refuses egress on a house role | `house_test` (steward shell and remote MCP arrive in B3) |
-| I3 | Scouts see nothing private | `core` item filters, `tools/policy`, agentloop `forbid_labels` | `house_test`, `public_roles_test`, `labels_test` |
-| I4 | Scouts fetch only what they were shown | `shown/refusal` in `tools/call!` before any `egress` call runs; `config` refuses an `egress` tool that is not an envelope tool with known parameters; webtool never follows a redirect | `shown_test` (property), `scout_test`, `public_roles_e2e_test` |
-| I5 | Trust follows the hand that brought it in | `core/entry-labels` | `house_test` |
-| I7 | Nothing the steward does destroys | The log is append-only; tools only add versions | `log_test`, `knowledge_test` |
-| I8 | Every old log still folds | `core/removed-event-kinds` | `removed_events_test` |
-| I9 | The calendar is the agent's | `core/calendar-writer!` refuses the operator, dispatcher and public roles; the feed is rendered from `:calendar` state only; served only by `serve/websocket-connection!` behind the listener's token | `calendar_test`, `calendar_serve_test`, `ics_test` |
+The invariants come from `docs/plans/house.md`. Tests are in
+`test/relay/`, pentests in `pentest/relay/pentest/scenarios/`.
 
-## Planned parts
-
-These are in the house plan and not built yet. Each box will be a
-separate phase.
-
-```mermaid
-flowchart LR
-    subgraph built["Built"]
-        log[("Log and state")]
-        roles["Roles and tools"]
-        calf["Calendar feed"]
-        scout["Scouts<br/>fetch only URLs they were shown"]
-    end
-
-    subgraph planned["Planned"]
-        direction TB
-        shell["B3 steward shell<br/>container, --network none,<br/>files mounted read-only"]
-        msgs["B4 messages to Kira<br/>one data model, channels:<br/>email, push, client"]
-        sanit["B7 sanitized pastes"]
-        mbox["B8 mailbox and ingestors<br/>mail, GitHub, ICS in;<br/>replies verified as Kira's"]
-        files["B9 files_move with undo"]
-        daily["B10 the daily note"]
-    end
-
-    roles -.-> shell
-    roles -.-> msgs
-    mbox -.-> roles
-    sanit -.-> roles
-    roles -.-> files
-    msgs -.-> daily
-    calf -.-> daily
-
-    style planned stroke-dasharray: 5 5
-```
-
-The only mail that leaves the house goes to Kira's configured address,
-as text only, with no header the model chose except the subject (I2).
-Scouts may fetch a URL only if it appeared verbatim in an earlier tool
-result of the same session (I4). Both arrive with the phases above.
+| | Invariant | Enforced in | Tests | Pentests |
+|---|---|---|---|---|
+| I1 | No way out of the house | `check-grants` in `relay.config` refuses an `egress` tool on a house role, and a remote MCP tool that is not `read` or `edit`; `relay.tools/manifest` refuses again when building any session; `relay.shell/run-argv` always gives `--network none`, and `relay.shell/settings-problem` lets relay.edn name only the runner program | `shell_test`: `no-session-for-a-house-role-has-a-way-out`, `the-manifest-alone-keeps-a-house-role-in`, `the-shell-always-runs-with-no-network-and-read-only-mounts`; `house_test`: `only-a-public-role-may-have-an-egress-tool`; `shell_live_test` | `s18-shell-walls`, `s18-house-settings`, `s9-settings`, `s1-*` |
+| I2 | Only Kira gets mail | `relay.messages/settings-problem` takes one plain address as `:to`; `relay.channels/email` writes From and To from the channel and fixed headers; `relay.channels/curl-argv` gives one `--mail-rcpt`; `relay.mail/send!` | `channels_test`: `every-delivery-goes-only-where-its-channel-says`, `hostile-messages-that-go-together-are-one-safe-email`; `mail_test` reads mail back from mailpit | `s19-mail-only-kira` |
+| I3 | Scouts see nothing private | the public filters in `relay.core` (`shown-to-public?`, `fact-shown-to-public?`, `doc-shown-to-public?`); `check-grants` in `relay.config` refuses a private tool for a public role; `relay.tools/policy` sends `forbid_labels`; `refuse-private` in `relay.tools`; agentloop's forbid check | `house_test`: `scouts-see-only-public-items`, `forbid-private-reaches-agentloop-for-every-public-role`; `public_roles_test` | `s21-scout-sees-nothing-private` |
+| I4 | Scouts fetch only what they were shown | `relay.shown/refusal`, called by `egress-call!` in `relay.tools` before any `egress` call runs; `relay.config/egress-problem` refuses an `egress` tool relay cannot check; webtool reports redirects | `shown_test`: `i4-a-call-runs-only-with-addresses-it-was-shown`; `scout_test`; `house_test`: `an-egress-tool-takes-only-what-relay-can-check` | `s22-scout-fetch-rule` |
+| I5 | Trust follows the hand that brought it in | `relay.core/entry-points` and `entry-labels`; `relay.mailbox/verdict` and `relay.ingest/mail-verdict` for mail | `house_test`: `the-operator-s-entry-points-are-trusted`, `provenance-is-a-function-of-the-entry-point`, `what-a-session-writes-carries-what-it-read`; `mailbox_test`: `no-unverified-mail-is-ever-trusted-whatever-its-bytes`; `ingest_test`: `no-unverified-mail-is-ever-recorded-as-the-operators` | `s20-forged-operator-mail`, `s0-pasted-memo`, `s5-acp-pasted-resource` |
+| I6 | Sanitizing is idempotent and visible | `relay.text/sanitize` and `sanitize-input`, called by the CLI's writes, `relay.hub` (prompts, card ops, replies) and `relay.ingest` (Kira's verified mail) | `sanitize_test`: `sanitize-is-idempotent`, `the-output-has-nothing-hidden`, `printable-ascii-passes-unchanged`, `every-change-is-reported`; `sanitize_cli_test`; `sanitize_hub_test` | `s23-paste-command-line`, `s23-paste-conversation` |
+| I7 | Nothing the steward does destroys | `relay.shell/run-argv` mounts read-only; `relay.files/plan` and `move!` never overwrite or delete; `relay.moves/undo!`; `relay.log` only appends | `files_test`: `undoing-every-call-restores-the-tree-byte-for-byte`, `a-move-never-overwrites-deletes-or-leaves-the-folders`; `shell_live_test`; `log_test` | `s24-files-never-destroyed`, `s18-shell-walls` |
+| I8 | Every old log still folds | `relay.core/removed-event-kinds` and `evolve` | `removed_events_test`; `messages_test`: `every-old-notification-folds-into-a-message`; `calendar_test`: `an-old-log-has-no-calendar` | `s25-old-log-folds` |
+| I9 | The calendar is the agent's | `calendar-writer!` in `relay.core` refuses the operator, the dispatcher and public roles; `relay.core/calendar-feed` and `relay.ics/render`; `relay.websocket/decide-calendar` and `feed-token`; `relay.serve` binds the listener to 127.0.0.1 | `calendar_test`: `the-feed-has-only-what-roles-wrote`; `calendar_serve_test`; `ics_test` | `s26-calendar-feed` |
 
 ## Reading list
 
-- `README.md`: using relay, the tools, setup and deploy.
+- `README.md`: setup, settings and daily use.
 - `resources/AGENTS.md`: what relay tells its own roles.
-- `spec/relay.allium`: the rules, as a specification.
+- `spec/relay.allium`: the rules as a specification.
+- `docs/messages.md`: messages, routing and channels in detail.
+- `docs/house-shell.md`: the steward's shell in detail.
 - `docs/client-protocol.md`: the ACP extensions clients use.
-- `docs/plans/house.md`: the plan this design comes from.
