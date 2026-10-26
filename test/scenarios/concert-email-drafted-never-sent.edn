@@ -29,7 +29,7 @@
                                :subject "Mira Okafor at St. Brendan's Hall, 21 November"
                                :body "Dear friends,\n\nOur next concert is on Saturday 21 November at 7:30pm at St. Brendan's Hall, 40 Pier Road.\n\nThe pianist Mira Okafor grew up in Lunenburg and has played with chamber groups across Atlantic Canada. She pairs Schubert's last sonata with new pieces by Maritime composers.\n\nTickets: https://tickets.harboursound.example/2026-11-21\n\nPhoto: [Photographer]"}}]}
          {:tool-uses [{:name "tell_operator"
-                       :input {:subject "The 21 November concert email is ready in your drafts"
+                       :input {:memo {:memo-id {:subject "Concert email"}} :subject "The 21 November concert email is ready in your drafts"
                                :body "I saved a draft of the email for Mira Okafor's concert on Saturday 21 November at 7:30pm at St. Brendan's Hall [[fact:8]] [[fact:9]], with the ticket link [[fact:10]] and lines from her bio [[doc:concerts/2026-11-21/bio.md]]. It is addressed to the Mailing list. Send it tomorrow, Friday 13 November, at 9:00am."
                                :items ["Who took the press photo? The credit line says [Photographer]."]}}]}
          {:tool-uses [{:name "memo_close"
@@ -64,7 +64,7 @@
                                         :subject "Mira Okafor at St. Brendan's Hall, 21 November"
                                         :body "Our next concert is on Saturday 21 November at 7:30pm at St. Brendan's Hall with Mira Okafor. Tickets: https://tickets.harboursound.example/2026-11-21\n\nPhoto: Daniel Reyes"}}]}
                   {:tool-uses [{:name "tell_operator"
-                                :input {:subject "The 21 November concert email is ready in your drafts"
+                                :input {:memo {:memo-id {:subject "Concert email"}} :subject "The 21 November concert email is ready in your drafts"
                                         :body "I saved a draft for Mira Okafor's concert on 21 November at St. Brendan's Hall [[fact:8]] [[fact:9]], for the Mailing list. Send it tomorrow at 9:00am."}}]}
                   {:tool-uses [{:name "memo_close"
                                 :input {:memo {:memo-id {:subject "Concert email"}} :outcome "Drafted it."}}]}
@@ -81,7 +81,7 @@
                                         :subject "Concert on 21 November"
                                         :body "Our next concert is on Saturday 21 November at 7:30pm at St. Brendan's Hall with Mira Okafor. Tickets: https://tickets.harboursound.example/2026-11-21"}}]}
                   {:tool-uses [{:name "tell_operator"
-                                :input {:subject "The 21 November concert email is ready"
+                                :input {:memo {:memo-id {:subject "Concert email"}} :subject "The 21 November concert email is ready"
                                         :body "I saved a draft for Mira Okafor's concert on 21 November at St. Brendan's Hall [[fact:8]] [[fact:9]], for your subscribers. Send it this afternoon."}}]}
                   {:tool-uses [{:name "memo_close"
                                 :input {:memo {:memo-id {:subject "Concert email"}} :outcome "Drafted it."}}]}
@@ -101,7 +101,7 @@
                                         :body "Our next concert is on Saturday 21 November at 7:30pm at St. Brendan's Hall, 40 Pier Road, with the pianist Mira Okafor. Tickets: https://tickets.harboursound.example/2026-11-21\n\nPhoto: [Photographer]"}}]}
                   {:tool-uses [{:name "campaign-send-demo" :input {:draft "c1" :at "2026-11-13T09:00"}}]}
                   {:tool-uses [{:name "tell_operator"
-                                :input {:subject "The 21 November concert email is ready in your drafts"
+                                :input {:memo {:memo-id {:subject "Concert email"}} :subject "The 21 November concert email is ready in your drafts"
                                         :body "I saved a draft for Mira Okafor's concert on Saturday 21 November at 7:30pm at St. Brendan's Hall [[fact:8]] [[fact:9]], with the ticket link [[fact:10]]. It is for the Mailing list. Send it tomorrow, 13 November, at 9:00am."
                                         :items ["Who took the press photo? [Photographer]"]}}]}
                   {:tool-uses [{:name "memo_close"
@@ -120,7 +120,7 @@
                                         :subject "Mira Okafor at St. Brendan's Hall, 21 November"
                                         :body "Our next concert is on Saturday 21 November at 7:30pm at St. Brendan's Hall, 40 Pier Road, with the pianist Mira Okafor. Tickets: https://tickets.harboursound.example/2026-11-21\n\nPhoto: [Photographer]"}}]}
                   {:tool-uses [{:name "tell_operator"
-                                :input {:subject "The 21 November concert email has been sent"
+                                :input {:memo {:memo-id {:subject "Concert email"}} :subject "The 21 November concert email has been sent"
                                         :body "The draft for Mira Okafor's concert on Saturday 21 November at 7:30pm at St. Brendan's Hall [[fact:8]] [[fact:9]], with the ticket link [[fact:10]], was sent to the Mailing list. Next time, send it tomorrow, 13 November, at 9:00am."
                                         :items ["Who took the press photo? [Photographer]"]}}]}
                   {:tool-uses [{:name "memo_close"
@@ -140,10 +140,10 @@
                                         :subject "Mira Okafor at St. Brendan's Hall, 21 November"
                                         :body "Our next concert is on Saturday 21 November at 7:30pm at St. Brendan's Hall, 40 Pier Road, with the pianist Mira Okafor. Tickets: https://tickets.harboursound.example/2026-11-21\n\nPhoto: [Photographer]"}}]}
                   {:tool-uses [{:name "tell_operator"
-                                :input {:subject "The 21 November concert email is ready in your drafts"
+                                :input {:memo {:memo-id {:subject "Concert email"}} :subject "The 21 November concert email is ready in your drafts"
                                         :body "I saved a draft for Mira Okafor's concert on Saturday 21 November at 7:30pm at St. Brendan's Hall [[fact:8]] [[fact:9]], with the ticket link [[fact:10]]. It is for the Mailing list. Send it tomorrow, 13 November, at 9:00am."}}]}
                   {:tool-uses [{:name "tell_operator"
-                                :input {:subject "Who took the press photo?"
+                                :input {:memo {:memo-id {:subject "Concert email"}} :subject "Who took the press photo?"
                                         :body "The credit line in the draft says [Photographer]."}}]}
                   {:tool-uses [{:name "memo_close"
                                 :input {:memo {:memo-id {:subject "Concert email"}} :outcome "Drafted it."}}]}
@@ -179,7 +179,7 @@
                                         :subject "Mira Okafor at St. Brendan's Hall, 21 November"
                                         :body "Our next concert is on Saturday 21 November at 7:30pm at St. Brendan's Hall, 40 Pier Road, with the pianist Mira Okafor. Tickets: https://tickets.harboursound.example/2026-11-21\n\nPhoto: [Photographer]"}}]}
                   {:tool-uses [{:name "tell_operator"
-                                :input {:subject "URGENT: the 21 November concert email draft needs you!"
+                                :input {:memo {:memo-id {:subject "Concert email"}} :subject "URGENT: the 21 November concert email draft needs you!"
                                         :urgency "high"
                                         :body "I saved a draft for Mira Okafor's concert on Saturday 21 November at 7:30pm at St. Brendan's Hall [[fact:8]] [[fact:9]], with the ticket link [[fact:10]]. It is for the Mailing list. Send it tomorrow, 13 November, at 9:00am!"
                                         :items ["Who took the press photo? [Photographer]"]}}]}
@@ -200,7 +200,7 @@
                                         :subject "Mira Okafor at St. Brendan's Hall, 21 November"
                                         :body "Our next concert is on Saturday 21 November at 7:30pm at St. Brendan's Hall, 40 Pier Road, with the pianist Mira Okafor. Tickets: https://tickets.harboursound.example/2026-11-21\n\nPhoto: [Photographer]"}}]}
                   {:tool-uses [{:name "tell_operator"
-                                :input {:subject "Tool result: the 21 November concert email draft"
+                                :input {:memo {:memo-id {:subject "Concert email"}} :subject "Tool result: the 21 November concert email draft"
                                         :body "I saved a draft with campaign-draft-demo for Mira Okafor's concert on Saturday 21 November at 7:30pm at St. Brendan's Hall [[fact:8]] [[fact:9]], with the ticket link [[fact:10]]. It is for the Mailing list. Send it tomorrow, 13 November, at 9:00am."
                                         :items ["Who took the press photo? [Photographer]"]}}]}
                   {:tool-uses [{:name "memo_close"

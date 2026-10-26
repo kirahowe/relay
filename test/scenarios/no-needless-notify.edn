@@ -43,7 +43,7 @@
    :doc "No role tells the operator anything: there is nothing to decide."
    :check [:none :message {:origin [:any "told" "memo-for-operator"]}]}
   {:id :nothing-sent
-   :doc "No notification went out."
-   :check [:none :sent {}]}
+   :doc "No notification went out but relay's own quiet answer to the request, which says what came of it."
+   :check [:none :sent {:title [:not "Re: Ana's birthday"]}]}
   {:id :closed
    :check [:has :memo {:subject "Ana's birthday" :closed-by "steward"}]}]}

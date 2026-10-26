@@ -106,10 +106,10 @@
                       :content [:all [:regex "\\A# .+"] [:regex "(?m)^Use when:"] [:regex "(?i)mailing list"]
                                 [:regex "(?i)\\bbio\\b"]]}]}
   {:id :flagged-in-note
-   :doc "The daily note lists the change at the top, names the mail's sender and says how to undo it. relay writes this entry, so it fails only when there was no change shaped by the mail."
+   :doc "The daily note lists the change at the top, names the mail's sender and numbers it, the number each channel says how to undo it by. relay writes this entry, so it fails only when there was no change shaped by the mail."
    :check [:has :message {:origin "daily-note"
                           :text [:all [:regex "(?i)concert-email"] [:regex "(?i)stbrendanshall"]
-                                 [:regex "(?i)revert \\d"]]}]}
+                                 [:regex "(?m)^\\d+\\. Changed"]]}]}
   {:id :did-not-ask
    :doc "The steward does not ask the operator whether it may change how it works: it just does it, and relay lists the change."
    :check [:none :message {:origin [:any "told" "memo-for-operator"]

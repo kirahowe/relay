@@ -1,0 +1,57 @@
+;; Eval case: the operator's own request asks a question, and the answer
+;; reaches her. Built from a U2 dogfood run on staging: the steward closed
+;; the memo with "Told you what I know about you below.", and the answer
+;; itself went only into the wake's final text, which nobody reads. The
+;; close outcome is what relay sends her (request-done). See relay.eval.
+{:doc "A question in the operator's request is answered in what reaches her, not in the wake's final text."
+ :live? true
+
+ :eval {:id "operator-question-answered" :version 1 :tier :regression :tags [:messages :requests] :trials 3}
+
+ :clock "2026-10-12T09:00"
+
+ :model
+ {"steward" [{:tool-uses [{:name "facts" :input {}}]}
+             {:tool-uses [{:name "calendar_add"
+                           :input {:title "Dentist" :start "2026-10-15 10:00"}}]}
+             {:tool-uses [{:name "memo_close"
+                           :input {:memo {:memo-id {:subject "Dentist, and a question"}}
+                                   :outcome "Put the dentist on my calendar for Thursday 15 October at 10:00. What I know about you so far: your sister Ana's birthday is March 3, and you play cello in a community orchestra."}}]}
+             {:tool-uses [{:name "journal_write"
+                           :input {:text "Added the dentist on Thu 15 Oct 10:00 and told the operator the two facts I hold. Nothing open."}}]}
+             {:text "Done."}]}
+
+ :foils
+ {"answer-below"
+  {:fails #{:answer-reached-her :no-dangling-below}
+   :model {"steward" [{:tool-uses [{:name "facts" :input {}}]}
+                      {:tool-uses [{:name "calendar_add" :input {:title "Dentist" :start "2026-10-15 10:00"}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:subject "Dentist, and a question"}}
+                                            :outcome "Added the dentist for Thursday. Told you what I know about you below."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Added the dentist."}}]}
+                      {:text "Here is what I know: Ana's birthday is March 3, and you play cello."}]}}}
+
+ :steps
+ [{:run ["fact" "add" "The operator's sister Ana's birthday is March 3." "--topic" "family"]}
+  {:run ["fact" "add" "The operator plays cello in a community orchestra." "--topic" "music"]}
+  {:run ["memo" "steward" "-s" "Dentist, and a question"
+         "-m" "Put my dentist appointment on your calendar for Thursday 15 October at 10:00. And what do you know about me so far?"]}
+  {:tick 2}]
+
+ :assert
+ [[:has :wake {:role "steward" :outcome "ran"}]]
+
+ :graders
+ [{:id :answer-reached-her
+   :doc "Something relay told the operator (the reply to her request, or the steward's own message) holds the answer: both facts."
+   :check [:has :message {:text [:all [:regex "(?i)\\bana\\b|march 3"] [:regex "(?i)cello"]]}]}
+  {:id :no-dangling-below
+   :doc "Nothing she reads points at an answer \"below\" that is not there."
+   :check [:none :message {:text [:regex "(?i)\\bbelow\\b"]}]}
+  {:id :dentist-added
+   :doc "The dentist is on the steward's calendar on the 15th. Reported, not gating."
+   :gating? false
+   :check [:has :tool-call {:name "calendar_add" :input {:start [:regex "^2026-10-15"]}}]}
+  {:id :closed
+   :check [:has :memo {:subject "Dentist, and a question" :closed-by "steward"}]}]}
