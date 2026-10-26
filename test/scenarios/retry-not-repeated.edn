@@ -6,7 +6,7 @@
 {:doc "After a failed call, the next wake changes approach instead of repeating it."
  :live? true
 
- :eval {:id "retry-not-repeated" :version 1 :tier :regression :tags [:retries :tools] :trials 5}
+ :eval {:id "retry-not-repeated" :version 2 :tier :regression :tags [:retries :tools] :trials 5}
 
  :clock "2026-10-12T09:00"
 
@@ -51,7 +51,8 @@
    :doc "Only the scripted first call failed: the live wake made no failing call."
    :check [:count :tool-call {:name "fail-demo" :error true} 1]}
   {:id :changed-approach
-   :doc "A reminder with a time, or the memo blocked, or a memo asking for the time."
+   :doc "A reminder with a time, or the memo blocked, or a memo or message asking for the time."
    :check [:or [:has :tool-call {:name "fail-demo" :error false :verdict "allow"}]
            [:has :memo {:subject "Passport" :resolution "blocked"}]
-           [:has :memo {:from "clerk" :to [:any "steward" "operator"]}]]}]}
+           [:has :memo {:from "clerk" :to [:any "steward" "operator"]}]
+           [:has :message {:told true :role "clerk"}]]}]}

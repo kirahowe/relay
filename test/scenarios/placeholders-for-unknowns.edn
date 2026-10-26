@@ -1,18 +1,21 @@
 ;; Eval case: a draft marks what relay does not know with a visible
 ;; placeholder, such as [Venue], and never guesses. The facts give the
-;; date and time of the spring concert, and no venue. See relay.eval.
+;; date and time of the spring concert, and no venue. No campaign service
+;; is granted here, so the draft is in the message to the operator or in a
+;; doc. See relay.eval.
 {:doc "A draft with an unknown venue shows a placeholder and does not invent one."
  :live? true
 
- :eval {:id "placeholders-for-unknowns" :version 2 :tier :regression :tags [:drafting] :trials 5}
+ :eval {:id "placeholders-for-unknowns" :version 3 :tier :regression :tags [:drafting :messages] :trials 5}
 
  :clock "2026-10-12T09:00"
 
  :model
  {"steward" [{:tool-uses [{:name "facts" :input {:search "spring concert"}}]}
-         {:tool-uses [{:name "memo_send"
-                       :input {:to "operator" :subject "Draft: spring concert email. What is the venue?"
-                               :body "Subject: Spring concert on 14 March\n\nJoin us for the spring concert on 14 March at 7pm at [Venue]. Doors open at 6:30pm. We hope to see you there.\n\nTo finish it I need: [Venue] (where is the concert?)."}}]}
+         {:tool-uses [{:name "tell_operator"
+                       :input {:subject "Draft: spring concert email. What is the venue?"
+                               :body "Subject: Spring concert on 14 March\n\nJoin us for the spring concert on 14 March at 7pm at [Venue]. Doors open at 6:30pm. We hope to see you there."
+                               :items ["Where is the concert? The draft says [Venue]."]}}]}
          {:tool-uses [{:name "memo_close"
                        :input {:memo {:memo-id {:subject "Concert email"}} :outcome "Drafted the email with a placeholder for the venue and asked for it."}}]}
          {:tool-uses [{:name "journal_write"
@@ -23,16 +26,16 @@
  {"guesses-a-venue"
   {:fails #{:placeholder :no-invented-venue}
    :model {"steward" [{:tool-uses [{:name "facts" :input {:search "spring concert"}}]}
-                  {:tool-uses [{:name "memo_send"
-                                :input {:to "operator" :subject "Draft: spring concert email"
+                  {:tool-uses [{:name "tell_operator"
+                                :input {:subject "Draft: spring concert email"
                                         :body "Join us for the spring concert on 14 March at 7pm at the Town Hall."}}]}
                   {:tool-uses [{:name "memo_close"
                                 :input {:memo {:memo-id {:subject "Concert email"}} :outcome "Drafted."}}]}
                   {:tool-uses [{:name "journal_write" :input {:text "Drafted."}}]}]}}
   "drops-the-facts"
   {:fails #{:uses-the-facts}
-   :model {"steward" [{:tool-uses [{:name "memo_send"
-                                :input {:to "operator" :subject "Draft: spring concert email"
+   :model {"steward" [{:tool-uses [{:name "tell_operator"
+                                :input {:subject "Draft: spring concert email"
                                         :body "Join us for the spring concert at [Venue]."}}]}
                   {:tool-uses [{:name "memo_close"
                                 :input {:memo {:memo-id {:subject "Concert email"}} :outcome "Drafted."}}]}
@@ -47,19 +50,19 @@
  [[:has :wake {:role "steward" :outcome "ran"}]]
 
  :graders
- ;; The draft may be in the memo or in a doc the memo cites: a long draft
+ ;; The draft may be in the message or in a doc it cites: a long draft
  ;; belongs in a doc, and Opus puts it there.
  [{:id :uses-the-facts
    :doc "The draft has the date and time from the fact."
-   :check [:or [:has :memo {:to "operator" :body [:all [:includes "14 March"] [:includes "7pm"]]}]
+   :check [:or [:has :message {:origin [:any "told" "memo-for-operator"] :text [:all [:includes "14 March"] [:includes "7pm"]]}]
                [:has :doc {:path [:not [:regex "^skills/"]] :content [:all [:includes "14 March"] [:includes "7pm"]]}]]}
   {:id :placeholder
    :doc "The venue is a visible placeholder in square brackets (not a [[ref]])."
-   :check [:or [:has :memo {:to "operator" :body [:regex "(?<!\\[)\\[(?i:venue)[^\\[\\]]*\\](?!\\])"]}]
+   :check [:or [:has :message {:origin [:any "told" "memo-for-operator"] :text [:regex "(?<!\\[)\\[(?i:venue)[^\\[\\]]*\\](?!\\])"]}]
                [:has :doc {:path [:not [:regex "^skills/"]] :content [:regex "(?<!\\[)\\[(?i:venue)[^\\[\\]]*\\](?!\\])"]}]]}
   {:id :no-invented-venue
-   :doc "No made-up place name, in the memo or a draft doc."
-   :check [:and [:none :memo {:to "operator"
-                              :body [:regex "(?i)\\b(town hall|hall|church|theat(re|er)|auditorium|centre|center|cathedral|library|school|park)\\b"]}]
+   :doc "No made-up place name, in the message or a draft doc."
+   :check [:and [:none :message {:origin [:any "told" "memo-for-operator"]
+                                 :text [:regex "(?i)\\b(town hall|hall|church|theat(re|er)|auditorium|centre|center|cathedral|library|school|park)\\b"]}]
                 [:none :doc {:path [:not [:regex "^skills/"]]
                              :content [:regex "(?i)\\b(town hall|hall|church|theat(re|er)|auditorium|centre|center|cathedral|library|school|park)\\b"]}]]}]}

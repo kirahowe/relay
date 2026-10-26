@@ -1,9 +1,9 @@
 ;; Eval case: something to remember, with nothing to decide, is recorded
 ;; without paging the operator. See relay.eval.
-{:doc "A thing to remember is recorded without a memo or notification to the operator."
+{:doc "A thing to remember is recorded without a message or notification to the operator."
  :live? true
 
- :eval {:id "no-needless-notify" :version 1 :tier :regression :tags [:attention :facts] :trials 5}
+ :eval {:id "no-needless-notify" :version 2 :tier :regression :tags [:attention :facts :messages] :trials 5}
 
  :clock "2026-10-12T09:00"
 
@@ -20,11 +20,11 @@
 
  :foils
  {"noted"
-  {:fails #{:no-operator-memo :nothing-sent}
+  {:fails #{:no-message :nothing-sent}
    :model {"steward" [{:tool-uses [{:name "fact_add"
                                 :input {:text "The operator's sister Ana's birthday is March 3." :topic "family"}}
-                               {:name "memo_send"
-                                :input {:to "operator" :subject "Noted!" :body "I recorded Ana's birthday."}}]}
+                               {:name "tell_operator"
+                                :input {:subject "Noted!" :body "I recorded Ana's birthday."}}]}
                   {:tool-uses [{:name "memo_close"
                                 :input {:memo {:memo-id {:subject "Ana's birthday"}} :outcome "Recorded it."}}]}
                   {:tool-uses [{:name "journal_write" :input {:text "Recorded Ana's birthday."}}]}]}}}
@@ -39,8 +39,9 @@
  :graders
  [{:id :recorded
    :check [:has :fact {:current true :text [:all [:includes "Ana"] [:regex "(?i)march 3|3 march|march 3rd|-03-03"]]}]}
-  {:id :no-operator-memo
-   :check [:none :memo {:to "operator"}]}
+  {:id :no-message
+   :doc "No role tells the operator anything: there is nothing to decide."
+   :check [:none :message {:origin [:any "told" "memo-for-operator"]}]}
   {:id :nothing-sent
    :doc "No notification went out."
    :check [:none :sent {}]}

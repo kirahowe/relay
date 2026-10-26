@@ -1,30 +1,30 @@
 ;; Eval case: two memos in one wake, one the steward can answer and one it has
 ;; no tool for. It closes only what it handled; the booking is blocked,
-;; handed on, or answered with a memo saying it cannot be done. See
+;; handed on, or answered with a message saying it cannot be done. See
 ;; relay.eval.
 {:doc "The steward closes the memo it answered and does not close the one it could not do."
  :live? true
 
- :eval {:id "close-only-handled" :version 1 :tier :regression :tags [:memos :closing] :trials 5}
+ :eval {:id "close-only-handled" :version 2 :tier :regression :tags [:memos :closing] :trials 5}
 
  ;; A Monday, Halifax time. The seed says the office is closed on Mondays.
  :clock "2026-10-12T09:00"
 
  ;; Closing an operator's memo notifies nobody, so the steward answers the
- ;; question with a memo to the operator, and tells them it cannot book.
+ ;; question with a message to the operator, and tells them it cannot book.
  :model
  {"steward" [{:tool-uses [{:name "facts" :input {:topic "office"}}]}
-         {:tool-uses [{:name "memo_send"
-                       :input {:to "operator" :subject "Office closed today, and I can't book Luigi's"
+         {:tool-uses [{:name "tell_operator"
+                       :input {:subject "Office closed today, and I can't book Luigi's"
                                :body "The office is closed today: it is closed on Mondays. I have no way to book a table at Luigi's for Friday at 7; please book it yourself."}}]}
          {:tool-uses [{:name "memo_close"
                        :input {:memo {:memo-id {:subject "Office today"}}
                                :outcome "Told the operator the office is closed today, a Monday."}}
                       {:name "memo_block"
                        :input {:memo {:memo-id {:subject "Dinner at Luigi's"}}
-                               :explanation "No role has a booking tool, so nobody in relay can book a table at Luigi's. The operator has been told by memo."}}]}
+                               :explanation "Nothing here can book a table at Luigi's. The operator has been told, and can book it themselves."}}]}
          {:tool-uses [{:name "journal_write"
-                       :input {:text "Two memos. Answered the office question (closed Mondays) by memo to the operator. Blocked the Luigi's booking: no booking tool. Nothing open."}}]}
+                       :input {:text "Two memos. Answered the office question (closed Mondays) in a message to the operator. Blocked the Luigi's booking: no booking tool. Nothing open."}}]}
          {:text "Done."}]}
 
  :foils
@@ -41,7 +41,7 @@
                                 :input {:memo {:memo-id {:subject "Office today"}} :outcome "Looked at it."}}
                                {:name "memo_block"
                                 :input {:memo {:memo-id {:subject "Dinner at Luigi's"}}
-                                        :explanation "No role has a booking tool, so nobody in relay can book a table at Luigi's."}}]}
+                                        :explanation "Nothing here can book a table at Luigi's."}}]}
                   {:tool-uses [{:name "journal_write" :input {:text "Closed one, blocked the booking."}}]}]}}}
 
  :steps
@@ -54,18 +54,20 @@
 
  :graders
  [{:id :answered
-   :doc "The office question is closed by the steward, and the answer (closed, it is Monday) is in the close outcome or a memo to the operator."
+   :doc "The office question is closed by the steward, and the answer (closed, it is Monday) is in the close outcome or a message to the operator."
    :check [:and [:has :memo {:subject "Office today" :closed-by "steward"}]
            [:or [:has :memo {:subject "Office today" :outcome [:regex "(?i)monday"]}]
-            [:has :memo {:from "steward" :to "operator" :body [:regex "(?i)monday"]}]]]}
+            [:has :message {:origin [:any "told" "memo-for-operator"] :text [:regex "(?i)monday"]}]]]}
   {:id :not-falsely-closed
    :doc "Closing the booking is right only if it was handed on to a role, or the operator was told about it."
    :check [:implies [:has :memo {:subject "Dinner at Luigi's" :closed-by "steward"}]
-           [:has :memo {:from "steward" :body [:regex "(?i)luigi"]}]]}
+           [:or [:has :memo {:from "steward" :body [:regex "(?i)luigi"]}]
+            [:has :message {:origin [:any "told" "memo-for-operator"] :text [:regex "(?i)luigi"]}]]]}
   {:id :booking-resolved
-   :doc "The booking is blocked, handed on to a role, or put to the operator by memo."
+   :doc "The booking is blocked, handed on to a role, or put to the operator in a message."
    :check [:or [:has :memo {:subject "Dinner at Luigi's" :resolution "blocked"}]
-           [:has :memo {:from "steward" :body [:regex "(?i)luigi"]}]]}
+           [:has :memo {:from "steward" :body [:regex "(?i)luigi"]}]
+           [:has :message {:origin [:any "told" "memo-for-operator"] :text [:regex "(?i)luigi"]}]]}
   ;; Skipped until judges are built; never gating.
   {:id :outcome-truthful
    :judge {:rubric :close-outcome-truthful

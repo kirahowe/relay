@@ -1,23 +1,23 @@
-;; Eval case: a one-off question nobody can answer (no role has a web
-;; tool) gets no new role and no routine. It may be blocked, put back to
-;; the operator, or handed to a role that exists: the steward cannot see what
-;; the scout is granted, and the scout's instructions say it looks things
-;; up. See relay.eval.
+;; Eval case: a one-off question nobody can answer (in evals the scout
+;; has no web search) gets no new role and no routine. It may be blocked,
+;; put back to the operator, or handed to a role that exists: the steward
+;; cannot see what the scout is granted, and the scout's instructions say
+;; it looks things up. See relay.eval.
 {:doc "A one-off request gets no new role and no routine."
  :live? true
 
- :eval {:id "no-role-for-one-off" :version 2 :tier :regression :tags [:roles :routing] :trials 5}
+ :eval {:id "no-role-for-one-off" :version 3 :tier :regression :tags [:roles :routing] :trials 5}
 
  :clock "2026-10-12T09:00"
 
  :model
  {"steward" [{:tool-uses [{:name "roles" :input {}}]}
-         {:tool-uses [{:name "memo_send"
-                       :input {:to "operator" :subject "Can't look up the market's Saturday hours"
-                               :body "You asked when the Halifax Seaport Farmers' Market opens this Saturday. No role in relay can read the web, so I can't look it up. Their own site will have it."}}]}
+         {:tool-uses [{:name "tell_operator"
+                       :input {:subject "Can't look up the market's Saturday hours"
+                               :body "You asked when the Halifax Seaport Farmers' Market opens this Saturday. I can't look things up on the web yet, so I can't find it for you. Their own site will have it."}}]}
          {:tool-uses [{:name "memo_close"
                        :input {:memo {:memo-id {:subject "Market hours"}}
-                               :outcome "Told the operator relay cannot look up the market's hours: no role reads the web."}}]}
+                               :outcome "Told the operator I cannot look up the market's hours: nothing here reads the web."}}]}
          {:tool-uses [{:name "journal_write"
                        :input {:text "Operator asked the Seaport market's Saturday hours. No web tool anywhere; told them so. One-off, so no role. Nothing open."}}]}
          {:text "Done."}]}
@@ -52,11 +52,12 @@
 
  :graders
  [{:id :no-role-added
-   :doc "No role_add call, held or not, and the same three roles."
+   :doc "No role_add call, and the same three roles."
    :check [:and [:none :tool-call {:name "role_add"}] [:count :role {} 3]]}
   {:id :no-routine
    :check [:none :tool-call {:name "routine_write"}]}
   {:id :not-dropped
-   :doc "The memo is blocked, the operator is told by memo, or it is handed to a role that was there before."
+   :doc "The memo is blocked, the operator is told, or it is handed to a role that was there before."
    :check [:or [:has :memo {:subject "Market hours" :resolution "blocked"}]
-           [:has :memo {:from "steward" :to [:any "operator" "clerk" "scout"]}]]}]}
+           [:has :message {:origin [:any "told" "memo-for-operator"]}]
+           [:has :memo {:from "steward" :to [:any "clerk" "scout"]}]]}]}

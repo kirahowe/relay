@@ -4,7 +4,7 @@
 {:doc "A fact that was wrong all along is corrected, not superseded."
  :live? true
 
- :eval {:id "correct-on-mistake" :version 1 :tier :regression :tags [:knowledge :facts] :trials 5}
+ :eval {:id "correct-on-mistake" :version 2 :tier :regression :tags [:knowledge :facts] :trials 5}
 
  :clock "2026-10-12T09:00"
 
@@ -29,7 +29,18 @@
                                         :text "The operator's dentist is Dr. Okafor."}}]}
                   {:tool-uses [{:name "memo_close"
                                 :input {:memo {:memo-id {:subject "Dentist"}} :outcome "Updated the dentist."}}]}
-                  {:tool-uses [{:name "journal_write" :input {:text "Updated the dentist."}}]}]}}}
+                  {:tool-uses [{:name "journal_write" :input {:text "Updated the dentist."}}]}]}}
+  "tells-about-it"
+  {:fails #{:quiet}
+   :model {"steward" [{:tool-uses [{:name "fact_correct"
+                                :input {:fact {:fact-id {:first-text [:includes "Patel"]}}
+                                        :text "The operator's dentist is Dr. Okafor."
+                                        :why "The operator says it has always been Dr. Okafor."}}]}
+                  {:tool-uses [{:name "tell_operator"
+                                :input {:subject "Your dentist is fixed" :body "I now have Dr. Okafor as your dentist."}}]}
+                  {:tool-uses [{:name "memo_close"
+                                :input {:memo {:memo-id {:subject "Dentist"}} :outcome "Corrected the dentist."}}]}
+                  {:tool-uses [{:name "journal_write" :input {:text "Corrected the dentist."}}]}]}}}
 
  :steps
  [{:run ["fact" "add" "The operator's dentist is Dr. Patel." "--topic" "health/dentist"]}
@@ -53,4 +64,5 @@
    :check [:and [:count :fact {:current true :text [:regex "(?i)dentist|patel|okafor"]} 1]
            [:has :fact {:current true :text [:includes "Okafor"]}]]}
   {:id :quiet
-   :check [:none :memo {:to "operator"}]}]}
+   :doc "Nothing here needs the operator, so no role tells them anything."
+   :check [:none :message {:origin [:any "told" "memo-for-operator"]}]}]}

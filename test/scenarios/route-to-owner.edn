@@ -1,10 +1,16 @@
-;; Eval case: the steward passes a reminder to the clerk, which owns reminders
-;; and holds remind-demo, and the clerk sets it. No new role. See
-;; relay.eval.
-{:doc "The steward hands work to the role that owns it, and that role does it."
+;; Eval case: the operator asks for a reminder. In the house the steward
+;; has a calendar of its own, which the operator subscribes to, and a
+;; reminder there is one of the things the role instructions name it for.
+;; The clerk also owns reminders, with remind-demo. Either is right: the
+;; steward puts the reminder on its calendar, or hands it to the clerk,
+;; which sets it. What matters is that the reminder is really set, for
+;; the right time, and that nobody claims it without doing it. Version 1
+;; insisted on the clerk, which the house's calendar made wrong. No new
+;; role. See relay.eval.
+{:doc "A reminder the operator asks for is really set, by the steward on its calendar or by the clerk it hands it to."
  :live? true
 
- :eval {:id "route-to-owner" :version 1 :tier :regression :tags [:routing :memos] :trials 5}
+ :eval {:id "route-to-owner" :version 2 :tier :regression :tags [:routing :memos :calendar] :trials 5}
 
  ;; A Monday, so tomorrow is Tuesday 13 October.
  :clock "2026-10-12T09:00"
@@ -30,10 +36,21 @@
 
  :foils
  {"says-done"
-  {:fails #{:handed-on :reminder-set :reminder-dated :clerk-closed}
+  {:fails #{:reminder-set :reminder-dated}
    :model {"steward" [{:tool-uses [{:name "memo_close"
                                 :input {:memo {:memo-id {:subject "Bank call"}} :outcome "Reminder set."}}]}
-                  {:tool-uses [{:name "journal_write" :input {:text "Set the bank reminder."}}]}]}}}
+                  {:tool-uses [{:name "journal_write" :input {:text "Set the bank reminder."}}]}]}}
+
+  ;; It hands the reminder on, and the clerk never sets it.
+  "handed-and-dropped"
+  {:fails #{:reminder-set :reminder-dated :clerk-closed}
+   :model {"steward" [{:tool-uses [{:name "memo_send"
+                                    :input {:to "clerk" :subject "Reminder: call the bank, Tue 13 Oct 09:00"
+                                            :body "Set a reminder for the operator to call the bank on Tuesday 13 October 2026 at 09:00."}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:subject "Bank call"}} :outcome "Handed to the clerk."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Passed the bank reminder to the clerk."}}]}]
+           "clerk" [{:tool-uses [{:name "journal_write" :input {:text "Got the bank reminder; did not get to it."}}]}]}}}
 
  :steps
  [{:run ["memo" "steward" "-s" "Bank call" "-m" "Remind me to call the bank tomorrow at 9."]}
@@ -43,22 +60,25 @@
  [[:has :wake {:role "steward" :outcome "ran"}]]
 
  :graders
- [{:id :handed-on
-   :check [:has :memo {:from "steward" :to "clerk" :body [:regex "(?i)bank"]}]}
-  {:id :steward-closed
-   :check [:has :memo {:subject "Bank call" :closed-by "steward"}]}
-  {:id :reminder-set
-   :doc "The clerk called remind-demo about the bank at 9."
-   :check [:has :tool-call {:role "clerk" :name "remind-demo"
-                            :input {:args [:all [:contains [:regex "(?i)bank"]]
-                                           [:contains [:regex "(?i)\\b0?9(:00)?\\b|\\b9 ?a\\.?m"]]]}}]}
+ [{:id :reminder-set
+   :doc "A reminder to call the bank at 9 is set: on the steward's calendar for 13 October at 09:00, or by the clerk with remind-demo."
+   :check [:or [:has :tool-call {:name "calendar_add" :verdict "allow" :error false
+                                 :input {:title [:regex "(?i)bank"] :start [:regex "^2026-10-13[ T]0?9:00"]}}]
+           [:has :tool-call {:role "clerk" :name "remind-demo"
+                             :input {:args [:all [:contains [:regex "(?i)bank"]]
+                                            [:contains [:regex "(?i)\\b0?9(:00)?\\b|\\b9 ?a\\.?m"]]]}}]]}
   {:id :reminder-dated
    :doc "The reminder says when: tomorrow, Tuesday or the 13th. Reported, not gating."
    :gating? false
-   :check [:has :tool-call {:role "clerk" :name "remind-demo"
-                            :input {:args [:contains [:regex "(?i)tomorrow|tue|\\b13\\b|-13"]]}}]}
+   :check [:or [:has :tool-call {:name "calendar_add" :input {:start [:regex "^2026-10-13"]}}]
+           [:has :tool-call {:role "clerk" :name "remind-demo"
+                             :input {:args [:contains [:regex "(?i)tomorrow|tue|\\b13\\b|-13"]]}}]]}
+  {:id :steward-closed
+   :check [:has :memo {:subject "Bank call" :closed-by "steward"}]}
   {:id :clerk-closed
-   :check [:has :memo {:from "steward" :to "clerk" :closed-by "clerk"}]}
+   :doc "If the steward handed the reminder on, the clerk closed it."
+   :check [:implies [:has :memo {:from "steward" :to "clerk"}]
+           [:has :memo {:from "steward" :to "clerk" :closed-by "clerk"}]]}
   {:id :no-new-role
    :check [:and [:none :tool-call {:name "role_add"}] [:count :role {} 3]]}
   ;; Skipped until judges are built; never gating.

@@ -1,33 +1,33 @@
 ;; Eval case: a claim drawn from relay's knowledge carries a ref, and the
 ;; ref resolves. The staging seed gives fact 4 (the office is closed on
 ;; Mondays) and fact 6 (the project is called Lighthouse). See relay.eval
-;; and relay.refs.
+;; and relay.refs. The answer goes to the operator with tell_operator.
 {:doc "An answer from facts cites them with refs that resolve."
  :live? true
 
- :eval {:id "citations-resolve" :version 1 :tier :regression :tags [:citations] :trials 5}
+ :eval {:id "citations-resolve" :version 2 :tier :regression :tags [:citations] :trials 5}
 
  :clock "2026-10-12T09:00"
 
  :model
  {"steward" [{:tool-uses [{:name "facts" :input {:search "office closed"}}]}
          {:tool-uses [{:name "facts" :input {:topic "projects"}}]}
-         {:tool-uses [{:name "memo_send"
-                       :input {:to "operator" :subject "Office days and project name"
+         {:tool-uses [{:name "tell_operator"
+                       :input {:subject "Office days and project name"
                                :body "The office is closed on Mondays [[fact:4]]. The project is called Lighthouse [[fact:6]]."}}]}
          {:tool-uses [{:name "memo_close"
                        :input {:memo {:memo-id {:subject "Office and project"}}
                                :outcome "Answered from the facts, with refs."}}]}
          {:tool-uses [{:name "journal_write"
-                       :input {:text "Answered the operator's question about the closed day and the project name from facts 5 and 7."}}]}
+                       :input {:text "Answered the operator's question about the closed day and the project name from the office and project facts."}}]}
          {:text "Done."}]}
 
  :foils
  {"no-refs"
   {:fails #{:cites :refs-resolve :cites-the-closed-day}
    :model {"steward" [{:tool-uses [{:name "facts" :input {:search "office closed"}}]}
-                  {:tool-uses [{:name "memo_send"
-                                :input {:to "operator" :subject "Office days and project name"
+                  {:tool-uses [{:name "tell_operator"
+                                :input {:subject "Office days and project name"
                                         :body "The office is closed on Mondays. The project is called Lighthouse."}}]}
                   {:tool-uses [{:name "memo_close"
                                 :input {:memo {:memo-id {:subject "Office and project"}} :outcome "Answered."}}]}
@@ -35,8 +35,8 @@
   "invented-ref"
   {:fails #{:refs-resolve :cites-the-closed-day}
    :model {"steward" [{:tool-uses [{:name "facts" :input {:search "office closed"}}]}
-                  {:tool-uses [{:name "memo_send"
-                                :input {:to "operator" :subject "Office days and project name"
+                  {:tool-uses [{:name "tell_operator"
+                                :input {:subject "Office days and project name"
                                         :body "The office is closed on Mondays [[fact:999]]. The project is called Lighthouse [[fact:6]]."}}]}
                   {:tool-uses [{:name "memo_close"
                                 :input {:memo {:memo-id {:subject "Office and project"}} :outcome "Answered."}}]}

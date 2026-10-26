@@ -4,15 +4,15 @@
 {:doc "The steward reads its skill before multi-step work and follows it."
  :live? true
 
- :eval {:id "skill-followed" :version 1 :tier :capability :tags [:skills] :trials 5}
+ :eval {:id "skill-followed" :version 2 :tier :capability :tags [:skills] :trials 5}
 
  :clock "2026-10-12T09:00"
 
  :model
  {"steward" [{:tool-uses [{:name "doc_get" :input {:path "skills/steward/monthly-reminder.md"}}]}
          {:tool-uses [{:name "facts" :input {:topic "projects"}}]}
-         {:tool-uses [{:name "memo_send"
-                       :input {:to "operator" :subject "Draft: monthly reminder"
+         {:tool-uses [{:name "tell_operator"
+                       :input {:subject "Draft: monthly reminder"
                                :body "Hello team. The Lighthouse meeting is this month [[fact:6]]. Please bring your notes.\n\nWarm regards, the Lighthouse team"}}]}
          {:tool-uses [{:name "memo_close"
                        :input {:memo {:memo-id {:subject "Monthly reminder"}} :outcome "Drafted the reminder from the skill."}}]}
@@ -23,8 +23,8 @@
  :foils
  {"ignores-the-skill"
   {:fails #{:read-the-skill :uses-its-sign-off :skill-read-first}
-   :model {"steward" [{:tool-uses [{:name "memo_send"
-                                :input {:to "operator" :subject "Draft: monthly reminder"
+   :model {"steward" [{:tool-uses [{:name "tell_operator"
+                                :input {:subject "Draft: monthly reminder"
                                         :body "Hi everyone, reminder about this month's meeting. Best, Steward"}}]}
                   {:tool-uses [{:name "memo_close"
                                 :input {:memo {:memo-id {:subject "Monthly reminder"}} :outcome "Drafted."}}]}
@@ -45,8 +45,10 @@
    :doc "The steward read its skill with doc_get."
    :check [:has :tool-call {:role "steward" :name "doc_get" :input {:path "skills/steward/monthly-reminder.md"} :verdict "allow"}]}
   {:id :skill-read-first
-   :doc "It read the skill before it sent the draft."
-   :check [:before :tool-call {:name "doc_get" :input {:path "skills/steward/monthly-reminder.md"}} {:name "memo_send"}]}
+   :doc "It read the skill before it gave anyone the draft or saved it."
+   :check [:before :tool-call {:name "doc_get" :input {:path "skills/steward/monthly-reminder.md"}}
+           {:name [:any "tell_operator" "memo_send" "doc_put"]}]}
   {:id :uses-its-sign-off
-   :doc "The draft ends the way the skill says."
-   :check [:has :memo {:to "operator" :body [:regex "Warm regards,\\s*the Lighthouse team"]}]}]}
+   :doc "The draft, in the message or in a doc outside skills/, ends the way the skill says."
+   :check [:or [:has :message {:origin [:any "told" "memo-for-operator"] :text [:regex "Warm regards,\\s*the Lighthouse team"]}]
+           [:has :doc {:path [:not [:regex "^skills/"]] :content [:regex "Warm regards,\\s*the Lighthouse team"]}]]}]}

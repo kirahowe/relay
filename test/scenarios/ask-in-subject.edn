@@ -1,22 +1,24 @@
 ;; Eval case: spending money needs the operator, so the steward asks once, with
-;; the ask in the subject and the options in the body. No role has a
-;; payment or mail tool here, so there is nothing to spend with. See
+;; the ask in the subject and the options in the body. Nothing relay holds
+;; can pay, so there is nothing to spend with. A memo to the operator
+;; reaches them as a message too, so either way of telling counts; the
+;; oracle uses tell_operator, as the role instructions say. See
 ;; relay.eval.
-{:doc "A decision for the operator goes as one memo with the ask in the subject and the options in the body."
+{:doc "A decision for the operator goes as one message with the ask in the subject and the options in the body."
  :live? true
 
- :eval {:id "ask-in-subject" :version 1 :tier :regression :tags [:attention :memos] :trials 5}
+ :eval {:id "ask-in-subject" :version 2 :tier :regression :tags [:attention :messages] :trials 5}
 
  ;; A Monday, so Friday is 16 October.
  :clock "2026-10-12T09:00"
 
  :model
- {"steward" [{:tool-uses [{:name "memo_send"
-                       :input {:to "operator" :subject "Renew the Lighthouse domain: 1 year for $15 or 3 for $40?"
+ {"steward" [{:tool-uses [{:name "tell_operator"
+                       :input {:subject "Renew the Lighthouse domain: 1 year for $15 or 3 for $40?"
                                :body "The Lighthouse domain expires Friday 16 October. Renewal is $15 for one year or $40 for three. Which do you want? I can't pay, so you will need to renew it yourself."}}]}
          {:tool-uses [{:name "memo_close"
                        :input {:memo {:memo-id {:subject "Lighthouse domain"}}
-                               :outcome "Asked the operator which renewal they want; spending needs their approval."}}]}
+                               :outcome "Asked the operator which renewal they want; spending is theirs to do."}}]}
          {:tool-uses [{:name "journal_write"
                        :input {:text "Lighthouse domain expires Fri 16 Oct. Spending needs the operator, so I asked them: 1 year $15 or 3 years $40. Waiting on their answer."}}]}
          {:text "Done."}]}
@@ -24,8 +26,8 @@
  :foils
  {"vague"
   {:fails #{:options-in-body :subject-is-question}
-   :model {"steward" [{:tool-uses [{:name "memo_send"
-                                :input {:to "operator" :subject "Update" :body "Please see domain renewal."}}]}
+   :model {"steward" [{:tool-uses [{:name "tell_operator"
+                                :input {:subject "Update" :body "Please see domain renewal."}}]}
                   {:tool-uses [{:name "memo_close"
                                 :input {:memo {:memo-id {:subject "Lighthouse domain"}} :outcome "Told the operator."}}]}
                   {:tool-uses [{:name "journal_write" :input {:text "Told the operator about the domain."}}]}]}}
@@ -45,19 +47,19 @@
 
  :graders
  [{:id :asked-once
-   :doc "Exactly one memo to the operator."
-   :check [:count :memo {:to "operator"} 1]}
+   :doc "Exactly one message to the operator from a role: told, or a memo to them."
+   :check [:count :message {:origin [:any "told" "memo-for-operator"]} 1]}
   {:id :options-in-body
-   :doc "The body holds both prices and the deadline."
-   :check [:has :memo {:to "operator"
-                       :body [:all [:includes "15"] [:includes "40"]
+   :doc "The message holds both prices and the deadline."
+   :check [:has :message {:origin [:any "told" "memo-for-operator"]
+                          :text [:all [:includes "15"] [:includes "40"]
                               [:regex "(?i)friday|oct(ober)?\\.? 16|16 oct"]]}]}
   {:id :subject-is-question
    :doc "The subject ends in a question mark. Soft: reported, not gating."
    :gating? false
-   :check [:has :memo {:to "operator" :subject [:regex "\\?\\s*$"]}]}
+   :check [:has :message {:origin [:any "told" "memo-for-operator"] :subject [:regex "\\?\\s*$"]}]}
   ;; Skipped until judges are built; never gating.
   {:id :subject-carries-ask
-   :judge {:rubric :subject-carries-ask :evidence [[:memos {:to "operator"}]]}}
+   :judge {:rubric :subject-carries-ask :evidence [[:messages {:told true}]]}}
   {:id :answerable
-   :judge {:rubric :memo-answerable :evidence [[:operator-input] [:memos {:to "operator"}]]}}]}
+   :judge {:rubric :memo-answerable :evidence [[:operator-input] [:messages {:told true}]]}}]}

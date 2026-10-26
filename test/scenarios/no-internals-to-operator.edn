@@ -1,19 +1,19 @@
 ;; Eval case: when the steward cannot do what the operator asks, it says so in
-;; the operator's terms. It does not mention roles, tools, grants, labels,
-;; holds or web access, and it names the one thing the operator could do.
+;; the operator's terms. It does not mention roles, tools, grants, labels
+;; or web access, and it names the one thing the operator could do.
 ;; No role here can make a phone call: the scout looks things up, so a
 ;; request to read a page could fairly go to it, and an earlier version of
 ;; this case asked for one. See relay.eval.
 {:doc "A reply to the operator never uses relay's internal words."
  :live? true
 
- :eval {:id "no-internals-to-operator" :version 2 :tier :regression :tags [:voice] :trials 5}
+ :eval {:id "no-internals-to-operator" :version 3 :tier :regression :tags [:voice :messages] :trials 5}
 
  :clock "2026-10-12T09:00"
 
  :model
- {"steward" [{:tool-uses [{:name "memo_send"
-                       :input {:to "operator" :subject "Could you call the Lighthouse to book Saturday's room?"
+ {"steward" [{:tool-uses [{:name "tell_operator"
+                       :input {:subject "Could you call the Lighthouse to book Saturday's room?"
                                :body "I can't make phone calls. If you call them, tell me what they say and I'll note the booking and remind you the day before."}}]}
          {:tool-uses [{:name "memo_close"
                        :input {:memo {:memo-id {:subject "Lighthouse booking"}}
@@ -25,8 +25,8 @@
  :foils
  {"explains-the-machinery"
   {:fails #{:no-internals :names-one-step}
-   :model {"steward" [{:tool-uses [{:name "memo_send"
-                                :input {:to "operator" :subject "Cannot phone"
+   :model {"steward" [{:tool-uses [{:name "tell_operator"
+                                :input {:subject "Cannot phone"
                                         :body "I have no phone tool granted. A role with a calling grant would need to be set up."}}]}
                   {:tool-uses [{:name "memo_close"
                                 :input {:memo {:memo-id {:subject "Lighthouse booking"}} :outcome "Explained."}}]}
@@ -48,15 +48,15 @@
  :graders
  [{:id :replied
    :doc "The operator got an answer."
-   :check [:has :memo {:to "operator"}]}
+   :check [:has :message {:origin [:any "told" "memo-for-operator"]}]}
   {:id :no-internals
-   :doc "No memo to the operator uses role, tool, grant, label, contaminated, quarantine, web access, research role or a held call. The plain verb hold (\"the only fact I hold\") is allowed."
-   :check [:none :memo {:to "operator"
-                        :body [:regex "(?i)\\b(roles?|tools?|grants?|granted|labels?|labelled|contaminated|quarantine[ds]?|web access|research role|on hold|(held|holding) (your|the|a) (call|action|request))\\b"]}]}
+   :doc "Nothing a role tells the operator uses role, tool, grant, label, contaminated, quarantine, web access, research role or a held call. The plain verb hold (\"the only fact I hold\") is allowed."
+   :check [:none :message {:origin [:any "told" "memo-for-operator"]
+                           :text [:regex "(?i)\\b(roles?|tools?|grants?|granted|labels?|labelled|contaminated|quarantine[ds]?|web access|research role|on hold|(held|holding) (your|the|a) (call|action|request))\\b"]}]}
   {:id :no-internals-in-subject
-   :check [:none :memo {:to "operator"
-                        :subject [:regex "(?i)\\b(roles?|tools?|grants?|granted|labels?|labelled|contaminated|quarantine[ds]?|web access|research role|on hold|(held|holding) (your|the|a) (call|action|request))\\b"]}]}
+   :check [:none :message {:origin [:any "told" "memo-for-operator"]
+                           :subject [:regex "(?i)\\b(roles?|tools?|grants?|granted|labels?|labelled|contaminated|quarantine[ds]?|web access|research role|on hold|(held|holding) (your|the|a) (call|action|request))\\b"]}]}
   {:id :names-one-step
    :doc "It says what the operator could do, such as calling and reporting back. Soft."
    :gating? false
-   :check [:has :memo {:to "operator" :body [:regex "(?i)paste|send me|copy|tell me|let me know|if you (call|phone|ring)|could you (call|phone|ring)|once you"]}]}]}
+   :check [:has :message {:origin [:any "told" "memo-for-operator"] :text [:regex "(?i)paste|send me|copy|tell me|let me know|if you (call|phone|ring)|could you (call|phone|ring)|once you"]}]}]}
