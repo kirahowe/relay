@@ -45,8 +45,12 @@
                            answer message <n>
   relay memo steward -s <subject> -m <text>
                            ask for something
+  relay note [now]         the daily note; now sends it
+  relay accept <n>         yes to the offer in note item <n>
+  relay decline <n>        no to the offer in note item <n>
   relay revert <n>         undo a change the note flags
-  relay dismiss <n>        drop a suggestion from the note
+  relay dismiss <n>        drop an item from the note
+  relay routine run <name> run a routine now
   relay undo <n>           put back files that were moved
   relay status             what is running, and what it cost
 
@@ -61,6 +65,10 @@ Every command needs the data directory, from --data <dir> or from the file
 ~/.config/relay/config.edn, which holds a map such as {:data \"~/relay-data\"}.
 
   relay init                          make the data directory, asking for its settings
+                                      in a terminal; it writes relay.edn and adds
+                                      the steward, its daily-note routine and,
+                                      with web search, a scout. With an existing
+                                      relay.edn it only checks it
   relay status                        roles, open work, harnesses, recent wakes
   relay inbox                         memos waiting for you
   relay ready [--all]                 what is ready for you, the 10 newest: what
@@ -69,8 +77,13 @@ Every command needs the data directory, from --data <dir> or from the file
   relay ready <n>                     one message whole, by its number (a cut
                                       item says how to open it whole)
   relay reply <message> -m <text>     answer a message from relay ready; the role
-                                      that told you is woken with your answer
-  relay memo <to> -s <subject>        send a memo; body from -m or stdin
+                                      that told you is woken with your answer.
+                                      To the daily note: yes N, not N, drop N,
+                                      revert N
+  relay memo <to> -s <subject>        send a memo; body from -m or stdin.
+                                      --public marks it public, which a memo to a
+                                      public role (a scout) needs:
+                                      relay memo scout --public -s \"Garlic\" -m \"...\"
   relay close <memo> -m <outcome>     close a memo
   relay roles                         the registry, and what each role is doing
   relay add <id> [--title <t>] [--reports-to <id>] [--harness <h>] [--model <m>]
@@ -179,6 +192,9 @@ Every command needs the data directory, from --data <dir> or from the file
                                       <note>) flags, by its number there
   relay revert c<k>                   undo any other change, by the handle relay
                                       changes gives it
+  relay accept <item> [<note>]        take up the offer of help in an item of the
+                                      latest daily note (or of note <note>); the
+                                      role that wrote it is woken to do it
   relay decline <item> [<note>]       say no to the offer of help in an item of the
                                       latest daily note (or of note <note>); the
                                       item stays, and the offer does not come back
@@ -299,6 +315,8 @@ id public too.")
       (if-let [settings (setup/create! {:ask (fn [prompt] (print prompt) (flush) (read-line))
                                         :say println
                                         :webtool (setup/webtool-bin)
+                                        ;; Written as an absolute :client, for the same reason.
+                                        :relay-tui (some-> (setup/relay-tui-bin) fs/absolutize str)
                                         ;; Written as an absolute :bin, so no other
                                         ;; agentloop on PATH runs in its place.
                                         :agentloop (some-> (agentloop/agentloop-bin {}) fs/absolutize str)}
@@ -549,7 +567,7 @@ id public too.")
           woke (dispatch/wake! sys role {})]
       {:exit (if (#{:ran :idle} (:result woke)) 0 1)
        :out (cons (str "Sent " role " its " rname " routine now (memo " (get-in fired [:data :memo]) ").")
-                  (render/wake-result woke))})))
+                  (render/wake-result role woke))})))
 
 (defn- note!
   "relay note shows the daily note as it would go out now; relay note now
@@ -565,15 +583,18 @@ id public too.")
     (when-not (:daily-note config)
       (fail! "relay.edn has no :daily-note, so there is no daily note. Set :daily-note {:at \"07:30\" :role \"steward\"}."))
     (case sub
-      nil (let [{:keys [subject sections]} (core/compose-note state config today now)]
+      nil (let [{:keys [subject sections numbered]} (core/compose-note state config today now)]
             (if-not sections
               (result 0 "The daily note has nothing to say yet, so none would go out now."
                       (str "The steward writes its parts from its routine: relay routine run "
                            (digest/role-of config) " daily-note."))
               (apply result 0 subject ""
-                     (str/split-lines (channels/body-text {:subject subject :sections sections :labels []})))))
+                     (str/split-lines (channels/body-text (digest/with-hints {:subject subject :sections sections :labels []
+                                                                             :numbered numbered}
+                                                                            :cli))))))
       "now" (cond
-              (and (= today (core/daily-date state)) (not (false? (get-in state [:daily :sent]))))
+              (and (= today (core/daily-date state)) (not (false? (get-in state [:daily :sent])))
+                   (not (core/note-redoable? state today)))
               (result 0 (str "Today's note was made already. The next one is tomorrow at "
                              (get-in config [:daily-note :at]) "."))
               ;; Nothing to say yet: nothing is recorded, so the day's note
@@ -607,6 +628,43 @@ id public too.")
           (do (p/destroy-tree proc) nil)))
       (catch Exception _ nil))))
 
+(defn- probe-url
+  "What asking `url` once finds, within three seconds: :ok for a 200,
+  :refused when nothing answers, else :other."
+  [url]
+  (try
+    (let [client (-> (java.net.http.HttpClient/newBuilder)
+                     (.connectTimeout (java.time.Duration/ofSeconds 3))
+                     (.build))
+          req (-> (java.net.http.HttpRequest/newBuilder (java.net.URI/create url))
+                  (.timeout (java.time.Duration/ofSeconds 3))
+                  (.GET) (.build))
+          resp (.send client req (java.net.http.HttpResponse$BodyHandlers/discarding))]
+      (if (= 200 (.statusCode resp)) :ok :other))
+    (catch java.net.ConnectException _ :refused)
+    (catch Exception _ :refused)))
+
+(def ^:dynamic *probe*
+  "How relay calendar url checks the feed can be read: a function of a
+  URL giving :ok, :refused or :other. Tests bind their own."
+  probe-url)
+
+(defn calendar-checks
+  "What relay calendar url adds after the address, from what probing
+  found: `local` asking relay serve's listener on this machine, `remote`
+  asking the address itself (nil when it is on this machine). Pure."
+  [port local remote]
+  (cond
+    (= :refused local)
+    [(str "relay serve is not running, so the calendar cannot be read yet. Start it with bb service start"
+          " (README: The relay service).")]
+    (= :other local)
+    [(str "Something answers on port " port ", but not with the calendar. Is another program using"
+          " the port? Choose another :port in :serve :websocket.")]
+    (and remote (not= :ok remote))
+    [(str "It is not reachable on your tailnet yet. Publish the port with:")
+     (str "  tailscale serve --bg --https=" port " http://127.0.0.1:" port)]))
+
 (defn- calendar!
   "relay calendar url: the address a calendar app subscribes to the
   agent's calendar at, with the feed's own token (relay.websocket/
@@ -621,10 +679,35 @@ id public too.")
           _ (when error (fail! (str "relay could not read the listener's token: " error ".")))
           host (or (:host opts) (tailnet-name))]
       (if host
-        (result 0 (ws/calendar-url host port token)
-                "Add it in your calendar app as a calendar subscription. It opens the calendar and nothing else.")
+        (let [url (ws/calendar-url host port token)
+              local (*probe* (ws/calendar-url "127.0.0.1" port token))
+              checks (calendar-checks port local (when (and (= :ok local) (not (ws/local-host? host))) (*probe* url)))]
+          (apply result 0 url
+                 (or (seq checks)
+                     ["Add it in your calendar app as a calendar subscription. It opens the calendar and nothing else."])))
         (result 0 (ws/calendar-url "<your Mac's tailnet name>" port token)
                 "relay could not find this Mac's tailnet name: put it in, or run relay calendar url --host <name>.")))))
+
+(def ^:private last-tick-file
+  "Where the tick records when it last ran, beside relay.edn."
+  ".last-tick")
+
+(defn- last-tick
+  "When the tick last recorded that it ran in `dir`, or nil."
+  [dir]
+  (try (let [f (fs/path dir last-tick-file)]
+         (when (fs/exists? f) (java.time.Instant/parse (str/trim (slurp (str f))))))
+       (catch Exception _ nil)))
+
+(defn- note-tick!
+  "Records that the tick ran, at most every five minutes, so relay status
+  can tell a tick that never runs. The data directory may be synced, so
+  it is not rewritten every minute."
+  [dir ^java.time.Instant now]
+  (let [before (last-tick dir)]
+    (when (or (nil? before) (.isBefore before (.minusSeconds now 300)))
+      (try (spit (str (fs/path dir last-tick-file)) (str now))
+           (catch Exception _ nil)))))
 
 (defn- shell-notices
   "What relay status says about the steward's shell: a line when it has
@@ -649,8 +732,14 @@ id public too.")
         state #(inbound/current-state sys)
         lines (fn [ls] {:exit 0 :out ls})]
     (case cmd
-      "status" (lines (render/status (state) zone ((:clock sys)) (:config sys) (pause/recovery-lines (pause-file opts))
-                                     (shell-notices sys)))
+      "status" (let [no-log? (not (log/has-log? dir))
+                     paused (pause/recovery-lines (pause-file opts))]
+                 (lines (render/status (state) zone ((:clock sys)) (:config sys) paused
+                                       (concat (render/setup-notices (:config sys)
+                                                                     {:last-tick (last-tick dir) :now ((:clock sys))
+                                                                      :paused? (boolean (seq paused)) :no-log? no-log?})
+                                               (shell-notices sys))
+                                       {:no-log? no-log?})))
       "inbox" (lines (let [st (state)] (render/inbox st zone (core/unread-memos st core/operator))))
       "ready" (let [all (ready/ready (state) {:limit Integer/MAX_VALUE})
                     shown (if (:all opts) all (take ready-shown all))
@@ -672,8 +761,17 @@ id public too.")
                                    (println "Type your reply, then press Ctrl-D on a new line. (Or pass -m \"...\".)")
                                    (flush))
                                  (slurp *in*)))]
-                (submit! sys :message/reply {:in-reply-to (parse-long id) :text text})
-                (result 0 (str "Sent your reply to message " id ".")))
+                (let [events (submit! sys :message/reply {:in-reply-to (parse-long id) :text text})
+                      ;; A reply to the daily note is done in code, and its
+                      ;; answer is said here rather than as "Sent".
+                      ack (some #(when (and (= "message/created" (:type %))
+                                            (= "daily-note-acted" (get-in % [:data :origin])))
+                                   (:data %))
+                                events)]
+                  (if ack
+                    (apply result (if (pos? (or (:refused ack) 0)) 1 0)
+                           (map #(if (map? %) (:text %) %) (mapcat :items (:sections ack))))
+                    (result 0 (str "Sent your reply to message " id ".")))))
       "memo" (let [[to] more
                    body (or (:message opts) (stdin-text))]
                (when-not to (fail! "usage: relay memo <to> -s <subject> [-m <body>]"))
@@ -719,7 +817,14 @@ id public too.")
       "acp" (let [[r] more]
               (result (serve/acp! sys r {:trace (:trace opts) :socket (:socket opts) :run-dir (:run-dir opts)})))
       "serve" (result (serve/serve! sys {:socket (:socket opts) :run-dir (:run-dir opts)}))
-      "tick" (do (dispatch/tick! sys) (result 0))
+      ;; Said only when it woke someone, so launchd's log of a quiet
+      ;; minute stays empty; by hand in a terminal it always says.
+      "tick" (let [woken (seq (dispatch/tick! sys))]
+               (cond
+                 woken (result 0 (str "Woke " (str/join ", " woken) "; "
+                                      (if (next woken) "they work" "it works") " in the background."))
+                 (System/console) (result 0 "Nobody had anything to do.")
+                 :else (result 0)))
       "facts" (knowledge sys :facts {:topic (first more) :search (:search opts)
                                      :as-of (:as-of opts) :known-at (:known-at opts) :all (:all opts)})
       "fact" (let [[sub a b] more]
@@ -822,15 +927,15 @@ id public too.")
                                                (or (:tail opts) 30))))
       ;; An item's number in the daily note, the one a reply and the client
       ;; use: the latest note's, or the note named after it.
-      ("dismiss" "decline")
+      ("dismiss" "decline" "accept")
       (let [[n note] more
             k (some-> n parse-long)
             m (some-> note parse-long)]
         (when-not k (fail! (str "usage: relay " cmd " <item> [<note>], an item's number in the daily note")))
-        (submit! sys :digest/act (cond-> {:n k :op cmd} m (assoc :message m)))
+        (submit! sys :digest/act (cond-> {:n k :op cmd :via "cli"} m (assoc :message m)))
         (let [st (state)
               msg (if m (core/message st m) (core/latest-note st))]
-          (result 0 (text/visible-line (core/acted-line st msg k)))))
+          (result 0 (text/visible-line (core/acted-line st msg k (:config sys))))))
       ;; The same, or the handle relay changes gives a change no note
       ;; numbered (digest/revert-target).
       "revert"
@@ -839,7 +944,7 @@ id public too.")
         (if change
           (do (submit! sys :change/revert {:change change})
               (result 0 (text/visible-line (digest/undone-line (core/recipe-change-by-seq (state) change)))))
-          (do (submit! sys :digest/act (cond-> {:n n :op "revert"} message (assoc :message message)))
+          (do (submit! sys :digest/act (cond-> {:n n :op "revert" :via "cli"} message (assoc :message message)))
               (let [st (state)
                     msg (if message (core/message st message) (core/latest-note st))]
                 (result 0 (text/visible-line (core/acted-line st msg n)))))))
@@ -899,7 +1004,7 @@ id public too.")
   that loaded, so a file relay cannot read at all is told too. The log
   may be what is wrong, so the alert is not recorded there. Best effort:
   it never throws."
-  [dir problem]
+  [dir problem & [problems]]
   (binding [*out* *err*] (println (str "relay tick: relay.edn cannot be used: " problem)))
   (try
     (let [marker (fs/path dir ".settings-problem")
@@ -908,7 +1013,8 @@ id public too.")
         (let [now (java.time.Instant/now)
               msg (assoc (messages/message {:kind "alert" :urgency "high"
                                             :subject "relay has stopped: relay.edn cannot be used"
-                                            :sections [{:items [problem "Nothing runs until it is fixed."]}]})
+                                            :sections [{:items (conj (vec (or (seq problems) [problem]))
+                                                                     "Nothing runs until it is fixed.")}]})
                          :id 0 :created-at now :labels [])]
           ;; High urgency: quiet hours do not hold it, and no zone is needed.
           (doseq [{:keys [channel]} (messages/route settings nil msg now)]
@@ -970,9 +1076,10 @@ id public too.")
                      "mcp-token" (result 0 (connect/token! dir (first more) (:url opts)))
                      (let [sys (try (inbound/system dir (cond-> {} *clock* (assoc :clock *clock*)))
                                     (catch clojure.lang.ExceptionInfo e
-                                      (when (= "tick" cmd) (report-broken-settings! dir (ex-message e)))
+                                      (when (= "tick" cmd) (report-broken-settings! dir (ex-message e) (:problems (ex-data e))))
                                       (throw e)))]
                        (when (= "tick" cmd)
+                         (note-tick! dir ((:clock sys)))
                          (fs/delete-if-exists (fs/path dir ".settings-problem"))
                          (keep-loaded-messages! dir (:config sys)))
                        (binding [*public* (true? (:public opts))
@@ -1008,6 +1115,41 @@ id public too.")
                                                      (#{\space \tab} (nth l (count head)))))))
                                   entries)))))
 
+(def removed-commands
+  "Commands relay no longer has, and what took their place, so an old
+  habit is told what changed rather than shown the whole help."
+  (let [no-wait "no call waits for you any more, so there is nothing to "]
+    {"holds" "relay holds is gone in this version: no call waits for you any more."
+     "approve" (str "relay approve is gone in this version: " no-wait "approve.")
+     "deny" (str "relay deny is gone in this version: " no-wait "deny.")
+     "release" "relay release is gone in this version: nothing is held back any more."
+     "trust" "relay trust is gone in this version: what you write or paste is yours, and relay treats it so."
+     "review" (str "relay review is gone in this version: relay no longer checks research reports."
+                   " A scout answers with a memo, and relay ready shows what is ready.")
+     "verify" (str "relay verify is gone in this version: relay no longer checks research reports."
+                   " A scout answers with a memo, and relay ready shows what is ready.")
+     "ledger" "relay ledger is gone in this version: relay no longer keeps a ledger. Findings are on your board: relay cards."
+     "trust-level" "relay trust-level is gone in this version: relay no longer keeps trust levels."
+     "brief" "relay brief is gone in this version: the daily note replaces the morning brief. relay note shows it."}))
+
+(defn- main-role-name
+  "The main role's id for the help text: relay.edn's :dead-letter-handler
+  when the data directory and its relay.edn can be read as they are,
+  else steward. Best effort: help never fails for it, and nothing is
+  checked."
+  [opts]
+  (or (try (let [c (edn/read-string (slurp (str (fs/path (data-dir opts) "relay.edn"))))
+                 h (when (map? c) (:dead-letter-handler c))]
+             (when (config/role-id? h) h))
+           (catch Exception _ nil))
+      "steward"))
+
+(defn- help-text
+  "short-usage with the main role in place of steward."
+  [opts]
+  (let [role (main-role-name opts)]
+    (str/replace short-usage "relay memo steward -s" (str "relay memo " role " -s"))))
+
 (defn execute
   "Runs one command line. Returns {:exit :out}, :out being the lines to
   print. Prints nothing itself, except what a command that talks with the
@@ -1018,7 +1160,9 @@ id public too.")
       (and (= "help" cmd) (= "all" (first more)))
       (apply result 0 (str/split-lines usage))
       (or (nil? cmd) (#{"help" "-h" "--help"} cmd))
-      (apply result 0 (str/split-lines short-usage))
+      (apply result 0 (str/split-lines (help-text opts)))
+      (contains? removed-commands cmd)
+      (result 1 (removed-commands cmd))
       ;; A command's own help is printed before anything is loaded: no
       ;; config file, no data directory, so asking never touches them.
       (and (string? cmd) (or (:help opts) (:h opts)))
@@ -1048,6 +1192,8 @@ id public too.")
 (defn -main [& args]
   (let [code (try (run args)
                   (catch clojure.lang.ExceptionInfo e
-                    (binding [*out* *err*] (println (text/visible-line (ex-message e))))
+                    ;; A refusal may list several problems, one to a line.
+                    (binding [*out* *err*] (doseq [line (str/split-lines (str (ex-message e)))]
+                                             (println (text/visible-line line))))
                     (if (or (core/rejection e) (:relay/usage (ex-data e))) 1 2)))]
     (System/exit code)))

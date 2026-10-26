@@ -535,8 +535,10 @@
   (when (image-check? config)
     (cond
       (map? present) (str "relay could not look for the shell's image: " (:error present) ".")
-      (not present) (str "The shell has no image, so the steward cannot use it. relay house build makes it"
-                         " (if Apple's container system is not running, container system start first)."))))
+      (not present) (str "The shell has no image, so "
+                         (or (first (sort (for [[r g] (:grants config) :when (true? (:shell g))] r))) "the steward")
+                         " cannot use it. Make it with:\n  relay house build"
+                         "\nIf Apple's container system is not running, first:\n  container system start"))))
 
 (defn up!
   "Makes sure the container runs with the current settings. Returns

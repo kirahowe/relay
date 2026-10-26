@@ -17,6 +17,7 @@
             [relay.cards :as cards]
             [relay.config :as config]
             [relay.core :as core]
+            [relay.digest :as digest]
             [relay.provenance :as provenance]
             [relay.spend :as spend]
             [relay.text :as text]
@@ -175,13 +176,25 @@
   before it."
   5)
 
+(defn- paragraph
+  "Text for relay status, as lines that fit status-width: each line of
+  `s` wrapped, except one that starts indented, such as a command to
+  copy, which is kept whole on its own line."
+  [s]
+  (mapcat (fn [l] (if (re-find #"^\s" l) [l] (wrap l status-width))) (str/split-lines (str s))))
+
 (defn spend
   "This week's spend per role and the total, against the weekly budget if
-  there is one, and the total of each week before. `weeks` is
-  relay.spend/weekly's result, newest first. A role's id carries its
-  labels."
-  [state weeks budget]
+  there is one, and the total of each week before since the log began.
+  `weeks` is relay.spend/weekly's result, newest first. A role's id
+  carries its labels. `zone` is the operator's."
+  [state zone weeks budget]
   (let [[{:keys [week roles cost-usd unpriced]} & earlier] weeks
+        ;; The week the log began, as spend/weekly counts weeks: in the
+        ;; operator's zone.
+        began (some-> ^Instant (:first-at state) (spend/week-of zone))
+        ;; An empty log has no earlier weeks.
+        earlier (filter #(and began (not (.isBefore ^java.time.LocalDate (:week %) began))) earlier)
         without (fn [n] (when (pos? n) (str ", " n (if (= 1 n) " wake" " wakes") " without a cost")))]
     (concat
      ["" (str "Spend this week, from Monday " week)]
@@ -192,7 +205,41 @@
            (when budget (str " of a " (dollars budget) " weekly budget"))
            (without unpriced))]
      (when (seq earlier)
-       [(str "  earlier weeks: " (str/join ", " (for [w earlier] (str (:week w) " " (dollars (:cost-usd w))))))]))))
+       (map #(str "  " %)
+            (wrap (str "earlier weeks: " (str/join ", " (for [w earlier] (str (:week w) " " (dollars (:cost-usd w))))))
+                  (- status-width 2)))))))
+
+(def tick-overdue-minutes
+  "How long after the last tick relay status says the tick seems
+  stopped. The tick records itself at most every few minutes
+  (relay.cli), so this is well past that."
+  20)
+
+(defn setup-notices
+  "What relay status says about how relay is set up, apart from relay.edn
+  itself: a tick that has never run or seems stopped (`last-tick`, the
+  instant the tick last recorded, or nil; nothing while `paused?`, when
+  a paused tick records nothing and the pause says why, or with
+  `no-log?`), and a mailbox whose replies can never count as the
+  operator's for want of :authserv-id. Each a paragraph, a command on its
+  own indented line. Pure."
+  [config {:keys [last-tick ^Instant now paused? no-log?]}]
+  (concat
+   (when-not (or paused? no-log?)
+     (cond
+       (nil? last-tick)
+       [(str "The tick has never run, so no role is woken. Install its launchd job"
+             " (README: Setup, step 4).")]
+       (.isBefore ^Instant last-tick (.minusSeconds now (* 60 tick-overdue-minutes)))
+       [(str "The last tick was " (quot (.toMinutes (java.time.Duration/between ^Instant last-tick now)) 1)
+             " minutes ago, so no role is woken. Check that its launchd job is loaded:\n"
+             "  launchctl print gui/$(id -u)/relay.tick")]))
+   (for [[n {:keys [kind authserv-id]}] (sort-by (comp str key) (:ingest config))
+         :when (and (= :pop3 kind) (str/blank? authserv-id))]
+     (str "Your replies by mail will not count as yours: the mailbox " n " has no :authserv-id."
+          " Open a mail the agent's address received, find the line Authentication-Results: <id>; ...,"
+          " and set :authserv-id \"<id>\" on " n ". Until then, reply with relay reply or from the"
+          " dashboard."))))
 
 (defn status
   "Roles with their routines and open work, harnesses, the operator's
@@ -201,22 +248,30 @@
   when relay is paused (relay.pause/recovery-lines), or nil, and
   `notices` lines about the house from its edges, such as a shell with no
   image."
-  [state zone ^Instant now & [config paused notices]]
+  [state zone ^Instant now & [config paused notices {:keys [no-log?]}]]
   (concat
    (when paused
      (concat paused [""]))
    ["Roles"]
-   (if (empty? (core/active-role-ids state))
+   (cond
+     ;; A directory with only relay.edn, such as the one an upgrade
+     ;; checks a new file in: init is not what it needs.
+     no-log?
+     (map #(str "  " %) (wrap (str "relay.edn is valid. This directory has no log, so role names are"
+                                   " checked once the file is in place.")
+                              (- status-width 2)))
+     (empty? (core/active-role-ids state))
      ;; One hint: relay init adds the steward to a log with no roles,
      ;; and works from wherever relay is installed.
      ["  No roles yet. relay init adds your steward."]
+     :else
      (mapcat #(role-status state zone now %) (core/active-role-ids state)))
    (when (and config (seq (core/active-role-ids state)))
      (for [id (sort (keys (:grants config)))
            :when (not (core/role state id))]
        (str "  relay.edn grants " id ", but there is no " id " role. Add it: relay add " id
             (when (get-in config [:grants id :public]) " --public") " < its instructions")))
-   (mapcat (fn [line] ["" line])
+   (mapcat (fn [line] (cons "" (paragraph line)))
     (for [[h {:keys [condition paused-until said]}] (sort-by key (:harnesses state))]
      (str "Harness " h ": "
           (if (and paused-until (.isAfter ^Instant paused-until now))
@@ -226,13 +281,13 @@
                    (let [l (str/trim (str/replace (str said) #"\s+" " "))]
                      (str ". " (if (> (count l) 160) (str (subs l 0 160) "...") l)))))
             "available"))))
-   (mapcat (fn [line] ["" line])
+   (mapcat (fn [line] (cons "" (paragraph line)))
            (distinct (keep (fn [[_ problem]] (get-in core/setup-problems [problem :status]))
                            (sort-by key (:tools-broken state)))))
    ;; A setting naming the steward by an id no role has, said plainly.
-   (mapcat (fn [line] ["" line])
+   (mapcat (fn [line] (cons "" (paragraph line)))
            (when config (config/role-name-problems config (core/active-role-ids state))))
-   (mapcat (fn [line] ["" line]) notices)
+   (mapcat (fn [line] (cons "" (paragraph line))) notices)
    ["" (format "Your inbox: %d open%s" (count (core/unread-memos state core/operator))
                (if (seq (core/unread-memos state core/operator)) " (relay inbox shows them)" ""))]
    (for [id (core/active-role-ids state)
@@ -241,7 +296,7 @@
      (text/for-operator (core/id-labels state id) (str "Public role " id " cannot run: " why)))
    (let [budget (get-in config [:budget :weekly-usd])]
      (when (or budget (seq (:wakes state)))
-       (spend state (spend/weekly (vals (:wakes state)) zone now spend-weeks) budget)))
+       (spend state zone (spend/weekly (vals (:wakes state)) zone now spend-weeks) budget)))
    (when-let [recent (seq (take-last 5 (sort-by :id (vals (:wakes state)))))]
      (list* "" "Recent wakes"
            (for [{:keys [id role started-at status outcome crashed chat]} recent]
@@ -527,11 +582,41 @@
              (when (pos? more)
                ["" (str "… and " more " older. relay ready --all shows every one.")])))))))
 
+(defn with-commands
+  "A ready item's wire form with the commands that act on what it numbers
+  (a daily note's \"acts\"), for the command line: each change still to
+  undo ends with how, and a line under it all says how to act on the
+  rest (relay.digest/act-footer). An item done says nothing more."
+  [it]
+  (if-let [acts (seq (get it "acts"))]
+    (let [open (remove #(get % "done") acts)
+          undo (into {} (for [a open :when (= "revert" (get a "op"))] [(get a "line") (get a "n")]))
+          add (fn [i l] (if-let [n (get undo i)] (str l " " (digest/undo-hint :cli n)) l))
+          dismiss (filter #(= "dismiss" (get % "op")) open)
+          footer (when (seq dismiss) (digest/act-footer :cli (some #(get % "offer") dismiss)))
+          secs (when-let [ss (seq (get it "sections"))]
+                 (second (reduce (fn [[i out] s]
+                                   (let [ls (get s "lines")]
+                                     [(+ i (count ls))
+                                      (conj out (assoc s "lines" (vec (map-indexed #(add (+ i %1) %2) ls))))]))
+                                 [0 []] ss)))]
+      (cond-> (assoc it "lines" (cond-> (vec (map-indexed add (get it "lines"))) footer (conj footer)))
+        secs (assoc "sections" (cond-> secs footer (conj {"heading" nil "lines" [footer]})))))
+    it))
+
+(declare ready-one*)
+
 (defn ready-one
   "One ready item from its wire form, whole: nothing is cut. Lines are
   at most ready-width characters; text that came from elsewhere is
-  indented, so it never starts a line of the screen's own."
-  [{:strs [title lines from replies start at] :as it} zone now]
+  indented, so it never starts a line of the screen's own. A daily note
+  says how to act on its items (with-commands)."
+  [it zone now]
+  (let [{:strs [title lines from replies start at] :as it} (with-commands it)]
+    (ready-one* it title lines from replies start at zone now)))
+
+(defn- ready-one*
+  [it title lines from replies start at zone now]
   (let [indent "  "
         room (- ready-width 2)
         para (fn [s] (map #(str indent %) (wrap s room)))]

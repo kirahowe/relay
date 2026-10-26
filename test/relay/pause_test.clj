@@ -70,6 +70,8 @@
         (let [paused (str/split-lines (status))
               header (count (pause/recovery-lines file))]
           (pause/resume! file)
+          ;; A tick that just ran, so nothing is said of it either way.
+          (spit (str data "/.last-tick") (str (java.time.Instant/now)))
           (is (= (str/split-lines (status)) (drop (inc header) paused)))))
       (finally (fs/delete-tree dir)))))
 

@@ -128,7 +128,7 @@
                                           :steward (:dead-letter-handler config)}
                                          role-row)
      :prompt (prompt/wake {:role role-row
-                           :memos (map #(core/memo state %) memos)
+                           :memos (core/prompt-memos state memos)
                            :note note
                            :now (not-before (:now inputs) (:last-at state))
                            :zone (config/zone config)
@@ -829,8 +829,12 @@
         found (some-> (fs/which program) str)]
     (if-not found
       (binding [*out* *err*]
-        (println (str "relay needs the client " program ", and it is not installed. "
-                      "Install relay-tui, or name another ACP client with :client in relay.edn."))
+        (println (if (= "relay-tui" program)
+                   (str "relay-tui is not built. Clone https://github.com/kirahowe/relay-tui next to relay"
+                        " and build it with make -C ../relay-tui build, then run relay init again or set"
+                        " :client in relay.edn to its full path.")
+                   (str "relay needs the client " program ", and it is not installed. Install it, or name"
+                        " another ACP client with :client in relay.edn.")))
         1)
       (with-signals terminal-signals
         #(:exit (apply p/shell {:continue true}
@@ -845,8 +849,11 @@
   note's role wrote for it. Returns the events appended, or nil when no
   note is due."
   [{:keys [config] :as sys} state ^Instant t]
-  (when-let [date (digest/due-date (digest/at-time config) (config/zone config) t (core/daily-date state))]
-    (inbound/submit! sys {:type :digest/compose :actor core/dispatcher :args {:date (str date)}})))
+  (let [at (digest/at-time config) zone (config/zone config)]
+    (when-let [date (digest/due-date at zone t (core/daily-date state))]
+      ;; Its writer may still be reading what came in this morning.
+      (when-not (digest/waits? at zone date t (core/note-writer-busy? state config))
+        (inbound/submit! sys {:type :digest/compose :actor core/dispatcher :args {:date (str date)}})))))
 
 (defn announce-github!
   "Sends one message for the new GitHub items from people that came in

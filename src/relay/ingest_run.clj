@@ -24,7 +24,8 @@
             [relay.ics-feed :as ics-feed]
             [relay.inbound :as inbound]
             [relay.ingest :as ingest]
-            [relay.mailbox :as mailbox])
+            [relay.mailbox :as mailbox]
+            [relay.text :as text])
   (:import (java.io InputStream)
            (java.time Instant)))
 
@@ -215,6 +216,39 @@
       1 (first xs)
       (str (str/join ", " (pop xs)) " and " (peek xs)))))
 
+(defn- named
+  "Up to three names, each cut to 40 characters and never a link (an
+  outsider wrote them), then how many more."
+  [names]
+  (let [cut #(let [s (str/trim (str %))] (if (> (count s) 40) (str (subs s 0 39) "…") s))
+        shown (map (comp text/defang cut) (take 3 names))
+        more (- (count names) 3)]
+    (str (str/join ", " shown) (when (pos? more) (str " and " more " more")))))
+
+(defn- after-prefix [subject]
+  (str/trim (or (second (re-find #"^[^:]*:\s*(.*)$" (str subject))) subject)))
+
+(defn came-in
+  "What a poll's memos brought in, in a few words for relay poll: the
+  events of a calendar, the issues and pull requests of each repository,
+  the subjects of mail. Pure."
+  [{:keys [kind]} memos]
+  (case kind
+    :ics (str/join "; " (for [{:keys [subject body]} memos
+                              :let [names (keep #(second (re-find #"^(?:New|Changed): (.+)$" %))
+                                                (str/split-lines (str body)))]]
+                          (str (after-prefix subject) (when (seq names) (str " (" (named names) ")")))))
+    :github (str/join "; " (for [{:keys [subject body]} memos
+                                 :let [repo (second (re-find #"^GitHub ([^:]+):" (str subject)))
+                                       items (for [l (str/split-lines (str body))
+                                                   :let [[_ n user] (re-find #"^New (?:issue|pull request) #(\d+) by (\S+):" l)]
+                                                   :when n]
+                                               (str "#" n " by " user))]]
+                             (str (after-prefix subject) (when repo (str " in " repo))
+                                  (when (seq items) (str " (" (named items) ")")))))
+    (str (count memos) (if (= 1 (count memos)) " new mail" " new mails")
+         " (" (named (map :subject memos)) ")")))
+
 (defn poll-line
   "What relay poll says for one source: `events` the poll appended (nil
   when it did not poll), and `started` the GitHub repositories it saw for
@@ -222,7 +256,8 @@
   source's recorded failure when this poll failed the same way. Pure."
   ([source-name src events started] (poll-line source-name src events started nil))
   ([source-name src events started still]
-   (let [memos (count (filter #(= "memo/sent" (:type %)) events))
+   (let [sent (map :data (filter #(= "memo/sent" (:type %)) events))
+         memos (count sent)
          failed (first (filter #(#{"ingest/failed" "error"} (:type %)) events))]
      (str source-name ": "
           (cond
@@ -233,7 +268,7 @@
             (and (zero? memos) (seq started))
             (str "now watching " (and-list started) "; new issues and pull requests show up from the next check.")
             (zero? memos) "nothing new."
-            :else (str memos " new memo" (when (> memos 1) "s") " for " (:to src) "."))))))
+            :else (str (came-in src sent) "."))))))
 
 (defn poll-now!
   "Polls the named source, or every one, now, due or not (relay poll).

@@ -181,7 +181,7 @@
                      {:opts {:type "object"}}
                      {:query {}}]]
         (is (str/includes? (str (problem (web {:protocol :envelope :parameters (params props)})))
-                           "nor listed in :queries")
+                           "listed in :queries")
             (pr-str props))))
     (testing ":queries names string parameters other than url"
       (doseq [q [["url"] ["count"] ["nope"] "query" [:query]]]

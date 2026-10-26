@@ -148,6 +148,12 @@
 (defn initialized? [data-dir]
   (fs/exists? (fs/path data-dir "relay.edn")))
 
+(defn has-log?
+  "Whether `data-dir` has a log (init! makes it), rather than only a
+  relay.edn, such as a scratch directory a new relay.edn is checked in."
+  [data-dir]
+  (fs/directory? (log-dir data-dir)))
+
 (defn transact!
   "The only way anything is written. Under the lock, calls `(decide events)`
   with every event so far; it returns a sequence of new events as maps of

@@ -11,6 +11,7 @@
   (:require [relay.channels :as channels]
             [relay.config :as config]
             [relay.core :as core]
+            [relay.ingest :as ingest]
             [relay.log :as log]
             [relay.mail :as mail]
             [relay.messages :as messages]
@@ -81,7 +82,7 @@
                  (nil? channel) {:error (str "relay.edn no longer has the channel " channel-name ".") :final true}
                  :else (try (send! channel msgs #(core/message state %)
                                    {:mailed? #(= :delivered (get-in (core/message state %) [:deliveries channel-name :status]))
-                                    :replies? (boolean (some #(= :pop3 (:kind (val %))) (:ingest config)))})
+                                    :replies? (ingest/reads-replies? config)})
                             {:ok true}
                             (catch Exception e {:error (or (ex-message e) (str (class e)))})))]
     (when result

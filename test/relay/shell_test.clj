@@ -485,10 +485,12 @@
         said? (fn [out] (filter #(str/includes? % "relay house build") out))]
     (is (empty? (said? (status))) "the image is there")
     (fs/delete (str *dir* "/runner/image"))
-    (let [lines (said? (status))]
+    (let [out (status)
+          lines (said? out)]
       (is (= 1 (count lines)))
-      (is (str/includes? (first lines) "The shell has no image"))
-      (is (str/includes? (first lines) "container system start")))
+      (is (= "  relay house build" (first lines)) "the command on a line of its own, to copy")
+      (is (str/includes? (str/join " " out) "The shell has no image"))
+      (is (some #{"  container system start"} out)))
     (testing "without a role granted the shell, there is nothing to say"
       (spit (str (:data-dir sys) "/relay.edn")
             (pr-str (assoc base :house {:runner [(str *dir* "/fake-container")]} :grants {"scout" {:public true :tools ["web"]}})))

@@ -177,6 +177,15 @@
         ;; The URL of a private calendar is a secret, so it is not quoted.
         (str where " has a :url that cannot be used: " (url-problem url "https" "http") ".")))))
 
+(defn reads-replies?
+  "Whether a reply by mail can count as the operator's: some mailbox
+  source has the :authserv-id relay checks her mail's
+  Authentication-Results against. Without one no mail is verified, so a
+  mail does not ask to be answered by reply."
+  [config]
+  (boolean (some (fn [[_ src]] (and (= :pop3 (:kind src)) (not (str/blank? (:authserv-id src)))))
+                 (:ingest config))))
+
 (defn settings-problem
   "What is wrong with relay.edn's :ingest, or nil."
   [ingest public?]

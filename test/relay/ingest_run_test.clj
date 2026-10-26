@@ -242,7 +242,7 @@
     (try
       (inbound/submit! sys {:type :role/add :actor core/operator :args {:id "steward" :title "Steward" :instructions "x"}})
       (testing "relay poll checks it now and says what came in"
-        (is (= {:exit 0 :out ["cal: 1 new memo for steward."]}
+        (is (= {:exit 0 :out ["cal: 1 new (Interview, Thu 2026-10-29 14:00 to 15:00)."]}
                (update (cli/execute ["--data" (:data-dir sys) "poll"]) :out vec)))
         (is (= {:exit 0 :out ["cal: nothing new."]} (update (cli/execute ["--data" (:data-dir sys) "poll" "cal"]) :out vec)))
         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no source nope"

@@ -94,16 +94,31 @@
         wake (fn [id role cost] {:id id :role role :outcome "ran" :status :ended :started-at at :ended-at at
                                  :cost-usd cost})
         state (-> core/empty-state
-                  (assoc :wakes {1 (wake 1 "hub" 0.5) 2 (wake 2 "hub" 0.25) 3 (wake 3 "clerk" nil)
+                  (assoc :first-at (Instant/parse "2026-09-01T00:00:00Z")
+                         :wakes {1 (wake 1 "hub" 0.5) 2 (wake 2 "hub" 0.25) 3 (wake 3 "clerk" nil)
                                  4 (assoc (wake 4 "clerk" 1.0) :ended-at (Instant/parse "2026-10-06T12:00:00Z"))}))
         lines (vec (render/status state utc t0 {:budget {:weekly-usd 15}}))
-        section (take 5 (drop-while #(not (str/starts-with? % "Spend this week")) lines))]
+        section (take 6 (drop-while #(not (str/starts-with? % "Spend this week")) lines))]
     (is (= ["Spend this week, from Monday 2026-10-12"
             "  clerk                $0.00, 1 wake without a cost"
             "  hub                  $0.75"
             "  total                $0.75 of a $15.00 weekly budget, 1 wake without a cost"
-            "  earlier weeks: 2026-10-05 $1.00, 2026-09-28 $0.00, 2026-09-21 $0.00, 2026-09-14 $0.00"]
+            "  earlier weeks: 2026-10-05 $1.00, 2026-09-28 $0.00,"
+            "  2026-09-21 $0.00, 2026-09-14 $0.00"]
            section))
+    (testing "only weeks since the log began are listed"
+      (let [earlier #(filter (fn [l] (str/includes? l "earlier weeks")) (render/status (assoc state :first-at %) utc t0))]
+        (is (= ["  earlier weeks: 2026-10-05 $1.00"] (earlier (Instant/parse "2026-10-07T09:00:00Z"))))
+        (is (empty? (earlier (Instant/parse "2026-10-12T09:00:00Z"))) "a log begun this week has no earlier weeks"))
+      (testing "in the operator's zone: a log begun late on a Sunday west of UTC keeps that week"
+        (let [halifax (java.time.ZoneId/of "America/Halifax")
+              ended (fn [id iso cost] {:id id :role "hub" :outcome "ran" :status :ended :cost-usd cost
+                                       :started-at (Instant/parse iso) :ended-at (Instant/parse iso)})
+              st (assoc core/empty-state :first-at (Instant/parse "2026-10-19T01:00:00Z")
+                        :wakes {1 (ended 1 "2026-10-19T02:00:00Z" 4.25) 2 (ended 2 "2026-10-21T12:00:00Z" 1.0)})]
+          (is (= ["  earlier weeks: 2026-10-19 $1.00, 2026-10-12 $4.25"]
+                 (filter #(str/includes? % "earlier weeks")
+                         (render/status st halifax (Instant/parse "2026-10-27T12:00:00Z"))))))))
     (testing "without a budget, the total stands alone"
       (is (some #{"  total                $0.75, 1 wake without a cost"} (render/status state utc t0))))
     (testing "a cost under a cent is not shown as nothing"
@@ -198,6 +213,8 @@
       (let [printed (with-out-str
                       (is (= {:exit 0 :out ["Nothing waiting."]} (cli/execute ["--data" data "inbox"])))
                       (is (= ["Roles" "  No roles yet. relay init adds your steward."
+                              "" "The tick has never run, so no role is woken. Install its"
+                              "launchd job (README: Setup, step 4)."
                               "" "Your inbox: 0 open"]
                              (:out (cli/execute ["--data" data "status"]))))
                       (testing "an unknown command says so, shows the short usage and fails"
@@ -275,3 +292,28 @@
     (is (str/starts-with? (lines (inc i)) "            from the web page") (lines (inc i)))
     (is (every? #(<= (count %) 60) (take-while #(str/starts-with? % "            ") (drop (inc i) lines))))
     (is (some #{"      open  [3] GitHub kira/shelf: 1 new"} lines) (pr-str lines))))
+
+(deftest status-says-what-is-not-set-up-in-lines-that-fit-a-phone
+  (let [now (Instant/parse "2026-10-26T12:00:00Z")
+        notices #(render/setup-notices %1 (merge {:now now} %2))]
+    (testing "a tick that has never run, or stopped"
+      (is (str/starts-with? (first (notices {} {:last-tick nil})) "The tick has never run"))
+      (is (empty? (notices {} {:last-tick (.minusSeconds now 300)})))
+      (is (str/starts-with? (first (notices {} {:last-tick (.minusSeconds now 3600)})) "The last tick was 60 minutes ago"))
+      (is (empty? (notices {} {:last-tick nil :paused? true})) "a pause says it itself")
+      (is (empty? (notices {} {:last-tick nil :no-log? true})) "nor in a directory that only checks relay.edn"))
+    (testing "a mailbox with no :authserv-id"
+      (let [[n] (notices {:ingest {"mailbox" {:kind :pop3 :to "steward"}}} {:last-tick now})]
+        (is (str/includes? n "the mailbox mailbox has no :authserv-id"))
+        (is (str/includes? n "Authentication-Results")))
+      (is (empty? (notices {:ingest {"mailbox" {:kind :pop3 :authserv-id "mx.example.org"}}} {:last-tick now}))))
+    (testing "every status line fits 60 columns, commands on their own line"
+      (let [state (assoc core/empty-state :tools-broken {"web" "search-key"})
+            lines (render/status state utc now {:ingest {"mailbox" {:kind :pop3 :to "steward"}}} nil
+                                 (notices {:ingest {"mailbox" {:kind :pop3 :to "steward"}}} {:last-tick nil}))]
+        (is (every? #(<= (count %) 60) lines) (pr-str (remove #(<= (count %) 60) lines)))
+        (is (some #{"  security add-generic-password -a \"$USER\" -s relay-brave -w"} lines))))
+    (testing "a directory with only relay.edn is not told to run init"
+      (let [lines (render/status core/empty-state utc now {} nil nil {:no-log? true})]
+        (is (not-any? #(str/includes? % "relay init") lines))
+        (is (some #(str/includes? % "relay.edn is valid") lines))))))
