@@ -236,12 +236,27 @@ id public too.")
   "Whether what the operator writes is public: --public."
   false)
 
+(def ^:dynamic *reports*
+  "An atom holding the sanitizing reports of what the operator wrote in
+  this command, or nil outside a command. run-command binds it and tells
+  the operator what changed."
+  nil)
+
+(defn- sanitized
+  "x, a string or data holding strings, cleaned of hidden characters
+  (relay.text/sanitize-input). What changed is told to the operator when
+  the command ends."
+  [x]
+  (let [{:keys [value report]} (text/sanitize-input x)]
+    (when *reports* (swap! *reports* conj report))
+    value))
+
 (defn- submit!
   "Submits the operator's command. What the operator writes at the
   command line is theirs, so it carries the labels of that entry point:
-  none (I5)."
+  none (I5). Its text is sanitized first (I6)."
   [sys type args]
-  (inbound/submit! sys {:type type :actor core/operator :args args
+  (inbound/submit! sys {:type type :actor core/operator :args (sanitized args)
                         :labels (core/entry-labels :command-line) :public *public*}))
 
 (defn- run-tool
@@ -299,8 +314,8 @@ id public too.")
 (defn- operator-card! [sys type args]
   ;; Whatever the operator writes on a card is the operator's: no labels,
   ;; never public, whatever --public says.
-  (inbound/submit! sys {:type type :actor core/operator :args args :labels (core/entry-labels :command-line)
-                        :public false}))
+  (inbound/submit! sys {:type type :actor core/operator :args (sanitized args)
+                        :labels (core/entry-labels :command-line) :public false}))
 
 (def ^:private card-options
   "What relay card reads, and the options every command may be given."
@@ -443,7 +458,7 @@ id public too.")
       "retry" (let [[r] more]
                 (result 0 (str (count (submit! sys :memo/retry {:role r})) " memo(s) requeued")))
       "wake" (let [[r] more
-                   woke (dispatch/wake! sys r {:note (:note opts) :dispatched (:dispatched opts)
+                   woke (dispatch/wake! sys r {:note (sanitized (:note opts)) :dispatched (:dispatched opts)
                                                :public (:public opts)})]
                {:exit (if (#{:ran :idle} (:result woke)) 0 1) :out (render/wake-result woke)})
       :dashboard (result (dispatch/dashboard! sys (:open opts) {:data (when (:data opts) (str (fs/absolutize dir)))}))
@@ -614,6 +629,7 @@ id public too.")
       (when (contains? opts :untrusted)
         (fail! "relay has no --untrusted: what you write or paste is yours, and relay treats it so."))
       (let [dir (data-dir opts)
+            reports (atom [])
             result (case cmd
                      "init" (init! dir)
                      ;; Needs only the connection file and the keychain, so a
@@ -624,8 +640,11 @@ id public too.")
                                       (when (= "tick" cmd) (report-broken-settings! dir (ex-message e)))
                                       (throw e)))]
                        (when (= "tick" cmd) (fs/delete-if-exists (fs/path dir ".settings-problem")))
-                       (binding [*public* (true? (:public opts))]
-                         (command sys dir cmd more opts))))]
+                       (binding [*public* (true? (:public opts))
+                                 *reports* reports]
+                         (command sys dir cmd more opts))))
+            told (text/report-lines (apply text/merge-reports text/empty-report @reports))
+            result (cond-> result (seq told) (update :err (fnil into []) told))]
         ;; Everything printed may hold text a role wrote, so nothing
         ;; that could drive the terminal is printed raw. relay tool's
         ;; output is a JSON envelope for the harness, not a terminal.
