@@ -1,0 +1,210 @@
+(ns relay.ready
+  "What is ready for the operator: the client channel's view. Pure.
+
+  A fold over the state gives one list of items, newest first, each
+  something relay prepared or told her, with where it came from in plain
+  words:
+
+    :message   what a role or relay told her (relay.messages), with any
+               answers she gave
+    :draft     what a role prepared with an edit tool that is not relay's
+               own, such as a draft in her account, and where it went
+    :event     an entry on the agent's calendar that has not ended
+    :finding   an active card a role put on her board
+    :move      (B9) a file move, with its undo
+
+  An item is {:id \"message:7\" :kind :at :title :lines [text] :from
+  \"from a mail by x@y\" or nil :labels [..]} and what its kind adds. A
+  kind is one source, a function of the state that gives items (`sources`):
+  a new kind is one more entry there, and a line in `kind-words`. Nothing
+  else in this namespace knows the kinds.
+
+  Labels are provenance. The operator is shown where a thing came from
+  (`provenance`), never a label's name: a label of the form kind:detail,
+  such as mail:x@y or web, reads as \"from a mail by x@y\" or \"from the
+  web\". `wire` is the form a client is sent, with every text already
+  made safe to show."
+  (:require [clojure.string :as str]
+            [relay.cards :as cards]
+            [relay.core :as core]
+            [relay.messages :as messages]
+            [relay.text :as text]))
+
+;; --- where a thing came from
+
+(def ^:private detail-limit 80)
+
+(defn- detail [s]
+  (let [s (messages/squeeze-line s)
+        s (if (> (count s) detail-limit) (str (subs s 0 detail-limit) "…") s)]
+    (text/visible-line s)))
+
+(def ^:private sources-by-kind
+  "How a label of a known kind reads: kind -> (fn [detail-or-nil] words)."
+  {"mail" (fn [d] (if d (str "a mail by " d) "a mail"))
+   "web" (fn [_] "the web")
+   "github" (fn [d] (if d (str "GitHub (" d ")") "GitHub"))
+   "calendar" (fn [d] (if d (str "a calendar (" d ")") "a calendar"))})
+
+(defn outside?
+  "Whether text with these labels came from outside: anything but her
+  own things."
+  [labels]
+  (boolean (some #(not= "private" %) (filter string? labels))))
+
+(defn provenance
+  "Where text with these labels came from, in plain words for the
+  operator, or nil when it is all her own. A label of the form kind:detail
+  (or a bare kind) of a known kind reads by that kind; any other label
+  that marks outside text reads as \"from outside\". No label's name ever
+  appears, and a detail is cut and made visible."
+  [labels]
+  (let [labels (distinct (filter string? labels))
+        known (for [l labels
+                    :let [[_ k d] (re-matches #"([a-z]+)(?::(.+))?" l)
+                          f (get sources-by-kind k)]
+                    :when f]
+                (f (when d (detail d))))
+        outside? (outside? labels)]
+    (cond
+      (seq known) (str/join ", " (map #(str "from " %) (sort (distinct known))))
+      outside? "from outside")))
+
+;; --- the sources
+
+(defn- message-item [state m]
+  {:id (str "message:" (:id m)) :kind :message :at (:created-at m)
+   :message (:id m) :message-kind (:kind m) :urgency (:urgency m) :thread (:thread m)
+   :title (:subject m)
+   :lines (vec (for [sec (:sections m) it (:items sec)] (:text it)))
+   :labels (vec (:labels m))
+   :replies (vec (:replies m))
+   :reply-to (when (core/message-author state m) (:id m))})
+
+(defn- draft-item [p]
+  {:id (str "prepared:" (:id p)) :kind :draft :at (:at p)
+   :title (:title p)
+   :lines (vec (remove str/blank? [(:where p) (:preview p)]))
+   :labels (vec (:labels p))
+   :tool (:tool p)})
+
+(defn- event-item [e]
+  {:id (str "event:" (:id e)) :kind :event :at (:recorded-at e)
+   :title (:title e)
+   :lines (vec (remove str/blank? [(:location e) (:description e)]))
+   :labels (vec (:labels e))
+   :start (:start e) :end (:end e)})
+
+(defn- finding-item [c]
+  (let [p (cards/progress c)]
+    {:id (str "card:" (:id c)) :kind :finding :at (:added-at c)
+     :title (get-in c [:title :text])
+     :lines (vec (when (and p (pos? (:total p))) [(str (:done p) " of " (:total p) " done")]))
+     :labels (vec (cards/text-labels c))
+     :card (:id c)}))
+
+(def sources
+  "Where items come from: functions of the state giving items. B9's file
+  moves add one here."
+  [(fn [state] (map #(message-item state %) (vals (:messages state))))
+   (fn [state] (map draft-item (vals (:prepared state))))
+   (fn [state]
+     (for [e (core/calendar-events state {})] (event-item e)))
+   (fn [state]
+     (for [c (core/board state false)
+           :when (not= core/operator (:owner c))]
+       (finding-item c)))])
+
+(def default-limit 60)
+
+(defn ready
+  "Everything ready for the operator in `state`: the newest `limit`
+  items (60 unless given), newest first, ties by id."
+  ([state] (ready state {}))
+  ([state {:keys [limit] :or {limit default-limit}}]
+   (->> sources
+        (mapcat #(% state))
+        (sort-by (juxt (comp - #(.toEpochMilli ^java.time.Instant %) :at) :id))
+        (take limit)
+        vec)))
+
+;; --- what an edit call prepared
+
+(def ^:private title-keys ["subject" "title" "name" "summary"])
+(def ^:private preview-keys ["body" "text" "content" "description"])
+
+(defn prepared-args
+  "The :prepared/record args for a tool call {:call :tool :input :result},
+  from the call's input and result: its title is the input's subject,
+  title, name or summary, else the tool's name in words; where it went is
+  the first line of the tool's result; the preview is the input's body,
+  text, content or description. Pure and total."
+  [{:keys [call tool input result]}]
+  (let [input (if (map? input) input {})
+        pick (fn [ks] (first (for [k ks :let [v (get input k)]
+                                   :when (and (string? v) (not (str/blank? v)))]
+                               v)))
+        first-line (first (remove str/blank? (str/split-lines (str result))))]
+    {:call call :tool tool
+     :title (or (pick title-keys) (str/replace (str tool) #"[-_]+" " "))
+     :where (or first-line "")
+     :preview (pick preview-keys)}))
+
+;; --- the wire
+
+(defn- safe
+  "Text for the operator: from outside its links are broken, and every
+  hidden character is made visible. The \"from\" line says where it came
+  from, so the text carries no mark of its own."
+  [labels s]
+  (text/visible (if (outside? labels) (text/defang s) (str s))))
+
+(defn- safe-line [labels s]
+  (text/visible-line (if (outside? labels) (text/defang (messages/squeeze-line s)) (messages/squeeze-line s))))
+
+(defn- wire-item [{:keys [labels] :as it}]
+  (let [from (provenance labels)]
+    (cond-> {"id" (:id it) "kind" (name (:kind it)) "at" (str (:at it))
+             "title" (safe-line labels (:title it))
+             "lines" (mapv #(safe labels %) (:lines it))
+             "from" from
+             "outsider" (outside? labels)}
+      (:message it) (assoc "message" (:message it) "messageKind" (:message-kind it)
+                           "urgency" (:urgency it) "thread" (:thread it)
+                           "replyTo" (:reply-to it)
+                           "replies" (mapv (fn [r] {"at" (str (:at r)) "text" (safe [] (:text r))})
+                                           (:replies it)))
+      (:start it) (assoc "start" (str (:start it)) "end" (str (:end it)))
+      (:card it) (assoc "card" (:card it)))))
+
+(defn wire
+  "An item as a client is sent it: string keys, every text safe to show,
+  \"from\" in plain words, \"outsider\" true when it came from outside."
+  [it]
+  (wire-item it))
+
+(defn answer
+  "The _relay/ready answer: {\"rev\" log-rev \"items\" [wire form]}."
+  [state rev opts]
+  {"rev" rev "items" (mapv wire (ready state opts))})
+
+(defn by-id
+  "Wire items as a map from id to item."
+  [items]
+  (into {} (map (juxt #(get % "id") identity)) items))
+
+(defn changed
+  "The _relay/ready/changed params for a subscriber last sent `sent` (the
+  wire items by id), given the items now: the new or changed ones, and
+  the ids of those gone. Nil when nothing differs."
+  [rev sent current]
+  (let [now (by-id current)
+        new (vec (remove #(= (get sent (get % "id")) %) current))
+        gone (vec (sort (remove #(contains? now %) (keys sent))))]
+    (when (or (seq new) (seq gone))
+      {"rev" rev "items" new "gone" gone})))
+
+(defn apply-changed
+  "What a client holds after `params` (changed): its items by id."
+  [held {:strs [items gone]}]
+  (as-> held h (apply dissoc h gone) (merge h (by-id items))))

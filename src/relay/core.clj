@@ -114,6 +114,9 @@
    ;; Each ingest source's record: what it has brought in, by key and
    ;; version, where it got to, and whether it is failing.
    :ingest {}
+   ;; What roles prepared with edit tools for the operator (relay.ready),
+   ;; and the calls they came from, so a transcript read twice records once.
+   :prepared {} :prepared-calls {}
    ;; Every label any event has carried, which bounds what a session that
    ;; could read anything in relay may have seen.
    :seen-labels []
@@ -1085,6 +1088,28 @@
                (-> (or r {:seen {}})
                    (update :failing (fn [f] {:since (or (:since f) (inst at)) :error (:error data)
                                              :told (boolean (:told f))}))))))
+
+;; What a role prepared for the operator with an edit tool that is not
+;; relay's own: a draft in her account, say. relay.dispatch reads the
+;; calls out of a session and records each one (:prepared/record), so
+;; the client's ready view (relay.ready) can say what is waiting and
+;; where.
+(defmethod evolve* "prepared/recorded" [state {:keys [seq at actor data labels]}]
+  (-> state
+      (assoc-in [:prepared seq] (assoc (select-keys data [:tool :call :title :where :preview])
+                                       :id seq :at (inst at) :role actor :labels (union labels)))
+      (assoc-in [:prepared-calls (str (:tool data) "/" (:call data))] seq)))
+
+;; The operator's answer to a message, from a channel. It is threaded to
+;; the message it answers, which the client then shows as answered.
+(defmethod evolve* "reply/received" [state {:keys [seq at data]}]
+  (let [{:keys [in-reply-to channel text]} data]
+    (if (get-in state [:messages in-reply-to])
+      (-> state
+          (update-in [:messages in-reply-to :replies] (fnil conj [])
+                     {:id seq :at (inst at) :channel channel :text text})
+          (assoc-in [:messages in-reply-to :rev] seq))
+      state)))
 
 (defn- fact-version [{:keys [seq at actor labels public]} change {:keys [topic text valid-from valid-to]}]
   {:seq seq :recorded-at (inst at) :actor actor :change change :labels (union labels) :public (true? public)
@@ -2209,6 +2234,15 @@
   [state id]
   (get-in state [:messages id]))
 
+(defn message-author
+  "The role that told the operator a message, or nil when relay did: a
+  role's tell_operator, or the role that sent a memo to the operator. The
+  role may no longer be active."
+  [state m]
+  (or (:role m)
+      (when-let [from (get-in state [:memos (:memo m) :from])]
+        (when (get-in state [:roles from]) from))))
+
 (defn- deliveries! [{:keys [state]} channel ids]
   (when-not (and (string? channel) (sequential? ids) (seq ids)
                  (every? #(get-in state [:messages % :deliveries channel]) ids))
@@ -2377,6 +2411,49 @@
              "It keeps trying. When it works again, what came in meanwhile arrives then."]
             :source source)
       tx)))
+
+(def reply-limit 4000)
+
+(defmethod decide* :message/reply [{:keys [state actor] :as tx} {{:keys [in-reply-to text]} :args}]
+  ;; The operator answers a message from a channel. It is recorded as a
+  ;; reply to that message, and goes to the role that told her as a memo
+  ;; from her, so it is trusted (I5) and the role is woken to answer.
+  (when-not (= operator actor)
+    (reject! :forbidden "Only the operator answers a message."))
+  (let [m (or (message state in-reply-to) (reject! :not-found (str "There is no message " in-reply-to ".")))
+        role (message-author state m)
+        text (require-text text "A reply")]
+    (when-not role
+      (reject! :invalid "That message came from relay itself, so there is nobody to answer it."))
+    (when-not (active-role? state role)
+      (reject! :not-found (str "The one who told you that is no longer here.")))
+    (when (> (count text) reply-limit)
+      (reject! :invalid (str "A reply is at most " reply-limit " characters.")))
+    (operator-public! tx role "A reply")
+    (-> tx
+        (emit "reply/received" {:channel "client" :in-reply-to in-reply-to :text text})
+        (send-memo {:from operator :to role
+                    :subject (messages/clip-subject (str "Re: " (:subject m)))
+                    :body (str text "\n\nThis answers your message " in-reply-to ". To answer back, use"
+                               " tell_operator with in_reply_to " in-reply-to ".")}
+                   (:labels m)))))
+
+(defmethod decide* :prepared/record [{:keys [state] :as tx} {{:keys [call tool title where preview]} :args}]
+  ;; Written as the role whose session made the call, with the labels
+  ;; of what that session had seen, like anything a role writes.
+  (caller-role! tx)
+  (when (public-actor? tx)
+    (reject! :forbidden "A public role prepares nothing for the operator."))
+  (when-not (and (string? call) (not (blank? call)) (string? tool) (not (blank? tool)))
+    (reject! :invalid "A prepared item names the call and the tool."))
+  (let [line (fn [s n] (messages/squeeze-line (let [s (str s)] (subs s 0 (min n (count s))))))
+        title (line title 200)]
+    (when (blank? title) (reject! :invalid "A prepared item needs a title."))
+    (if (get-in state [:prepared-calls (str tool "/" call)])
+      tx
+      (emit tx "prepared/recorded"
+            (cond-> {:call call :tool tool :title title :where (line where 400)}
+              (not (blank? preview)) (assoc :preview (let [p (str/trim (str preview))] (subs p 0 (min 600 (count p))))))))))
 
 ;; the morning brief (relay.brief composes it)
 
