@@ -94,13 +94,24 @@ contract HarnessAdapter {
         -- needs_attention. A wake that started always ends.
 }
 
-contract NotificationChannel {
-    push: (notification: Notification) -> Boolean
+contract Channel {
+    -- One configured channel (relay.edn :messages :channels): an email
+    -- or a push. Each is a pure renderer (relay.channels) and a thin
+    -- delivery edge (relay.mail, relay.push). Several messages due on
+    -- one channel at once are sent as one.
+    deliver: (messages: List<Message>) -> Boolean
 
     @invariant FailureIsNotFatal
-        -- A push that fails is recorded as failed and otherwise
-        -- dropped. The thing it announced is already in the log, so
-        -- nothing is lost.
+        -- A delivery that fails is recorded as failed and tried again
+        -- later. The message is already in the log and in the client,
+        -- so nothing is lost.
+
+    @invariant OnlyToItsDestination
+        -- A delivery goes only to the channel's configured destination.
+        -- An email has exactly one recipient, the configured operator
+        -- address, from the configured agent address, no Cc or Bcc,
+        -- text/plain only, and no header the model chose except the
+        -- subject, encoded on one line (I2).
 }
 
 contract Tools {
@@ -329,10 +340,17 @@ enum CallerKind { operator | dispatcher | role }
 enum HarnessCondition { available | limited | unreachable | needs_attention }
 enum HarnessOutcome { ran | limited | unreachable | needs_attention }
 enum DeadLetterReason { never_closed | blocked | recipient_removed }
-enum NotificationKind {
-    memo_for_operator | work_abandoned | runaway_guard_tripped
+enum MessageKind { note | alert | digest | reply }
+enum Urgency { low | normal | high }
+-- What relay was telling, for its own records; the operator never sees
+-- it. A notification an older relay recorded folds into a message with
+-- its kind as the origin and nothing left to deliver.
+enum MessageOrigin {
+    told | memo_for_operator | work_abandoned | runaway_guard_tripped
     | harness_needs_attention | harness_unreachable
     | budget_reached | brief | tools_unavailable | tool_changed | shown
+    | session_forbidden | result_refused | public_role_cannot_run | public_role_can_run
+    | turn_unrecorded | conversation_line_dropped
 }
 enum ToolClass { read | write | edit | egress }
 enum Label { private | contaminated }
@@ -706,11 +724,35 @@ entity DeadLetter {
     }
 }
 
-entity Notification {
-    -- The id is the seq of the event that recorded it.
-    kind: NotificationKind
-    title: String
-    body: String
+value Section {
+    heading: String?
+    items: List<Item>
+}
+
+value Item {
+    text: String
+    refs: List<Ref>
+    labels: Set<Label>
+}
+
+entity Message {
+    -- What relay tells the operator, one data model whatever carries
+    -- it. The id is the seq of the event that recorded it.
+    kind: MessageKind
+    urgency: Urgency
+    -- One line.
+    subject: String
+    -- Each section an optional heading and items; each item its text,
+    -- the refs it drew on, and where it came from (its labels, shown to
+    -- the operator in plain words). At most 12 sections of at most 50
+    -- items of at most 4000 characters: tell_operator is refused past
+    -- them, and relay's own messages are cut to fit, saying how many
+    -- items or sections were left out.
+    sections: List<Section>
+    in_reply_to: Message?
+    -- The first message of its thread.
+    thread: Message
+    origin: MessageOrigin
     about: Role?
     harness: Harness?
     memo: Memo?
@@ -722,22 +764,28 @@ entity Notification {
     -- For brief: the day it covers.
     date: Date?
     created_at: Timestamp
-    delivery: pending | delivered | failed
+    -- One per configured channel its route names, with when it is due
+    -- (route). The client channel is not among them: every message is
+    -- always the client's to show (_relay/messages).
+    deliveries: List<Delivery>
+}
 
-    -- Failed pushes so far, and when the next is due; none once relay
+entity Delivery {
+    message: Message
+    channel: String
+    due: Timestamp
+    status: pending | delivered | failed
+    -- Failed tries so far, and when the next is due; none once relay
     -- has given up.
     attempts: Integer
     retry_at: Timestamp?
 
-    transitions delivery {
+    transitions status {
         pending -> delivered
         pending -> failed
         failed -> delivered
         terminal: delivered
     }
-
-    is_stranded: delivery = pending and created_at + config.stranded_after < now
-    is_due_again: delivery = failed and retry_at != null and retry_at <= now
 }
 
 entity Brief {
@@ -977,8 +1025,8 @@ config {
     runaway_wakes: Integer = 30
     runaway_window: Duration = 1.hour
 
-    -- How long a notification may sit unpushed before the tick pushes it
-    -- again. Fixed in the dispatcher, not a setting.
+    -- How long a delivery due when its message was made may sit
+    -- undelivered before the tick makes it. Fixed in the dispatcher, not a setting.
     stranded_after: Duration = 2.minutes
 
     -- Limits on what is written.
@@ -991,8 +1039,8 @@ config {
     max_journal_entry_length: Integer = 20000
     max_doc_length: Integer = 500000
 
-    -- How many times a notification is pushed before relay gives up.
-    notification_attempts: Integer = 8
+    -- How many times a delivery is tried before relay gives up.
+    delivery_attempts: Integer = 8
 
     -- What the roles may spend in a week, all together, in US dollars,
     -- from :budget {:weekly-usd n} in the settings. Null for none. relay
@@ -1175,19 +1223,20 @@ rule NotifyOperatorOfMemo {
 
     requires: memo.is_for_operator
 
-    ensures: Notification.created(
-        kind: memo_for_operator,
-        title: memo.subject,
-        body: memo.body,
+    ensures: Message.created(
+        origin: memo_for_operator,
+        kind: note,
+        urgency: normal,
+        subject: memo.subject,
+        sections: [memo.body],
         memo: memo,
         created_at: now,
-        delivery: pending
+        deliveries: route(this, now)
     )
 
     @guidance
-        -- A memo to the operator is the only way anything reaches them
-        -- from a role, and it always notifies, once. The notification
-        -- carries the subject as its title and the body as its text.
+        -- A memo to the operator always becomes a message, once: a
+        -- note with the memo's subject and its body as the one item.
 }
 
 rule PublicItem {
@@ -1420,14 +1469,16 @@ rule EscalateToOperator {
 
     requires: not exists handler or handler.status != active or letter.memo.recipient = handler
 
-    ensures: Notification.created(
-        kind: work_abandoned,
-        title: dead_letter_title(letter),
-        body: dead_letter_report(letter),
+    ensures: Message.created(
+        origin: work_abandoned,
+        kind: alert,
+        urgency: normal,
+        subject: dead_letter_title(letter),
+        sections: [dead_letter_report(letter)],
         about: letter.memo.recipient,
         dead_letter: letter,
         created_at: now,
-        delivery: pending
+        deliveries: route(this, now)
     )
 
     @guidance
@@ -2005,13 +2056,15 @@ rule TellOperatorHarnessNeedsThem {
     requires: wake.tools_error = null
     requires: not harness.operator_told
 
-    ensures: Notification.created(
-        kind: harness_needs_attention,
-        title: harness.name + " needs you before relay can work",
-        body: needs_attention_text(wake),   -- black box: what it said, and that nothing was dropped
+    ensures: Message.created(
+        origin: harness_needs_attention,
+        kind: alert,
+        urgency: high,
+        subject: "relay needs you before it can work",
+        sections: [needs_attention_text(wake)],   -- black box: what it said, and that nothing was dropped
         harness: harness,
         created_at: now,
-        delivery: pending
+        deliveries: route(this, now)
     )
     ensures: harness.operator_told = true
 
@@ -2060,13 +2113,15 @@ rule TakeAChangedTool {
 
     ensures: tool.accepted_tool_digest = wake.tools_error.got
     ensures: wake.role.changed_tool = tool
-    ensures: Notification.created(
-        kind: tool_changed,
-        title: tool.name + " changed",
-        body: tool_changed_text(wake),   -- black box: relay uses the new version, and the role starts afresh with it
+    ensures: Message.created(
+        origin: tool_changed,
+        kind: note,
+        urgency: normal,
+        subject: tool.name + " changed",
+        sections: [tool_changed_text(wake)],   -- black box: relay uses the new version, and the role starts afresh with it
         role: wake.role,
         created_at: now,
-        delivery: pending
+        deliveries: route(this, now)
     )
 
     @guidance
@@ -2105,7 +2160,7 @@ rule ChangedToolAgain {
         -- a random id differs on every connect. relay still takes each
         -- new definition, so a server that settles works at the next
         -- try, but waits a doubling time first and tells the operator
-        -- nothing more: one notification per streak, and no session
+        -- nothing more: one message per streak, and no session
         -- started on every tick.
 }
 
@@ -2116,17 +2171,19 @@ rule TellOperatorToolsUnavailable {
     requires: not takes_changed_tool(wake)
     requires: wake.role.tools_unavailable_session = null
 
-    ensures: Notification.created(
-        kind: tools_unavailable,
-        title: wake.role.id + "'s tools could not be set up",
-        body: tools_unavailable_text(wake),     -- black box: what agentloop said, and relay wake or the settings' digest
+    ensures: Message.created(
+        origin: tools_unavailable,
+        kind: alert,
+        urgency: normal,
+        subject: "Some work could not start: a connection failed",
+        sections: [tools_unavailable_text(wake)],     -- black box: what agentloop said, and relay wake or the settings' digest
         role: wake.role,
         created_at: now,
-        delivery: pending
+        deliveries: route(this, now)
     )
 
     @guidance
-        -- Once per outage. The notification carries the session's
+        -- Once per outage. The message carries the session's
         -- labels.
 }
 
@@ -2196,18 +2253,20 @@ rule TellOperatorOfLongOutage {
     when: DispatcherTicks(lost_wakes)
 
     for harness in Harnesses where condition = unreachable and not operator_told and down_since != null and down_since + config.outage_patience <= now:
-        ensures: Notification.created(
-            kind: harness_unreachable,
-            title: harness.name + " has been unreachable since " + harness.down_since,
-            body: "Every role on it waits, and nothing has been dropped. Work carries on by itself once it is back.",
+        ensures: Message.created(
+            origin: harness_unreachable,
+            kind: alert,
+            urgency: high,
+            subject: "The model service has been unreachable since " + harness.down_since,
+            sections: ["Work waits, and nothing has been dropped. It carries on by itself once the service is back."],
             harness: harness,
             created_at: now,
-            delivery: pending
+            deliveries: route(this, now)
         )
         ensures: harness.operator_told = true
 
     @guidance
-        -- One notification per outage. Reported by the tick, not by the
+        -- One message per outage. Reported by the tick, not by the
         -- failing wake, so it takes the first tick after the patience
         -- has run out.
 }
@@ -2303,13 +2362,15 @@ rule TripRunawayGuard {
 
         ensures:
             role.guard_reported_at = now
-            Notification.created(
-                kind: runaway_guard_tripped,
-                title: role.id + " was stopped by the runaway guard",
-                body: "Its work is waiting and nothing was dropped.",
+            Message.created(
+                origin: runaway_guard_tripped,
+                kind: alert,
+                urgency: high,
+                subject: "relay paused work that kept restarting",
+                sections: ["The work is waiting and nothing was dropped."],
                 about: role,
                 created_at: now,
-                delivery: pending
+                deliveries: route(this, now)
             )
 
     @guidance
@@ -2318,48 +2379,93 @@ rule TripRunawayGuard {
         -- operator is told once per window.
 }
 
--- Notifications
+-- Messages to the operator
 
-rule PushNotification {
-    when: notification: Notification.created
-    ensures: NotificationPushed(notification: notification)
+rule TellOperator {
+    -- tell_operator: a house role tells the operator something. It
+    -- gives the content and the urgency; it never chooses a medium, an
+    -- address or a recipient.
+    when: TellOperator(role, subject, sections, urgency, in_reply_to)
+
+    requires: role.status = active
+    requires: not role.is_public
+    requires: length(subject) <= config.max_subject_length
 
     @guidance
-        -- Notifications are recorded first, as part of the same append
-        -- as whatever caused them, and pushed after it.
+        -- The subject is one line. in_reply_to names a message relay
+        -- sent, or nothing.
+
+    ensures: Message.created(
+        origin: told,
+        kind: if in_reply_to = null: note else: reply,
+        urgency: urgency ?? normal,
+        subject: subject,
+        sections: sections,
+        in_reply_to: in_reply_to,
+        about: role,
+        created_at: now,
+        deliveries: route(this, now)
+    )
+
+    @guidance
+        -- A public role reports back by memo instead. The message
+        -- carries the labels of what the session read.
 }
 
-rule RepushStranded {
+-- route(message, now) is a pure function of relay.edn's :messages:
+-- every configured channel a matching route names (a route matches on
+-- its :kinds and :urgencies, each optional), due now, or at the next
+-- :digest-at for a channel that only :at :digest routes name. Quiet
+-- hours hold any delivery of a message that is not high urgency until
+-- they end; high urgency goes at once.
+
+rule DeliverMessage {
+    when: message: Message.created
+    for delivery in message.deliveries where delivery.due <= now:
+        ensures: DeliveryMade(message, delivery.channel)
+
+    @guidance
+        -- Messages are recorded first, as part of the same append as
+        -- whatever caused them, and delivered after it.
+}
+
+rule DeliverWhatIsDue {
     when: DispatcherTicks(lost_wakes)
 
-    for notification in Notifications where is_stranded or is_due_again:
-        ensures: NotificationPushed(notification: notification)
+    for (channel, messages) in due_deliveries(now):
+        ensures: DeliveryMade(messages, channel)
 
     @guidance
-        -- A notification left pending for over two minutes was
-        -- recorded by a process that stopped before pushing it. A
-        -- failed one is pushed again once its wait is over.
+        -- The tick delivers what was held for quiet hours or the
+        -- digest and has come due, what a process recorded and stopped
+        -- before delivering (pending over two minutes), and what failed
+        -- and is due again. What comes due together on one channel goes
+        -- as one push or one email.
 }
 
-rule NotificationDelivered {
-    when: PushSucceeded(notification)
+rule DeliverySucceeded {
+    when: DeliverySucceeded(messages, channel)
 
-    ensures: notification.delivery = delivered
+    for d in Deliveries where d.channel = channel and d.message in messages:
+        ensures: d.status = delivered
 }
 
-rule NotificationFailed {
-    when: PushFailed(notification, error)
+rule DeliveryFailed {
+    when: DeliveryFailed(messages, channel, error)
 
-    let attempt = notification.attempts + 1
+    let tried = Deliveries where channel = channel and message in messages
+    let attempt = tried.map(d => d.attempts).max + 1
 
-    ensures:
-        notification.delivery = failed
-        notification.attempts = attempt
-        notification.retry_at = if attempt < config.notification_attempts: now + retry_delay(attempt) else: null
+    for d in tried:
+        ensures:
+            d.status = failed
+            d.attempts = attempt
+            d.retry_at = if attempt < config.delivery_attempts: now + retry_delay(attempt) else: null
 
     @guidance
         -- The wait doubles from retry_base up to retry_ceiling, as for a
-        -- memo, and relay gives up after notification_attempts tries.
+        -- memo, and relay gives up after delivery_attempts tries, or at
+        -- once when relay.edn no longer has the channel.
 }
 
 -- Spend
@@ -2377,7 +2483,7 @@ rule WarnOfSpend {
 
     let week = week_of(now)                              -- black box: the WeekSpend holding now
     let total = week.cost_usd.values.sum
-    let told = (Notifications where kind = budget_reached and week = week.week).map(n => n.percent).max ?? 0
+    let told = (Messages where origin = budget_reached and week = week.week).map(n => n.percent).max ?? 0
     let percent = if total >= config.weekly_budget: 100
                   else if total * 100 >= config.weekly_budget * 80: 80
                   else: 0
@@ -2386,15 +2492,17 @@ rule WarnOfSpend {
     requires: wake.cost_usd != null
     requires: percent > told
 
-    ensures: Notification.created(
-        kind: budget_reached,
-        title: if percent = 100: "relay has spent its weekly budget"
+    ensures: Message.created(
+        origin: budget_reached,
+        kind: alert,
+        urgency: normal,
+        subject: if percent = 100: "relay has spent its weekly budget"
                else: "relay has spent 80% of its weekly budget",
-        body: spend_text(total, week.week, config.weekly_budget),   -- black box: the total, the week and the budget
+        sections: [spend_text(total, week.week, config.weekly_budget)],   -- black box: the total, the week and the budget
         week: week.week,
         percent: percent,
         created_at: now,
-        delivery: pending
+        deliveries: route(this, now)
     )
 
     @guidance
@@ -2411,7 +2519,7 @@ rule WarnOfSpend {
 
 -- relay week reports a window of the log: each interruption (a harness
 -- that needs the operator, work given up to the operator) from the event
--- that asked to the event that answered, the notifications sent, each role's wakes and what they
+-- that asked to the event that answered, the messages sent, each role's wakes and what they
 -- cost, health checks on each wake, and the operator's flags. relay
 -- traces exports the same wakes as OpenTelemetry spans, holding no
 -- content. Both are worked out from the log and the run files when
@@ -2452,13 +2560,15 @@ rule SendMorningBrief {
     ensures: Brief.created(date: today, sent: not brief.is_empty, sections: brief.sections, created_at: now)
     ensures:
         if not brief.is_empty:
-            Notification.created(
-                kind: brief,
-                title: brief.title,
-                body: brief.body,
+            Message.created(
+                origin: brief,
+                kind: digest,
+                urgency: normal,
+                subject: brief.title,
+                sections: brief.parts,
                 date: today,
                 created_at: now,
-                delivery: pending
+                deliveries: route(this, now)
             )
 
     @guidance
@@ -2472,9 +2582,9 @@ rule SendMorningBrief {
         -- it is unavailable; a tool relay.edn does not define makes it
         -- say not configured. The brief is empty when no section has an
         -- item or is unavailable, and an empty brief is recorded and
-        -- not pushed. The notification carries the labels of what it
+        -- not sent. The message carries the labels of what it
         -- shows, so a brief with calendar text is marked contaminated
-        -- and its URLs broken when it is pushed. A title or a calendar
+        -- and its URLs broken when it is sent. A title or a calendar
         -- or list name has each run of whitespace made one space and is
         -- cut at 80 code points. cal and rem's escapes are read back
         -- before the push escapes the text once; an escape they never
@@ -3079,7 +3189,7 @@ invariant ARoleCallCarriesItsSessionsLabels {
 
 invariant NoEventDropsWhatItCopies {
     -- An event that copies or quotes text (a dead letter quoting a memo
-    -- and a transcript, a routine's run, a notification) carries that
+    -- and a transcript, a routine's run, a message) carries that
     -- text's labels, whoever writes it, the dispatcher included.
     for event in Events:
         includes_all(event.labels, event.copied_labels)
@@ -3168,19 +3278,19 @@ invariant ASupersededMemoStaysDead {
 
 invariant ADeadLetterNotifiesTheOperatorAtMostOnce {
     -- Each dead letter is passed on exactly once: as a memo to the
-    -- handler, or as one notification to the operator, never both.
+    -- handler, or as one message to the operator, never both.
     for letter in DeadLetters:
-        (Notifications where dead_letter = letter).count <= 1
+        (Messages where dead_letter = letter).count <= 1
 }
 
 invariant EveryMemoToTheOperatorNotifiesOnce {
     for memo in Memos where recipient = null:
-        (Notifications where memo = memo).count = 1
+        (Messages where memo = memo).count = 1
 }
 
 invariant OnlyMemosToTheOperatorNotifyAsMemos {
-    for notification in Notifications where kind = memo_for_operator:
-        notification.memo.recipient = null
+    for message in Messages where origin = memo_for_operator:
+        message.memo.recipient = null
 }
 
 invariant OnlyActiveRolesRun {
@@ -3334,7 +3444,7 @@ surface Clock {
         -- Something outside relay ticks the dispatcher about once a
         -- minute. A tick ends wakes whose process is gone, fires due
         -- routines, trips the runaway guard, reports outages that
-        -- outlasted the patience, pushes notifications left stranded,
+        -- outlasted the patience, delivers messages that are due,
         -- and then starts a wake for each role with work waiting. Last,
         -- it sends the morning brief when one is due.
         -- The first four are one event append in this order; rules are
@@ -3443,18 +3553,23 @@ surface ConversationService {
         -- whenever any of it changes.
 }
 
-surface NotificationBoundary {
+surface MessageBoundary {
     provides:
-        PushSucceeded(notification)
-        PushFailed(notification, error)
+        DeliverySucceeded(messages, channel)
+        DeliveryFailed(messages, channel, error)
+        -- _relay/messages: every message, newest first, then
+        -- _relay/messages/changed for each one made or changed since.
+        ClientMessages(messages)
 
     contracts:
-        demands NotificationChannel
+        demands Channel
 
     @guarantee NothingElseReachesThem
-        -- The operator is told things only through notifications.
+        -- The operator is told things only through messages, and every
+        -- message is in the client whatever its other deliveries did.
         -- They never have to look anywhere to find out whether the
-        -- roles need them.
+        -- roles need them. Nothing they receive names a role, a tool,
+        -- a label or a class unless they asked.
 }
 
 surface TheRecord {

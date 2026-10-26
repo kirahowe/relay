@@ -3,7 +3,7 @@
 relay runs a small set of agent roles for one person, the operator. A hub
 role takes the operator's requests, hands them to other roles, and adds
 roles as jobs need owners. Roles talk to each other in memos, wake
-themselves on routines, and reach the operator by notification.
+themselves on routines, and reach the operator with messages.
 
 Everything relay knows is an append-only log of events in a data
 directory. The state (who exists, what is open, what is known) is the log
@@ -52,7 +52,8 @@ tools, each one a `relay tool <name>` call made as that role:
 Every memo stays open until its recipient closes it, saying what it did,
 or blocks it, saying why it can't. A memo left open is retried after a
 growing wait, and after enough tries it becomes a dead letter and goes to
-the hub. A memo to `operator` is pushed to the operator's phone.
+the hub. A role tells the operator something with `tell_operator`, and a
+memo to `operator` reaches them the same way (see Messages to you).
 
 ### Time
 
@@ -116,7 +117,7 @@ breaks in the id so that `parse` reads back what was written.
 for `rem`, `file` and `web`, which relay cannot look up. An external
 result carries the id as `:target` for the client to open. A client uses
 `resolve` to mark the refs in an answer that do not resolve. In
-notifications, `relay.refs/plain` writes a ref as short text.
+messages, `relay.refs/plain` writes a ref as short text.
 
 #### Skills
 
@@ -210,7 +211,7 @@ Row 2 RBC: all open
 ### Settings
 
 `<data>/relay.edn` holds the operator's settings: harnesses, where
-notifications go, limits, the dead letter handler, external tools, an optional weekly budget, an optional
+messages go, limits, the dead letter handler, external tools, an optional weekly budget, an optional
 morning brief and what each role is granted.
 `setup/relay.example.edn` shows each of them. No role can read this
 file. Every external tool has a class (`read`, `write`, `edit` or
@@ -301,7 +302,7 @@ since, as it does for a server whose description carries a timestamp,
 relay still takes it but waits the usual doubling time before trying
 the role again, and says nothing more. When relay.edn's `:digest` is what refuses it,
 relay never moves that pin: the role is tried again after the usual
-wait, and the notification says to set the new digest there.
+wait, and the message says to set the new digest there.
 
 A server can also be remote: a service on the internet that speaks MCP
 over HTTP, such as MailerLite's at `https://mcp.mailerlite.com/mcp`. You
@@ -470,7 +471,7 @@ and the role is told only its ref, such as
 `shown/<date>/<call>.md`, written as the role, with the display's labels
 and its session's, so a display drawn from a web page is contaminated.
 Nobody writes under `shown/` any other way. A wake that showed you
-something tells you the paths in a notification, never the text. Read
+something tells you the paths in a message, never the text. Read
 one with `relay doc <path>`. An envelope tool gives a display as a
 `display` field beside `content`, with `title`, `body`, `labels` and
 optional `sources`, each a `title` and a `ref`.
@@ -553,7 +554,7 @@ is written in Go.
    ```
 
    `relay init` asks for the settings relay cannot run without: the time
-   zone, the model and how to get its API key, and where notifications go.
+   zone, the model and how to get its API key, and where pushes go.
    It also asks where webtool is, so a public role can look things up on
    the web, and for the command that prints the Brave Search API key,
    which is used only to send searches to Brave. With webtool it writes
@@ -597,7 +598,7 @@ is written in Go.
        setup/launchd/relay.tick.plist > ~/Library/LaunchAgents/relay.tick.plist
    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/relay.tick.plist
    ```
-6. For notifications on a phone, run an [ntfy](https://ntfy.sh) server.
+6. For pushes to a phone, run an [ntfy](https://ntfy.sh) server.
    Its config names your machine, so keep it outside this repository:
 
    ```sh
@@ -608,9 +609,9 @@ is written in Go.
    Edit its `base-url` and `cache-file`, install
    `setup/launchd/relay.ntfy.plist` the same way as the tick (it uses
    `@NTFY@`, `@NTFYCONFIG@` and `@LOGS@`), and subscribe to the topic from
-   the ntfy app. Then set `:notify` in `relay.edn` to
-   `{:kind :ntfy :url "http://127.0.0.1:2586" :topic "relay"}`, or choose
-   ntfy when `relay init` asks.
+   the ntfy app. Then give `:messages` in `relay.edn` a push channel,
+   `{:kind :push :via :ntfy :url "http://127.0.0.1:2586" :topic "relay"}`,
+   and a route to it, or choose ntfy when `relay init` asks.
 
    Anyone who can reach the server can read or post to an open topic, so
    lock it down. `setup/ntfy/lockdown <server.yml> <ntfy>` does it for a
@@ -679,6 +680,69 @@ client with `relay acp <role>`. `relay status` shows roles, open work,
 harnesses, this week's spend and recent wakes, and `relay help` lists
 every command.
 
+### Messages to you
+
+Everything relay tells you is a message: a note (a draft is ready, a
+question only you can answer), an alert (something is wrong), a digest
+(the morning brief) or a reply in a thread. A message has a subject, an
+urgency (low, normal or high), and sections of items, each with the refs
+it drew on and where it came from. Text from outside is marked
+`[from outside]` and its links broken, in every channel.
+
+A role uses `tell_operator` to tell you something. It gives the content
+and the urgency, and nothing else: relay.edn alone decides where the
+message goes. A role that works on the web cannot use it; it reports
+back by memo. A memo to `operator` and relay's own alerts become
+messages too.
+
+`:messages` in relay.edn has channels and routes:
+
+```clojure
+:messages
+{:channels {"phone" {:kind :push :via :ntfy :url "http://127.0.0.1:2586" :topic "relay"}
+            "mail"  {:kind :email :url "smtps://smtp.example.org:465"
+                     :from "agent@example.org" :to "you@example.org"
+                     :user "agent@example.org"
+                     :credentials-command ["security" "find-generic-password" "-s" "relay-mail" "-w"]}}
+ :routes [{:kinds ["alert"] :channels ["phone" "mail"]}
+          {:urgencies ["high"] :channels ["phone"]}
+          {:urgencies ["normal"] :channels ["mail"]}
+          {:urgencies ["low"] :channels ["mail"] :at :digest}]
+ :quiet-hours {:from "22:00" :to "07:00"}
+ :digest-at "18:00"}
+```
+
+A message goes to every channel that a matching route names. A route
+matches on `:kinds` and `:urgencies`, and leaving one out matches all.
+A channel that only `:at :digest` routes name gets the message at
+`:digest-at`. Quiet hours hold every message that is not high urgency
+until they end. A high-urgency message goes at once. Messages that come
+due on one channel at the same tick go as one push or one email. Every
+message also shows in the client (`_relay/messages` in
+`docs/client-protocol.md`). Without `:messages`, that is the only place
+they show.
+
+A push is one line: the subject as its title and the first line of the
+message as its body. `:link`, if given, is opened when you tap it; `{id}`
+in it is the message's number. `:via` is `:ntfy`, `:macos`, `:command`
+(the title as its last argument, the body on stdin) or `:file`, which
+appends a JSON line and reaches nobody.
+
+An email goes from the agent's own address (`:from`) to yours (`:to`),
+and to nobody else: relay submits it with `curl` over SMTP, with exactly
+one recipient, no Cc or Bcc, as plain UTF-8 text. The subject is the
+only part a role writes that becomes a header, and it is encoded on one
+line. A reply threads to the message it answers with `In-Reply-To`.
+`:url` is `smtps://` for a real server; plain `smtp://` is taken only to
+this machine (`127.0.0.1` or `localhost`), such as a local relay or
+mailpit in tests. The password is what `:credentials-command` prints. It
+goes to curl on stdin at each send, so it is on no command line.
+
+A delivery that fails is recorded and tried again by the tick after a
+wait that doubles, up to eight times. The message itself is in the log
+either way. When relay.edn cannot be loaded at all, the tick still sends
+a high-urgency alert through `:messages` if that section is sound.
+
 ### Spend
 
 Each wake records the tokens its model calls used and what they cost in
@@ -694,7 +758,7 @@ how many wakes ran without a cost beside the spend.
 
 An optional weekly budget in relay.edn, `:budget {:weekly-usd 15}`,
 sets a warning level for all roles together. relay sends you one
-notification when the week's spend reaches 80% of it and one when it
+message when the week's spend reaches 80% of it and one when it
 reaches 100%. A wake that passes both at once sends only the 100% one.
 The budget never stops or slows anything.
 
@@ -708,8 +772,8 @@ It starts with the interruptions: each time relay needed you. These are
 a harness that needs you and work given up and sent to you. For each
 kind it says how many arose, how many were dealt with, how many still
 wait, and the median and longest wait. One decided after the window ends
-counts as waiting. Then the notifications sent, per day and per kind,
-and the memos to you per role. Then each role's wakes and conversations:
+counts as waiting. Then the messages relay sent you, per day and per
+kind, and the memos to you per role. Then each role's wakes and conversations:
 memos closed, blocked, left open and dead-lettered, wakes cut short,
 crashed or without their tools, and what they cost. A wake belongs
 to the window it started in.
@@ -741,8 +805,8 @@ roles and tools and the labels each session held.
 
 ### Morning brief
 
-With `:brief {:at "07:30"}` in relay.edn, relay sends you one
-notification each morning at that time in its time zone. It has two
+With `:brief {:at "07:30"}` in relay.edn, relay sends you one digest
+message each morning at that time in its time zone. It has two
 sections: today's calendar and reminders due today or overdue. Each gives a count and up to eight
 short lines. relay composes it itself and wakes no role, so it costs no
 tokens and no calendar invite reaches a prompt.
@@ -1104,8 +1168,9 @@ bb scenarios [--agentloop <path>]  # every scenario, against the mock model
 `staging init` refuses a directory in or around `~/Sync` or the data
 directory named in `~/.config/relay/config.edn`, and a directory that is not
 empty. `--force` empties a directory only if an earlier `staging init` made
-it. The staging `relay.edn` uses a `:file` notifier, which appends each
-notification to `notifications.log` in the directory and reaches nobody. Its
+it. The staging `relay.edn` routes every message to a push channel with
+`:via :file`, which appends each push to `notifications.log` in the
+directory and reaches nobody. Its
 roles are the hub, the clerk and the scout, a public role. It also defines stand-in tools that no role holds until
 a scenario grants them, among them a mailing service for a made-up concert
 society: `campaign-draft-demo` (edit) keeps every version of a draft in

@@ -17,8 +17,9 @@ they disagree, fix this page.
 Each method is about the connection or about one conversation.
 
 - A **connection** method names no conversation and works on a connection
-  that has none open. It takes no `sessionId`, and the board's methods
-  refuse one like any parameter they do not take (-32602).
+  that has none open. It takes no `sessionId`, and the board's and the
+  messages' methods refuse one like any parameter they do not take
+  (-32602).
 - A **session** method is about one live conversation. Its `sessionId`
   names a conversation this connection is attached to. Without one, relay
   takes the only conversation the connection is attached to or, before it
@@ -111,6 +112,24 @@ command line instead.
   edit, waits for the answer before taking another op, and on a refusal
   shows relay's reason and reopens the input with what was typed.
 
+### `_relay/messages`
+
+- Scope: connection.
+- Params: `{"limit": int}`, how many of the newest to send, from 1 to
+  500 (100 when left out), or `{}`. Anything else, `sessionId` included,
+  is refused (-32602).
+- Answer: `{"rev": int, "messages": [Message]}`, newest first. `rev` is
+  the seq of the log's last event. Messages are in their wire form
+  (below).
+- Errors: -32000 "relay has not read its messages yet. Try again." just
+  after start.
+- After it: the first call subscribes the connection to
+  `_relay/messages/changed`.
+- This is the client channel: every message relay tells the operator is
+  here, whichever other channels relay.edn routes it to, and whatever
+  became of those deliveries.
+- relay-tui: not used yet.
+
 ## Methods: a session
 
 ### `_relay/seen`
@@ -164,10 +183,12 @@ command line instead.
 |---|---|---|---|
 | `_relay/roles/changed` | connection | `{"roles": [Role]}`, the whole roster, sent when any of it changed since this connection was last sent it | replaces the roster whole |
 | `_relay/cards/changed` | connection | `{"rev", "cards": [Card]}`, every card whose rev is not the one this connection was last sent, archived cards included so the client can drop them | updates the one board, open conversation or not; a changed card brings the board into view unless the operator is busy in the pane |
+| `_relay/messages/changed` | connection | `{"rev", "messages": [Message]}`, oldest first: every message made, or whose deliveries changed, since this connection was last sent messages | not used yet |
 | `_relay/replayed` | session | `{"sessionId", "truncated": bool}`, after the replay that follows `session/load` or an attaching `session/new`; `truncated` says the oldest updates were dropped | marks the conversation loaded, says so at the top when truncated, and stops calls the replay left open once the roster says the turn is idle |
 
 relay sends `_relay/cards/changed` only to a connection that has called
-`_relay/cards`, and `_relay/roles/changed` only to one that has called
+`_relay/cards`, `_relay/messages/changed` only to one that has called
+`_relay/messages`, and `_relay/roles/changed` only to one that has called
 `_relay/roles`. A replay starts with the session's latest labels (a
 `session_info_update` carrying `agentloop/labels`) and usage, and keeps
 consecutive text chunks of one kind merged.
@@ -219,3 +240,28 @@ A checklist has `"items": [{"id", "text", "done", "outsider", "rev"}]`
 and a note `"note": {"text", "outsider", "rev"}`. Only cells that are not
 open are listed, and a note has no `progress`. An element's `rev` is
 when its text was last written, which is what `seen` is checked against.
+
+## A message's wire form
+
+Like a card, a message uses string keys and is ready to show: hidden
+characters are shown as `\u{XXXX}`, and text from outside is defanged
+and marked, with `"outsider": true` beside it. Nothing internal is sent:
+no role, no origin and no label names.
+
+```json
+{"id": 2207, "kind": "note", "urgency": "normal", "at": "2026-10-26T14:03:00Z",
+ "rev": 2209, "thread": 2207, "inReplyTo": null,
+ "subject": {"text": "Draft ready: spring concert email", "outsider": false},
+ "sections": [{"items": [{"text": "It is in your Hear Here drafts.", "outsider": false,
+                          "refs": ["[[doc:hear-here/spring.md]]"]}]},
+              {"list": true,
+               "items": [{"text": "[Venue]", "outsider": false, "refs": []}]}],
+ "deliveries": [{"channel": "mail", "status": "delivered"}]}
+```
+
+`kind` is `note`, `alert`, `digest` or `reply`; `urgency` is `low`,
+`normal` or `high`. A section may have a `heading`, in the same form as
+`subject`. `rev` is the seq of the last event that changed the message
+(its creation or a delivery). `deliveries` lists the configured channels
+it was routed to, each `pending`, `delivered` or `failed`; the client
+channel is not listed, since every message is the client's.
