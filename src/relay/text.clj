@@ -11,6 +11,10 @@
                 labels say an outsider may have written it. The edge
                 that shows text applies visible to it once, last.
 
+    sanitize    cleans what the operator pastes, at the entry (see
+                sanitize-input, the one function every entry point calls),
+                and says what it changed.
+
   The operator is never shown a label's name: text from outside is
   marked as from outside."
   (:require [clojure.string :as str]))
@@ -172,3 +176,191 @@
           {:word w :scripts (vec (sort scripts))})
         (for [cp (distinct (iterator-seq (.iterator (.codePoints s)))) :when (> cp 127)]
           {:cp cp :name (or (Character/getName (int cp)) "unnamed")}))))))
+
+;; --- what the operator pastes
+;;
+;; Pastes are the operator's, so nothing is withheld. They are cleaned
+;; deterministically at the entry, and the operator is told each change,
+;; so text that hides characters (bidi overrides, zero-width runs, tag
+;; characters that spell out a message) cannot ride in on a paste.
+
+(defn- bidi? [^long cp]
+  (or (<= 0x202A cp 0x202E) (<= 0x2066 cp 0x2069) (contains? #{0x200E 0x200F 0x061C} cp)))
+
+(defn- tag? [^long cp] (<= 0xE0000 cp 0xE007F))
+
+(defn- emoji-block-unassigned?
+  "An unassigned code point in the emoji and symbol planes' blocks. The
+  JVM's Unicode tables lag the newest emoji, so these are left alone
+  rather than deleted from what the operator wrote."
+  [^long cp]
+  (and (<= 0x1F000 cp 0x1FFFF) (= Character/UNASSIGNED (Character/getType (int cp)))))
+
+(defn- strip-kind
+  "What sanitize does with a code point: nil to keep it, else :separator
+  (becomes a line break), :bidi, :tag, :control or :invisible (removed).
+  Tab, newline and carriage return stay."
+  [^long cp]
+  (cond
+    (contains? #{9 10 13} cp) nil
+    (contains? #{0x85 0x2028 0x2029} cp) :separator
+    (bidi? cp) :bidi
+    (tag? cp) :tag
+    (= Character/CONTROL (Character/getType (int cp))) :control
+    (emoji-block-unassigned? cp) nil
+    (hidden? cp) :invisible
+    :else nil))
+
+(defn- strip
+  "[text counts]: s without what strip-kind removes, and how many of each."
+  [^String s]
+  (let [sb (StringBuilder.)
+        counts (volatile! {})]
+    (doseq [cp (iterator-seq (.iterator (.codePoints s)))]
+      (case (strip-kind cp)
+        nil (.appendCodePoint sb (int cp))
+        :separator (do (.append sb \newline) (vswap! counts update :separator (fnil inc 0)))
+        (vswap! counts update (strip-kind cp) (fnil inc 0))))
+    [(str sb) @counts]))
+
+(def ^:private cjk #{"Han" "Hiragana" "Katakana" "Hangul"})
+
+(def ^:private latin-lookalikes
+  "Cyrillic and Greek letters that pass for Latin ones."
+  (set "АВЕКМНОРСТУХаеорсухѕіјԁԛԝΑΒΕΖΗΙΚΜΝΟΡΤΥΧαοινρυ"))
+
+(defn- single-ascii-letter?
+  "Whether cp, normalized by NFKC, is exactly one ASCII letter (fullwidth
+  and mathematical letters, circled letters), but not a ligature or a
+  symbol like the trademark sign."
+  [cp]
+  (and (> cp 127)
+       (let [n (java.text.Normalizer/normalize (String. (Character/toChars (int cp))) java.text.Normalizer$Form/NFKC)]
+         (and (= 1 (count n)) (< (int (first n)) 128) (Character/isLetter (first n))))))
+
+(defn- cps [^String w] (iterator-seq (.iterator (.codePoints w))))
+
+(defn- lookalike-words
+  "Words that are not what they look like, beyond the script mixes
+  lookalike-findings reports: words with fullwidth or mathematical
+  letters ({:word w :reads-as ascii}), and whole Cyrillic or Greek words
+  of Latin-looking letters among Latin text ({:word w :scripts [s]
+  :whole-script true})."
+  [s]
+  (let [words (re-seq #"\S+" s)
+        latin-text? (some #(re-find #"[A-Za-z]{2}" %) words)]
+    (for [w words
+          :when (some #(> (int %) 127) w)
+          :let [nfkc (java.text.Normalizer/normalize ^String w java.text.Normalizer$Form/NFKC)
+                letters (filter #(Character/isLetter (int %)) (cps w))
+                scripts (set (keep script-of letters))]
+          :let [finding
+                (cond
+                  (and (not= nfkc w) (some single-ascii-letter? (cps w)))
+                  {:word w :reads-as nfkc}
+                  (and latin-text?
+                       (= 1 (count scripts))
+                       (#{"Cyrillic" "Greek"} (first scripts))
+                       (>= (count letters) 2)
+                       (every? #(contains? latin-lookalikes (char %)) letters))
+                  {:word w :scripts (vec scripts) :whole-script true})]
+          :when finding]
+      finding)))
+
+(defn- mixed-words
+  "Words worth a second look, as data: those that mix alphabets, as
+  lookalike-findings finds them, less the ordinary mixes of Japanese and
+  Korean writing, then lookalike-words."
+  [s]
+  (vec (distinct
+        (concat
+         (for [{:keys [word scripts]} (lookalike-findings s)
+               :when word
+               :when (> (count (set (map #(if (cjk %) "CJK" %) scripts))) 1)]
+           {:word word :scripts scripts})
+         (lookalike-words s)))))
+
+(def empty-report {:removed {} :normalized? false :mixed []})
+
+(defn merge-reports
+  "One report from several: counts added, words kept once."
+  [& rs]
+  (reduce (fn [a b]
+            {:removed (merge-with + (:removed a) (:removed b))
+             :normalized? (boolean (or (:normalized? a) (:normalized? b)))
+             :mixed (vec (distinct (concat (:mixed a) (:mixed b))))})
+          empty-report rs))
+
+(defn sanitize
+  "A pasted string, cleaned: invisible, bidi-control, tag, control and
+  private-use characters removed (tab, newline and carriage return stay;
+  U+0085, U+2028 and U+2029 become a newline), then NFC, until nothing
+  changes, so sanitize is idempotent. Printable ASCII is never touched.
+  Returns {:text cleaned :report r}, r saying what was removed by kind,
+  whether normalizing changed anything, and the words that mix alphabets or pass for other letters.
+  Pure."
+  [s]
+  (loop [t (str s) removed {} normalized? false]
+    (let [[t1 counts] (strip t)
+          t2 (java.text.Normalizer/normalize t1 java.text.Normalizer$Form/NFC)
+          removed (merge-with + removed counts)
+          normalized? (or normalized? (not= t1 t2))]
+      (if (= t2 t)
+        {:text t2 :report {:removed removed :normalized? normalized? :mixed (mixed-words t2)}}
+        (recur t2 removed normalized?)))))
+
+(defn- plural [n one many] (str n " " (if (= 1 n) one many)))
+
+(defn- clip [^String w]
+  (if (> (.codePointCount w 0 (count w)) 40)
+    (str (subs w 0 (.offsetByCodePoints w 0 40)) "…")
+    w))
+
+(defn report-lines
+  "What to tell the operator about a report: one plain line per kind of
+  change, empty when nothing changed. Never mentions labels."
+  [{:keys [removed normalized? mixed]}]
+  (let [from "from what you pasted."
+        n #(get removed % 0)
+        shown (take 3 mixed)]
+    (vec
+     (concat
+      (when (pos? (n :control)) [(str "Removed " (plural (n :control) "control character" "control characters") " " from)])
+      (when (pos? (n :invisible)) [(str "Removed " (plural (n :invisible) "invisible character" "invisible characters") " " from)])
+      (when (pos? (n :bidi)) [(str "Removed " (plural (n :bidi) "text-direction character" "text-direction characters") " " from)])
+      (when (pos? (n :tag)) [(str "Removed " (plural (n :tag) "hidden tag character" "hidden tag characters") " " from)])
+      (when (pos? (n :separator))
+        [(str "Turned " (plural (n :separator) "unusual line separator" "unusual line separators") " into ordinary line breaks.")])
+      (when normalized? ["Put some combined characters into their standard form."])
+      (for [{:keys [word scripts reads-as whole-script]} shown]
+        (cond
+          reads-as (str "The word \"" (clip word) "\" uses look-alike letters; it reads as \"" (clip reads-as) "\".")
+          whole-script (str "The word \"" (clip word) "\" is written in " (first scripts)
+                            " letters that look like Latin ones.")
+          :else (str "The word \"" (clip word) "\" mixes " (str/join " and " scripts)
+                     " letters, so it may not be what it looks like.")))
+      (when (> (count mixed) 3)
+        [(str (- (count mixed) 3) " more words mix letters from different alphabets.")])))))
+
+(defn sanitize-input
+  "The one function every operator entry point calls: a string, or any
+  data holding strings (map values, vector items; keys are left alone),
+  with every string sanitized. Returns {:value cleaned :report r :notes
+  lines}, :notes being what to tell the operator, one plain line per
+  change, empty when nothing changed. Entry points that exist today (the
+  command line, conversation prompts and resources, board edits) call
+  it; the channels that accept replies call it too."
+  [x]
+  (let [reports (volatile! [])
+        walk (fn walk [v]
+               (cond
+                 (string? v) (let [{:keys [text report]} (sanitize v)]
+                               (vswap! reports conj report)
+                               text)
+                 (map? v) (reduce-kv (fn [m k x] (assoc m k (walk x))) v v)
+                 (vector? v) (mapv walk v)
+                 (sequential? v) (doall (map walk v))
+                 :else v))
+        value (walk x)
+        report (apply merge-reports empty-report @reports)]
+    {:value value :report report :notes (report-lines report)}))
