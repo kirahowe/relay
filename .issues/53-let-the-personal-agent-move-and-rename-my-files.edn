@@ -1,10 +1,10 @@
 {:id 53
  :title "Let the personal agent move and rename my files"
- :status :ready
+ :status :review
  :type :feature
  :priority :p2
  :created "2026-10-19"
- :updated "2026-10-19"
+ :updated "2026-10-26"
  :tags #{}
  :blocked-by #{}
  :related #{}

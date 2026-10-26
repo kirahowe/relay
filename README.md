@@ -47,6 +47,8 @@ tools, each one a `relay tool <name>` call made as that role:
   `:may-add`
 - `sh`, for a house role granted `:shell`: a command run in the steward's
   shell, a Linux container with no network (see The steward's shell)
+- `files_move`, for a house role granted `:files`: moves and renames
+  inside the folders you chose, which you can undo (see Organizing files)
 - any external command the operator defines in `relay.edn` and grants
 
 Every memo stays open until its recipient closes it, saying what it did,
@@ -484,6 +486,42 @@ a session read in a stranger's mail and left in scratch is still from
 outside when a later session reads it. relay reads those labels when a
 command starts and again when it ends, so a command that runs while
 another session writes to scratch carries that session's labels too.
+
+### Organizing files
+
+A house role granted `:files` gets the `files_move` tool, which moves and
+renames files and folders inside the folders you name:
+
+```clojure
+:grants {"steward" {:shell true
+                    :files ["/Users/you/Downloads" "/Users/you/Documents/Taxes"]}}
+```
+
+These writable folders are separate from the shell's `:mounts`, which
+stay read-only. A folder can be in both, and then the steward can look
+through it with `sh` before it plans the moves. The model never touches
+the disk: relay's own code makes each move on the Mac.
+
+relay refuses `:files` for a public role, and refuses a folder that is,
+holds or sits inside a secret, the home directory, the data directory or
+the data volume, by the same checks as the shell's mounts, again with
+symbolic links resolved when a call runs. Every path in a call is taken
+with its links resolved and must lie inside one of your folders. relay
+never moves a symbolic link, a folder that holds one, or one of your
+folders itself. A move never overwrites: one whose target exists is
+refused. It never deletes and never copies, so a move to another disk is
+refused. The folders a target needs are made. relay checks every move in
+a call before it makes any, and if one is refused, none is made.
+
+Each call is a move in the log with a number, recorded before anything
+moves and again after with what moved, a fingerprint of each thing
+moved, and the folders it made. Both carry the session's labels, so you
+can see where a call came from. `relay moves` lists them. `relay undo
+<move>` puts one back exactly, and removes the folders it made once they
+are empty. If anything has changed since (you edited a moved file, moved
+it again, or put something new where it was), undo says what changed and
+touches nothing. A folder it made that now holds something of yours is
+kept.
 
 #### What you are shown
 

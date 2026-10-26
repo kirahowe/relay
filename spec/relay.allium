@@ -356,6 +356,7 @@ enum ToolClass { read | write | edit | egress }
 enum Label { private | contaminated }
 enum FactChange { added | superseded | corrected | retracted }
 enum CalendarChange { added | changed | removed }
+enum MoveStatus { moving | moved }
 enum CardKind { checklist | tracker | note }
 enum CardStatus { active | archived }
 enum CellState { open | done | skip }
@@ -458,6 +459,10 @@ entity Role {
     -- runs commands in the steward's shell (StewardShell). Never a
     -- public role's, and only with a :house section.
     has_shell: Boolean
+    -- Granted :files in the settings: the folders the role may move and
+    -- rename files within, with files_move (OrganizeFiles). Separate from
+    -- the shell's read-only mounts. Never a public role's.
+    files: List<String>
     -- The wake to carry on from, when the last one was cut short.
     interrupted_wake: Wake?
     -- Set when a wake's MCP tools could not be set up, until a wake of
@@ -852,6 +857,34 @@ entity CalendarEventVersion {
     location: String?
     description: String?
     why: String?
+}
+
+entity MoveCall {
+    -- One files_move call. The id is the seq of its files/moving event,
+    -- recorded before anything moves; files/moved records what it did.
+    -- A call relay never finished stays moving, and undo then tells the
+    -- operator to check its moves by hand.
+    actor: Role
+    moves: List<MovePlan>
+    status: MoveStatus
+    done: List<MoveStep>
+    undone: Set<Integer>
+    stopped: String?
+}
+
+value MovePlan {
+    -- Real paths, links resolved, both inside one of the actor's folders.
+    from: String
+    to: String
+}
+
+value MoveStep {
+    index: Integer
+    -- Sizes and SHA-256 of what moved, a folder's every entry included.
+    fingerprint: Fingerprint
+    -- The folders the move made for its target, which undo removes once
+    -- they are empty again.
+    created: List<String>
 }
 
 entity Note {
@@ -2699,6 +2732,53 @@ rule ServeCalendarFeed {
     requires: request.token = config.serve.websocket.token
 }
 
+-- Organizing files
+
+rule MoveFiles {
+    when: FilesMoveRequested(caller, moves)
+
+    -- relay's own code makes the moves on the host; the model and the
+    -- container never touch the disk. Every move is checked before any
+    -- is made, and one refused move refuses the call.
+    requires: caller is Role and not caller.is_public and caller.files != []
+    requires: moves.count in 1..100
+    requires: every folder in caller.files, as its real path, passes the
+        shell's place and identity checks   -- never a secret, the home directory, the data directory or the data volume
+    requires: for m in moves:
+        real(m.from) and real(m.to) lie inside one of caller.files
+        and m.from is a file or a folder holding no link
+        and m.from is not one of caller.files and holds none of them
+        and nothing exists at m.to
+        and m.from and m.to are on one disk
+    requires: no two moves touch the same path or one inside another
+
+    ensures: MoveCall.created(actor: caller, moves: moves, status: moving)
+    ensures: each move is made with an atomic rename, the folders its
+        target needs made and recorded, then the call is moved
+
+    @guidance
+        -- Both events carry the session's labels and private, since
+        -- the paths are the operator's.
+}
+
+rule UndoMove {
+    when: MoveUndoRequested(operator, call)
+
+    requires: call.status = moved
+    requires: for step in call.done where not step.index in call.undone:
+        fingerprint(call.moves[step.index].to) = step.fingerprint
+        and nothing exists at call.moves[step.index].from
+        and the folders above both are where they were, links resolved
+
+    ensures: each step is renamed back, in reverse order
+    ensures: each folder the steps made is removed when it is empty
+    ensures: call.undone = every done index
+
+    @guidance
+        -- When a requirement fails, undo says what changed and touches
+        -- nothing. A folder it made that holds something new is kept.
+}
+
 -- Knowledge: facts
 
 rule AddFact {
@@ -3181,6 +3261,18 @@ invariant StewardShell {
     for result in ShellResults:
         "private" in result.labels
         includes_all(result.labels, result.container.scratch_labels)
+}
+
+invariant NothingTheStewardDoesDestroys {
+    -- I7. The shell's mounts are read-only and the log is append-only.
+    -- files_move never overwrites, deletes or copies, never moves a
+    -- link or a writable folder, and never reaches outside the
+    -- writable folders. Undoing every call in reverse order restores
+    -- the tree byte for byte.
+    for role in Roles where role.files != []:
+        not role.is_public
+    for call in MoveCalls:
+        call.moves.all(m => inside(m.from, call.actor.files) and inside(m.to, call.actor.files))
 }
 
 invariant OldLogsStillFold {

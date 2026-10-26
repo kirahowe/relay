@@ -27,7 +27,6 @@
 | --- | --- | --- | --- |
 | [37](37-let-the-hub-see-which-role-owns-what.md) | Let the hub see which role owns what | bug | P2 |
 | [38](38-stop-the-hub-notifying-twice-for-one-stuck-memo.md) | Stop the hub notifying twice for one stuck memo | bug | P2 |
-| [53](53-let-the-personal-agent-move-and-rename-my-files.md) | Let the personal agent move and rename my files | feature | P2 |
 | [57](57-make-hidden-characters-visible-in-card-text-that-roles-and.md) | Make hidden characters visible in card text that roles and resolve get | bug | P2 |
 | [61](61-fork-acp-go-sdk-and-decode-with-encoding-json-v2.md) | Fork acp-go-sdk and decode with encoding/json/v2 | feature | P2 |
 | [84](84-try-relay-from-the-phone-with-agmente.md) | Try relay from the phone with Agmente | chore | P2 |
@@ -40,6 +39,7 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [79](79-review-what-the-operator-consents-to-on-a-screen-of-its-own.md) | Review what the operator consents to on a screen of its own, with text relay made | feature | P1 |
+| [53](53-let-the-personal-agent-move-and-rename-my-files.md) | Let the personal agent move and rename my files | feature | P2 |
 
 ## Done
 

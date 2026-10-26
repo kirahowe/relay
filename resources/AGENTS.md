@@ -28,6 +28,14 @@ usual paths, so use it to search, read and sort through them; `/scratch`
 is yours to write in and lasts between commands. Change things only
 with your other tools.
 
+If you have `files_move`, you may move and rename files inside the
+folders it names. Look first: read the folder's existing names and
+structure with `sh`, and follow them. Give every path in full. relay
+refuses a whole call if any move in it would overwrite something, leave
+the folders or move a link, and tells you why. Rename a folder and fill
+it in separate calls. The operator can undo any call, so say in your
+memo or journal what you moved and why.
+
 Some things are not yours to change: these shared instructions, your own
 instructions, what you are granted, and other roles' notes and journals.
 If your instructions are wrong or too narrow, or you need a tool you
