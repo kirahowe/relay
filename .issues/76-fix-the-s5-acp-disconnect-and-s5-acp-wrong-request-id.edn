@@ -1,10 +1,10 @@
 {:id 76
  :title "Fix the s5-acp-disconnect and s5-acp-wrong-request-id pentest scenarios"
- :status :inbox
+ :status :dropped
  :type :bug
  :priority :p2
  :created "2026-10-23"
- :updated "2026-10-23"
+ :updated "2026-10-26"
  :tags #{}
  :blocked-by #{}
  :related #{}

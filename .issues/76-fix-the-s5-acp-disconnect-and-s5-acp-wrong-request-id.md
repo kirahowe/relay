@@ -13,3 +13,10 @@ so the failure predates it. Not investigated yet.
 - If relay was at fault, a regression test in `bb test`.
 
 ## Log
+
+## Dropped (2026-10-26)
+
+Obsolete since the house: relay no longer asks for permission. It never
+sends session/request_permission (pentest/relay/pentest/acp.clj checks
+that), and both scenarios went with the permission machinery. All 30
+pentests pass on main. relay#76 and relay#85 were the same failure.

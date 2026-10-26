@@ -1,10 +1,10 @@
 {:id 85
  :title "Refuse a hung-up or wrong-id ACP answer as relay again"
- :status :ready
+ :status :dropped
  :type :bug
  :priority :p1
  :created "2026-10-24"
- :updated "2026-10-24"
+ :updated "2026-10-26"
  :tags #{}
  :blocked-by #{}
  :related #{}

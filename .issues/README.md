@@ -10,7 +10,6 @@
 | [48](48-judge-remote-tool-definitions-with-a-decision-model.md) | Judge remote tool definitions with a decision model | feature | P2 |
 | [49](49-haiku-leaves-the-memo-or-journal-undone-before-an-act-call.md) | Haiku leaves the memo or journal undone before an act call | bug | P2 |
 | [72](72-use-the-sidebar-s-empty-space-under-the-roles.md) | Use the sidebar's empty space under the roles | feature | P2 |
-| [76](76-fix-the-s5-acp-disconnect-and-s5-acp-wrong-request-id.md) | Fix the s5-acp-disconnect and s5-acp-wrong-request-id pentest scenarios | bug | P2 |
 | [81](81-tell-every-connection-a-request-was-settled-after-a-detach.md) | Tell every connection a request was settled after a detach and a race | bug | P2 |
 | [82](82-read-the-log-s-decimals-exactly.md) | Read the log's decimals exactly | bug | P2 |
 | [56](56-serve-the-board-over-http-and-sse-on-the-tailnet-for-a-web.edn) | Serve the board over HTTP and SSE on the tailnet for a web client | feature | P3 |
@@ -25,7 +24,6 @@
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
-| [85](85-refuse-a-hung-up-or-wrong-id-acp-answer-as-relay-again.md) | Refuse a hung-up or wrong-id ACP answer as relay again | bug | P1 |
 | [37](37-let-the-hub-see-which-role-owns-what.md) | Let the hub see which role owns what | bug | P2 |
 | [38](38-stop-the-hub-notifying-twice-for-one-stuck-memo.md) | Stop the hub notifying twice for one stuck memo | bug | P2 |
 | [57](57-make-hidden-characters-visible-in-card-text-that-roles-and.md) | Make hidden characters visible in card text that roles and resolve get | bug | P2 |
@@ -108,10 +106,12 @@
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
+| [85](85-refuse-a-hung-up-or-wrong-id-acp-answer-as-relay-again.md) | Refuse a hung-up or wrong-id ACP answer as relay again | bug | P1 |
 | [2](2-trust-the-legacy-contaminated-items.md) | Trust the legacy contaminated items | chore | P2 |
 | [17](17-set-up-the-job-search-role.md) | Set up the job search role | feature | P2 |
 | [34](34-give-the-quarantined-reader-a-read-only-fetch-that-takes-no.md) | Give the quarantined reader a read-only fetch that takes no free URLs | feature | P2 |
 | [68](68-have-bb-deploy-check-for-a-running-relay-service.md) | Have bb deploy check for a running relay service | feature | P2 |
 | [71](71-let-bb-deploy-stop-and-restart-relay-serve-itself.md) | Let bb deploy stop and restart relay serve itself | feature | P2 |
+| [76](76-fix-the-s5-acp-disconnect-and-s5-acp-wrong-request-id.md) | Fix the s5-acp-disconnect and s5-acp-wrong-request-id pentest scenarios | bug | P2 |
 | [18](18-set-up-the-grant-search-role.md) | Set up the grant search role | feature | P3 |
 | [36](36-clean-up-after-an-interrupted-deploy-and-leave-no-check.md) | Clean up after an interrupted deploy, and leave no check dirs in TMPDIR | bug | P3 |
