@@ -57,8 +57,8 @@ Three rules hold the walls up:
 2. **No way out.** A house role is granted no `egress` tool. The
    steward's shell runs with `--network none`.
 3. **Provenance, not gates.** Everything carries labels saying where it
-   came from. Labels are shown to Kira as plain words ("from a mail by
-   stranger@example.com"). Nothing is withheld because of one, except
+   came from. Labels are shown to Kira as plain words ("from outside: a
+   mail that says it is from stranger@example.com"). Nothing is withheld because of one, except
    that a scout can never be shown anything private.
 
 ## The four repos
@@ -250,8 +250,8 @@ flowchart TB
 ```
 
 That is invariant I9 on the writing side: the feed holds only events a
-role wrote. Reading Kira's own calendar (phase B8) will arrive as memos
-from an ingestor. It never becomes calendar events.
+role wrote. Kira's own calendar, read by an ingestor (relay.ingest), arrives as memos
+to the steward. It never becomes calendar events.
 
 ### From a tool call to Kira's calendar app
 

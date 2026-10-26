@@ -265,7 +265,9 @@ no role, no origin and no label names.
                           "refs": ["[[doc:hear-here/spring.md]]"]}]},
               {"list": true,
                "items": [{"text": "[Venue]", "outsider": false, "refs": []}]}],
- "deliveries": [{"channel": "mail", "status": "delivered"}]}
+ "deliveries": [{"channel": "mail", "status": "delivered"}],
+ "replies": [{"id": 2230, "at": "2026-10-26T15:10:00Z", "channel": "mail",
+              "text": {"text": "The Old Hall, please.", "outsider": false}}]}
 ```
 
 `kind` is `note`, `alert`, `digest` or `reply`; `urgency` is `low`,
@@ -273,4 +275,7 @@ no role, no origin and no label names.
 `subject`. `rev` is the seq of the last event that changed the message
 (its creation or a delivery). `deliveries` lists the configured channels
 it was routed to, each `pending`, `delivered` or `failed`; the client
-channel is not listed, since every message is the client's.
+channel is not listed, since every message is the client's. `replies` are
+the operator's own answers to the message, verified by the channel they
+came through (an email reply from their address that passed DKIM), oldest
+first; a reply also changes `rev`.

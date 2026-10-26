@@ -350,7 +350,7 @@ enum MessageOrigin {
     | harness_needs_attention | harness_unreachable
     | budget_reached | brief | tools_unavailable | tool_changed | shown
     | session_forbidden | result_refused | public_role_cannot_run | public_role_can_run
-    | turn_unrecorded | conversation_line_dropped
+    | turn_unrecorded | conversation_line_dropped | ingest_failing
 }
 enum ToolClass { read | write | edit | egress }
 enum Label { private | contaminated }
@@ -757,6 +757,9 @@ entity Message {
     in_reply_to: Message?
     -- The first message of its thread.
     thread: Message
+    -- The operator's own replies to it, verified by the channel they
+    -- came through (OperatorMail), oldest first.
+    replies: List<String>
     origin: MessageOrigin
     about: Role?
     harness: Harness?
@@ -2499,6 +2502,66 @@ rule DeliveryFailed {
         -- The wait doubles from retry_base up to retry_ceiling, as for a
         -- memo, and relay gives up after delivery_attempts tries, or at
         -- once when relay.edn no longer has the channel.
+}
+
+-- What comes in from outside (relay.ingest)
+
+rule IngestRecord {
+    -- An ingest source in relay.edn's :ingest (a POP3 mailbox, GitHub
+    -- repositories, a calendar feed) was polled by the tick, and what
+    -- it found is recorded. Only relay.edn says what to fetch.
+    when: IngestPolled(source, items, keys, cursor)
+
+    requires: source.to.status = active
+
+    for item in items where seen(source, item.key) != item.version:
+        ensures: Memo.sent(to: source.to, from: dispatcher,
+                           labels: {contaminated, source_label(source, item)})
+
+    @guidance
+        -- One memo per mail; per repository, one for every 50 items a
+        -- poll returned, all recorded at once since the GitHub cursor is
+        -- past them; one per calendar per poll, listing at most 50 new
+        -- or changed and 50 removed events. A calendar answer that is
+        -- not a whole VCALENDAR is a failed poll, never a removal of
+        -- every event. What was seen at the
+        -- same version is never recorded again, so two ticks that poll
+        -- at once record it once. relay never deletes from the mailbox.
+}
+
+rule OperatorMail {
+    -- A mail is the operator's only when verified: one From naming the
+    -- :to of an email channel, exactly one Authentication-Results with
+    -- the source's :authserv-id, and that one says dkim=pass for the
+    -- operator's domain. Every header line ends CRLF, and so does the
+    -- blank line that ends them. A mail that names the operator's
+    -- address and is not verified is labelled mail:unverified-operator,
+    -- never with that address.
+    when: IngestPolled(source, items, keys, cursor)
+
+    for mail in items where verified(mail):
+        ensures: Memo.sent(to: reply_role(mail) ?? source.to, from: operator, labels: {})
+        if answers(mail) != null:
+            ensures: MessageReplied(answers(mail), channel, text)
+
+    @guidance
+        -- answers(mail) is the message whose Message-ID relay made
+        -- (at an agent domain, with the message's creation time) that
+        -- In-Reply-To or References names. The memo goes to the role
+        -- that sent that message. A mail that is not verified is from
+        -- outside, as any other, and joins no thread.
+}
+
+invariant NoUnverifiedMailIsTrusted {
+    for m in Memos where m.from = operator and m.sent_by = dispatcher:
+        verified(m.mail)
+}
+
+rule IngestFailing {
+    when: IngestFailed(source, error)
+    ensures: source.failing = error
+    if now - source.failing_since >= config.outage_patience and not source.told:
+        ensures: Message.created(kind: alert, origin: ingest_failing)
 }
 
 -- Spend

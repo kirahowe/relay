@@ -804,6 +804,73 @@ wait that doubles, up to eight times. The message itself is in the log
 either way. When relay.edn cannot be loaded at all, the tick still sends
 a high-urgency alert through `:messages` if that section is sound.
 
+### The mailbox and other sources
+
+Ingestors bring what arrives from outside into relay as memos to a
+role, usually the steward. They are code, with no model, and the tick
+polls each one. relay.edn's `:ingest` alone says what to fetch:
+
+```clojure
+:ingest
+{"mailbox"  {:kind :pop3 :url "pop3s://pop.example.org:995" :user "agent@example.org"
+             :credentials-command ["security" "find-generic-password" "-s" "relay-pop" "-w"]
+             :authserv-id "mx.example.org" :to "steward"}
+ "repos"    {:kind :github :repos ["owner/repo"] :to "steward"
+             :credentials-command ["cat" "/path/to/read-only-token"]}
+ "calendar" {:kind :ics :url "https://calendar.example.org/you.ics" :to "steward"}}
+```
+
+- `:pop3` reads the agent's own mailbox with `curl`. The password goes
+  to curl on stdin. relay never deletes a mail: it remembers each one's
+  UIDL and reads only new ones, at most 20 a poll. A mail over 10 MB is
+  read as its headers only. Attachments are listed, not kept.
+- `:github` asks the REST API for the issues and pull requests in each
+  repository updated since the last poll, with `If-None-Match`, so a
+  quiet repository costs little of the rate limit. The first poll only
+  marks where to start. The token is optional and should be read-only.
+  Every item a poll returns gets a memo, 50 to a memo, since the next
+  poll starts after them.
+- `:ics` reads a calendar feed, such as your own calendar's private
+  address. relay never writes it. The memo lists events that are new,
+  changed or removed, at most 50 a poll; events long over are left out.
+  An answer that is not a whole calendar (an error page, an empty body,
+  a feed cut off) is a failed poll, so it never reads as every event
+  removed.
+
+Each source is polled every `:every-minutes` (5 for mail, 15 for
+GitHub, 60 for a calendar), at the minutes that are a multiple of it.
+`relay poll [<source>]` checks now and says what came in. No redirect is
+followed, and plain `pop3://` or `http://` is taken only to this
+machine. A source that keeps failing for `:outage-patience-minutes`
+sends you one alert. `:to` must not be a public role.
+
+Everything an ingestor brings in is from outside, and carries a label
+saying where: `mail:<sender>`, `github:<owner>/<repo>` or
+`ics:<source>`. You see a mail as "from outside: a mail that says it is
+from stranger@example.com", since anyone can write a From header. A mail
+that names your own address but was not verified is labelled
+`mail:unverified-operator` and shown as "from outside: a mail that says
+it is from you, not verified", never with your address. The steward
+reads it like any other memo.
+
+A mail is yours, and trusted, only when all of these hold: it has one
+From header naming one address, the `:to` of an email channel in
+`:messages`; exactly one `Authentication-Results` header carries the
+source's `:authserv-id` (your mail provider's, which strips forged
+copies); and that header says `dkim=pass` with a single `header.d`,
+your address's domain. Another method's pass (`bimi`, `spf`) does not
+count. relay reads the headers strictly. A bare CR or LF, a
+header it cannot parse, or a second header with that authserv-id makes
+the mail an outsider's. Without `:authserv-id`, no mail is trusted.
+
+A verified mail that answers one relay sent you (its `In-Reply-To` or
+`References` holds that message's Message-ID) becomes a reply on the
+message's thread, and a memo in your words to the role that sent the
+message, without the quoted text at the end. Any other verified mail
+reaches the source's role as yours. A reply that is not verified is
+mailbox content: it joins no thread, and the memo says it could not be
+confirmed.
+
 ### Spend
 
 Each wake records the tokens its model calls used and what they cost in

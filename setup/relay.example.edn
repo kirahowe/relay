@@ -55,6 +55,19 @@
   ;; :digest-at "18:00"
   }
 
+ ;; What comes in from outside, as memos to a role (README: The mailbox
+ ;; and other sources). The agent's own mailbox over POP3, issues and
+ ;; pull requests on your GitHub repositories, and calendars you read.
+ ;; Mail from your own address (an email channel's :to) is yours only
+ ;; when your provider's Authentication-Results, under :authserv-id,
+ ;; says DKIM passed for your domain.
+ ;; :ingest
+ ;; {"mailbox"  {:kind :pop3 :url "pop3s://pop.example.org:995" :user "agent@example.org"
+ ;;              :credentials-command ["security" "find-generic-password" "-s" "relay-pop" "-w"]
+ ;;              :authserv-id "mx.example.org" :to "steward"}
+ ;;  "repos"    {:kind :github :repos ["owner/repo"] :to "steward"}
+ ;;  "calendar" {:kind :ics :url "https://calendar.example.org/you.ics" :to "steward"}}
+
  ;; relay serve's WebSocket listener, for a phone client over the tailnet
  ;; (README: Reaching relay from your phone). It listens on 127.0.0.1 at
  ;; :port, for clients that send the token :token-command prints. Leave it
