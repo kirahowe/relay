@@ -71,6 +71,27 @@
          (provenance/summary ["mail:x@y.test" "github:a/b" "ics:work" "web:p.html"])))
   (is (= "GitHub (a/b) and a mail from x@y.test" (provenance/summary ["mail:x@y.test" "github:a/b"]))))
 
+(defspec a-mark-is-short-and-names-no-label 300
+  (prop/for-all [ls gen-labels]
+    (let [m (provenance/mark ls)]
+      (if (provenance/outside? ls)
+        (and (re-matches #"\(from [a-zA-Z ]+\)" m)
+             (<= (count m) 40)
+             (not (re-find #"contaminated|private" m)))
+        (nil? m)))))
+
+(deftest a-mark-says-only-what-kind-of-thing-it-came-from
+  (is (= "(from a web page)" (provenance/mark ["web:https://evil.example/x" "contaminated" "private"])))
+  (is (= "(from a web search)" (provenance/mark ["search:web"])))
+  (is (= "(from a mail)" (provenance/mark ["mail:x@y.test" "mail:z@y.test"])))
+  (is (= "(from GitHub)" (provenance/mark ["github:a/b"])))
+  (is (= "(from a calendar)" (provenance/mark ["ics:work"])))
+  (is (= "(from outside)" (provenance/mark ["contaminated"])))
+  (is (= "(from a mail and a web page)" (provenance/mark ["mail:x@y.test" "web:p.html"])))
+  (is (= "(from outside)" (provenance/mark ["mail:x@y.test" "web:p.html" "github:a/b"]))
+      "three kinds say no more than outside")
+  (is (nil? (provenance/mark ["private"]))))
+
 (deftest a-tool-call-names-the-page-it-read
   (is (= ["web:office-holidays.html"] (provenance/tool-sources {:page "office-holidays.html"} ["contaminated"])))
   (is (= ["web:https://a.example/x"] (provenance/tool-sources {"url" "https://a.example/x"} ["contaminated"])))
@@ -438,8 +459,14 @@
         (is (= [] (:sources (last-message sys))))
         (is (:ok (call sys "memo_close" {:memo own :outcome "done"} ["private"] w)))
         (end-wake sys w)
-        (let [w (start-wake sys)]
-          (is (= [outside] (get-in (inbound/current-state sys) [:wakes w :memos])) "then the mailbox"))))))
+        (let [w (start-wake sys)
+              st (inbound/current-state sys)]
+          (is (= [outside] (get-in st [:wakes w :memos])) "then the mailbox")
+          ;; Regression (U1b review): the pentest's attack wake ran
+          ;; private only, so the split must never narrow labels: the
+          ;; wake that takes the mail holds all it carries.
+          (is (contains? (set (core/wake-labels st (:config sys) (get-in st [:wakes w]))) "contaminated")
+              "and that wake is contaminated, as before the split"))))))
 
 (deftest a-search-key-that-does-not-work-is-kept-on-the-wake
   (with-relay {:tools {"web" (assoc page-tool :command [fixture "nokey"])} :grants {"hub" {:tools ["web"]}}}

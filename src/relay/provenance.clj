@@ -143,3 +143,28 @@
   [srcs]
   (let [ws (phrases srcs)]
     (when (seq ws) (str "Drew on: " (listed ws "; ")))))
+
+(defn- kind-words
+  "What kind of thing a source is, in two or three words, never what it
+  names: no address or page an outsider chose."
+  [l]
+  (when (and (source? l) (not= contaminated l))
+    (case (first (str/split l #":" 2))
+      "web" "a web page"
+      "search" "a web search"
+      "mail" "a mail"
+      "github" "GitHub"
+      "ics" "a calendar"
+      nil)))
+
+(defn mark
+  "A short mark for a line in a listing, such as a routine or a skill:
+  \"(from a web page)\", saying only what kind of outside text shaped
+  it. Two kinds are named; more, or none known, read \"(from outside)\".
+  Nil when nothing came from outside."
+  [srcs]
+  (let [ss (sources srcs)
+        ws (vec (distinct (keep kind-words ss)))]
+    (cond (empty? ss) nil
+          (<= 1 (count ws) 2) (str "(from " (str/join " and " ws) ")")
+          :else "(from outside)")))

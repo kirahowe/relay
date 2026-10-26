@@ -198,18 +198,21 @@
 (def ^:private peek-limit 100)
 
 (defn peek
-  "One line of what a text now says, for the note: the first line
-  `after` has that `before` lacks, without a heading's # or a list's dash,
-  cut to 100 characters. Nil when it adds none."
+  "One line of what a text now says, for the note: the first substantive
+  line `after` has that `before` lacks, that is not a heading or a
+  skill's `Use when:` line, without a list's dash, cut to 100 characters.
+  When it adds only headings or `Use when:` lines, the first of those,
+  without its #. Nil when it adds none."
   [before after]
   (let [had (set (map str/trim (str/split-lines (str before))))
-        line (->> (str/split-lines (str after))
-                  (map str/trim)
-                  (remove str/blank?)
-                  (remove had)
-                  (map #(str/trim (str/replace % #"^(#+|[-*]|\d+[.)])\s*" "")))
-                  (remove str/blank?)
-                  first)]
+        added (->> (str/split-lines (str after))
+                   (map str/trim)
+                   (remove str/blank?)
+                   (remove had))
+        frame? #(or (str/starts-with? % "#") (re-find #"(?i)^use when:" %))
+        clean #(str/trim (str/replace % #"^(#+|[-*]|\d+[.)])\s*" ""))
+        line (or (first (remove str/blank? (map clean (remove frame? added))))
+                 (first (remove str/blank? (map clean added))))]
     (when line
       (let [line (messages/squeeze-line line)]
         (if (> (cp-count line) peek-limit)

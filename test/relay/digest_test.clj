@@ -101,6 +101,11 @@
   (is (= "Ask about holiday hours" (digest/peek nil "# Ask about holiday hours\nUse when: x")))
   (is (= "Use when: y" (digest/peek "# T\nUse when: x" "# T\nUse when: y")))
   (is (nil? (digest/peek "a" "a")))
+  ;; Regression (U1b review): a new skill's peek quoted its heading,
+  ;; 'It says: "Concert email"', which says nothing of what changed.
+  (is (= "Open with the date and the hall." (digest/peek nil "# Concert email\nUse when: drafting the concert email\n\nOpen with the date and the hall.\nSign off warmly.")))
+  (is (= "Send it to Dana first." (digest/peek "# T\nUse when: x\nA." "## T again\nUse when: y\nA.\n- Send it to Dana first.")))
+  (is (= "Send it on Fridays." (digest/peek nil "Send it on Fridays.\nmore\nlines")) "one line only")
   (is (= 100 (count (digest/peek nil (apply str (repeat 300 "x")))))))
 
 (deftest line-deltas-count-what-was-added-and-removed
