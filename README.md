@@ -33,7 +33,9 @@ data is wherever `--data` or the config file points.
   of help, grants a scout found, new GitHub issues, and every change to
   how relay works that outside text shaped, each with a one-line undo.
 - The mailbox and other sources: the agent's own mail, your GitHub
-  repositories and your calendar, brought in as memos to the steward.
+  repositories, your calendar and your Mac's Calendar and Reminders,
+  brought in as memos to the steward, which can also add and finish
+  your reminders.
 - The steward's shell, a container with no network that reads the
   folders you choose, and file moves you can undo.
 - The agent's own calendar, which you subscribe to.
@@ -201,14 +203,7 @@ Linux).
    in the login keychain, so the setting is
    `:token-command ["security" "find-generic-password" "-s" "relay-ntfy" "-w"]`.
    If you use `:token-file` instead, keep the file readable only by you.
-7. To give roles Apple Reminders, build `tools/rem` (see its README) and
-   define its two tools (`rem-read`, `rem`) and grant them in `relay.edn`.
-8. To let roles read your Apple Calendar, build `tools/cal` (see its README),
-   run `tools/cal/cal calendars` once in a terminal to accept the Calendar
-   prompt, define the `cal` tool in `relay.edn` with class `:read` and labels
-   `["private" "contaminated"]`, and grant it. Invites carry other people's
-   text, which is why it is contaminated.
-9. To let roles use a service that offers an MCP server, such as
+7. To let roles use a service that offers an MCP server, such as
    MailerLite or Ticket Tailor, find the server's address in the
    service's help pages. MailerLite's is `https://mcp.mailerlite.com/mcp`.
    Pick a short name for the service, in lower case, and run this in a
@@ -475,7 +470,9 @@ polls each one. relay.edn's `:ingest` alone says what to fetch:
              :authserv-id "mx.example.org" :to "steward"}
  "repos"    {:kind :github :repos ["owner/repo"] :to "steward"
              :credentials-command ["cat" "/path/to/read-only-token"]}
- "calendar" {:kind :ics :url "https://calendar.example.org/you.ics" :to "steward"}}
+ "calendar" {:kind :ics :url "https://calendar.example.org/you.ics" :to "steward"}
+ "mac-cal"  {:kind :apple-calendar :calendars ["Home" "Work"] :to "steward"}
+ "mac-rem"  {:kind :apple-reminders :lists ["Personal" "Groceries"] :to "steward"}}
 ```
 
 - `:pop3` reads the agent's own mailbox with `curl`. The password goes
@@ -501,9 +498,23 @@ polls each one. relay.edn's `:ingest` alone says what to fetch:
   An answer that is not a whole calendar (an error page, an empty body,
   a feed cut off) is a failed poll, so it never reads as every event
   removed.
+- `:apple-calendar` reads the Calendar app on this Mac, which also
+  holds calendars that have no feed (the ones "On My Mac"). It gives
+  the same memo, snapshot and label as `:ics`. `:calendars` names the
+  calendars to read by title; leave it out for all of them. Events from
+  8 days back to 60 days ahead are read, and one that ended more than a
+  day ago is no longer news.
+- `:apple-reminders` reads the reminder lists you name in `:lists`, and
+  nothing else. The memo says which reminders are new, changed or done.
+  See "Calendar and reminders on your Mac".
+
+Both Apple kinds run relay's own `tools/eventkit/eventkit`, which the
+Homebrew install builds; `:bin` names another build. They are polled like
+the others, with no approval.
 
 Each source is polled every `:every-minutes` (5 for mail, 15 for
-GitHub, 60 for a calendar), at the minutes that are a multiple of it.
+GitHub, 60 for an ICS feed, 15 for Apple Calendar, 5 for Apple Reminders),
+at the minutes that are a multiple of it.
 `relay poll [<source>]` checks now and says what came in. No redirect is
 followed, and plain `pop3://` or `http://` is taken only to this
 machine. A source that keeps failing for `:outage-patience-minutes`
@@ -511,7 +522,9 @@ sends you one alert. `:to` must not be a public role.
 
 Everything an ingestor brings in is from outside, and carries a label
 saying where: `mail:<sender>`, `github:<owner>/<repo>` or
-`ics:<source>`. You see a mail as "from outside: a mail that says it is
+`calendar:<source>` (an ICS feed or Apple Calendar). Apple Reminders are
+the exception: they are your own lists, so they carry `private` and no
+source. You see a mail as "from outside: a mail that says it is
 from stranger@example.com", since anyone can write a From header. A mail
 that names your own address but was not verified is labelled
 `mail:unverified-operator` and shown as "from outside: a mail that says
@@ -541,6 +554,67 @@ reaches the source's role as yours. A reply that is not verified is
 mailbox content: it joins no thread, and the memo says it could not be
 confirmed.
 
+### Calendar and reminders on your Mac
+
+relay can read the Calendar and Reminders apps on the Mac it runs on,
+and let the steward manage your reminders. It does this with its own
+small program, `tools/eventkit/eventkit`, not with a tool you configure.
+
+macOS asks once for permission. Run this in a terminal on the Mac:
+
+```sh
+relay eventkit-access
+```
+
+Allow Calendar and Reminders when macOS asks. The program asks in its
+own name, so the grant holds for the background service too, and it says
+what was granted. If access is lost later (an OS upgrade can do it), the
+source fails like any other, and the alert says to run
+`relay eventkit-access` again.
+
+The role named in a source's `:to` gets tools for it, with no grant to
+keep in sync:
+
+- `your_calendar` reads your calendar over a span of dates, as relay
+  last read it. It is named so it cannot be mistaken for `calendar`,
+  which holds only the agent's own events. What it shows is outside text
+  (an invite's description may carry anyone's words), so it carries
+  `contaminated` and `calendar:<source>`.
+- `reminders` reads the reminders in the source's lists, with the id each
+  change takes. They are yours, so they carry `private` and nothing
+  else.
+- `reminder_add`, `reminder_edit`, `reminder_done` and `reminder_reopen`
+  change your reminders, only in the lists the source names. relay checks
+  the list before it calls the program, and passes every one of them to
+  the program as `--allow`, which refuses any other. The program has no
+  delete command, so nothing a role does can delete a reminder. Name
+  only lists that are yours alone: EventKit cannot tell whether an iCloud
+  list is shared, and writing to a shared one shows others the text.
+  The text a role writes is cleaned like text sent to you, and its links
+  are broken when the session had read outside text.
+
+Every write is in the log twice, `reminders/changing` before the
+program runs and `reminders/changed` after, with the reminder as it was
+and as it is. A relay stopped between them leaves a call the `reminders`
+tool tells the role to check by hand. The snapshot updates at once, so
+the next poll does not report the role's own change back to it.
+
+A write is a change in the daily note's sense. It is flagged, with where
+the outside text came from, only when the session had read outside text
+directly in its wake, and it can be undone like a skill or a routine
+(`relay revert`, a reply, the client). The undo is gentle:
+
+- undoing an add marks the reminder done; it never deletes it;
+- undoing an edit puts back the fields as they were, but only while the
+  reminder still reads as relay left it. If you changed it since, relay
+  leaves it alone and says to fix it by hand;
+- undoing a completion opens the reminder again, and undoing a
+  reopening marks it done.
+
+Putting a reminder back needs the program, so relay does it within a
+minute (at once for `relay revert`) and tells you if it cannot. Until
+then the note's item reads "asked".
+
 ### The daily note
 
 With `:daily-note {:at "07:30" :role "steward"}` in relay.edn, relay
@@ -549,7 +623,7 @@ is short and has up to five parts:
 
 - Changes to check. Every change to how a role works (a skill, a
   routine, a note it keeps, or another role, for a role that may add
-  roles) made since the last note by a session that had read something
+  roles), and every change to your reminders, made since the last note by a session that had read something
   from outside: a mail, a GitHub item, a calendar feed or the web. Each
   says in one line what changed, where the outside text came from, and
   how to undo it. relay works this part out in code from the labels, so
@@ -597,7 +671,7 @@ note, by mail or from the client's ready view, use the key in the client
 (`_relay/messages/act`), or run `relay revert 1`. `relay revert 1 <note>`
 undoes item 1 of an earlier note.
 Undoing puts back what was there before the change, or removes what it
-added. When you undo several changes to the same thing, in any order,
+added. (A reminder is never deleted: see "Calendar and reminders on your Mac".) When you undo several changes to the same thing, in any order,
 you end up with the version from before all of them, never one that
 another of those changes wrote. A new role or a removed one is listed
 with no number: removing a role is for good, since its name is never
@@ -1089,9 +1163,7 @@ from one.
 An external tool normally gets the call's arguments on its command line,
 appended after the configured command with no `--` between them. So a
 tool on this plain protocol must refuse flags in the model's part of its
-arguments, or the model could override a flag the operator pinned; `rem`
-reads its pinned flags first and treat anything after
-as the role's command. Prefer the envelope protocol for new tools.
+arguments, or the model could override a flag the operator pinned. Prefer the envelope protocol for new tools.
 Every external tool may run for its `:timeout-seconds`, ten minutes by
 default. The limit covers its output too, so a child left holding stdout
 open does not keep it running. relay starts each tool in a process group
@@ -1175,7 +1247,7 @@ signs relay in, shows you the server's tools and writes
 `<data>/connections/<name>.edn`, and `:connections ["<name>"]` in
 relay.edn loads it. Each tool that is on becomes a tool called
 `<name>_<tool>` with `:protocol :mcp-http`, granted by that name like any
-other. No role can read the connection file. Setup step 9 walks through
+other. No role can read the connection file. Setup step 7 walks through
 it.
 
 The sign-in is OAuth 2.1 with PKCE. relay finds the server's

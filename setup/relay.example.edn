@@ -59,7 +59,8 @@
 
  ;; What comes in from outside, as memos to a role (README: The mailbox
  ;; and other sources). The agent's own mailbox over POP3, issues and
- ;; pull requests on your GitHub repositories, and calendars you read.
+ ;; pull requests on your GitHub repositories, calendars you read, and the
+ ;; Calendar and Reminders apps on this Mac.
  ;; Mail from your own address (an email channel's :to) is yours only
  ;; when your provider's Authentication-Results, under :authserv-id,
  ;; says DKIM passed for your domain.
@@ -69,7 +70,14 @@
  ;;              :authserv-id "mx.example.org" :to "steward"}
  ;;  "repos"    {:kind :github :repos ["owner/repo"] :to "steward"}
  ;;             ; :api-url "https://github.example.com/api/v3" for GitHub Enterprise
- ;;  "calendar" {:kind :ics :url "https://calendar.example.org/you.ics" :to "steward"}}
+ ;;  "calendar" {:kind :ics :url "https://calendar.example.org/you.ics" :to "steward"}
+ ;;  ; Calendar and Reminders on this Mac, through relay's own tools/eventkit/eventkit
+ ;;  ; (run relay eventkit-access once in a terminal to allow it). :calendars
+ ;;  ; defaults to all of them. The role in :to gets your_calendar, reminders and
+ ;;  ; reminder_add, reminder_edit, reminder_done and reminder_reopen, and may
+ ;;  ; write only to the :lists named here: name only lists that are yours alone.
+ ;;  "mac-cal"  {:kind :apple-calendar :calendars ["Home" "Work"] :to "steward"}
+ ;;  "mac-rem"  {:kind :apple-reminders :lists ["Personal" "Groceries"] :to "steward"}}
 
  ;; relay serve's WebSocket listener, for a phone client over the tailnet
  ;; (README: Reaching relay from your phone). It listens on 127.0.0.1 at
@@ -104,14 +112,13 @@
 
  ;; Tools beyond relay's own, each an external command given the call's
  ;; arguments after its own, with no -- in between: such a tool must
- ;; refuse flags in the model's part, as rem does. New tools
+ ;; refuse flags in the model's part. New tools
  ;; are better written for the envelope protocol (see below). Every tool has a :class, which says what a
  ;; call can do:
  ;;   :read    returns content and sends nothing out
  ;;   :write   changes relay's own data only
  ;;   :edit    changes your own things outside relay: nobody else sees the
- ;;            change, and it can be undone, as with your own reminders
- ;;            or a draft in your own account
+ ;;            change, and it can be undone, as with a draft in your own account
  ;;   :egress  can send what the model chooses where an outsider can see it;
  ;;            only a public role may have one
  ;; and :labels, the labels its output always carries, as strings:
@@ -121,22 +128,7 @@
  ;; nothing waits for you because of them. No tool here may send, post,
  ;; publish or pay as you: relay prepares, and you do the last step.
  :tools
- ;; Reminders is two tools over one binary. The operator fixes --mode here;
- ;; the model's arguments come after it and cannot change it. Reading is
- ;; labelled private only, which trusts every list's text. Changing your
- ;; own reminders is :edit: nobody else sees them, and a change can be
- ;; undone. If any list is shared with other people, add "contaminated" to
- ;; rem-read, since their text could carry instructions, and leave rem
- ;; out, since writing sends text to them. See tools/rem/README.md.
- {"rem-read" {:class :read
-              :labels ["private"]
-              :description "Read Apple Reminders. Run with [\"help\"] for the commands."
-              :command ["/path/to/relay/tools/rem/rem" "--mode" "read"]}
-  "rem" {:class :edit
-         :labels ["private"]
-         :description "Change Apple Reminders. Run with [\"help\"] for the commands."
-         :command ["/path/to/relay/tools/rem/rem" "--mode" "write"]}
-
+ {
   ;; The web, for the scout: webtool's ask (see webtool's README) searches
   ;; with Brave Search and reads the top results, at most 5. It is :egress
   ;; because the query goes out to Brave, so only a public role may have
@@ -164,16 +156,6 @@
                       :required ["query"]
                       :additionalProperties false}
          :command ["/path/to/webtool/bin/webtool" "--config" "/path/to/webtool.json" "ask"]}}
-
- ;; Calendar is one read-only tool; cal cannot create, change or delete
- ;; anything and takes no operator-pinned option, so the command is just the
- ;; binary. Invites and shared calendars carry text other people wrote, so its
- ;; output is both private and contaminated. Grant it with :tools ["cal"].
- ;; See tools/cal/README.md.
- ;; "cal" {:class :read
- ;;        :labels ["private" "contaminated"]
- ;;        :description "Read Apple Calendar. Run with [\"help\"] for the commands."
- ;;        :command ["/path/to/relay/tools/cal/cal"]}
 
  ;; A tool can speak relay's envelope protocol instead of taking arguments
  ;; on its command line: it gets the call as JSON on stdin, with the
@@ -262,6 +244,6 @@
  ;; may not have :may-add, a tool whose :labels include "private", or the
  ;; dead letter handler's job.
  :grants
- {"steward" {:may-add true :tools ["rem-read" "rem"]}
+ {"steward" {:may-add true}
   ;; relay init adds it; by hand: relay add scout --public --title Scout < setup/scout.md
   "scout" {:public true :tools ["web"]}}}

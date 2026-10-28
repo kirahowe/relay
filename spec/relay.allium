@@ -384,6 +384,7 @@ enum Label { private | contaminated }
 enum FactChange { added | superseded | corrected | retracted }
 enum CalendarChange { added | changed | removed }
 enum MoveStatus { moving | moved }
+enum ReminderCallStatus { changing | changed | failed }
 enum CardKind { checklist | tracker | note }
 enum CardStatus { active | archived }
 enum CellState { open | done | skip }
@@ -879,8 +880,12 @@ entity RecipeChange {
     -- A change to how a role works, kept as relay folds the event that
     -- made it: a skill (a doc under skills/<role>/), a routine, a note
     -- a role keeps, or a role. The id is that event's seq.
-    what: skill | routine | note | role
-    change: added | changed | removed
+    -- Also a reminder the role wrote (ChangeReminder): owner is the
+    -- ingest source's name, name the reminder's id, and change is added,
+    -- changed, completed or reopened. It holds the reminder before and
+    -- after, and its title for the note.
+    what: skill | routine | note | role | reminder
+    change: added | changed | removed | completed | reopened
     owner: Role
     name: String
     actor: String
@@ -982,6 +987,31 @@ entity CalendarEventVersion {
     location: String?
     description: String?
     why: String?
+}
+
+entity ReminderCall {
+    -- One call to a reminder tool. The id is the seq of its
+    -- reminders/changing event, recorded before the binary runs;
+    -- reminders/changed (the reminder before and after) or
+    -- reminders/failed after. A call relay never finished stays changing,
+    -- and the reminders tool tells the role to check it by hand.
+    actor: Role
+    source: String
+    op: add | edit | done | reopen
+    status: ReminderCallStatus
+    before: Reminder?
+    after: Reminder?
+}
+
+value Reminder {
+    -- As the EventKit binary prints it. A reminder is the operator's own
+    -- text: private, never outside.
+    id: String
+    list: String
+    title: String
+    notes: String?
+    due: String?           -- a date, or a local date and time
+    completed: Boolean
 }
 
 entity MoveCall {
@@ -2988,7 +3018,15 @@ rule IngestRecord {
 
     for item in items where seen(source, item.key) != item.version:
         ensures: Memo.sent(to: source.to, from: dispatcher,
-                           labels: {contaminated, source_label(source, item)})
+                           labels: source_labels(source, item))
+            -- contaminated and the source's label, except for Apple
+            -- Reminders: the operator's own lists, labelled private only
+
+    ensures: source.snapshot = snapshot_of(items)
+        -- A calendar source (an ics feed or Apple Calendar) keeps the
+        -- events it showed last, and a reminders source its reminders,
+        -- as plain data in the state, folded from the ingest/polled
+        -- event, for the tools that read them on demand.
 
     @guidance
         -- One memo per mail; per repository, one for every 50 items a
@@ -2999,6 +3037,74 @@ rule IngestRecord {
         -- every event. What was seen at the
         -- same version is never recorded again, so two ticks that poll
         -- at once record it once. relay never deletes from the mailbox.
+        -- Apple Calendar (kind apple-calendar, every 15 minutes) and
+        -- Apple Reminders (kind apple-reminders, every 5) run relay's own
+        -- EventKit binary instead of a fetch. A calendar read goes from 8
+        -- days back to 60 ahead, maps into the same event shape,
+        -- diff and memo as an ics feed, and carries calendar:<source>.
+        -- A reminders memo lists the new, changed and done reminders,
+        -- 50 a poll, labelled private; one first seen already done is not
+        -- news, and one gone from its list is let go of quietly. A lost
+        -- grant is IngestFailed with an error that says to run
+        -- relay eventkit-access.
+}
+
+rule ChangeReminder {
+    when: ReminderWriteRequested(caller, source, op, args)
+    -- reminder_add, reminder_edit, reminder_done, reminder_reopen, for
+    -- the role an apple-reminders source reports to. relay's own code
+    -- calls the binary; there is no delete.
+    requires: caller.kind = role and not caller.role.is_public
+    requires: source.kind = apple_reminders and source.to = caller.role
+    requires: reminder_lists_allowed(source, op, args)
+        -- the list written to, and for an edit, done or reopen the
+        -- reminder's current list (from the snapshot) and any list it
+        -- moves to, are each one of the source's lists, exactly. Refused
+        -- here before the binary is called; the binary refuses it again,
+        -- every list of the source being passed as --allow.
+    requires: args_are_valid(op, args)
+        -- a title, a due date that is a date or a local date and time,
+        -- notes within limits; an edit changes something
+    ensures: ReminderCall.created(actor: caller.role, source: source.name, op: op, status: changed)
+    ensures: RecipeChange.created(what: reminder, change: change_name(op))
+        -- shaped by outside text when the session read some directly,
+        -- as any change is, so the daily note flags it
+
+    @guidance
+        -- Text a role writes is cleaned like text sent to the operator:
+        -- hidden characters removed, and links broken when the session
+        -- holds outside labels. Every event carries the session's labels
+        -- and private. The snapshot and what the source has seen update
+        -- with reminders/changed, so the next poll does not report the
+        -- role's own change back.
+}
+
+rule SettleReminderUndo {
+    when: ReminderUndoAsked(change)
+    -- Asked by RevertChange for a change with what = reminder. The tick
+    -- (and relay revert at once) carries it out, since putting a
+    -- reminder back needs the binary.
+    let current = reminder_now(change)
+    ensures: if current = null:
+        ReminderUndoRefused(change)
+    else if change.change = added:
+        current.completed = true               -- marked done, never deleted
+    else if change.change = completed:
+        current.completed = false
+    else if change.change = reopened:
+        current.completed = true
+    else if fields(current) = fields(change.after):
+        fields(current) = fields(change.before)   -- only the fields the edit changed
+    else:
+        ReminderUndoRefused(change)
+            -- the operator changed it since: relay says to fix it by hand
+
+    @guidance
+        -- A refused undo tells the operator why and leaves the change
+        -- not undone, so it can be asked for again. An undo that finds
+        -- the reminder already as it would leave it changes nothing and
+        -- counts as done. A done undo is the operator's own change: it
+        -- is not flagged and cannot be undone again.
 }
 
 rule OperatorMail {
@@ -3222,6 +3328,9 @@ rule RevertChange {
     -- never shown to the operator.
     requires: not change.reverted
     requires: change.what != role or change.change = changed
+    requires: change.what != reminder or not reminder_undo_asked(change)
+        -- For a reminder this asks (ReminderUndoAsked) and
+        -- SettleReminderUndo does it, then marks the change reverted.
     requires: change.undo_of = null
     ensures: change.reverted = true
     ensures: ChangeUndone(change: change)
