@@ -36,6 +36,7 @@
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
+| [89](89-read-the-mac-calendar-and-manage-reminders-through.md) | Read the Mac calendar and manage reminders through ingestors and an actuator | feature | P1 |
 | [37](37-let-the-hub-see-which-role-owns-what.md) | Let the hub see which role owns what | bug | P2 |
 
 ### Review
