@@ -12,7 +12,7 @@
     events --from I --to I [--calendar T]...
     reminders --list T...            unfinished, and done in the last 14 days
     [--allow T]... add --list T --title T [--due D] [--notes N]
-    [--allow T]... set ID [--title T] [--due D|none] [--notes N|none] [--list T]
+    [--allow T]... set ID [--title T] [--due D | --clear-due] [--notes N | --clear-notes] [--list T]
     [--allow T]... done ID | reopen ID
 
   There is no delete command, so nothing relay does can delete one of the
@@ -26,11 +26,13 @@
   (:require [cheshire.core :as json]
             [clojure.string :as str]
             [relay.ics-feed :as ics-feed]
+            [relay.provenance :as provenance]
             [relay.text :as text])
   (:import (java.security MessageDigest)
            (java.time Duration Instant LocalDate LocalDateTime ZoneId)
            (java.time.format DateTimeFormatter)
-           (java.time.temporal ChronoUnit)))
+           (java.time.temporal ChronoUnit)
+           (java.text Normalizer Normalizer$Form)))
 
 (def look-back
   "How far before now a calendar read starts. An event that ended less
@@ -290,13 +292,12 @@
           :else
           (let [t (when (some? title) (clean-line labels title))
                 n (when (some? notes) (str/trim (clean labels notes)))
-                clear-due? (and (some? due) (or (str/blank? due) (= "none" (str/lower-case (str/trim due)))))
+                clear-due? (and (some? due) (str/blank? due))
                 set-due? (and (some? due) (not clear-due?))]
             (cond
               (and (some? title) (str/blank? t)) {:error "A reminder needs a title."}
               (and t (text-problem "title" t title-limit)) {:error (text-problem "title" t title-limit)}
               (and n (text-problem "notes" n notes-limit)) {:error (text-problem "notes" n notes-limit)}
-              (and n (= "none" (str/lower-case n))) {:error "Notes that say only \"none\" would clear the notes. Say something else, or send empty notes to clear them."}
               (and set-due? (due-problem due)) {:error (due-problem due)}
               (and (some? list) (not (allowed? lists list))) {:error (refuse-list list)}
               (and (nil? t) (nil? n) (not clear-due?) (not set-due?) (nil? list))
@@ -311,9 +312,9 @@
                 {:id (:id r) :args args
                  :tail (cond-> ["set" (:id r)]
                          t (into ["--title" t])
-                         clear-due? (into ["--due" "none"])
+                         clear-due? (into ["--clear-due"])
                          set-due? (into ["--due" due])
-                         (some? n) (into ["--notes" (if (str/blank? n) "none" n)])
+                         (some? n) (into (if (str/blank? n) ["--clear-notes"] ["--notes" n]))
                          (some? list) (into ["--list" list]))})))))
       {:error (str "relay has no reminder write called " op ".")})))
 
@@ -330,56 +331,98 @@
   [op]
   (case op "add" "added" "edit" "changed" "done" "completed" "reopen" "reopened"))
 
-(defn- differs [a b]
-  (into {} (for [k [:title :notes :due :list]
-                 :when (not= (str (get a k)) (str (get b k)))]
-             [k (get b k)])))
+(declare provenance-of-texts)
+
+(def undo-field-names [:list :title :notes :due :completed])
+
+(defn- same-value? [k x y]
+  (if (= :completed k) (= (boolean x) (boolean y)) (= (str x) (str y))))
+
+(defn undo-fields
+  "The fields a change set, each with the value it had before and after:
+  {field {:before :after}}. An edit, a completion or a reopening set the
+  fields whose values differ between its images. An add set nothing it
+  could put back except that the reminder is open: undoing it completes
+  the reminder, as relay never deletes one."
+  [{:keys [before after]}]
+  (let [a (fields after)]
+    (if (nil? before)
+      {:completed {:before true :after (:completed a)}}
+      (let [b (fields before)]
+        (into {} (for [k undo-field-names :when (not (same-value? k (get b k) (get a k)))]
+                   [k {:before (get b k) :after (get a k)}]))))))
+
+(defn- outside-text? [outside k text]
+  (and (#{:title :notes} k)
+       (some #(not= "private" %) (:labels (provenance-of-texts outside [text])))))
+
+(defn- field-name [k] (case k :due "due date" :list "list" :completed "done state" (name k)))
+
+(defn- and-join [xs]
+  (case (count xs) 0 "" 1 (first xs) (str (str/join ", " (butlast xs)) " and " (last xs))))
 
 (defn revert-plan
-  "How to put back a change to a reminder: `change` is what the log
-  records of it ({:change \"added\" | \"changed\" | \"completed\" |
-  \"reopened\" :before :after}), `current` the reminder as it is now in
-  its list, or nil. One of
-    {:op \"done\" | \"reopen\" :id}            mark it done, or open again
-    {:op \"edit\" :id :set {field value}}      put back what the edit changed
-    {:noop why}                              it is already as undoing leaves it
-    {:refuse why}                            relay does not touch it
-  Undoing an add completes the reminder and never deletes it. Undoing an
-  edit puts back the fields only while the reminder still reads as relay
-  left it; if the operator changed it since, relay does not overwrite
-  that."
-  [{:keys [change before after]} current]
-  (let [where (str "\"" (one-line (:title after) 80) "\"")]
+  "How to undo a change to a reminder, field by field, with no history.
+  `change` is {:before :after} as the log records it, `current` the reminder
+  as the list holds it now (nil if gone), `outside` the set of outside
+  texts (core/reminder-outside) and `lists` the lists relay may write to.
+  For each field the change set:
+    the reminder already holds the before value  -> nothing to do
+    it holds the change's after value            -> put the before value back,
+                                                    unless that is outside text
+                                                    or a list relay may not write
+    anything else (the operator changed it)      -> leave it alone, and say so
+  Fields the change did not set are never touched. One of
+    {:steps [{:op \"edit\" :set {field value}} {:op \"done\" | \"reopen\"}]
+     :left [lines] :summary line}   writes the fields it can; :left says what it did not
+    {:noop why :left [lines]}        nothing to write (and the change counts as undone)
+    {:refuse why}                    nothing it may write, and some field changed since
+                                     or is outside text: the change stays not undone"
+  [{:keys [before after] :as change} current {:keys [outside lists]}]
+  (let [where (str "\"" (one-line (:title after) 80) "\"")
+        uf (undo-fields change)
+        cur (fields current)
+        verdicts (into {} (for [[k {b :before a :after}] uf]
+                            [k (cond
+                                 (same-value? k (get cur k) b) :at-before
+                                 (not (same-value? k (get cur k) a)) :changed-since
+                                 (outside-text? outside k (str b)) :withheld
+                                 (and (= :list k) (not (allowed? lists b))) :not-allowed
+                                 :else :restore)]))
+        of (fn [v] (filter #(= v (verdicts %)) undo-field-names))
+        restores (of :restore)
+        left (vec (concat
+                   (when-let [ks (seq (of :changed-since))]
+                     [(str "Left alone because you changed " (if (next ks) "them" "it") " since: " (and-join (map field-name ks)) ".")])
+                   (for [k (of :withheld)
+                         :let [srcs (:sources (provenance-of-texts outside [(str (get-in uf [k :before]))]))]]
+                     (str "Its earlier " (field-name k) " came from "
+                          (text/defang (or (provenance/summary srcs) "something from outside"))
+                          ", so relay won't put it back; change it by hand if you want it."))
+                   (for [k (of :not-allowed)]
+                     (str "Its earlier " (field-name k) " is not a list relay may write to, so it stays."))))]
     (cond
       (nil? current)
       {:refuse (str "The reminder " where " is not in its list any more, or was finished too long ago for"
                     " relay to find, so there is nothing to put back.")}
-      (= "added" change)
-      (if (:completed current)
-        {:noop (str "The reminder " where " is done already.")}
-        {:op "done" :id (:id current)})
-      (= "completed" change)
-      (if (:completed current)
-        {:op "reopen" :id (:id current)}
-        {:noop (str "The reminder " where " is open already.")})
-      (= "reopened" change)
-      (if (:completed current)
-        {:noop (str "The reminder " where " is done already.")}
-        {:op "done" :id (:id current)})
-      (= "changed" change)
-      (cond
-        (not= (fields current) (fields after))
-        {:refuse (str "The reminder " where " has changed since relay edited it, so relay leaves it alone."
-                      " Fix it by hand: before the edit it was "
-                      (let [b (fields before)]
-                        (str "titled " (pr-str (one-line (:title b) 80))
-                             (when (seq (:due b)) (str ", due " (due-text (:due b))))
-                             " in the list " (pr-str (:list b)) "."))
-                      )}
-        (empty? (differs after before))
-        {:noop (str "The edit of " where " changed nothing to put back.")}
-        :else {:op "edit" :id (:id current) :set (differs after before)})
-      :else {:refuse "relay does not know how to undo that."})))
+      (empty? uf) {:noop (str "The change to " where " set nothing to put back.")}
+      (and (empty? restores) (empty? left))
+      {:noop (str "The reminder " where " is already as undoing the change leaves it.") :left []}
+      (empty? restores)
+      (if (seq (of :at-before))
+        {:noop (str "Nothing was written to " where ": what relay may put back is back already.") :left left}
+        {:refuse (str "Nothing of the change to " where " could be undone. " (str/join " " left)
+                      (when (seq (of :changed-since)) " Fix it by hand."))})
+      :else
+      {:steps (vec (concat
+                    (when-let [ks (seq (remove #{:completed} restores))]
+                      [{:op "edit" :id (:id current) :set (into {} (for [k ks] [k (get-in uf [k :before])]))}])
+                    (when (some #{:completed} restores)
+                      [{:op (if (get-in uf [:completed :before]) "done" "reopen") :id (:id current)}])))
+       :left left
+       :summary (if (= [:completed] (vec restores))
+                  (if (get-in uf [:completed :before]) (str "Marked " where " as done.") (str "Opened " where " again."))
+                  (str "Put back the " (and-join (map field-name restores)) " of " where "."))})))
 
 (defn revert-tail
   "The binary's arguments (after --allow) that carry out a revert-plan."
@@ -388,9 +431,73 @@
     ("done" "reopen") [op id]
     "edit" (cond-> ["set" id]
              (contains? set :title) (into ["--title" (:title set)])
-             (contains? set :due) (into ["--due" (if (str/blank? (:due set)) "none" (:due set))])
-             (contains? set :notes) (into ["--notes" (if (str/blank? (:notes set)) "none" (:notes set))])
+             (contains? set :due) (into (if (str/blank? (:due set)) ["--clear-due"] ["--due" (:due set)]))
+             (contains? set :notes) (into (if (str/blank? (:notes set)) ["--clear-notes"] ["--notes" (:notes set)]))
              (contains? set :list) (into ["--list" (:list set)]))))
+
+;; --- where reminder text came from
+;;
+;; Reminders are the operator's, so what the lists hold reads as private
+;; only. But text a role wrote from a session that had read outside text is
+;; still that text's, however long it sits in a list. relay keeps one
+;; monotonic set: every title or notes text such a session asked to write,
+;; recorded before the binary runs (reminders/changing), mapped to the
+;; outside labels and sources of the write. Nothing leaves the set: not an
+;; undo, a clean edit, a failure or a completion. A text relay shows to a
+;; role is outside exactly when it is in the set, wherever it appears, in
+;; whichever source's snapshot, after a crash or a move. Only the operator
+;; changing the words takes them out of reach. Text she happens to type
+;; that matches stays outside, which is the safe side.
+
+(defn- outside-label? [l]
+  (and (string? l) (or (= "contaminated" l) (boolean (re-matches #"[a-z]+:.+" l)))))
+
+(defn- trimmed
+  "The key a text has in the set of outside texts, or nil when blank. It
+  is folded (compatibility normalization, lower case, every run of
+  whitespace one space) so that text stored a little differently from
+  what relay sent, such as with other line ends or composed accents,
+  still matches. Folding only ever matches more, never less."
+  [s]
+  (let [t (-> (Normalizer/normalize (str s) Normalizer$Form/NFKC)
+              (str/lower-case)
+              (str/replace #"(?U)\s+" " ")
+              str/trim)]
+    (when-not (str/blank? t) t)))
+
+(defn note-outside
+  "The set of outside texts (`outside`, {text {:labels :sources}}) after a
+  write recorded with these session `labels` and `sources` asked for
+  `args` (its :title and :notes, as sent). A session that held no outside
+  label adds nothing."
+  [outside labels sources args]
+  (let [ls (vec (filter outside-label? labels))]
+    (if (empty? ls)
+      (or outside {})
+      (reduce (fn [m t]
+                (update m t (fn [e] {:labels (vec (sort (distinct (concat (:labels e) ls))))
+                                     :sources (vec (sort (distinct (concat (:sources e) sources))))})))
+              (or outside {})
+              (keep trimmed [(:title args) (:notes args)])))))
+
+(defn provenance-of-texts
+  "What showing these `texts` carries: private, and the labels and sources
+  of each that is in the `outside` set. The one function every display of
+  reminder text goes through. {:labels :sources}."
+  [outside texts]
+  (let [hits (keep #(get outside (trimmed %)) texts)]
+    {:labels (vec (sort (distinct (cons "private" (mapcat :labels hits)))))
+     :sources (vec (sort (distinct (mapcat :sources hits))))}))
+
+(defn reminder-texts
+  "The words of a reminder a role is shown: its title and notes."
+  [r]
+  [(:title r) (:notes r)])
+
+(defn shown-provenance
+  "provenance-of-texts for the words of `reminders`."
+  [outside reminders]
+  (provenance-of-texts outside (mapcat reminder-texts reminders)))
 
 (defn snapshot-with
   "A reminders snapshot with `r` in it, replacing the reminder of its id
@@ -400,15 +507,61 @@
         i (first (keep-indexed (fn [i x] (when (= (:id x) (:id r)) i)) snapshot))]
     (if i (assoc snapshot i r) (conj snapshot r))))
 
-(defn stuck-lines
-  "What to tell a role about reminder calls that were recorded and never
-  finished: `calls` are core's reminder calls, `now` the time. A relay
-  stopped between the record before the binary ran and the one after, so
-  the log does not say whether the change happened. A call under five
-  minutes old may still be running."
-  [calls ^Instant now]
-  (vec (for [{:keys [at op args status source]} calls
-             :when (and (= :changing status) (.isBefore ^Instant at (.minus now (Duration/ofMinutes 5))))]
-         (str "relay stopped while it ran your " op " call on " source " at " at ", so the log does not say whether"
-              " it happened. Check that reminder by hand"
-              (when-let [t (or (:title args) (:id args))] (str " (" (pr-str (one-line t 80)) ")")) "."))))
+;; --- what a write did is decided by reading, and only what relay can attribute is recorded
+;;
+;; A write's record holds only the fields the call asked to set, and each only
+;; if a read shows it now holding the requested value. Every other field is
+;; the operator's whatever the read shows, so it is never in the record and an
+;; undo's per-field compare-and-swap can never touch it. An add is attributed
+;; by the id the binary reported and a read confirms, never by its title.
+
+(defn requested-fields
+  "What a call asked to set, as {field value}: an edit's title, notes, due
+  date and list (an empty notes or due clears it); done and reopen, whether
+  the reminder is done. An add is attributed by id, not by fields."
+  [op args]
+  (case op
+    "edit" (into {} (for [k [:title :notes :due :list] :when (contains? args k)] [k (get args k)]))
+    "done" {:completed true}
+    "reopen" {:completed false}
+    {}))
+
+(defn- with-field [r k v]
+  (if (and (#{:notes :due} k) (str/blank? (str v))) (dissoc r k) (assoc r k v)))
+
+(defn attribute-fields
+  "What a read shows of a change to a reminder: `pre` is the reminder as
+  read before, `requested` the {field value} the change asked for, `post`
+  the reminder as read now (nil if it cannot be found). One of
+    {:status :changed :before pre :after pre-with-the-confirmed-fields :confirmed [field ...]}
+    {:status :failed}      none of the requested values is there
+    {:status :gone}        no such reminder now
+  The after-image is the pre-read with only the requested fields that hold
+  their requested values replaced."
+  [pre requested post]
+  (if (nil? post)
+    {:status :gone}
+    (let [ok (filterv (fn [[k v]] (same-value? k (get post k) v)) requested)]
+      (if (seq ok)
+        {:status :changed :before pre :confirmed (mapv first ok)
+         :after (reduce (fn [r [k v]] (with-field r k v)) pre ok)}
+        {:status :failed}))))
+
+(defn- add-image [args hit]
+  (cond-> {:id (:id hit) :list (:list hit) :title (:title hit) :completed false}
+    (and (seq (str (:notes args))) (= (str (:notes args)) (str (:notes hit)))) (assoc :notes (:notes hit))
+    (and (seq (str (:due args))) (= (str (:due args)) (str (:due hit)))) (assoc :due (:due hit))))
+
+(defn attribute
+  "What a successful reminder write did, from the images the binary itself
+  printed, and only what the call asked for. `call` has :op and :args;
+  `before` and `after` are the binary's images (before is nil for an add).
+  edit, done, reopen: attribute-fields of the requested fields. add: the
+  reminder the binary reported, by its id:
+    {:status :changed :before nil :after image}, or {:status :failed} with no id."
+  [{:keys [op args]} before after]
+  (if (= "add" op)
+    (if (:id after)
+      {:status :changed :before nil :after (add-image args after)}
+      {:status :failed})
+    (attribute-fields before (requested-fields op args) after)))

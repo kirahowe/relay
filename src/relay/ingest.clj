@@ -211,6 +211,20 @@
              " Name only lists that are yours alone: a list shared with other people could carry their words,"
              " and writing to it would show them yours.")))))
 
+(defn- shared-list-problem
+  "Which list two Apple Reminders sources both name, as a sentence, or nil.
+  A reminder belongs to its list, so two sources over one list would read
+  and write the same reminders under two names."
+  [ingest]
+  (let [by-list (reduce (fn [acc [n src]]
+                          (reduce (fn [acc l] (update acc l (fnil conj []) n)) acc
+                                  (when (and (= :apple-reminders (:kind src)) (vector? (:lists src))) (:lists src))))
+                        {} (sort-by (comp str key) ingest))]
+    (first (for [[l names] (sort-by key by-list) :when (> (count names) 1)]
+             (str "relay.edn's :ingest has two Apple Reminders sources, " (str/join " and " (map pr-str names))
+                  ", that both name the list " (pr-str l) ". Give a list to one source only: each reminder belongs to one list,"
+                  " and two sources would read and write it under two names.")))))
+
 (defn reads-replies?
   "Whether a reply by mail can count as the operator's: some mailbox
   source has the :authserv-id relay checks her mail's
@@ -226,7 +240,8 @@
   (cond
     (nil? ingest) nil
     (not (map? ingest)) "relay.edn's :ingest is a map of source names to sources."
-    :else (some (fn [[n src]] (source-problem n src public?)) (sort-by (comp str key) ingest))))
+    :else (or (some (fn [[n src]] (source-problem n src public?)) (sort-by (comp str key) ingest))
+              (shared-list-problem ingest))))
 
 (defn every-minutes [{:keys [kind every-minutes]}]
   (or every-minutes (default-every-minutes kind)))
@@ -497,11 +512,16 @@
 
 (defn reminders-memo
   "The memo for what changed in a source's reminders: {:from :subject
-  :body :labels}, or nil when nothing is worth saying. `fresh` as fresh
-  gives it. A reminder seen for the first time already done is not news.
-  Reminders are the operator's own lists, so the memo carries private and
-  no source, and no warning about orders: it is not outside text."
-  [source-name fresh]
+  :body :labels :sources}, or nil when nothing is worth saying. `fresh`
+  as fresh gives it. A reminder seen for the first time already done is
+  not news. Reminders are the operator's own lists, so the memo carries
+  private only, except for a reminder whose words a session that had read
+  outside text wrote and nobody has changed since: `shown`, a function of
+  the reminders the memo mentions, says what they carry
+  (relay.core/shown-provenance), and the memo then carries that text's
+  labels and sources."
+  ([source-name fresh] (reminders-memo source-name fresh #(eventkit/shown-provenance {} %)))
+  ([source-name fresh shown]
   (let [news (for [[{:keys [reminder]} st] fresh
                    :let [kind (cond (and (= :new st) (:completed reminder)) nil
                                     (= :new st) :new
@@ -512,15 +532,21 @@
         of (fn [k] (map second (filter #(= k (first %)) news)))
         count-of (fn [k what] (when (seq (of k)) (str (count (of k)) " " what)))]
     (when (seq news)
-      {:from "dispatcher" :labels ["private"]
+      (let [{:keys [labels sources]} (shown (map second news))
+            outside? (some #(not= "private" %) labels)]
+      {:from "dispatcher" :labels labels :sources sources
        :subject (one-line (str "Reminders (" source-name "): "
                                (str/join ", " (remove nil? [(count-of :new "new") (count-of :changed "changed") (count-of :done "done")])))
                           200)
        :body (str "What changed in your reminders (" source-name "), the operator's own lists. A reminder's id is what"
-                  " reminder_edit, reminder_done and reminder_reopen take.\n\n"
+                  " reminder_edit, reminder_done and reminder_reopen take.\n"
+                  (when outside?
+                    (str "Some of the words below were written by a session of yours that had read text from outside,"
+                         " so they count as from outside. " outside-note "\n"))
+                  "\n"
                   (str/join "\n\n"
                             (for [[k r] news]
-                              (str (case k :new "New: " :changed "Changed: " :done "Done: ") (eventkit/reminder-text r)))))})))
+                              (str (case k :new "New: " :changed "Changed: " :done "Done: ") (eventkit/reminder-text r)))))})))))
 
 (defn sources-for
   "The ingest sources whose :to is `role` and whose kind is among `kinds`,

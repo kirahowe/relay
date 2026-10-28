@@ -909,7 +909,11 @@
   ([{:keys [config] :as sys} {:keys [spawn!] :or {spawn! spawn-wake!}}]
    (let [state (inbound/current-state sys)]
      (inbound/submit! sys {:type :tick :actor core/dispatcher
-                           :args {:lost-wakes (lost-wakes state)}}))
+                           :args {:lost-wakes (lost-wakes state)}})
+     ;; A reminder call left unfinished was cut short by relay stopping: it is
+     ;; cancelled, closed as failed, and nothing is said to the operator.
+     (when (some #(= :changing (:status %)) (vals (:reminder-calls state)))
+       (inbound/submit! sys {:type :reminders/close-interrupted :actor core/dispatcher :args {}})))
    (let [state (inbound/current-state sys)
          t (now sys state)]
      (doseq [{:keys [channel messages]} (core/messages-due state t (.minus ^Instant t stale-after))]

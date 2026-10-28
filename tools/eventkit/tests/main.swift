@@ -75,8 +75,15 @@ check(isUsage(["add", "--list", "L", "--title", "T", "--list", "M"]), "list twic
 check(isUsage(["add", "stray", "--list", "L", "--title", "T"]), "stray positional")
 check(run(["add", "--list", "L", "--title", "--notes", "--notes", "x"])?.one("title") == "--notes", "title value is data")
 
-check(run(["set", "ID", "--due", "none"])?.one("due") == "none", "set due none")
-check(run(["set", "ID", "--notes", "none", "--list", "M"])?.one("list") == "M", "set notes and list")
+check(isUsage(["set", "ID", "--due", "none"]), "none is not a due date")
+check(run(["set", "ID", "--clear-due"])?.has("clear-due") == true, "set --clear-due")
+check(run(["set", "ID", "--clear-notes", "--list", "M"])?.has("clear-notes") == true, "set --clear-notes and list")
+check(run(["set", "ID", "--notes", "none"])?.one("notes") == "none", "notes that read none are notes")
+check(isUsage(["set", "ID", "--due", "2026-10-28", "--clear-due"]), "--due conflicts with --clear-due")
+check(isUsage(["set", "ID", "--notes", "x", "--clear-notes"]), "--notes conflicts with --clear-notes")
+check(isUsage(["set", "ID", "--clear-due", "--clear-due"]), "a switch is given once")
+check(isUsage(["set", "ID", "--clear-due", "x"]), "a switch takes no value")
+check(isUsage(["add", "--list", "L", "--title", "T", "--clear-notes"]), "add has no clear flags")
 check(isUsage(["set", "ID"]), "set needs a change")
 check(isUsage(["set", "--title", "T"]), "set needs an id")
 check(isUsage(["set", "ID", "OTHER", "--title", "T"]), "set takes one id")
@@ -133,7 +140,7 @@ for command in ["access", "calendars", "events", "lists", "reminders", "add", "s
 // Property: parse never crashes, and an accepted command line never has an
 // empty allow with a read or a non-empty allow with a read.
 let pool = ["add", "set", "done", "reopen", "events", "reminders", "lists", "help", "--list", "--allow", "--from", "--to",
-            "--title", "--due", "--notes", "--calendar", "", "x", "-", "--", "2026-10-28", "none"]
+            "--title", "--due", "--notes", "--clear-due", "--clear-notes", "--calendar", "", "x", "-", "--", "2026-10-28", "none"]
 for _ in 0..<5000 {
     let args = (0..<Int.random(in: 0...8, using: &rng)).map { _ in pool.randomElement(using: &rng)! }
     if case .run(let i) = parse(args), !i.command.isWrite {
@@ -253,25 +260,25 @@ check(sharingMarkers(CalendarTraits(isSubscribed: true, typeName: "subscription"
 
 // MARK: alarms
 
-let t0 = Date(timeIntervalSince1970: 1_800_000_000)
-check(alarmsToRemove(oldDue: nil, alarmDates: [t0, nil]).isEmpty, "no old timed due removes nothing")
-check(alarmsToRemove(oldDue: t0, alarmDates: [nil, t0, t0.addingTimeInterval(-900), t0]) == [1, 3], "only alarms at the old due go")
-check(alarmsToRemove(oldDue: t0, alarmDates: [nil, nil]).isEmpty, "relative and location alarms stay")
-check(needsNewAlarm(newDue: nil, remaining: []) == false, "no new alarm without a timed due")
-check(needsNewAlarm(newDue: t0, remaining: [nil]) == true, "new alarm when absent")
-check(needsNewAlarm(newDue: t0, remaining: [nil, t0]) == false, "no duplicate alarm")
-for _ in 0..<2000 {
-    let old = Date(timeIntervalSince1970: Double(Int.random(in: 0...2_000_000_000, using: &rng)))
-    let dates: [Date?] = (0..<Int.random(in: 0...8, using: &rng)).map { _ in
-        switch Int.random(in: 0...2, using: &rng) {
-        case 0: return nil
-        case 1: return old
-        default: return Date(timeIntervalSince1970: old.timeIntervalSince1970 + Double(Int.random(in: -86400...86400, using: &rng)))
-        }
+let timed = parseDue("2026-10-28T09:00")
+let dayDue = parseDue("2026-10-28")
+let noDue: Due? = nil
+check(alarmEffect(command: .add, due: timed) == .relativeAtDue, "a new timed reminder gets one relative alarm")
+check(alarmEffect(command: .add, due: dayDue) == .none, "a date-only due gets none")
+check(alarmEffect(command: .add, due: noDue) == .none, "no due, no alarm")
+let allDues: [Due?] = [timed, dayDue, noDue]
+for command in [Command.set, .done, .reopen, .reminders, .events] {
+    for due in allDues {
+        check(alarmEffect(command: command, due: due) == .none, "\(command) never touches an alarm")
     }
-    let drop = Set(alarmsToRemove(oldDue: old, alarmDates: dates))
-    for (i, d) in dates.enumerated() {
-        check(drop.contains(i) == (d == old), "removal matches exactly the old due time")
+}
+// Whatever a set is given, its plan has no alarm effect.
+for _ in 0..<500 {
+    let groups: [[String]] = [["--title", "T"], ["--due", "2026-10-28T09:00"], ["--notes", "N"], ["--list", "L"], ["--clear-notes"]]
+    var args = ["set", "ID"]
+    for g in groups where Bool.random(using: &rng) { args += g }
+    if case .run(let i) = parse(args) {
+        check(alarmEffect(command: i.command, due: i.one("due").flatMap(parseDue)) == .none, "set's plan has no alarm effect")
     }
 }
 

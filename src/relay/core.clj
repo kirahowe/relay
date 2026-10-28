@@ -141,6 +141,14 @@
    ;; event, and the undos of reminder changes asked for and not done yet,
    ;; by the change's seq (relay.reminders).
    :reminder-calls {} :reminder-reverts {}
+   ;; What each settled undo of a reminder change did, by the change's
+   ;; seq: {:lines [...] :partial bool}. Partial when it left a field alone.
+   :reminder-outcomes {}
+   ;; Every title or notes text a session that had read outside text asked
+   ;; to write into a reminder, with that write's outside labels and
+   ;; sources. Folded from reminders/changing, recorded before the binary
+   ;; runs, and never shrunk (relay.eventkit/note-outside).
+   :reminder-outside {}
    ;; Each ingest source's record: what it has brought in, by key and
    ;; version, where it got to, whether it is failing, and for a
    ;; calendar or reminders source what it showed last (:snapshot, as
@@ -909,11 +917,11 @@
                :peek (when (= "note/written" type) (digest/peek (:text prev) (:text data)))})))
 
       "reminders/changed"
-      (let [{:keys [source op before after]} data]
+      (let [{:keys [source op] rb :before after :after} data]
         (ch {:what "reminder" :owner source :name (:id after) :title (:title after) :list (:list after)
              :change (eventkit/change-name op)
-             :before before :after after
-             :peek (digest/peek (str (:title before) "\n" (:notes before)) (str (:title after) "\n" (:notes after)))}))
+             :before rb :after after
+             :peek (digest/peek (str (:title rb) "\n" (:notes rb)) (str (:title after) "\n" (:notes after)))}))
 
       ("role/added" "role/updated" "role/removed")
       (let [id (:id data)
@@ -930,12 +938,33 @@
                                     (:instructions (role after id))))})))
       nil)))
 
-(defn recipe-changes [state] (:recipe-changes state))
+(defn- shown-change
+  "A recorded change as anything shows it. The record is not the authority
+  on a reminder's words: it holds the labels of the session that made the
+  change, which may have read nothing from outside while the title it
+  finished was an injected one. So a change to a reminder takes the labels
+  and sources of the outside texts its reminder carries from the set
+  (relay.eventkit/shown-provenance), on top of its own."
+  [state c]
+  (if (= "reminder" (:what c))
+    (let [{:keys [labels sources]} (eventkit/shown-provenance (:reminder-outside state) (remove nil? [(:before c) (:after c)]))]
+      (cond-> (assoc c :labels (union (:labels c) labels))
+        ;; What the operator did is hers whatever it touched, so her undo
+        ;; is not shaped by anything: only a role's change takes the sources.
+        (not (#{operator dispatcher} (:actor c)))
+        (assoc :sources (vec (sort (distinct (concat (event-sources c) sources)))))))
+    c))
+
+(defn recipe-changes
+  "Every recorded change to how a role works, oldest first, as a display
+  shows it (shown-change). Every path that shows a change reads it here."
+  [state]
+  (mapv #(shown-change state %) (:recipe-changes state)))
 
 (defn recipe-change-by-seq
   "The recorded change the event `seq` made, or nil."
   [state seq]
-  (first (filter #(= seq (:seq %)) (:recipe-changes state))))
+  (first (filter #(= seq (:seq %)) (recipe-changes state))))
 
 (defn- recipe-key
   "The thing a change is to: a skill by its path, anything else by what
@@ -1392,9 +1421,12 @@
 ;; did updates the source's snapshot and what it has seen, so the next
 ;; poll does not report the role's own change back to it.
 (defmethod evolve* "reminders/changing" [state {:keys [seq at actor labels data] :as event}]
-  (assoc-in state [:reminder-calls seq]
-            {:id seq :actor actor :at (inst at) :labels (union labels) :sources (event-sources event)
-             :source (:source data) :op (:op data) :args (:args data) :status :changing}))
+  (-> state
+      (assoc-in [:reminder-calls seq]
+                {:id seq :actor actor :at (inst at) :labels (union labels) :sources (event-sources event)
+                 :source (:source data) :op (:op data) :args (:args data)
+                 :status :changing})
+      (update :reminder-outside eventkit/note-outside labels (event-sources event) (:args data))))
 
 (defmethod evolve* "reminders/changed" [state {:keys [data]}]
   (let [{:keys [call source before after]} data]
@@ -1402,7 +1434,7 @@
                        (fn [r] (-> (or r {:seen {}})
                                    (update :snapshot #(eventkit/snapshot-with % after))
                                    (assoc-in [:seen (:id after)] (eventkit/version after)))))
-      call (update-in [:reminder-calls call] assoc :status :changed :before before :after after))))
+      call (update-in [:reminder-calls call] assoc :status :changed :after after))))
 
 (defmethod evolve* "reminders/failed" [state {:keys [data]}]
   (update-in state [:reminder-calls (:call data)] assoc :status :failed :error (:error data)))
@@ -3012,10 +3044,23 @@
         #(send-memo % {:from from :to (:to src) :subject subject :body body} labels)))
     tx))
 
-(defn- record-reminders [tx source src fresh]
-  (if-let [{:keys [subject body labels from]} (ingest/reminders-memo source fresh)]
+(defn reminder-outside
+  "Every reminder text an outside session ever asked to write, with the
+  labels and sources of the write: {text {:labels :sources}}."
+  [state]
+  (:reminder-outside state))
+
+(defn shown-provenance
+  "What showing these reminders' words to a role carries
+  (relay.eventkit/shown-provenance): private, and the labels and sources
+  of any that an outside session asked to write."
+  [state reminders]
+  (eventkit/shown-provenance (reminder-outside state) reminders))
+
+(defn- record-reminders [{:keys [state] :as tx} source src fresh]
+  (if-let [{:keys [subject body labels from sources]} (ingest/reminders-memo source fresh #(shown-provenance state %))]
     (with-public tx false
-      #(send-memo % {:from from :to (:to src) :subject subject :body body} labels))
+      #(send-memo % {:from from :to (:to src) :subject subject :body body} labels (not-empty sources)))
     tx))
 
 (defmethod decide* :ingest/record [{:keys [state config] :as tx} {{:keys [source items keys cursor]} :args}]
@@ -3217,6 +3262,8 @@
   (-> state
       (update :reverted (fnil conj #{}) (:change data))
       (update :reminder-reverts dissoc (:change data))
+      (cond-> (:lines data) (assoc-in [:reminder-outcomes (:change data)]
+                                      {:lines (vec (:lines data)) :partial (boolean (:partial data))}))
       (touch-notes (fn [{:keys [op change]}] (and (= "revert" op) (= change (:change data)))))
       (mark-undo (:put data) (:change data))
       (acted (:message data) (:n data) "reverted")))
@@ -3627,6 +3674,9 @@
     (cond
       (and (= "revert" op) (contains? (:reminder-reverts state) change))
       (digest/asked-line (recipe-change-by-seq state change))
+      ;; A reminder's undo says what it did, field by field, as the log recorded it.
+      (and (= "revert" op) (get-in state [:reminder-outcomes change]))
+      (str/join " " (get-in state [:reminder-outcomes change :lines]))
       (= "revert" op) (digest/undone-line (recipe-change-by-seq state change))
       (= "declined" done) (digest/declined-line text offer labels)
       (= "accepted" done) (digest/accepted-line text offer labels (or (digest/role-of config) "the steward"))
@@ -3990,6 +4040,8 @@
 
 (def reminder-ops #{"add" "edit" "done" "reopen"})
 
+(defn- reminder? [r] (and (map? r) (string? (:id r)) (string? (:list r)) (string? (:title r))))
+
 (defn reminder-call
   "A call to a reminder tool by the seq of its reminders/changing event."
   [state id]
@@ -4004,9 +4056,8 @@
     (when-not (map? args) (reject! :invalid "A reminder call names what it asks for."))
     (emit tx "reminders/changing" {:source source :op op :args args} [private-label])))
 
-(defn- reminder? [r] (and (map? r) (string? (:id r)) (string? (:list r)) (string? (:title r))))
-
 (defmethod decide* :reminders/finish [{:keys [state actor] :as tx} {{:keys [call before after]} :args}]
+  ;; What the call did, as relay attributed it from its reads (relay.eventkit/attribute).
   (let [c (reminder-call state call)]
     (when-not (and c (= actor (:actor c)))
       (reject! :not-found (str "There is no reminder call " call " by " actor ".")))
@@ -4016,6 +4067,22 @@
       (reject! :invalid (str "What reminder call " call " did is not well formed.")))
     (emit tx "reminders/changed" {:call call :source (:source c) :op (:op c) :before before :after after}
           (:labels c))))
+
+(def interrupted-after
+  "How long a reminder call may stay recorded and unfinished before relay
+  takes it that relay stopped during it: far more than a call's time limit."
+  (Duration/ofMinutes 10))
+
+(defmethod decide* :reminders/close-interrupted [{:keys [state ^Instant now] :as tx} _]
+  ;; A call left :changing was cut short by relay stopping. The action is
+  ;; cancelled, as any call that fails partway: it is closed as failed and the
+  ;; operator is told nothing. Its words stay in the outside set.
+  (dispatcher-only! tx)
+  (reduce (fn [tx c]
+            (if (and (= :changing (:status c)) (.isBefore ^Instant (:at c) (.minus now interrupted-after)))
+              (emit tx "reminders/failed" {:call (:id c) :error "relay stopped during the call"} (:labels c))
+              tx))
+          tx (vals (:reminder-calls state))))
 
 (defmethod decide* :reminders/fail [{:keys [state actor] :as tx} {{:keys [call error]} :args}]
   (let [c (reminder-call state call)]
@@ -4030,22 +4097,46 @@
         (when-let [c (recipe-change-by-seq state change)] [ask c]))
       (reject! :not-found "No undo of that reminder change is waiting.")))
 
-(defmethod decide* :reminders/revert-done [{:keys [state] :as tx} {{:keys [change op before after]} :args}]
+(defn- finish-revert
+  "Records a settled undo of reminder change `c` (asked by `ask`): the
+  reminder as the operator's own change, the change undone with its outcome
+  lines, and, only if a field was left alone, a message to the operator from
+  those lines. Shared by the decision that relay.reminders asks for and by
+  the reconciliation of an undo whose result could not be read."
+  [{:keys [state] :as tx} c ask change {:keys [op before after lines partial]}]
+  (let [tx' (-> (assoc tx :actor operator :labels [] :public false)
+                (cond-> after
+                  (emit "reminders/changed"
+                        {:source (:owner c) :op op :before before :after after}
+                        [private-label])))
+        put (when after (last-id tx'))]
+    (-> tx'
+        (emit "change/reverted" (cond-> {:change change :lines (mapv #(ingest/one-line (str %) 600) lines)
+                                         :partial (boolean partial)}
+                                  put (assoc :put put)
+                                  (:message ask) (assoc :message (:message ask) :n (:n ask))))
+        (assoc :actor (:actor tx) :labels (:labels tx) :public (:public tx))
+        ;; An undo that left a field alone tells the operator, the same
+        ;; whoever asked, from this event, as a refusal does: otherwise
+        ;; withheld outside text would stay with the item reading as
+        ;; undone. A whole undo is what she asked for and the item says
+        ;; so, so it sends nothing. The lines quote the reminder's words,
+        ;; so they carry the labels of the outside set.
+        (cond-> partial
+          (tell "reminder-revert" "note" "normal" "A reminder change was partly undone"
+                (mapv #(ingest/one-line (str %) 600) lines)
+                :labels (union (:labels c) (:labels (shown-provenance state (remove nil? [(:before c) (:after c)])))))))))
+
+(defmethod decide* :reminders/revert-done [{:keys [state] :as tx} {{:keys [change op before after lines partial] :as args} :args}]
   ;; relay.reminders put the reminder back (or found it already as the
   ;; undo leaves it). The undo is the operator's: no sources, no flag.
   (dispatcher-only! tx)
   (let [[ask c] (asked-revert! tx change)]
     (when-not (or (nil? after) (and (reminder? after) (or (nil? before) (reminder? before)) (reminder-ops op)))
       (reject! :invalid "What the undo did is not well formed."))
-    (let [tx' (-> (assoc tx :actor operator :labels [] :public false)
-                  (cond-> after (emit "reminders/changed" {:source (:owner c) :op op :before before :after after}
-                                      [private-label])))
-          put (when after (last-id tx'))]
-      (-> tx'
-          (emit "change/reverted" (cond-> {:change change}
-                                    put (assoc :put put)
-                                    (:message ask) (assoc :message (:message ask) :n (:n ask))))
-          (assoc :actor (:actor tx) :labels (:labels tx) :public (:public tx))))))
+    (when-not (and (vector? lines) (seq lines) (<= (count lines) 12) (every? string? lines))
+      (reject! :invalid "An undo of a reminder says what it did, in a few lines."))
+    (finish-revert tx c ask change args)))
 
 (defmethod decide* :reminders/revert-refuse [{:keys [state] :as tx} {{:keys [change why]} :args}]
   ;; relay.reminders would not put the reminder back, or could not. The
@@ -4056,7 +4147,9 @@
     (-> tx
         (emit "reminders/revert-refused" {:change change :why why})
         (tell "reminder-revert" "note" "normal" "A reminder was not put back"
-              [why] :labels (:labels c)))))
+              [why] :labels (union (:labels c)
+                                   ;; The message quotes the reminder's words.
+                                   (:labels (shown-provenance state (remove nil? [(:before c) (:after c)]))))))))
 
 ;; files_move (relay.files). relay's own code moves the files on the
 ;; host; these record what it is about to do, what it did, and what the

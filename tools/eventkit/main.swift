@@ -23,7 +23,7 @@ not-found, refused, failed.
   eventkit lists
   eventkit reminders --list <title> [--list <title>]...
   eventkit --allow <title>... add --list <title> --title <text> [--due <due>] [--notes <text>]
-  eventkit --allow <title>... set <id> [--title <text>] [--due <due>|none] [--notes <text>|none] [--list <title>]
+  eventkit --allow <title>... set <id> [--title <text>] [--due <due> | --clear-due] [--notes <text> | --clear-notes] [--list <title>]
   eventkit --allow <title>... done <id>
   eventkit --allow <title>... reopen <id>
 
@@ -273,23 +273,14 @@ func dueDate(_ components: DateComponents?) -> Date? {
     return timeZoneCalendar.date(from: c)
 }
 
-/// Change a reminder's due date. A timed due carries an absolute alarm at
-/// its time; this touches only the alarm that belonged to the old due time
-/// and leaves every other alarm (early alerts, location, other times) alone.
-func setDue(_ reminder: EKReminder, _ text: String) {
-    let alarms = reminder.alarms ?? []
-    let drop = alarmsToRemove(oldDue: dueDate(reminder.dueDateComponents), alarmDates: alarms.map { $0.absoluteDate })
-    for index in drop { reminder.removeAlarm(alarms[index]) }
-    let remaining = (reminder.alarms ?? []).map { $0.absoluteDate }
-    guard text != "none", let due = parseDue(text) else {
+/// Change a reminder's due date, and nothing else about it: alarms are not
+/// touched (alarmEffect). Setting the due date to nil clears it.
+func setDue(_ reminder: EKReminder, _ text: String?) {
+    guard let text, let due = parseDue(text) else {
         reminder.dueDateComponents = nil
         return
     }
-    let components = dueComponents(due)
-    reminder.dueDateComponents = components
-    if let date = dueDate(components), needsNewAlarm(newDue: date, remaining: remaining) {
-        reminder.addAlarm(EKAlarm(absoluteDate: date))
-    }
+    reminder.dueDateComponents = dueComponents(due)
 }
 
 func save(_ reminder: EKReminder) {
@@ -363,7 +354,11 @@ case .add:
     new.title = invocation.one("title")!
     new.calendar = destination
     new.notes = invocation.one("notes")
-    if let due = invocation.one("due") { setDue(new, due) }
+    if let due = invocation.one("due") {
+        setDue(new, due)
+        // A new timed reminder gets one alarm that follows its due date.
+        if alarmEffect(command: .add, due: parseDue(due)) == .relativeAtDue { new.addAlarm(EKAlarm(relativeOffset: 0)) }
+    }
     save(new)
     succeed(["after": reminderObject(reminderFacts(new))])
 
@@ -378,8 +373,8 @@ case .set:
     }
     let before = reminderObject(reminderFacts(found))
     if let title = invocation.one("title") { found.title = title }
-    if let notes = invocation.one("notes") { found.notes = notes == "none" ? nil : notes }
-    if let due = invocation.one("due") { setDue(found, due) }
+    if invocation.has("clear-notes") { found.notes = nil } else if let notes = invocation.one("notes") { found.notes = notes }
+    if invocation.has("clear-due") { setDue(found, nil) } else if let due = invocation.one("due") { setDue(found, due) }
     if let destination { found.calendar = destination }
     save(found)
     succeed(["before": before, "after": reminderObject(reminderFacts(found))])

@@ -77,12 +77,6 @@
     (when-not after (throw (ex-info "eventkit's answer had no reminder." {:code "failed"})))
     {:before (some-> (:before r) eventkit/reminder) :after after}))
 
-(defn find-reminder
-  "The reminder `id` as it is now in `list`, or nil."
-  [src list id]
-  (let [{:keys [items]} (fetch-reminders (assoc src :lists [list]))]
-    (some #(when (= id (:key %)) (:reminder %)) items)))
-
 (defn access!
   "Runs `access` with the terminal's input and error, so macOS can ask,
   and returns {:calendar :reminders} as the binary says, or {:error why}."

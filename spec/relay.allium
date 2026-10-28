@@ -3076,34 +3076,51 @@ rule ChangeReminder {
         -- holds outside labels. Every event carries the session's labels
         -- and private. The snapshot and what the source has seen update
         -- with reminders/changed, so the next poll does not report the
-        -- role's own change back.
+        -- role's own change back. Outside text is one monotonic set: every
+        -- title or notes text a session holding outside labels asked to
+        -- write, recorded in reminders/changing before the binary runs,
+        -- with that write's outside labels and sources, never removed.
+        -- Any reminder text shown to a role is outside exactly when it is
+        -- in the set, whatever the id, list, source or field. A call that
+        -- fails partway (an error, a timeout, a crash, no answer) is
+        -- cancelled: reminders/failed and nothing else, the role is told
+        -- it did not go through and to read again before retrying. A
+        -- call left unfinished is closed as failed by the next tick. relay
+        -- records a change only from a call the binary reports as done,
+        -- from the binary's own before and after images, and only the
+        -- fields the call asked to set (an add by the reported id). A
+        -- cancelled undo is refused through the usual refusal.
 }
 
 rule SettleReminderUndo {
     when: ReminderUndoAsked(change)
     -- Asked by RevertChange for a change with what = reminder. The tick
     -- (and relay revert at once) carries it out, since putting a
-    -- reminder back needs the binary.
-    let current = reminder_now(change)
-    ensures: if current = null:
-        ReminderUndoRefused(change)
-    else if change.change = added:
-        current.completed = true               -- marked done, never deleted
-    else if change.change = completed:
-        current.completed = false
-    else if change.change = reopened:
-        current.completed = true
-    else if fields(current) = fields(change.after):
-        fields(current) = fields(change.before)   -- only the fields the edit changed
-    else:
-        ReminderUndoRefused(change)
-            -- the operator changed it since: relay says to fix it by hand
+    -- reminder back needs the binary. No history is used: not the prior
+    -- chain, not other changes, not which source read the reminder.
+    let current = reminder_now(change)       -- read fresh, whichever source holds it
+    for field in set_fields(change):         -- list, title, notes, due, completed; for an add, only completed (false to true)
+        ensures: if current.field = change.before.field:
+            nothing_to_do()
+        else if current.field != change.after.field:
+            left_alone(field)                -- the operator changed it since
+        else if field in {title, notes} and outside_text(change.before.field):
+            left_alone(field)                -- an undo never writes outside text
+        else:
+            current.field = change.before.field
+    ensures: if nothing_written and nothing_already_at_before and any_left_alone:
+        ReminderUndoRefused(change)          -- the change stays not undone
+    ensures: ChangeUndone(change, lines: outcome_lines, partial: any_left_alone)
+        -- recorded in the log with the lines; when partial, the operator
+        -- gets a message from them, whichever entry point asked, and the
+        -- note item reads "partly undone"; a whole undo sends nothing
 
     @guidance
         -- A refused undo tells the operator why and leaves the change
-        -- not undone, so it can be asked for again. An undo that finds
-        -- the reminder already as it would leave it changes nothing and
-        -- counts as done. A done undo is the operator's own change: it
+        -- not undone, so it can be asked for again. An undo that writes
+        -- some fields says which it left alone; one that finds every
+        -- field already at its before value changes nothing and counts
+        -- as done. Only the fields being restored go to the binary. A done undo is the operator's own change: it
         -- is not flagged and cannot be undone again.
 }
 

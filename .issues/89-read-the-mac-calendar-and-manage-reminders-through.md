@@ -25,13 +25,24 @@ Decisions (Kira, 2026-10-28):
 
 Judgment calls (Claude):
 
+- Provenance of reminder text is a set of every text an outside session
+  asked to write, recorded before the write and never shrunk; text
+  matching it reads as outside wherever it appears. Kira changing the
+  text is the only way back. Chosen after two review rounds found holes
+  in per-reminder tracking.
 - Reverting an added reminder marks it completed and does not delete it.
   The binary has no delete command at all, so no bug or injected
   instruction can delete one of Kira's reminders.
-- Reverting an edit puts back the fields as they were before, but only
-  while the reminder still shows what relay wrote. If Kira changed it
-  since, the revert refuses and says to fix it by hand, so relay never
-  overwrites her own edit.
+- Reminder undo is per-field compare-and-swap with no history, and an undo
+  never writes outside text. For each field a change set, if the reminder
+  still holds what the change left, the field goes back to its earlier
+  value; otherwise it is left alone and said so, so relay never overwrites
+  her own edit. An earlier title or notes that an outside session wrote is
+  not written back. Chosen after rounds 4 and 5 found chain-undo defects.
+- A reminder write or undo that fails partway (an error, a timeout, relay
+  stopping) counts as cancelled and is retried later; relay records a
+  change only from a call the binary reports as done. Kira, 2026-10-29,
+  after rounds 7 to 9 found holes in reconciling uncertain outcomes.
 - A single Swift binary, `tools/eventkit`, replaces `cal`, `rem` and
   `tools/shared`. It prints JSON and relay cleans the text, so the Swift
   escaping code goes. One binary also means one permission grant.
@@ -115,8 +126,9 @@ stores it.
   destination is not one of them:
   - `eventkit --allow L... add --list L --title T [--due D] [--notes N]`
     prints `{"after": <reminder>}`.
-  - `eventkit --allow L... set <id> [--title T] [--due D|none] [--notes
-    N|none] [--list L]` prints `{"before": <reminder>, "after":
+  - `eventkit --allow L... set <id> [--title T] [--due D | --clear-due]
+    [--notes N | --clear-notes] [--list L]` (a clear flag conflicts with
+    its value flag, a `usage` error; no value is magic) prints `{"before": <reminder>, "after":
     <reminder>}`.
   - `eventkit --allow L... done <id>` and `reopen <id>` print before and
     after.
@@ -147,3 +159,19 @@ stores it.
   when shaped by outside text, and revertable as described above.
 
 ## Log
+
+- 2026-10-28: Built. Binary in tompkrts/tvypyntq, relay side in
+  yxxuqtuw/sknkrswp, plus kzsqovvm (relay sent fractional-second
+  instants the real binary refuses; bb verify now runs relay's read
+  arguments through the real binary). Formula change in homebrew-tap
+  3617700, local only. bb verify passes in full.
+- 2026-10-28: Codex round 1 found reminder text laundering and four
+  related defects; round 2 found five more in per-reminder provenance,
+  so the design changed to one set of outside texts that only grows
+  (pokutsmm, ppxztonv) and reverts restore before-images (zqlrnvlv).
+- 2026-10-28: Codex round 3 found three in scope: daily_note_draft
+  quotes a reminder title with the change record's labels instead of
+  the outside-text set; a due-date edit plus undo can remove an
+  independent alarm that sat at the new due time; reverts of add, done
+  and reopen don't check whether Kira changed the reminder since.
+  Third round with a finding, so stopped to ask Kira per AGENTS.md.

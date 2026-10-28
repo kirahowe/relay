@@ -61,7 +61,12 @@
   (let [;; What was done with each numbered item, from this note or any
         ;; other, or the command line.
         acted (core/note-acted state m)
-        item-line (fn [{:keys [text action]}] (str text (get done-marks (get acted (:n action)))))
+        numbered-items (into {} (map (juxt :n identity)) (:numbered m))
+        ;; An undo of a reminder that left a field alone reads as partly undone.
+        partly? (fn [n] (let [ch (:change (get numbered-items n))]
+                          (and ch (get-in state [:reminder-outcomes ch :partial]))))
+        mark (fn [n] (if (and (= "reverted" (get acted n)) (partly? n)) " (partly undone)" (get done-marks (get acted n))))
+        item-line (fn [{:keys [text action]}] (str text (mark (:n action))))
         ;; A listed section's items behind a dash, as mail shows them.
         line (fn [sec it] (cond->> (item-line it) (:list sec) (str "- ")))
         numbered (into {} (map (juxt :n identity)) (:numbered m))]

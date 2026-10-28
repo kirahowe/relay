@@ -23,6 +23,7 @@
   [xs]
   (loop [[x & more :as xs] xs acc {}]
     (cond (empty? xs) acc
+          (#{"--clear-due" "--clear-notes"} x) (recur more (assoc acc x [true]))
           (str/starts-with? x "--") (recur (rest more) (update acc x (fnil conj []) (first more)))
           :else (recur more acc))))
 
@@ -34,6 +35,11 @@
       one (fn [k] (first (get opts k)))
       reminders (:reminders s)]
   (when (:error s) (fail! (:error (:error s)) (:code (:error s))))
+  (when (and (:garbage s) (#{"add" "set" "done" "reopen"} cmd))
+    (println "this is not json")
+    (System/exit 0))
+  (when (and (:write-error s) (#{"add" "set" "done" "reopen"} cmd))
+    (fail! (:error (:write-error s)) (:code (:write-error s))))
   (case cmd
     "access" (out! (:access s))
     "calendars" (out! {:calendars []})
@@ -48,6 +54,8 @@
             (let [r (cond-> {:id (str "R" (inc (count reminders))) :list l :title (one "--title") :completed false
                              :completed_at nil :modified "2026-10-28T10:00:00Z" :due (one "--due") :notes (one "--notes")})]
               (save! (assoc s :reminders (conj (vec reminders) r)))
+              (when-let [n (:sleep-after-save s)] (Thread/sleep (* 1000 n)))
+              (when (:fail-after-save s) (fail! "crashed after saving" "failed"))
               (out! {:after r})))
     ("set" "done" "reopen")
     (let [id (first more)
@@ -61,9 +69,13 @@
                     "reopen" (assoc r :completed false :completed_at nil)
                     "set" (cond-> r
                             (one "--title") (assoc :title (one "--title"))
-                            (one "--due") (assoc :due (if (= "none" (one "--due")) nil (one "--due")))
-                            (one "--notes") (assoc :notes (if (= "none" (one "--notes")) nil (one "--notes")))
+                            (one "--clear-due") (assoc :due nil)
+                            (one "--due") (assoc :due (one "--due"))
+                            (one "--clear-notes") (assoc :notes nil)
+                            (one "--notes") (assoc :notes (one "--notes"))
                             dest (assoc :list dest)))]
         (save! (assoc s :reminders (mapv #(if (= id (:id %)) after %) reminders)))
+        (when-let [n (:sleep-after-save s)] (Thread/sleep (* 1000 n)))
+        (when (:fail-after-save s) (fail! "crashed after saving" "failed"))
         (out! {:before r :after after})))
     (fail! (str "unknown command " cmd) "usage")))

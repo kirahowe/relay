@@ -21,7 +21,7 @@ strict, and an unknown one is a `usage` error.
     eventkit lists
     eventkit reminders --list <title>...
     eventkit --allow <title>... add --list <title> --title <text> [--due <due>] [--notes <text>]
-    eventkit --allow <title>... set <id> [--title <text>] [--due <due>|none] [--notes <text>|none] [--list <title>]
+    eventkit --allow <title>... set <id> [--title <text>] [--due <due> | --clear-due] [--notes <text> | --clear-notes] [--list <title>]
     eventkit --allow <title>... done <id>
     eventkit --allow <title>... reopen <id>
 
@@ -38,6 +38,10 @@ share a title, the command is a `usage` error.
 
 Ids are exact. There are no prefixes.
 
+`set` clears a due date with `--clear-due` and notes with `--clear-notes`.
+Each conflicts with its value flag (`--due`, `--notes`): giving both is a
+`usage` error. No value is magic, so notes that read `none` are just notes.
+
 ## Writes and --allow
 
 `--allow <title>` goes before the command word, once per list. A write is
@@ -46,14 +50,19 @@ refused (`refused`) unless the reminder's current list (`set`, `done`,
 `--allow` after the command word is a `usage` error, and the read commands
 do not take it.
 
-A timed due date gets an alarm at that time. Editing the due date replaces only
-that alarm. Other alarms on the reminder (early alerts, location) are left
-alone.
+## Alarms
+
+`add` with a timed due date gives the new reminder one alarm relative to
+its due date (offset 0), which follows the due date by itself if it moves.
+No command ever adds or removes an alarm on an existing reminder: `set`
+changes the due date only, so an alarm you set stays exactly as you set it.
+(An undo has nothing to put back for alarms, because the before-image holds
+none.)
 
 ## No delete
 
 There is no delete command, and the code calls no EventKit method that
-removes anything. Calendar events are read-only. A reminder that should go
+removes anything, an alarm included (`removeAlarm` appears nowhere). Calendar events are read-only. A reminder that should go
 away is completed instead.
 
 ## Access

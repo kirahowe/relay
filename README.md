@@ -593,7 +593,32 @@ keep in sync:
   The text a role writes is cleaned like text sent to you, and its links
   are broken when the session had read outside text.
 
-Every write is in the log twice, `reminders/changing` before the
+Reminders are yours, but words a role wrote from a session that had read
+outside text stay outside text. Before each write relay records, in
+`reminders/changing`, every title or notes text the session asked to
+write, with that session's outside labels and sources. This set only
+grows: an undo, a clean edit, a failed call or a completion removes
+nothing. Any reminder text relay shows a role (a poll memo, the
+`reminders` tool, the result of a write, the warning for an unfinished
+call and the before-image it quotes) is outside exactly when it matches
+a text in the set, in any source, list or field, and then carries those
+labels and sources. Only you changing the words takes them out of reach.
+Text you happen to type that is identical to one in the set stays
+outside, which is the safe side.
+
+Two reminder sources may not name the same list. A write that fails partway counts as
+cancelled. relay records a change only from a call the program reports as
+done, using the program's own before and after images and only the fields
+the call asked to set (an add by the id the program reported); anything you
+changed meanwhile is yours and never part of it. An error, a timeout, a crash
+or no answer means the action did not go through: relay records
+`reminders/failed` and nothing else, the role is told to read its reminders
+again before retrying (a failed call may still have partly happened), and you
+are told nothing. If relay stops during a call, the next tick closes it as
+failed. A write that did land before failing shows up at the next poll as an
+ordinary change, its words still labelled through the set above. An undo that
+fails partway is refused ("ask again later") so you hear it, and the change
+stays not undone. Every write is in the log twice, `reminders/changing` before the
 program runs and `reminders/changed` after, with the reminder as it was
 and as it is. A relay stopped between them leaves a call the `reminders`
 tool tells the role to check by hand. The snapshot updates at once, so
@@ -602,14 +627,25 @@ the next poll does not report the role's own change back to it.
 A write is a change in the daily note's sense. It is flagged, with where
 the outside text came from, only when the session had read outside text
 directly in its wake, and it can be undone like a skill or a routine
-(`relay revert`, a reply, the client). The undo is gentle:
-
-- undoing an add marks the reminder done; it never deletes it;
-- undoing an edit puts back the fields as they were, but only while the
-  reminder still reads as relay left it. If you changed it since, relay
-  leaves it alone and says to fix it by hand;
-- undoing a completion opens the reminder again, and undoing a
-  reopening marks it done.
+(`relay revert`, a reply, the client). The undo is gentle, and works field
+by field with no history. For each field the change set (list, title, notes,
+due date, done), relay reads the reminder fresh and compares: if it still
+holds what the change left, relay puts back what it was before; if you
+changed it since, relay leaves that field alone and says so. Fields the
+change did not set are never touched, and relay sends the program only the
+fields it is restoring. If you changed every field, the undo is refused and
+the change stays not undone. If every field already holds its earlier value,
+nothing is written and the undo counts as done. An add has no earlier value,
+so undoing it marks the reminder done; relay never deletes one. An undo also
+never writes outside text: if the earlier title or notes are words an outside
+session asked to write, relay leaves that field and says where the words came
+from, and you can change it by hand. Because each undo stands alone, undoing
+several changes in any order cannot bring back a value you rejected. What
+an undo did, field by field, is recorded in the log. An undo that left a
+field alone sends you a message saying which and why, whoever asked for it
+(the command line, a reply, the client or the tick), and the note's item
+reads "partly undone". A whole undo sends nothing, since it did what you
+asked.
 
 Putting a reminder back needs the program, so relay does it within a
 minute (at once for `relay revert`) and tells you if it cannot. Until

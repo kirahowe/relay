@@ -44,6 +44,7 @@ struct CommandSpec {
     var positional: Bool           // takes exactly one positional (an id)
     var once: [String]             // each may be given once
     var many: [String]             // each may be given any number of times
+    var switches: [String] = []    // flags with no value, each at most once
 }
 
 let specs: [Command: CommandSpec] = [
@@ -54,7 +55,8 @@ let specs: [Command: CommandSpec] = [
     .lists: CommandSpec(positional: false, once: [], many: []),
     .reminders: CommandSpec(positional: false, once: [], many: ["list"]),
     .add: CommandSpec(positional: false, once: ["list", "title", "due", "notes"], many: []),
-    .set: CommandSpec(positional: true, once: ["title", "due", "notes", "list"], many: []),
+    .set: CommandSpec(positional: true, once: ["title", "due", "notes", "list"], many: [],
+                      switches: ["clear-due", "clear-notes"]),
     .done: CommandSpec(positional: true, once: [], many: []),
     .reopen: CommandSpec(positional: true, once: [], many: []),
 ]
@@ -66,6 +68,9 @@ struct Invocation: Equatable {
     var flags: [String: [String]]
 
     func one(_ name: String) -> String? { flags[name]?.first }
+
+    /// Whether a switch (a flag with no value) was given.
+    func has(_ name: String) -> Bool { flags[name] != nil }
 }
 
 enum ParseResult: Equatable {
@@ -105,6 +110,11 @@ func parse(_ args: [String]) -> ParseResult {
     while let argument = rest.popFirst() {
         if argument.hasPrefix("--") {
             let name = String(argument.dropFirst(2))
+            if spec.switches.contains(name) {
+                if flags[name] != nil { return usageFailure("\(argument) given twice.") }
+                flags[name] = [""]
+                continue
+            }
             let isOnce = spec.once.contains(name)
             guard isOnce || spec.many.contains(name) else {
                 return usageFailure("Unknown option \(argument) for \(command.rawValue).")
@@ -141,11 +151,13 @@ func validate(_ i: Invocation) -> Failure? {
         if title.isEmpty { return bad("--title must not be empty.") }
         if let due = i.one("due"), parseDue(due) == nil { return bad(dueHint(due)) }
     case .set:
-        if !["title", "due", "notes", "list"].contains(where: { i.flags[$0] != nil }) {
-            return bad("set needs at least one of --title, --due, --notes, --list.")
+        if !["title", "due", "notes", "list", "clear-due", "clear-notes"].contains(where: { i.flags[$0] != nil }) {
+            return bad("set needs at least one of --title, --due, --clear-due, --notes, --clear-notes, --list.")
         }
+        if i.has("due"), i.has("clear-due") { return bad("--due and --clear-due cannot be given together.") }
+        if i.has("notes"), i.has("clear-notes") { return bad("--notes and --clear-notes cannot be given together.") }
         if i.one("title")?.isEmpty == true { return bad("--title must not be empty.") }
-        if let due = i.one("due"), due != "none", parseDue(due) == nil { return bad(dueHint(due)) }
+        if let due = i.one("due"), parseDue(due) == nil { return bad(dueHint(due)) }
     default:
         break
     }
@@ -375,19 +387,18 @@ func sortedReminders(_ reminders: [ReminderFacts]) -> [ReminderFacts] {
 
 // MARK: alarms
 
-/// Which alarms a due-date edit removes: those at positions whose absolute
-/// date equals the old timed due date (nil for a relative or location
-/// alarm, or when the old due had no time). Every other alarm is the
-/// user's own and stays.
-func alarmsToRemove(oldDue: Date?, alarmDates: [Date?]) -> [Int] {
-    guard let oldDue else { return [] }
-    return alarmDates.indices.filter { alarmDates[$0] == oldDue }
+/// What a command does to a reminder's alarms. Only a new reminder gets
+/// one; no command ever adds or removes an alarm on an existing reminder,
+/// because an alarm the user set is theirs and the before-image does not
+/// hold alarms to put back.
+enum AlarmEffect: Equatable {
+    case none
+    /// One alarm relative to the due date (offset 0), which follows the due
+    /// date by itself when it moves.
+    case relativeAtDue
 }
 
-/// Whether to add an absolute alarm at the new timed due date: not when
-/// there is no new timed due, and not when one is already there among the
-/// alarms that remain.
-func needsNewAlarm(newDue: Date?, remaining: [Date?]) -> Bool {
-    guard let newDue else { return false }
-    return !remaining.contains(newDue)
+func alarmEffect(command: Command, due: Due?) -> AlarmEffect {
+    guard command == .add, let due, due.time != nil else { return .none }
+    return .relativeAtDue
 }

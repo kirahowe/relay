@@ -1243,25 +1243,32 @@
    :parameters (obj {:list {:type "string" :description "Only this list."}
                      :include_done {:type "boolean" :description "Also show reminders finished lately. Default false."}
                      :source {:type "string" :description "Only this source of yours, when you have more than one."}})
-   :read (fn [{:keys [state config now]} actor {:keys [list include_done source]}]
+   :read (fn [{:keys [state config]} actor {:keys [list include_done source]}]
            (let [all (reminder-sources config actor)
                  sources (if source (filterv #(= source (first %)) all) all)]
              (when (empty? sources)
                (throw (ex-info (if source (str "You have no reminders source called " source ".") "You have no reminders.") {})))
-             {:content (str/join "\n\n"
-                                 (concat
-                                  (for [[n src] sources
-                                        :let [{:keys [snapshot snapshot-at]} (core/ingest-record state n)
-                                              lists (if list (filterv #(= list %) (:lists src)) (:lists src))]]
-                                   (cond
-                                     (nil? snapshot-at) (str "relay has not read " n " yet. It reads it every "
-                                                             (ingest/every-minutes src) " minutes.")
-                                     (empty? lists) (str "relay does not use a list called " (pr-str list) ". It uses "
-                                                         (str/join ", " (map pr-str (:lists src))) ".")
-                                     :else (eventkit/reminders-text
-                                            lists (cond->> snapshot (not include_done) (remove :completed)))))
-                                 (eventkit/stuck-lines (filter #(= actor (:actor %)) (vals (:reminder-calls state))) now)))
-              :labels [core/private-label]}))})
+             (let [views (for [[n src] sources
+                               :let [{:keys [snapshot snapshot-at]} (core/ingest-record state n)
+                                     lists (if list (filterv #(= list %) (:lists src)) (:lists src))
+                                     shown (when snapshot-at
+                                             (cond->> (filter #((set lists) (:list %)) snapshot)
+                                               (not include_done) (remove :completed)))]]
+                           {:shown shown
+                            :text (cond
+                                    (nil? snapshot-at) (str "relay has not read " n " yet. It reads it every "
+                                                            (ingest/every-minutes src) " minutes.")
+                                    (empty? lists) (str "relay does not use a list called " (pr-str list) ". It uses "
+                                                        (str/join ", " (map pr-str (:lists src))) ".")
+                                    :else (eventkit/reminders-text lists shown))})
+                   ;; What the text shows carries where its words came from: the
+                   ;; reminders it shows, no others.
+                   from (eventkit/provenance-of-texts
+                         (core/reminder-outside state)
+                         (mapcat eventkit/reminder-texts (mapcat :shown views)))]
+               {:content (str/join "\n\n" (map :text views))
+                :labels (:labels from)
+                :sources (:sources from)})))})
 
 (defn- reminder-source
   "Which of the role's reminders sources a call is for: the one named, the
