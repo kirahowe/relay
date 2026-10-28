@@ -352,7 +352,7 @@
   ;; Several named sources make the longest "Drew on:" lines.
   (gen/vector (gen/elements ["web:https://example.org/a/very/long/path/to/office-holidays-2026.html"
                              "mail:someone.with.a.long.name@lanternhall.example" "github:kira/shelf"
-                             "ics:work-calendar" "search:web" "contaminated"])
+                             "calendar:work-calendar" "search:web" "contaminated"])
               1 5))
 
 (defspec every-line-of-relay-ready-fits-a-phone 200

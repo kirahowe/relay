@@ -17,7 +17,9 @@
             [relay.harness.agentloop :as agentloop]
             [relay.inbound :as inbound]
             [relay.files :as files]
+            [relay.eventkit-run :as eventkit-run]
             [relay.ingest-run :as ingest-run]
+            [relay.reminders :as reminders]
             [relay.log :as log]
             [relay.messages :as messages]
             [relay.moves :as moves]
@@ -208,6 +210,9 @@ Every command needs the data directory, from --data <dir> or from the file
   relay poll [<source>]               check relay.edn's :ingest sources now (the
                                       mailbox, GitHub, calendars), due or not, and
                                       say what came in
+  relay eventkit-access               ask macOS to let relay read your Calendar and
+                                      Reminders (run it in a terminal, once; it
+                                      says what was granted)
   relay tool --data <dir> --role <r> [--wake <w>] <name>
                                       run a role's tool call (harnesses use this)
 
@@ -734,6 +739,17 @@ id public too.")
   "How many of the newest items relay ready shows without --all."
   10)
 
+(defn- reverted-line
+  "What `relay revert` says about change `change` it asked to undo: the
+  undo itself, or for a reminder, whatever relay.reminders settled it as
+  (it needs the EventKit binary, so it is done now rather than at the
+  next tick)."
+  [sys change]
+  (let [c (core/recipe-change-by-seq (inbound/current-state sys) change)]
+    (if (= "reminder" (:what c))
+      (str/join " " (reminders/settle-reverts! sys))
+      (digest/undone-line c))))
+
 (defn- command
   "Runs one command with the data directory's system. Returns {:exit :out},
   :out being the lines to print."
@@ -951,11 +967,14 @@ id public too.")
         (when error (fail! error))
         (if change
           (do (submit! sys :change/revert {:change change})
-              (result 0 (text/visible-line (digest/undone-line (core/recipe-change-by-seq (state) change)))))
+              (result 0 (text/visible-line (reverted-line sys change))))
           (do (submit! sys :digest/act (cond-> {:n n :op "revert" :via "cli"} message (assoc :message message)))
               (let [st (state)
-                    msg (if message (core/message st message) (core/latest-note st))]
-                (result 0 (text/visible-line (core/acted-line st msg n)))))))
+                    msg (if message (core/message st message) (core/latest-note st))
+                    item (first (filter #(= n (:n %)) (:numbered msg)))]
+                (if (contains? (:reminder-reverts st) (:change item))
+                  (result 0 (text/visible-line (reverted-line sys (:change item))))
+                  (result 0 (text/visible-line (core/acted-line st msg n))))))))
       "connect" (let [[n url] more
                       config (:config sys)]
                   (when-not (and n url)
@@ -1140,6 +1159,26 @@ id public too.")
      "trust-level" "relay trust-level is gone in this version: relay no longer keeps trust levels."
      "brief" "relay brief is gone in this version: the daily note replaces the morning brief. relay note shows it."}))
 
+(defn- configured-eventkit-bin
+  "The :bin of the first Apple source in relay.edn that names one, or nil.
+  Best effort, like main-role-name: no data directory, or a relay.edn that
+  will not read, means relay's own binary."
+  [opts]
+  (try (let [c (edn/read-string (slurp (str (fs/path (data-dir opts) "relay.edn"))))]
+         (first (for [[_ src] (sort-by (comp str key) (when (map? c) (:ingest c)))
+                      :when (and (map? src) (#{:apple-calendar :apple-reminders} (:kind src)) (string? (:bin src)))]
+                  (str (fs/expand-home (:bin src))))))
+       (catch Exception _ nil)))
+
+(defn- eventkit-access
+  "relay eventkit-access: runs the binary's access command where macOS can
+  ask, and says what it granted. Needs no data directory unless relay.edn
+  names another binary with :bin."
+  [opts]
+  (let [r (eventkit-run/access! (or (configured-eventkit-bin opts) (eventkit-run/default-bin)))
+        ok? (and (not (:error r)) (every? #(= "granted" (str (get r %))) [:calendar :reminders]))]
+    (apply result (if ok? 0 1) (map text/visible-line (eventkit-run/access-lines r)))))
+
 (defn- main-role-name
   "The main role's id for the help text: relay.edn's :dead-letter-handler
   when the data directory and its relay.edn can be read as they are,
@@ -1180,6 +1219,7 @@ id public too.")
           (apply result 1 (str "relay has no command " cmd ".") "" (str/split-lines short-usage))))
       ;; Before relay.edn is read: a file that will not load stops serve,
       ;; but the tick still runs and says what is wrong.
+      (= "eventkit-access" cmd) (eventkit-access opts)
       (= "run" cmd)
       (result (run/run! (dispatch/relay-bin) (str (fs/absolutize (data-dir opts)))
                         (select-keys opts [:socket :run-dir])))

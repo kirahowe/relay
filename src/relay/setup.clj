@@ -153,7 +153,7 @@
   grant), and the folders the steward may tidy. Each is a set of lines
   that start with ;; inside a section that is on, so removing the ;; from
   a block's lines turns it on and nothing else."
-  [:mail :mailbox :repos :calendar :shell :files])
+  [:mail :mailbox :repos :calendar :maccal :macrem :shell :files])
 
 (defn- switch-blocks
   "The template's lines marked `@block ` after their indentation, as
@@ -228,13 +228,18 @@
            (messages-text messages)
            " ;; What comes in from outside, as memos to the steward: the agent's own\n"
            " ;; mailbox, the GitHub repositories to watch, and your calendar's\n"
-           " ;; private ICS address, which it only reads. Turn each on by itself.\n"
+           " ;; private ICS address, which it only reads, and the Calendar and\n"
+           " ;; Reminders apps on this Mac (run relay eventkit-access once to allow\n"
+           " ;; them; the steward may then manage the reminder lists named here, so\n"
+           " ;; name only lists that are yours alone). Turn each on by itself.\n"
            " :ingest\n"
            " {\n  @mailbox \"mailbox\"  {:kind :pop3 :url \"pop3s://pop.example.org:995\" :user \"agent@example.org\"\n"
            "  @mailbox             :credentials-command [\"security\" \"find-generic-password\" \"-s\" \"relay-pop\" \"-w\"]\n"
            "  @mailbox             :authserv-id \"mx.example.org\" :to \"" steward "\"}\n"
            "  @repos \"repos\"    {:kind :github :repos [\"you/your-repo\"] :to \"" steward "\"}\n"
            "  @calendar \"calendar\" {:kind :ics :url \"https://calendar.example.org/you.ics\" :to \"" steward "\"}\n"
+           "  @maccal \"mac-cal\"  {:kind :apple-calendar :calendars [\"Home\"] :to \"" steward "\"}\n"
+           "  @macrem \"mac-rem\"  {:kind :apple-reminders :lists [\"Personal\"] :to \"" steward "\"}\n"
            "  }\n\n"
            " ;; The steward's shell: a Linux container with no network, where the\n"
            " ;; steward reads the folders you list here, read-only. A plain path is\n"
@@ -249,8 +254,7 @@
            " ;; note.\n"
            " :daily-note {:at " (pr-str daily-note-at) " :role \"" steward "\"}\n\n"
            " ;; Tools beyond relay's own. Each needs :class and :labels; see\n"
-           " ;; setup/relay.example.edn, which also shows Apple Reminders and\n"
-           " ;; services that speak MCP.\n"
+           " ;; setup/relay.example.edn, which also shows services that speak MCP.\n"
            (if web (web-tool web webtool-file) " :tools {}\n\n")
            " ;; What each role is granted beyond relay's own tools: :tools,\n"
            " ;; :may-add, :public, :shell and :files. The steward may add roles.\n"

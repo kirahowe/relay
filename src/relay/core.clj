@@ -17,6 +17,7 @@
             [relay.config :as config]
             [relay.digest :as digest]
             [relay.ics :as ics]
+            [relay.eventkit :as eventkit]
             [relay.ics-feed :as ics-feed]
             [relay.ingest :as ingest]
             [relay.mailbox :as mailbox]
@@ -136,8 +137,14 @@
    ;; Calls to files_move, by the seq of their files/moving event: what
    ;; each moved, and what has been undone (relay.files).
    :moves {}
+   ;; Calls to the reminder tools, by the seq of their reminders/changing
+   ;; event, and the undos of reminder changes asked for and not done yet,
+   ;; by the change's seq (relay.reminders).
+   :reminder-calls {} :reminder-reverts {}
    ;; Each ingest source's record: what it has brought in, by key and
-   ;; version, where it got to, and whether it is failing.
+   ;; version, where it got to, whether it is failing, and for a
+   ;; calendar or reminders source what it showed last (:snapshot, as
+   ;; plain data, at :snapshot-at).
    :ingest {}
    ;; What roles prepared with edit tools for the operator (relay.ready),
    ;; and the calls they came from, so a transcript read twice records once.
@@ -901,6 +908,13 @@
                :delta (digest/line-delta (:text prev) (:text data))
                :peek (when (= "note/written" type) (digest/peek (:text prev) (:text data)))})))
 
+      "reminders/changed"
+      (let [{:keys [source op before after]} data]
+        (ch {:what "reminder" :owner source :name (:id after) :title (:title after) :list (:list after)
+             :change (eventkit/change-name op)
+             :before before :after after
+             :peek (digest/peek (str (:title before) "\n" (:notes before)) (str (:title after) "\n" (:notes after)))}))
+
       ("role/added" "role/updated" "role/removed")
       (let [id (:id data)
             prev (role before id)]
@@ -1276,12 +1290,13 @@
 ;; What an ingest source has brought in. :seen is [[key version] ...],
 ;; :gone the keys it no longer has; pairs, not a map, since the log's
 ;; JSON would make the keys keywords.
-(defmethod evolve* "ingest/polled" [state {n :seq data :data}]
+(defmethod evolve* "ingest/polled" [state {n :seq at :at data :data}]
   (cond-> (update-in (resolve-alerts state n #{"ingest-failing"} :source (:source data)) [:ingest (:source data)]
                      (fn [r]
                        (-> (or r {:seen {}})
                            (update :seen #(apply dissoc (into (or % {}) (map vec (:seen data))) (:gone data)))
                            (assoc :cursor (:cursor data))
+                           (cond-> (contains? data :snapshot) (assoc :snapshot (vec (:snapshot data)) :snapshot-at (inst at)))
                            (dissoc :failing))))
     ;; New GitHub items from people, for the tick's one push.
     (seq (:people data)) (update :github-news (fnil into []) (:people data))))
@@ -1370,6 +1385,33 @@
                                             (assoc (select-keys old [:title :start :end :start-date :end-date :location :description])
                                                    :why (:why data)
                                                    :start (some-> (:start old) str) :end (some-> (:end old) str))))))
+
+;; Reminders the roles wrote (relay.reminders). The call is recorded before
+;; the binary runs and its outcome after, as files_move's are, so a relay
+;; stopped between leaves a call that says to check by hand. What a write
+;; did updates the source's snapshot and what it has seen, so the next
+;; poll does not report the role's own change back to it.
+(defmethod evolve* "reminders/changing" [state {:keys [seq at actor labels data] :as event}]
+  (assoc-in state [:reminder-calls seq]
+            {:id seq :actor actor :at (inst at) :labels (union labels) :sources (event-sources event)
+             :source (:source data) :op (:op data) :args (:args data) :status :changing}))
+
+(defmethod evolve* "reminders/changed" [state {:keys [data]}]
+  (let [{:keys [call source before after]} data]
+    (cond-> (update-in state [:ingest source]
+                       (fn [r] (-> (or r {:seen {}})
+                                   (update :snapshot #(eventkit/snapshot-with % after))
+                                   (assoc-in [:seen (:id after)] (eventkit/version after)))))
+      call (update-in [:reminder-calls call] assoc :status :changed :before before :after after))))
+
+(defmethod evolve* "reminders/failed" [state {:keys [data]}]
+  (update-in state [:reminder-calls (:call data)] assoc :status :failed :error (:error data)))
+
+(defmethod evolve* "reminders/revert-asked" [state {:keys [at data]}]
+  (assoc-in state [:reminder-reverts (:change data)] {:message (:message data) :n (:n data) :at (inst at)}))
+
+(defmethod evolve* "reminders/revert-refused" [state {:keys [data]}]
+  (update state :reminder-reverts dissoc (:change data)))
 
 (defmethod evolve* "files/moving" [state {:keys [seq at actor labels data] :as event}]
   (assoc-in state [:moves seq] (cond-> {:id seq :actor actor :at (inst at) :labels (union labels)
@@ -2970,6 +3012,12 @@
         #(send-memo % {:from from :to (:to src) :subject subject :body body} labels)))
     tx))
 
+(defn- record-reminders [tx source src fresh]
+  (if-let [{:keys [subject body labels from]} (ingest/reminders-memo source fresh)]
+    (with-public tx false
+      #(send-memo % {:from from :to (:to src) :subject subject :body body} labels))
+    tx))
+
 (defmethod decide* :ingest/record [{:keys [state config] :as tx} {{:keys [source items keys cursor]} :args}]
   ;; What an ingest source's poll found (relay.ingest-run fetched it).
   ;; Only what was never seen, or seen at another version, becomes a
@@ -2978,37 +3026,50 @@
   (let [src (get-in config [:ingest source])]
     (when-not src (reject! :not-found (str "relay.edn has no ingest source " source ".")))
     (active-role! state (:to src))
-    (let [{:keys [seen failing] old-cursor :cursor} (ingest-record state source)
+    (let [{:keys [seen failing] old-cursor :cursor :as old} (ingest-record state source)
           kind (:kind src)
           ;; Mail and calendar events not taken now come in the next
           ;; poll, which fetches them again. GitHub items cannot wait:
           ;; the cursor moves past every item the poll returned.
           fresh (cond->> (ingest/fresh seen items)
                   (= :pop3 kind) (take ingest/mails-per-poll)
-                  (= :ics kind) (take ingest/items-per-memo)
+                  (#{:ics :apple-calendar :apple-reminders} kind) (take ingest/items-per-memo)
                   true vec)
           present (set keys)
           listed (set (map :key items))
           ;; A calendar event gone from the feed was removed; one still in
           ;; it but no longer coming up is let go of quietly. At most a
           ;; memo's worth of removals at a time, the rest next poll.
-          removed (when (= :ics kind)
+          calendar? (ingest/calendar-kind? kind)
+          removed (when calendar?
                     (vec (take ingest/items-per-memo (sort (filter #(not (present %)) (clojure.core/keys seen))))))
-          aged (when (= :ics kind) (vec (sort (filter #(and (present %) (not (listed %))) (clojure.core/keys seen)))))
+          aged (when calendar? (vec (sort (filter #(and (present %) (not (listed %))) (clojure.core/keys seen)))))
+          ;; A reminder gone from its list, or done too long ago to be
+          ;; read, is let go of quietly.
+          vanished (when (= :apple-reminders kind) (vec (sort (filter #(not (present %)) (clojure.core/keys seen)))))
           tx (case kind
                :pop3 (reduce #(record-mail %1 src (first %2)) tx fresh)
                :github (record-github tx src fresh)
-               :ics (record-calendar tx source src fresh (mapv #(get seen %) removed)))
+               (:ics :apple-calendar) (record-calendar tx source src fresh (mapv #(get seen %) removed))
+               :apple-reminders (record-reminders tx source src fresh))
+          ;; What a calendar or reminders source showed, for the tools that
+          ;; read it on demand.
+          snapshot (case kind
+                     (:ics :apple-calendar) (mapv (comp ics-feed/event->data :event) items)
+                     :apple-reminders (mapv :reminder items)
+                     nil)
           new-seen (vec (for [[it _] fresh] [(:key it) (:version it)]))
-          gone (vec (concat removed aged))
+          gone (vec (concat removed aged vanished))
           ;; A new issue or pull request a person opened gets a push, all
           ;; of a tick's in one (:github/announce).
           people (when (= :github kind)
                    (vec (for [[it st] fresh :when (= :new st) :when (ingest/news? src it)]
                           (select-keys it [:repo :number :kind :title :user :url]))))]
-      (if (or (seq new-seen) (seq gone) (not= cursor old-cursor) failing)
+      (if (or (seq new-seen) (seq gone) (not= cursor old-cursor) failing
+              (and snapshot (or (not= snapshot (:snapshot old)) (nil? (:snapshot-at old)))))
         (emit tx "ingest/polled" (cond-> {:source source :seen new-seen :gone gone :cursor cursor}
-                                   (seq people) (assoc :people people)))
+                                   (seq people) (assoc :people people)
+                                   snapshot (assoc :snapshot snapshot)))
         tx))))
 
 (defmethod decide* :ingest/failed [{:keys [state config ^Instant now] :as tx} {{:keys [source error]} :args}]
@@ -3155,6 +3216,7 @@
 (defmethod evolve* "change/reverted" [state {:keys [data]}]
   (-> state
       (update :reverted (fnil conj #{}) (:change data))
+      (update :reminder-reverts dissoc (:change data))
       (touch-notes (fn [{:keys [op change]}] (and (= "revert" op) (= change (:change data)))))
       (mark-undo (:put data) (:change data))
       (acted (:message data) (:n data) "reverted")))
@@ -3364,6 +3426,19 @@
                          (assoc (select-keys before [:title :instructions :reports-to :harness :model]) :id owner)
                          (:labels before)))))))
 
+(defn- ask-reminder-revert
+  "Asks for the undo of a change to a reminder. Putting it back means
+  calling the EventKit binary, which a decision cannot do, so this only
+  records the request (reminders/revert-asked); relay.reminders carries
+  it out and settles it (:reminders/revert-done, :reminders/revert-refuse),
+  and only then is the change undone."
+  [{:keys [state] :as tx} c {:keys [message n]}]
+  (when (get-in state [:reminder-reverts (:seq c)])
+    (reject! :invalid "relay is putting that reminder back already; it says if it cannot."))
+  (-> (assoc tx :actor operator :labels [] :public false)
+      (emit "reminders/revert-asked" (cond-> {:change (:seq c)} message (assoc :message message :n n)))
+      (assoc :actor (:actor tx) :labels (:labels tx) :public (:public tx))))
+
 (defn- revert!
   "Undoes change `change-seq` as the operator, or refuses with a plain
   reason: a change that cannot be undone (digest/revert-refusal), or one
@@ -3376,7 +3451,9 @@
     (when (contains? (:reverted state) change-seq)
       (reject! :invalid "That change was undone already."))
     (when-let [why (digest/revert-refusal c)] (reject! :invalid why))
-    (let [tx' (revert-change (assoc tx :actor operator :labels [] :public false) c)
+    (if (= "reminder" (:what c))
+      (ask-reminder-revert tx c {:message message :n n})
+      (let [tx' (revert-change (assoc tx :actor operator :labels [] :public false) c)
           ;; What it put back, when it put back anything, so the change
           ;; that made is known as an undo (mark-undo).
           put (when (> (count (:events tx')) (count (:events tx))) (last-id tx'))]
@@ -3384,7 +3461,7 @@
           (emit "change/reverted" (cond-> {:change change-seq}
                                     put (assoc :put put)
                                     message (assoc :message message :n n)))
-          (assoc :actor (:actor tx) :labels (:labels tx) :public (:public tx))))))
+          (assoc :actor (:actor tx) :labels (:labels tx) :public (:public tx)))))))
 
 (defn- dismiss! [tx m {:keys [n keys text labels]}]
   (-> tx
@@ -3548,6 +3625,8 @@
   (let [{:keys [op change text offer labels part]} (first (filter #(= n (:n %)) (:numbered m)))
         done (get-in state [:messages (:id m) :acted n])]
     (cond
+      (and (= "revert" op) (contains? (:reminder-reverts state) change))
+      (digest/asked-line (recipe-change-by-seq state change))
       (= "revert" op) (digest/undone-line (recipe-change-by-seq state change))
       (= "declined" done) (digest/declined-line text offer labels)
       (= "accepted" done) (digest/accepted-line text offer labels (or (digest/role-of config) "the steward"))
@@ -3903,6 +3982,81 @@
   (let [cur (calendar-live! state event)]
     (emit tx "calendar/removed" (cond-> {:event event} (not (blank? why)) (assoc :why (str/trim why)))
           (:labels cur))))
+
+;; The reminder tools (relay.reminders). relay's own code calls the
+;; EventKit binary on the host; these record what it is about to do, what
+;; it did, and the operator's undo of it. Every event carries private:
+;; reminders are the operator's.
+
+(def reminder-ops #{"add" "edit" "done" "reopen"})
+
+(defn reminder-call
+  "A call to a reminder tool by the seq of its reminders/changing event."
+  [state id]
+  (get-in state [:reminder-calls id]))
+
+(defmethod decide* :reminders/start [{:keys [config actor] :as tx} {{:keys [source op args]} :args}]
+  (caller-role! tx)
+  (let [src (get-in config [:ingest source])]
+    (when (or (public-actor? tx) (not= :apple-reminders (:kind src)) (not= actor (:to src)))
+      (reject! :forbidden (str actor " may not change reminders from " (pr-str source) ".")))
+    (when-not (reminder-ops op) (reject! :invalid "A reminder call adds, edits, completes or reopens."))
+    (when-not (map? args) (reject! :invalid "A reminder call names what it asks for."))
+    (emit tx "reminders/changing" {:source source :op op :args args} [private-label])))
+
+(defn- reminder? [r] (and (map? r) (string? (:id r)) (string? (:list r)) (string? (:title r))))
+
+(defmethod decide* :reminders/finish [{:keys [state actor] :as tx} {{:keys [call before after]} :args}]
+  (let [c (reminder-call state call)]
+    (when-not (and c (= actor (:actor c)))
+      (reject! :not-found (str "There is no reminder call " call " by " actor ".")))
+    (when-not (= :changing (:status c))
+      (reject! :invalid (str "Reminder call " call " is already recorded.")))
+    (when-not (and (reminder? after) (or (nil? before) (reminder? before)))
+      (reject! :invalid (str "What reminder call " call " did is not well formed.")))
+    (emit tx "reminders/changed" {:call call :source (:source c) :op (:op c) :before before :after after}
+          (:labels c))))
+
+(defmethod decide* :reminders/fail [{:keys [state actor] :as tx} {{:keys [call error]} :args}]
+  (let [c (reminder-call state call)]
+    (when-not (and c (= actor (:actor c)))
+      (reject! :not-found (str "There is no reminder call " call " by " actor ".")))
+    (when-not (= :changing (:status c))
+      (reject! :invalid (str "Reminder call " call " is already recorded.")))
+    (emit tx "reminders/failed" {:call call :error (ingest/one-line (str error) 300)} (:labels c))))
+
+(defn- asked-revert! [{:keys [state]} change]
+  (or (when-let [ask (get-in state [:reminder-reverts change])]
+        (when-let [c (recipe-change-by-seq state change)] [ask c]))
+      (reject! :not-found "No undo of that reminder change is waiting.")))
+
+(defmethod decide* :reminders/revert-done [{:keys [state] :as tx} {{:keys [change op before after]} :args}]
+  ;; relay.reminders put the reminder back (or found it already as the
+  ;; undo leaves it). The undo is the operator's: no sources, no flag.
+  (dispatcher-only! tx)
+  (let [[ask c] (asked-revert! tx change)]
+    (when-not (or (nil? after) (and (reminder? after) (or (nil? before) (reminder? before)) (reminder-ops op)))
+      (reject! :invalid "What the undo did is not well formed."))
+    (let [tx' (-> (assoc tx :actor operator :labels [] :public false)
+                  (cond-> after (emit "reminders/changed" {:source (:owner c) :op op :before before :after after}
+                                      [private-label])))
+          put (when after (last-id tx'))]
+      (-> tx'
+          (emit "change/reverted" (cond-> {:change change}
+                                    put (assoc :put put)
+                                    (:message ask) (assoc :message (:message ask) :n (:n ask))))
+          (assoc :actor (:actor tx) :labels (:labels tx) :public (:public tx))))))
+
+(defmethod decide* :reminders/revert-refuse [{:keys [state] :as tx} {{:keys [change why]} :args}]
+  ;; relay.reminders would not put the reminder back, or could not. The
+  ;; request is over; the operator is told why, and may ask again.
+  (dispatcher-only! tx)
+  (let [[_ c] (asked-revert! tx change)
+        why (ingest/one-line (str why) 600)]
+    (-> tx
+        (emit "reminders/revert-refused" {:change change :why why})
+        (tell "reminder-revert" "note" "normal" "A reminder was not put back"
+              [why] :labels (:labels c)))))
 
 ;; files_move (relay.files). relay's own code moves the files on the
 ;; host; these record what it is about to do, what it did, and what the

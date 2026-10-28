@@ -295,7 +295,7 @@
 
 (defn thing
   "A thing a change is to, in words: how-to \"x\", routine \"x\"..."
-  [{:keys [what name labels]}]
+  [{:keys [what name labels title]}]
   ;; A name chosen in a session that read outside text may be that text's
   ;; choice: a domain in it must not become a link.
   (let [name (if (outside? labels) (text/defang name) name)]
@@ -303,7 +303,10 @@
     "skill" (str "how-to \"" name "\"")
     "routine" (str "routine \"" name "\"")
     "note" (str "note \"" name "\"")
-    "role" (str "role \"" name "\""))))
+    "role" (str "role \"" name "\"")
+    "reminder" (let [t (str title)
+                     t (if (> (count t) 80) (str (subs t 0 79) "…") t)]
+                 (str "reminder \"" (if (outside? labels) (text/defang t) t) "\"")))))
 
 (defn change-line
   "One line saying what a change did, in plain words."
@@ -311,6 +314,8 @@
   (str (case change
          "added" (str "New " (thing c))
          "changed" (str "Changed the " (thing c))
+         "completed" (str "Completed the " (thing c))
+         "reopened" (str "Reopened the " (thing c))
          "removed" (str "Removed the " (thing c)))
        (when (and delta (not= "removed" change)) (lines-text delta))
        (when schedule (str ", now " schedule))))
@@ -338,10 +343,24 @@
 (defn undone-line
   "What undoing change `c` did, in plain words, for the operator."
   [{:keys [change] :as c}]
-  (case change
-    "added" (str "Removed the new " (thing c) ".")
-    "changed" (str "Put the " (thing c) " back as it was.")
-    "removed" (str "Brought back the " (thing c) ".")))
+  (if (= "reminder" (:what c))
+    ;; relay never deletes a reminder, so undoing an add finishes it.
+    (case change
+      "added" (str "Marked the new " (thing c) " as done.")
+      "changed" (str "Put the " (thing c) " back as it was.")
+      "completed" (str "Opened the " (thing c) " again.")
+      "reopened" (str "Marked the " (thing c) " as done again."))
+    (case change
+      "added" (str "Removed the new " (thing c) ".")
+      "changed" (str "Put the " (thing c) " back as it was.")
+      "removed" (str "Brought back the " (thing c) "."))))
+
+(defn asked-line
+  "What undoing a reminder change says at once: putting the reminder back
+  needs its list, so relay does it a moment later and says if it
+  cannot."
+  [c]
+  (str "Asked relay to undo the change to the " (thing c) ". It does it within a minute, and tells you if it cannot."))
 
 (defn quoted
   "An item's text quoted in what relay says back about it, as the note

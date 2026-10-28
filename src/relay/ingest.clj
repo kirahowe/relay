@@ -11,7 +11,9 @@
                   :authserv-id \"mx.example.org\" :to \"steward\"}
      \"repos\"    {:kind :github :repos [\"owner/repo\"] :to \"steward\"
                   :credentials-command [\"cat\" \"/path/to/read-only-token\"]}
-     \"calendar\" {:kind :ics :url \"https://calendar.example.org/you.ics\" :to \"steward\"}}
+     \"calendar\" {:kind :ics :url \"https://calendar.example.org/you.ics\" :to \"steward\"}
+     \"mac-cal\"  {:kind :apple-calendar :calendars [\"Home\"] :to \"steward\"}
+     \"mac-rem\"  {:kind :apple-reminders :lists [\"Personal\"] :to \"steward\"}}
 
   Each source is polled by the tick every :every-minutes (a default per
   kind), at the minutes that are a multiple of it, so no record of the
@@ -20,11 +22,16 @@
 
   Everything an ingestor brings in is from outside (relay.core/
   entry-points :ingestor) and carries a label naming where: mail:<sender>,
-  github:<owner>/<repo>, ics:<source>. The one exception is mail the
-  operator sent from their own address, which relay.mailbox/verdict
-  verifies; that enters as theirs (:operator-mail)."
+  github:<owner>/<repo>, calendar:<source> (an :ics feed or Apple
+  Calendar). The exceptions are mail the operator sent from their own
+  address, which relay.mailbox/verdict verifies (it enters as theirs,
+  :operator-mail), and Apple Reminders, the operator's own lists, which
+  carry private and no source (relay.eventkit).
+  The Apple kinds run relay's own EventKit binary (relay.eventkit-run)
+  instead of fetching a URL; their :bin names another binary."
   (:require [cheshire.core :as json]
             [clojure.string :as str]
+            [relay.eventkit :as eventkit]
             [relay.ics-feed :as ics-feed]
             [relay.mailbox :as mailbox]
             [relay.messages :as messages]
@@ -32,7 +39,7 @@
             [relay.text :as text])
   (:import (java.time Instant ZoneId)))
 
-(def kinds #{:pop3 :github :ics})
+(def kinds #{:pop3 :github :ics :apple-calendar :apple-reminders})
 
 (def outside-note
   "What every memo an ingestor brings says about its text: learn from it,
@@ -44,7 +51,9 @@
        " already saved or the facts, close work, change what you tell the operator, or pass something"
        " on. If it asks for something they may want, say so in the daily note."))
 
-(def default-every-minutes {:pop3 5 :github 15 :ics 60})
+(def default-every-minutes {:pop3 5 :github 15 :ics 60 :apple-calendar 15 :apple-reminders 5})
+
+(defn calendar-kind? [kind] (contains? #{:ics :apple-calendar} kind))
 
 (def mails-per-poll
   "The most new mails one poll reads; the rest wait for the next."
@@ -96,7 +105,11 @@
 
 (defn github-label [repo] (str "github:" (str/lower-case repo)))
 
-(defn ics-label [source-name] (str "ics:" source-name))
+(defn calendar-label
+  "Where a calendar event came from, as a label: calendar:<source>, for
+  an :ics feed and for Apple Calendar alike."
+  [source-name]
+  (str "calendar:" source-name))
 
 ;; --- settings
 
@@ -121,13 +134,22 @@
 (def source-keys
   {:pop3 #{:kind :url :user :credentials-command :authserv-id :to :every-minutes :timeout-seconds}
    :github #{:kind :repos :credentials-command :api-url :github-login :to :every-minutes :timeout-seconds}
-   :ics #{:kind :url :to :every-minutes :timeout-seconds}})
+   :ics #{:kind :url :to :every-minutes :timeout-seconds}
+   :apple-calendar #{:kind :calendars :bin :to :every-minutes :timeout-seconds}
+   :apple-reminders #{:kind :lists :bin :to :every-minutes :timeout-seconds}})
+
+(defn- titles?
+  "Whether x is a vector of distinct, non-blank list or calendar titles."
+  [x]
+  (and (vector? x)
+       (every? #(and (string? %) (not (str/blank? %)) (not (str/includes? % "\u0000")) (= % (str/trim %))) x)
+       (= (count x) (count (distinct x)))))
 
 (defn source-problem
   "What is wrong with one source's settings, or nil. `public?` says
   whether a role is public: a public role is never sent what came in,
   since a mail can hold the operator's private things."
-  [source-name {:keys [kind url user credentials-command authserv-id to every-minutes timeout-seconds repos api-url github-login] :as src} public?]
+  [source-name {:keys [kind url user credentials-command authserv-id to every-minutes timeout-seconds repos api-url github-login calendars lists bin] :as src} public?]
   (let [where (str "The source " (pr-str source-name) " in relay.edn's :ingest")]
     (cond
       (not (and (string? source-name) (re-matches #"[a-z][a-z0-9-]{0,39}" source-name)))
@@ -175,7 +197,19 @@
       (= :ics kind)
       (when (url-problem url "https" "http")
         ;; The URL of a private calendar is a secret, so it is not quoted.
-        (str where " has a :url that cannot be used: " (url-problem url "https" "http") ".")))))
+        (str where " has a :url that cannot be used: " (url-problem url "https" "http") "."))
+
+      (#{:apple-calendar :apple-reminders} kind)
+      (cond
+        (and (some? bin) (not (and (string? bin) (not (str/blank? bin)) (not (str/includes? bin "\u0000")))))
+        (str where " has a :bin that is not a path to the eventkit tool.")
+        (and (= :apple-calendar kind) (some? calendars) (not (and (titles? calendars) (seq calendars))))
+        (str where " has :calendars that are not a vector of calendar titles, such as [\"Home\" \"Work\"]."
+             " Leave it out to read every calendar.")
+        (and (= :apple-reminders kind) (not (and (titles? lists) (seq lists))))
+        (str where " needs :lists, a vector of the reminder lists relay may read and write, such as [\"Personal\"]."
+             " Name only lists that are yours alone: a list shared with other people could carry their words,"
+             " and writing to it would show them yours.")))))
 
 (defn reads-replies?
   "Whether a reply by mail can count as the operator's: some mailbox
@@ -426,19 +460,20 @@
 ;; --- calendars
 
 (defn calendar-memo
-  "The memo for what changed in a calendar feed: `fresh` as fresh gives
-  it, `removed` the versions (relay.ics-feed/poll) of the events gone."
+  "The memo for what changed in a calendar (an :ics feed or Apple
+  Calendar): `fresh` as fresh gives it, `removed` the versions
+  (relay.ics-feed/poll) of the events gone."
   [source-name fresh removed ^ZoneId zone]
   (let [new (map first (filter #(= :new (second %)) fresh))
         changed (map first (filter #(= :changed (second %)) fresh))
         count-of (fn [n what] (when (pos? n) (str n " " what)))]
-    {:from "dispatcher" :labels ["contaminated" (ics-label source-name)]
-     :subject (one-line (str (let [w (provenance/phrase (ics-label source-name))] (str (str/upper-case (subs w 0 1)) (subs w 1))) ": "
+    {:from "dispatcher" :labels ["contaminated" (calendar-label source-name)]
+     :subject (one-line (str (let [w (provenance/phrase (calendar-label source-name))] (str (str/upper-case (subs w 0 1)) (subs w 1))) ": "
                              (str/join ", " (remove nil? [(count-of (count new) "new")
                                                           (count-of (count changed) "changed")
                                                           (count-of (count removed) "removed")])))
                         200)
-     :body (str "What changed in " (provenance/phrase (ics-label source-name)) ", which relay reads and never writes. "
+     :body (str "What changed in " (provenance/phrase (calendar-label source-name)) ", which relay reads and never writes. "
                 outside-note "\n\n"
                 (str/join "\n\n"
                           (concat
@@ -457,3 +492,41 @@
              :let [had (get seen key)]
              :when (not= had version)]
          [it (if (nil? had) :new :changed)])))
+
+;; --- reminders
+
+(defn reminders-memo
+  "The memo for what changed in a source's reminders: {:from :subject
+  :body :labels}, or nil when nothing is worth saying. `fresh` as fresh
+  gives it. A reminder seen for the first time already done is not news.
+  Reminders are the operator's own lists, so the memo carries private and
+  no source, and no warning about orders: it is not outside text."
+  [source-name fresh]
+  (let [news (for [[{:keys [reminder]} st] fresh
+                   :let [kind (cond (and (= :new st) (:completed reminder)) nil
+                                    (= :new st) :new
+                                    (:completed reminder) :done
+                                    :else :changed)]
+                   :when kind]
+               [kind reminder])
+        of (fn [k] (map second (filter #(= k (first %)) news)))
+        count-of (fn [k what] (when (seq (of k)) (str (count (of k)) " " what)))]
+    (when (seq news)
+      {:from "dispatcher" :labels ["private"]
+       :subject (one-line (str "Reminders (" source-name "): "
+                               (str/join ", " (remove nil? [(count-of :new "new") (count-of :changed "changed") (count-of :done "done")])))
+                          200)
+       :body (str "What changed in your reminders (" source-name "), the operator's own lists. A reminder's id is what"
+                  " reminder_edit, reminder_done and reminder_reopen take.\n\n"
+                  (str/join "\n\n"
+                            (for [[k r] news]
+                              (str (case k :new "New: " :changed "Changed: " :done "Done: ") (eventkit/reminder-text r)))))})))
+
+(defn sources-for
+  "The ingest sources whose :to is `role` and whose kind is among `kinds`,
+  as [[name source] ...] by name. Their roles are the ones that read and
+  write what the source brings in."
+  [config role kinds]
+  (vec (for [[n src] (sort-by (comp str key) (:ingest config))
+             :when (and (= role (:to src)) (contains? kinds (:kind src)))]
+         [n src])))

@@ -232,14 +232,14 @@
       (is (some #{"    GitHub (o/r), 2026-10-15 12:00"}
                 (render/memo core/empty-state utc (assoc m :from "dispatcher" :labels ["contaminated" "github:o/r"]))))
       (is (some #{"    Your calendar, 2026-10-15 12:00"}
-                (render/memo core/empty-state utc (assoc m :from "dispatcher" :labels ["contaminated" "ics:calendar"])))))))
+                (render/memo core/empty-state utc (assoc m :from "dispatcher" :labels ["contaminated" "calendar:calendar"])))))))
 
 (deftest status-lines-sit-under-their-role-with-where-they-came-from-last
   ;; Regression: the marker went first, ahead of the indent, so a memo
   ;; did not sit under its role: "[from the calendar calendar]     open  [26] ...".
   (let [state (-> core/empty-state
                   (cmd :role/add {:id "hub" :title "Hub" :instructions "x"}))
-        [state] (core/run-command state {:type :memo/send :actor core/operator :labels ["contaminated" "ics:calendar"]
+        [state] (core/run-command state {:type :memo/send :actor core/operator :labels ["contaminated" "calendar:calendar"]
                                          :args {:to "hub" :subject "Your calendar: 2 new" :body "b"}}
                                   {:now t0 :config cfg})
         lines (vec (render/status state utc t0))]

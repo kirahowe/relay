@@ -248,7 +248,7 @@
         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no source nope"
                               (cli/execute ["--data" (:data-dir sys) "poll" "nope"]))))
       (let [[m] (memos-since sys 0)]
-        (is (= ["contaminated" "ics:cal"] (:labels m)))
+        (is (= ["calendar:cal" "contaminated"] (:labels m)))
         (is (str/includes? (:body m) "New: Interview, Thu 2026-10-29 14:00 to 15:00")))
       (let [sys (system dir {:ingest {"cal" {:kind :ics :url (str base "/moved-token/basic.ics") :to "steward"}}})
             [e] (ingest-run/poll! sys "cal")]

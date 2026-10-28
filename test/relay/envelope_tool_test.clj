@@ -47,18 +47,18 @@
 
 (deftest an-envelope-tool-is-given-only-the-class-labels
   ;; Regression (U1): a scout that had answered a request shaped by a
-  ;; calendar carried ics:calendar, relay passed it on, and webtool refused
+  ;; calendar carried calendar:calendar, relay passed it on, and webtool refused
   ;; every later search ("labels must be among contaminated, private").
   (with-tools {"mail" (tool "echo")}
     (fn [sys]
       (is (= "asked When? with [\"contaminated\"] as toolu_8"
              (:ok (tools/call! sys "clerk" "mail" {:question "When?"}
-                               ["contaminated" "ics:calendar" "mail:stranger@example.com"] "toolu_8")))))))
+                               ["contaminated" "calendar:calendar" "mail:stranger@example.com"] "toolu_8")))))))
 
 (def ^:private any-label
   (gen/one-of [(gen/elements ["private" "contaminated"])
                (gen/fmap #(str "mail:" % "@example.com") (gen/not-empty gen/string-alphanumeric))
-               (gen/fmap #(str "ics:" %) (gen/not-empty gen/string-alphanumeric))
+               (gen/fmap #(str "calendar:" %) (gen/not-empty gen/string-alphanumeric))
                gen/string]))
 
 (defspec envelope-labels-are-always-among-the-classes 300

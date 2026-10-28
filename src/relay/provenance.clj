@@ -19,7 +19,7 @@
 
   A source is a label that names an outsider: `contaminated` (something
   from outside, no more known), or kind:what such as
-  mail:dana@example.org, github:kira/tidy, ics:calendar, files:downloads
+  mail:dana@example.org, github:kira/tidy, calendar:home, files:downloads
   (a folder mounted in the shell and not marked trusted), and two that
   relay records itself and never sends to agentloop: web:<page or URL>
   for a page a tool read, search:web for a web search, and tool:<name>
@@ -107,7 +107,7 @@
                      (= "unknown" what) "a mail from an unknown sender"
                      :else (str "a mail from " (text/defang (text/without-hidden what))))
         "github" (str "GitHub (" what ")")
-        "ics" (cond (calendar-words what) "your calendar"
+        "calendar" (cond (calendar-words what) "your calendar"
                     (str/includes? what "cal") (str "the calendar feed " what)
                     :else (str "the " what " calendar"))
         "web" (str "the web page " (text/defang (cut (text/without-hidden what) 80)))
@@ -131,7 +131,7 @@
                      (= "unknown" what) "Mail from an unknown sender: "
                      :else (str "Mail from " what ": "))
         "github" (str "GitHub " what ": ")
-        "ics" (let [w (phrase l)] (str (str/upper-case (subs w 0 1)) (subs w 1) ": "))
+        "calendar" (let [w (phrase l)] (str (str/upper-case (subs w 0 1)) (subs w 1) ": "))
         nil))))
 
 (defn phrases
@@ -179,7 +179,7 @@
       "search" "a web search"
       "mail" "a mail"
       "github" "GitHub"
-      "ics" "a calendar"
+      "calendar" "a calendar"
       "files" "your files"
       "tool" "a tool"
       nil)))

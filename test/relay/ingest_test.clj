@@ -89,6 +89,50 @@
   (is (thrown-with-msg? Exception #"public role"
                         (config/resolve-config (assoc-in settings [:ingest "mailbox" :to] "scout")))))
 
+(deftest the-apple-sources-are-checked
+  (let [problem (fn [src] (ingest/source-problem "s" src #(= "scout" %)))]
+    (testing "Apple Calendar takes optional calendars, the binary, and the common settings"
+      (is (nil? (problem {:kind :apple-calendar :to "steward"})))
+      (is (nil? (problem {:kind :apple-calendar :calendars ["Home" "Work"] :to "steward" :bin "~/bin/eventkit"
+                          :every-minutes 30 :timeout-seconds 20})))
+      (is (re-find #":calendars" (problem {:kind :apple-calendar :calendars "Home" :to "steward"})))
+      (is (re-find #":calendars" (problem {:kind :apple-calendar :calendars [] :to "steward"})))
+      (is (re-find #":calendars" (problem {:kind :apple-calendar :calendars ["Home" "Home"] :to "steward"})))
+      (is (re-find #":calendars" (problem {:kind :apple-calendar :calendars ["Home" ""] :to "steward"})))
+      (is (re-find #"does not take" (problem {:kind :apple-calendar :lists ["Personal"] :to "steward"}))))
+    (testing "Apple Reminders needs lists, and says to name only private ones"
+      (is (nil? (problem {:kind :apple-reminders :lists ["Personal"] :to "steward"})))
+      (is (re-find #"needs :lists.*alone" (problem {:kind :apple-reminders :to "steward"})))
+      (is (re-find #"needs :lists" (problem {:kind :apple-reminders :lists [] :to "steward"})))
+      (is (re-find #"needs :lists" (problem {:kind :apple-reminders :lists ["A" "A"] :to "steward"})))
+      (is (re-find #"needs :lists" (problem {:kind :apple-reminders :lists ["A "] :to "steward"})))
+      (is (re-find #"does not take" (problem {:kind :apple-reminders :lists ["A"] :calendars ["B"] :to "steward"}))))
+    (testing "the binary, if named, is a path"
+      (is (re-find #":bin" (problem {:kind :apple-reminders :lists ["A"] :to "steward" :bin ""})))
+      (is (re-find #":bin" (problem {:kind :apple-calendar :to "steward" :bin ["eventkit"]}))))
+    (testing "neither goes to a public role, as no ingestor does"
+      (is (re-find #"public role" (problem {:kind :apple-reminders :lists ["A"] :to "scout"})))
+      (is (re-find #"public role" (problem {:kind :apple-calendar :to "scout"}))))
+    (testing "and they are polled every 15 and 5 minutes unless said"
+      (is (= 15 (ingest/every-minutes {:kind :apple-calendar})))
+      (is (= 5 (ingest/every-minutes {:kind :apple-reminders})))
+      (is (= 30 (ingest/every-minutes {:kind :apple-calendar :every-minutes 30}))))))
+
+(deftest a-calendar-source-is-labelled-the-same-whatever-it-reads
+  (is (= "calendar:home" (ingest/calendar-label "home")))
+  (is (every? ingest/source-label? [(ingest/calendar-label "home") (ingest/calendar-label "mac-cal")]))
+  (is (relay.text/contaminated? [(ingest/calendar-label "x")]) "a source label is outside text")
+  (is (= "the mac calendar" (relay.provenance/phrase (ingest/calendar-label "mac"))))
+  (testing "a reminders memo is private and no source: not outside text"
+    (let [r {:id "R1" :list "Personal" :title "Buy milk" :completed false}
+          memo (ingest/reminders-memo "rem" [[{:key "R1" :version "v" :reminder r} :new]])]
+      (is (= ["private"] (:labels memo)))
+      (is (not (relay.text/contaminated? (:labels memo))))
+      (is (not (relay.provenance/outside? (relay.provenance/sources (:labels memo)))))
+      (is (nil? (ingest/reminders-memo "rem" [])))
+      (is (nil? (ingest/reminders-memo "rem" [[{:key "R1" :version "v" :reminder (assoc r :completed true)} :new]]))
+          "one first seen done is no news"))))
+
 (deftest a-source-is-due-once-in-each-of-its-windows
   (doseq [every [1 5 15 60]]
     (let [src {:kind :github :every-minutes every}
@@ -464,7 +508,7 @@
         w (poll (seed) feed)
         [m] (memos w)]
     (is (nil? (:rejected w)) (:why w))
-    (is (= ["contaminated" "ics:cal"] (:labels m)))
+    (is (= ["calendar:cal" "contaminated"] (:labels m)))
     (is (= "Your calendar: 3 new" (get-in m [:data :subject])))
     (is (str/includes? (get-in m [:data :body]) "New: Interview, Acme, Thu 2026-10-29 14:00 to 15:00"))
     (testing "the same feed again says nothing"
@@ -557,10 +601,10 @@
     (testing "the wake ends with the labels the session reports"
       (let [wake-id (:id (support/calling-wake (:state w) "steward"))
             w3 (run w "dispatcher" :wake/end {:wake wake-id :outcome "ran" :exit 0 :said "Done."
-                                              :labels ["contaminated" "ics:cal"]})
+                                              :labels ["contaminated" "calendar:cal"]})
             ended (first (of-type w3 "wake/ended"))]
         (is (nil? (:rejected w3)) (:why w3))
-        (is (= ["contaminated" "ics:cal"] (:labels ended)))
+        (is (= ["calendar:cal" "contaminated"] (:labels ended)))
         (is (not= (core/session-labels-bound (:state w) cfg "steward") (:labels ended))
             "not the bound on what it could have read")))))
 
@@ -568,7 +612,7 @@
   (let [env (fn [labels] (tools/parse-envelope (str "{\"input\":{},\"labels\":" (json/generate-string labels)
                                                     ",\"call_id\":\"c1\"}")))]
     (is (= ["contaminated" "github:owner/repo"] (:labels (env ["contaminated" "github:owner/repo"]))))
-    (is (nil? (:problem (env ["contaminated" "mail:eve@example.net" "ics:cal"]))))
+    (is (nil? (:problem (env ["contaminated" "mail:eve@example.net" "calendar:cal"]))))
     (is (:problem (env ["contaminated" "mail:Eve@x"])))
     (is (:problem (env ["contaminated" "mail:eve\u200b@example.net"])) "a zero-width character")))
 

@@ -57,6 +57,9 @@ runs the behaviour evals against the real model, which costs a little.
                 :cmd ["sh" "-c" "make check && make build"]}
                {:id "webtool" :what "webtool's tests, then its release and fixture builds" :dir wt
                 :cmd ["sh" "-c" "make test && make build && make fixture"]}
+               {:id "eventkit" :what "the EventKit binary's tests and build, then relay's read arguments through it" :dir root
+                :cmd ["sh" "-c" (str "tools/eventkit/test.sh && tools/eventkit/build.sh"
+                                     " && bb -cp src:resources:test -m relay.eventkit-contract tools/eventkit/eventkit")]}
                {:id "relay" :what "relay's tests and the mock scenarios against that agentloop" :dir root
                 :cmd ["bb" "test" "--agentloop" al-bin]}
                {:id "pentest" :what "the whole system attacked on artificial data" :dir root

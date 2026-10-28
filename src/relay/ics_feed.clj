@@ -139,6 +139,13 @@
 (defn- instant-of ^Instant [w ^ZoneId zone]
   (or (:instant w) (some-> ^LocalDate (:date w) (.atStartOfDay zone) .toInstant)))
 
+(defn bounds
+  "An event's start and end as instants in `zone`; a whole-day time is
+  the start of its day. An event with no end ends when it starts."
+  [{:keys [start end]} ^ZoneId zone]
+  (let [s (instant-of start zone)]
+    [s (or (instant-of end zone) s)]))
+
 (defn upcoming?
   "Whether an event is worth a role's attention at `now`: it has not been
   over for more than a day, or it repeats with no end before now."
@@ -161,6 +168,15 @@
     (boolean (and (= ["BEGIN" "VCALENDAR"] (first names))
                   (some #{["END" "VCALENDAR"]} names)))))
 
+(defn items-of
+  "The events of a feed or an EventKit read that are upcoming at `now`,
+  as poll's items: [{:key :version :event}]. The version carries the
+  title after the digest, so a removal can still say what was removed
+  once the event is gone."
+  [evs ^ZoneId zone ^Instant now]
+  (vec (for [e evs :when (upcoming? e zone now)]
+         {:key (event-key e) :version (str (version e) " " (one-line (:summary e) 80)) :event e})))
+
 (defn poll
   "What a poll of a feed found: {:items [{:key :version :event}] :keys
   [every key in the feed]}, the items those upcoming at `now`. Throws
@@ -170,11 +186,42 @@
   (when-not (calendar? text)
     (throw (ex-info "the calendar's answer was not a whole calendar feed" {})))
   (let [evs (events text zone)]
-    ;; The version carries the title after the digest, so a removal can
-    ;; still say what was removed once the event is gone from the feed.
-    {:items (vec (for [e evs :when (upcoming? e zone now)]
-                   {:key (event-key e) :version (str (version e) " " (one-line (:summary e) 80)) :event e}))
+    {:items (items-of evs zone now)
      :keys (vec (distinct (map event-key evs)))}))
+
+;; --- events as the log keeps them
+
+(def ^:private stored-description-limit 2000)
+
+(defn- cut-text [s n]
+  (let [s (str s)]
+    (if (> (count s) n) (subs s 0 n) s)))
+
+(defn- when->data [w]
+  (cond (:instant w) {:instant (str (:instant w))}
+        (:date w) {:date (str (:date w))}))
+
+(defn- data->when [w]
+  (cond (:instant w) {:instant (Instant/parse (str (:instant w)))}
+        (:date w) {:date (LocalDate/parse (str (:date w)))}))
+
+(defn event->data
+  "An event as plain data for the log and the state's snapshot: its times
+  as strings, its long text cut."
+  [ev]
+  (cond-> (-> ev
+              (update :start when->data)
+              (update :summary cut-text 500))
+    (:end ev) (update :end when->data)
+    (:location ev) (update :location cut-text 300)
+    (:description ev) (update :description cut-text stored-description-limit)))
+
+(defn data->event
+  "event->data's data, as an event again. Keys the log's JSON made
+  keywords stay keywords."
+  [d]
+  (cond-> (update d :start data->when)
+    (:end d) (update :end data->when)))
 
 ;; --- what a role reads
 
@@ -205,9 +252,10 @@
 
 (defn event-text
   "An event as a few lines a role reads, times in `zone`."
-  [{:keys [summary location description status rrule organizer] :as ev} ^ZoneId zone]
+  [{:keys [summary location description status rrule organizer calendar] :as ev} ^ZoneId zone]
   (str (one-line summary 200) ", " (when-text ev zone)
        (when (= "cancelled" status) " (cancelled)")
+       (when calendar (str ", in " (one-line calendar 80)))
        (when rrule (str ", repeating (" (one-line rrule 120) ")"))
        (when location (str "\n  At: " (one-line location 300)))
        (when organizer (str "\n  Organizer: " (one-line organizer 200)))

@@ -78,21 +78,21 @@
   (let [phrase #(digest/source-phrase {:labels %})]
     (is (= "a mail from eve@example.net" (phrase ["contaminated" "mail:eve@example.net"])))
     (is (= "GitHub (owner/repo)" (phrase ["contaminated" "github:owner/repo" "private"])))
-    (is (= "the work calendar" (phrase ["ics:work"])))
+    (is (= "the work calendar" (phrase ["calendar:work"])))
     (is (= "a mail that says it is from you, not verified" (phrase ["mail:unverified-operator"])))
     (is (= "something from outside" (phrase ["contaminated"])))
     (is (= "the web page office-holidays.html" (digest/source-phrase {:sources ["web:office-holidays.html"]
-                                                                     :labels ["contaminated" "ics:x"]}))
+                                                                     :labels ["contaminated" "calendar:x"]}))
         "what the session read directly, not all it held")
-    (is (= "GitHub (a/b) and the c calendar" (phrase ["ics:c" "github:a/b"])))
-    (is (str/ends-with? (phrase ["ics:c" "github:a/b" "mail:x@y.org" "ics:dd" "ics:e"]) "and 2 more"))
+    (is (= "the c calendar and GitHub (a/b)" (phrase ["calendar:c" "github:a/b"])))
+    (is (str/ends-with? (phrase ["calendar:c" "github:a/b" "mail:x@y.org" "calendar:dd" "calendar:e"]) "and 2 more"))
     (testing "no label's name is shown"
       (is (not-any? #(str/includes? (phrase ["contaminated" %]) "contaminated")
                     ["mail:x@y.org" "github:a/b"])))))
 
 (deftest a-change-is-flagged-for-what-its-writer-read-directly
   (let [c {:seq 4 :what "skill" :name "g" :change "changed" :actor "steward" :delta {:added 1 :removed 0}
-           :labels ["contaminated" "ics:calendar" "private"]}]
+           :labels ["contaminated" "calendar:calendar" "private"]}]
     (is (= [c] (digest/flagged [c] 0)) "an older change, with only labels, counts them")
     (is (empty? (digest/flagged [(assoc c :sources [])] 0)) "one whose writer read nothing outside is quiet")
     (is (= 1 (count (digest/flagged [(assoc c :sources ["mail:x@y.org"])] 0))))))
@@ -139,7 +139,7 @@
 ;; --- the note
 
 (def ^:private label-sets
-  [[] ["private"] ["contaminated"] ["contaminated" "mail:eve@example.net"] ["github:a/b"] ["private" "ics:cal"]])
+  [[] ["private"] ["contaminated"] ["contaminated" "mail:eve@example.net"] ["github:a/b"] ["private" "calendar:cal"]])
 
 (def ^:private gen-change
   (gen/let [what (gen/elements ["skill" "routine" "note" "role"])
@@ -211,7 +211,7 @@
                   ;; Nothing to say, nothing sent.
                   (= (nil? (:sections note)) (and (empty? want) (empty? (mapcat :items (:sections note)))))
                   ;; No label's name reaches the text.
-                  (not-any? #(re-find #"contaminated|private|mail:|github:|ics:" (:text %)) texts))))))
+                  (not-any? #(re-find #"contaminated|private|mail:|github:|calendar:" (:text %)) texts))))))
 
 (deftest a-dismissed-suggestion-is-never-in-the-note
   (quick 300

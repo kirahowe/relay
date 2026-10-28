@@ -13,6 +13,8 @@
              token, when there is one, is what :credentials-command prints.
     ICS      one GET of the feed's URL. The URL of a private calendar is
              a secret, so no error quotes it.
+    Apple    relay's own EventKit binary (relay.eventkit-run), for Apple
+             Calendar and Reminders.
 
   No redirect is followed: where a fetch goes is relay.edn's to say."
   (:require [babashka.http-client :as http]
@@ -21,6 +23,7 @@
             [relay.channels :as channels]
             [relay.config :as config]
             [relay.core :as core]
+            [relay.eventkit-run :as eventkit-run]
             [relay.ics-feed :as ics-feed]
             [relay.inbound :as inbound]
             [relay.ingest :as ingest]
@@ -189,7 +192,9 @@
                     (case (:kind src)
                       :pop3 {:items (fetch-mailbox src (set (keys seen)))}
                       :github (fetch-github src cursor now)
-                      :ics (fetch-calendar src (config/zone config) now))
+                      :ics (fetch-calendar src (config/zone config) now)
+                      :apple-calendar (eventkit-run/fetch-calendar src (config/zone config) now)
+                      :apple-reminders (eventkit-run/fetch-reminders src))
                     (catch Exception e {:error (or (ex-message e) (.getSimpleName (class e)))}))]
         (if (:error found)
           (inbound/submit! sys {:type :ingest/failed :actor core/dispatcher
@@ -234,10 +239,12 @@
   the subjects of mail. Pure."
   [{:keys [kind]} memos]
   (case kind
-    :ics (str/join "; " (for [{:keys [subject body]} memos
+    (:ics :apple-calendar)
+    (str/join "; " (for [{:keys [subject body]} memos
                               :let [names (keep #(second (re-find #"^(?:New|Changed): (.+)$" %))
                                                 (str/split-lines (str body)))]]
                           (str (after-prefix subject) (when (seq names) (str " (" (named names) ")")))))
+    :apple-reminders (str/join "; " (map (comp after-prefix :subject) memos))
     :github (str/join "; " (for [{:keys [subject body]} memos
                                  :let [repo (second (re-find #"^GitHub ([^:]+):" (str subject)))
                                        items (for [l (str/split-lines (str body))

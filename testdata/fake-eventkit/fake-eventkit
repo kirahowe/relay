@@ -1,0 +1,69 @@
+#!/usr/bin/env bb
+;; A stand-in for tools/eventkit/eventkit, for relay's tests. It prints
+;; canned JSON in the binary's contract and records its arguments. Copy it
+;; into a directory of its own beside a state.edn:
+;;   {:access {"calendar" "granted" "reminders" "granted"}
+;;    :events [{...}] :reminders [{...}] :error {:error "..." :code "..."}}
+;; Each call appends its argv, as a JSON array, to argv.log there. Writes
+;; change :reminders in state.edn, so a later read sees them. It has no
+;; delete command, like the real one.
+(require '[babashka.fs :as fs] '[cheshire.core :as json] '[clojure.edn :as edn] '[clojure.string :as str])
+
+(def here (str (fs/parent (fs/absolutize *file*))))
+(def args (vec *command-line-args*))
+(spit (str here "/argv.log") (str (json/generate-string args) "\n") :append true)
+
+(defn state [] (edn/read-string (slurp (str here "/state.edn"))))
+(defn save! [s] (spit (str here "/state.edn") (pr-str s)))
+(defn out! [m] (println (json/generate-string m)) (System/exit 0))
+(defn fail! [error code] (println (json/generate-string {:error error :code code})) (System/exit 1))
+
+(defn options
+  "Each --name value pair in `xs` as {name [values]}."
+  [xs]
+  (loop [[x & more :as xs] xs acc {}]
+    (cond (empty? xs) acc
+          (str/starts-with? x "--") (recur (rest more) (update acc x (fnil conj []) (first more)))
+          :else (recur more acc))))
+
+(let [s (state)
+      [allowed rest-args] (loop [[x y & more :as xs] args allowed []]
+                            (if (= "--allow" x) (recur more (conj allowed y)) [allowed xs]))
+      [cmd & more] rest-args
+      opts (options (if (#{"set" "done" "reopen"} cmd) (rest more) more))
+      one (fn [k] (first (get opts k)))
+      reminders (:reminders s)]
+  (when (:error s) (fail! (:error (:error s)) (:code (:error s))))
+  (case cmd
+    "access" (out! (:access s))
+    "calendars" (out! {:calendars []})
+    "lists" (out! {:lists []})
+    "events" (out! {:events (let [wanted (set (get opts "--calendar"))]
+                              (filter #(or (empty? wanted) (wanted (:calendar %))) (:events s)))})
+    "reminders" (let [lists (set (get opts "--list"))]
+                  (when (empty? lists) (fail! "give a list" "usage"))
+                  (out! {:reminders (filter #(lists (:list %)) reminders)}))
+    "add" (let [l (one "--list")]
+            (when-not ((set allowed) l) (fail! (str "the list " l " is not allowed") "refused"))
+            (let [r (cond-> {:id (str "R" (inc (count reminders))) :list l :title (one "--title") :completed false
+                             :completed_at nil :modified "2026-10-28T10:00:00Z" :due (one "--due") :notes (one "--notes")})]
+              (save! (assoc s :reminders (conj (vec reminders) r)))
+              (out! {:after r})))
+    ("set" "done" "reopen")
+    (let [id (first more)
+          r (first (filter #(= id (:id %)) reminders))]
+      (when-not r (fail! (str "no reminder " id) "not-found"))
+      (when-not ((set allowed) (:list r)) (fail! (str "the list " (:list r) " is not allowed") "refused"))
+      (let [dest (one "--list")
+            _ (when (and dest (not ((set allowed) dest))) (fail! (str "the list " dest " is not allowed") "refused"))
+            after (case cmd
+                    "done" (assoc r :completed true :completed_at "2026-10-28T10:00:00Z")
+                    "reopen" (assoc r :completed false :completed_at nil)
+                    "set" (cond-> r
+                            (one "--title") (assoc :title (one "--title"))
+                            (one "--due") (assoc :due (if (= "none" (one "--due")) nil (one "--due")))
+                            (one "--notes") (assoc :notes (if (= "none" (one "--notes")) nil (one "--notes")))
+                            dest (assoc :list dest)))]
+        (save! (assoc s :reminders (mapv #(if (= id (:id %)) after %) reminders)))
+        (out! {:before r :after after})))
+    (fail! (str "unknown command " cmd) "usage")))

@@ -165,6 +165,8 @@
                            ["the mailbox" ";; \"mailbox\""]
                            ["GitHub" ";; \"repos\""]
                            ["your calendar" ";; \"calendar\" {:kind :ics"]
+                           ["Calendar on this Mac" ";; \"mac-cal\"  {:kind :apple-calendar"]
+                           ["Reminders on this Mac" ";; \"mac-rem\"  {:kind :apple-reminders"]
                            ["the shell" ";; :house {:mounts"]
                            ["the shell's grant" ";; :shell true"]
                            ["folders to tidy" ";; :files"]]]

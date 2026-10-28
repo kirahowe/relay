@@ -23,6 +23,7 @@ not whatever is on PATH.
 | agentloop | `make test && make build` | The harness enforces the label rule and forbid_labels, MCP and the display channel by itself, with the race detector on. |
 | relay-tui | `make check && make build` | The dashboard renders only what relay sent and strips control characters. |
 | webtool | `make test && make build && make fixture` | Search, ask and fetch refuse anything not plainly on the public internet. The fixture build is the one the pentests use. |
+| eventkit | `tools/eventkit/test.sh && tools/eventkit/build.sh && bb … relay.eventkit-contract …` | The EventKit binary parses strictly, refuses a write outside its `--allow` lists and has no delete. relay's tests use a fake binary, so the last part runs the real one on the arguments relay builds for a read (never a write) and fails if it cannot parse them. |
 | relay | `bb test --agentloop …` | relay's own rules, the model-based property over random command sequences, the agentloop integration against a mock model, and every end-to-end scenario played through on staging data against the mock model. |
 | pentest | `bb pentest --jobs 4 …` | The built system holds up when attacked from outside, on artificial data, assuming the model obeys the attacker perfectly. |
 | eval | `bb eval --live …` | Roles do their jobs well on the real model: they cite, keep skills, speak plainly, and keep quiet when nothing needs the operator. |

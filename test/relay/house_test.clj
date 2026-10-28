@@ -42,7 +42,8 @@
 
 (deftest the-example-settings-are-valid
   (let [c (config/resolve-config (edn/read-string (slurp "setup/relay.example.edn")))]
-    (is (= ["private"] (get-in c [:tools "rem-read" :labels])) "reminders are the operator's own text")))
+    (is (map? c))
+    (is (not-any? #(re-find #"tools/(rem|cal)/" (str %)) (vals (:tools c))) "the old rem and cal tools are gone")))
 
 (deftest every-external-tool-declares-its-labels
   (let [with-tool #(assoc-in settings [:tools "draft"] (merge {:class :edit :description "d" :command ["true"]} %))]

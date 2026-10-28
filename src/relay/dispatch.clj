@@ -17,6 +17,7 @@
             [relay.harness.agentloop :as agentloop]
             [relay.inbound :as inbound]
             [relay.ingest-run :as ingest-run]
+            [relay.reminders :as reminders]
             [relay.json :as strict]
             [relay.log :as log]
             [relay.prompt :as prompt]
@@ -924,6 +925,11 @@
      ;; so the role that reads them is woken by this tick.
      (when (seq (:ingest config))
        (ingest-run/poll-due! sys t)
+       ;; An undo of a reminder change the operator asked for needs the
+       ;; binary, which a decision cannot call: done here.
+       (try (reminders/settle-reverts! sys)
+            (catch Exception e
+              (binding [*out* *err*] (println "relay tick: could not settle a reminder undo:" (ex-message e)))))
        ;; What people opened on GitHub this tick, in one push.
        (try (announce-github! sys)
             (catch Exception e

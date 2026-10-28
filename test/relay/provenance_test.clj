@@ -25,7 +25,7 @@
 
 (def gen-label
   (gen/elements ["private" "contaminated" "mail:dana@riverbend.test" "github:kira/tidy" "files:downloads"
-                 "ics:calendar" "ics:holidays" "web:office-holidays.html" "search:web"
+                 "calendar:calendar" "calendar:holidays" "web:office-holidays.html" "search:web"
                  "mail:unverified-operator" "mail:unknown"]))
 
 (def gen-labels (gen/vector gen-label 0 8))
@@ -54,21 +54,21 @@
       (if (provenance/outside? ls)
         (and (str/starts-with? line "Drew on: ")
              (not (str/includes? line "\n"))
-             (not (re-find #"contaminated|private|ics:|github:|mail:|web:|search:|files:" line)))
+             (not (re-find #"contaminated|private|calendar:|github:|mail:|web:|search:|files:" line)))
         (nil? line)))))
 
 (deftest sources-in-words
   (is (= "Drew on: a mail from dana@riverbend.test; the web page office-holidays.html"
          (provenance/drew-on ["web:office-holidays.html" "mail:dana@riverbend.test" "private"])))
   (testing "a calendar called calendar is the operator's own, said once"
-    (is (= ["your calendar"] (provenance/phrases ["ics:calendar" "contaminated"])))
-    (is (= ["the holidays calendar"] (provenance/phrases ["ics:holidays"]))))
+    (is (= ["your calendar"] (provenance/phrases ["calendar:calendar" "contaminated"])))
+    (is (= ["the holidays calendar"] (provenance/phrases ["calendar:holidays"]))))
   (is (= ["something from outside"] (provenance/phrases ["contaminated"])))
   (is (= ["GitHub (kira/tidy)"] (provenance/phrases ["github:kira/tidy"])))
   (testing "an address an outsider chose is never a link"
     (is (= ["the web page hxxps://evil[.]example/x"] (provenance/phrases ["web:https://evil.example/x"]))))
-  (is (= "GitHub (a/b), the work calendar, a mail from x@y.test and 1 more"
-         (provenance/summary ["mail:x@y.test" "github:a/b" "ics:work" "web:p.html"])))
+  (is (= "the work calendar, GitHub (a/b), a mail from x@y.test and 1 more"
+         (provenance/summary ["mail:x@y.test" "github:a/b" "calendar:work" "web:p.html"])))
   (is (= "GitHub (a/b) and a mail from x@y.test" (provenance/summary ["mail:x@y.test" "github:a/b"])))
   (testing "a folder of the operator's mounted in the shell, not marked trusted"
     (is (= ["your files in downloads"] (provenance/phrases ["files:downloads" "contaminated" "private"])))
@@ -88,7 +88,7 @@
   (is (= "(from a web search)" (provenance/mark ["search:web"])))
   (is (= "(from a mail)" (provenance/mark ["mail:x@y.test" "mail:z@y.test"])))
   (is (= "(from GitHub)" (provenance/mark ["github:a/b"])))
-  (is (= "(from a calendar)" (provenance/mark ["ics:work"])))
+  (is (= "(from a calendar)" (provenance/mark ["calendar:work"])))
   (is (= "(from outside)" (provenance/mark ["contaminated"])))
   (is (= "(from a mail and a web page)" (provenance/mark ["mail:x@y.test" "web:p.html"])))
   (is (= "(from outside)" (provenance/mark ["mail:x@y.test" "web:p.html" "github:a/b"]))
@@ -104,7 +104,7 @@
     (is (= ["tool:cal"] (provenance/tool-sources {:from "today"} ["contaminated" "private"] "cal")))
     (is (= ["Drew on: the cal tool"] [(provenance/drew-on ["tool:cal"])]))
     (is (= "(from a tool)" (provenance/mark ["tool:cal"])))
-    (is (= ["ics:calendar"] (provenance/tool-sources {} ["contaminated" "ics:calendar"] "cal")) "a named source wins")))
+    (is (= ["calendar:calendar"] (provenance/tool-sources {} ["contaminated" "calendar:calendar"] "cal")) "a named source wins")))
 
 ;; --- defanging only what is a link
 
@@ -233,7 +233,7 @@
 (defn- last-message [sys]
   (last (sort-by :id (vals (:messages (inbound/current-state sys))))))
 
-(def calendar ["contaminated" "ics:calendar"])
+(def calendar ["contaminated" "calendar:calendar"])
 
 (deftest what-a-wake-had-in-context-is-not-where-its-work-came-from
   (with-relay
@@ -246,7 +246,7 @@
           (is (:ok (call sys "journal_write" {:text "Saw the interview on the calendar."} session w)))
           (is (:ok (call sys "tell_operator" {:subject "Interview on Thursday" :body "It is at 11."} session w)))
           (let [m (last-message sys)]
-            (is (= ["ics:calendar"] (:sources m)))
+            (is (= ["calendar:calendar"] (:sources m)))
             (is (= "Drew on: your calendar" (messages/drew-on m)))
             (is (str/ends-with? (channels/body-text m) "Drew on: your calendar"))
             (is (= "Interview on Thursday" (channels/subject-text m)) "never on the subject"))
@@ -271,7 +271,7 @@
             (is (:ok (call sys "card_add" {:kind "note" :title "Prep" :text "Interview prep"} session w)))
             (let [st (inbound/current-state sys)
                   c (last (sort-by :id (vals (:cards st))))]
-              (is (= ["ics:calendar"] (core/sources-of st (:id c) [])))
+              (is (= ["calendar:calendar"] (core/sources-of st (:id c) [])))
               (is (= "Drew on: your calendar"
                      (get (first (filter #(= (str "card:" (:id c)) (get % "id")) (map ready/wire (ready/ready st))))
                           "from")))))
@@ -326,7 +326,7 @@
       (submit sys "operator" :role/add {:id "hub" :title "Hub" :instructions "Help."})
       (submit sys "operator" :memo/send {:to "hub" :subject "Tidy my notes" :body "Please."})
       (let [w (start-wake sys)
-            session ["contaminated" "ics:calendar" "private"]]
+            session ["contaminated" "calendar:calendar" "private"]]
         (is (:error (call sys "memo_close" {:memo 999999 :outcome "noted"} session w)))
         (is (:error (call sys "doc" {:path "../nowhere"} session w)))
         (is (:ok (call sys "tell_operator" {:subject "Done" :body "All tidy."} session w)))

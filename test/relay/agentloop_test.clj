@@ -78,7 +78,7 @@
   ;; Regression (U1): an older agentloop on PATH refused a source label
   ;; with "policy.labels: unknown label", and relay said only that it did
   ;; not start.
-  (doseq [stderr ["agentloop: policy.labels: unknown label \"ics:calendar\"\n"
+  (doseq [stderr ["agentloop: policy.labels: unknown label \"calendar:calendar\"\n"
                   "agentloop: unknown field \"display_ref_prefix\"\n"]]
     (let [{:keys [outcome said]} (classify nil :exit 2 :stderr stderr :bin "/opt/old/agentloop")]
       (is (= "needs-attention" outcome))
