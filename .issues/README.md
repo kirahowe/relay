@@ -44,7 +44,6 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [79](79-review-what-the-operator-consents-to-on-a-screen-of-its-own.md) | Review what the operator consents to on a screen of its own, with text relay made | feature | P1 |
-| [88](88-install-relay-through-homebrew-and-remove-bb-deploy.md) | Install relay through Homebrew and remove bb deploy | feature | P1 |
 | [37](37-let-the-hub-see-which-role-owns-what.md) | Let the hub see which role owns what | bug | P2 |
 
 ## Done
@@ -74,6 +73,7 @@
 | [55](55-show-the-board-in-the-acp-tui-workspace-pane.md) | Show the board in the acp-tui workspace pane | feature | P1 |
 | [58](58-forward-only-json-relay-wrote-itself-through-relay-acp.md) | Read JSON with one strict dialect across relay, agentloop and acp-tui | bug | P1 |
 | [73](73-keep-the-board-on-the-dashboard-whether-or-not-a.md) | Keep the board on the dashboard whether or not a conversation is open | bug | P1 |
+| [88](88-install-relay-through-homebrew-and-remove-bb-deploy.md) | Install relay through Homebrew and remove bb deploy | feature | P1 |
 | [3](3-run-agentloop-s-live-smoke-tests-from-a-flag-not-an-env-var.md) | Run agentloop's live smoke tests from a flag, not an env var | chore | P2 |
 | [5](5-support-reminder-sections-in-rem.md) | Support reminder sections in rem | feature | P2 |
 | [7](7-add-bb-deploy-and-bb-rollback-for-kira-to-run.md) | Add bb deploy and bb rollback for Kira to run | feature | P2 |
