@@ -1,0 +1,11 @@
+{:id 90
+ :title "Find what dropped four regression cases since B12b"
+ :status :ready
+ :type :bug
+ :priority :p1
+ :created "2026-10-28"
+ :updated "2026-10-28"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "90-find-what-dropped-four-regression-cases-since-b12b.md"}

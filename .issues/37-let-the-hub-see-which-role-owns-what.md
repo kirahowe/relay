@@ -14,9 +14,12 @@ change in the baseline.
 
 ## Acceptance criteria
 
-- [ ] route-to-owner passes on Haiku (3 trials) and Opus (1 trial).
-- [ ] The rest of the suite holds its baseline (test/scenarios/BASELINES.md).
-- [ ] A public role still sees only what the operator wrote with `--public`.
+- [x] route-to-owner passes on Haiku (3 trials) and Opus (1 trial).
+  - Receipt: Haiku 3/3 in `20261028T153557Z-9a29` (2/3 in `20261028T153447Z-418d`, one journal-order failure); Opus 1/1 in `20261028T153506Z-7117` and `20261028T155021Z-1aff`.
+- [x] The rest of the suite holds its baseline (test/scenarios/BASELINES.md).
+  - Receipt: holds against the commit before this change. Four cases are below B12b, but they fail the same way without it (`20261028T155829Z-b943`, `20261028T155935Z-3890`), so that is relay#90.
+- [x] A public role still sees only what the operator wrote with `--public`.
+  - Receipt: public_roles_test `roles-a-public-role-sees-are-those-written-with-public`; Codex rounds 1 and 2; pentest s21-scout-sees-nothing-private passes.
 
 ## Plan
 
@@ -52,3 +55,15 @@ filter, since a role's text is private unless written with `--public`.
   directly followed by text, with no blank line between, dropped that
   text as well. Fixed by removing heading lines before splitting into
   paragraphs, with a test for it.
+- Codex review, round 2: no in-scope defects.
+- `bb verify`: all passed (agentloop, relay-tui, webtool, relay, pentest).
+- Live evals (BASELINES.md, "roles shows what each role is for"):
+  route-to-owner Haiku `20261028T153447Z-418d` 2/3 (one journal-order
+  failure) and 3/3 in the full run `20261028T153557Z-9a29`; Opus
+  `20261028T153506Z-7117` 1/1 and 1/1 in `20261028T155021Z-1aff`. No
+  trial called `roles`: the steward uses its own calendar, which v2
+  allows, so the case no longer exercises this change.
+- The full runs show four regression cases below B12b. Rerun on the
+  commit before this change, they fail the same way, so they are filed
+  as relay#90 and are not this change's.
+- Spend: $3.84 in all.
