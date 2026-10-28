@@ -2,8 +2,7 @@
 .clj-kondo/.cache/
 .lsp/
 .nrepl-port
-tools/rem/rem
-tools/cal/cal
+tools/eventkit/eventkit
 .jj/
 .clj-kondo/
 out/

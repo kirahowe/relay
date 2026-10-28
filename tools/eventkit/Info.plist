@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>relay.tools.eventkit</string>
+	<key>CFBundleName</key>
+	<string>eventkit</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>eventkit reads your calendars and events on request from relay. It never changes them.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>eventkit reads your calendars and events on request from relay. It never changes them.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>eventkit reads your reminders and, in the lists you name, adds, edits, completes and reopens them for relay. It never deletes one.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>eventkit reads your reminders and, in the lists you name, adds, edits, completes and reopens them for relay. It never deletes one.</string>
+</dict>
+</plist>
