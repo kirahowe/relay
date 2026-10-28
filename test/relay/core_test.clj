@@ -1132,3 +1132,24 @@
                               (= (core/facts (:state final) {:all true :known-at t})
                                  (core/facts then {:all true :known-at t})))))
                      (take-nth 7 (:events final))))))))
+
+(deftest a-role-s-purpose-is-its-first-paragraph
+  (is (= "You are the operator's chief of staff. They bring requests to you."
+         (core/role-purpose "# Steward\n\nYou are the operator's chief of staff.\nThey bring requests to you.\n\n## The other roles\n\nMore.")))
+  (is (= "File receipts." (core/role-purpose "# Clerk\nFile receipts.\n\nAsk before changing categories."))
+      "a heading with no blank line after it")
+  (is (= "#3 on the list." (core/role-purpose "#3 on the list.")) "a # that starts no heading")
+  (is (nil? (core/role-purpose "# Only a heading\n")))
+  (is (nil? (core/role-purpose nil)))
+  (is (= "one two…" (core/role-purpose "one two three" 9)) "cut at a word")
+  (is (= "abcdefgh…" (core/role-purpose "abcdefghijk" 8)) "or mid-word when there is no space"))
+
+(defspec a-role-s-purpose-is-one-short-line-from-its-instructions 300
+  (prop/for-all [instructions gen/string
+                 limit (gen/choose 1 60)]
+    (let [p (core/role-purpose instructions limit)
+          body (str/replace (str p) #"…$" "")]
+      (or (nil? p)
+          (and (not (str/includes? p "\n"))
+               (<= (.codePointCount ^String body 0 (count body)) limit)
+               (str/includes? (str/replace instructions #"\s+" " ") body))))))

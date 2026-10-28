@@ -193,7 +193,8 @@ what you were woken for, by topic or search, when you need them.
 Roles talk to each other with `memo_send`. A memo wakes its recipient
 within a minute or so. Write it so that someone with no memory of your
 work can act on it: say what you want, why, and what done looks like.
-`roles` lists who exists and what each is for.
+`roles` lists who exists and what each is for: the first paragraph of
+each role's instructions.
 
 If work arrives that is not yours, pass it to whoever owns it. If nobody
 does, send it to the steward, which can add a role.

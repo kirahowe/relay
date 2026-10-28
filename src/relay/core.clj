@@ -207,6 +207,22 @@
 (defn active-role-ids [state]
   (->> (vals (:roles state)) (filter #(= :active (:status %))) (map :id) sort vec))
 
+(defn role-purpose
+  "What a role is for, as `roles` lists it: the first paragraph of its
+  instructions, leaving out heading lines, on one line, cut at a word to
+  at most `limit` characters (400 when not given). Nil when there is none."
+  ([instructions] (role-purpose instructions 400))
+  ([instructions limit]
+   (when-let [p (->> (str/split (str/replace (str instructions) #"(?m)^[ \t]*#+(?:[ \t].*)?$" "") #"\n\s*\n")
+                     (map #(str/trim (str/replace % #"\s+" " ")))
+                     (remove str/blank?)
+                     first)]
+     (if (<= (.codePointCount ^String p 0 (count p)) limit)
+       p
+       (let [cut (subs p 0 (.offsetByCodePoints ^String p 0 limit))
+             at-word (str/replace cut #"\s+\S*$" "")]
+         (str (if (str/blank? at-word) cut at-word) "…"))))))
+
 (defn memo [state id] (get-in state [:memos id]))
 
 ;; A role runs at most one wake that works through its memos (dispatched,

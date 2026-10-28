@@ -1,10 +1,10 @@
 {:id 37
  :title "Let the hub see which role owns what"
- :status :ready
+ :status :in-progress
  :type :bug
  :priority :p2
  :created "2026-10-18"
- :updated "2026-10-18"
+ :updated "2026-10-28"
  :tags #{"evals" "prompt"}
  :blocked-by #{}
  :related #{}

@@ -228,10 +228,14 @@
                           ;; operator wrote, and whom they report to only
                           ;; when the operator chose that id too.
                           :when (or (not public) (core/role-text-public? state id))
-                          :let [{:keys [title reports-to title-labels]} (core/role state id)
-                                reports-to (when (or (not public) (core/role-id-public? state reports-to)) reports-to)]]
-                      (item (str id ": " title (when reports-to (str ", reports to " reports-to)))
-                            (core/union (core/id-labels state id) title-labels (core/id-labels state reports-to))))
+                          :let [{:keys [title reports-to title-labels instructions instructions-labels]} (core/role state id)
+                                reports-to (when (or (not public) (core/role-id-public? state reports-to)) reports-to)
+                                purpose (core/role-purpose instructions)]]
+                      (item (str id ": " title (when reports-to (str ", reports to " reports-to))
+                                 (when purpose (str "\n  " purpose)))
+                            (core/union (core/id-labels state id) title-labels
+                                        (when purpose instructions-labels)
+                                        (core/id-labels state reports-to))))
                     "\n")))}
 
    "clock"
@@ -793,7 +797,7 @@
    "role_add"
    {:class :write
     :grant :may-add
-    :description "Add a role. Its instructions say what it is for, what it may decide alone, and when to ask. What it may use is granted by the operator, not written here."
+    :description "Add a role. Its instructions say what it is for, what it may decide alone, and when to ask. Say what it is for in the first paragraph: `roles` shows that paragraph to every role. What it may use is granted by the operator, not written here."
     :parameters (obj {:id text :title text :instructions text} "id" "title" "instructions")
     :run (fn [sys actor labels args]
            (submit sys actor labels :role/add args)

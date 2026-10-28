@@ -416,7 +416,14 @@
     (is (not (str/includes? (roles w) "clerk")) "the operator's role, written without --public")
     (is (str/includes? (roles w) "hub: Hub"))
     (let [w (run-public w :role/update {:id "clerk" :title "Clerk" :instructions "File things."})]
-      (is (str/includes? (roles w) "clerk: Clerk") "rewritten with --public, id included"))
+      (is (str/includes? (roles w) "clerk: Clerk") "rewritten with --public, id included")
+      (is (str/includes? (roles w) "clerk: Clerk\n  File things.") "with what it is for"))
+    (testing "what a role is for carries the labels of whoever wrote its instructions"
+      (let [w (run w "hub" :role/update {:id "clerk" :instructions "Reminders for the bank."} ["private"])
+            r (read-as w "hub" "roles" {})]
+        (is (str/includes? (:content r) "clerk: Clerk\n  Reminders for the bank."))
+        (is (core/private? (:labels r)))
+        (is (not (str/includes? (roles w) "bank")) "and a public role is not shown it")))
     (testing "an id a role chose holding private can never be made public"
       (let [w (run w "hub" :role/add {:id "zz-secret" :title "t" :instructions "i"} ["private"])
             w (run-public w :role/update {:id "zz-secret" :title "t" :instructions "i"})]
