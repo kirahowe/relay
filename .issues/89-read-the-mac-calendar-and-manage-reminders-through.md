@@ -59,29 +59,41 @@ Judgment calls (Claude):
 
 ## Acceptance criteria
 
-- [ ] `tools/eventkit` reads calendars, events and reminders as JSON, and
+- [x] `tools/eventkit` reads calendars, events and reminders as JSON, and
       adds, edits, completes and reopens reminders only in the lists it
       is given. It has no delete command.
-- [ ] `:kind :apple-calendar` and `:kind :apple-reminders` ingest sources
+  - Receipt: tools/eventkit/test.sh (strict parsing, --allow refusals, no delete or alarm path); real binary ran calendars, lists and relay's read argv (no-access, no usage error); commit tompkrts
+- [x] `:kind :apple-calendar` and `:kind :apple-reminders` ingest sources
       send the `:to` role memos of what changed, with no approval.
-- [ ] Calendar memos are labelled contaminated and `calendar:<source>`.
+  - Receipt: reminders_test the-apple-calendar-is-read-into-memos-with-no-approval, reminders-are-read-into-memos-that-are-private-and-not-outside-text
+- [x] Calendar memos are labelled contaminated and `calendar:<source>`.
       Reminder memos are labelled private only.
-- [ ] The `:to` role can read the latest calendar and reminders snapshot
+  - Receipt: reminders_test the-apple-calendar-is-read-into-memos-with-no-approval, reminders-are-read-into-memos-that-are-private-and-not-outside-text; Kira's later decision: reminder text an outside session wrote reads as outside (shown-text-is-outside-iff-an-outside-session-ever-asked-to-write-it)
+- [x] The `:to` role can read the latest calendar and reminders snapshot
       on demand.
-- [ ] The `:to` role can add, edit, complete and reopen reminders in the
+  - Receipt: reminders_test the-source-s-role-can-read-the-operator-s-calendar-and-reminders, the-tools-are-only-for-the-role-a-source-reports-to
+- [x] The `:to` role can add, edit, complete and reopen reminders in the
       configured lists. A write to any other list is refused in relay and
       in the binary.
-- [ ] Every reminder write is in the log with the fields before and after.
-- [ ] Writes shaped by outside text are flagged in the daily note and can
+  - Receipt: reminders_test a-reminder-is-added-edited-completed-and-reopened-in-the-lists-the-source-names, a-write-to-any-other-list-is-refused-in-relay-before-the-binary-is-called; eventkit_test a-list-outside-the-source-is-never-asked-of-the-binary
+- [x] Every reminder write is in the log with the fields before and after.
+  - Receipt: reminders_test every-kind-of-failure-cancels-the-action-and-records-failed-only; eventkit_test a-successful-call-records-only-what-it-asked-for-from-the-binarys-images
+- [x] Writes shaped by outside text are flagged in the daily note and can
       be reverted. Revert semantics as above.
-- [ ] Lost Calendar or Reminders access shows up as one outage alert
+  - Receipt: reminders_test a-write-shaped-by-outside-text-is-flagged-with-its-source-and-a-revert, an-undo-that-leaves-a-field-alone-says-so-whatever-asked-for-it; eventkit_test an-undo-is-field-by-field-compare-and-swap-and-never-writes-outside-text (property)
+- [x] Lost Calendar or Reminders access shows up as one outage alert
       that says how to grant access again.
-- [ ] `tools/cal`, `tools/rem` and `tools/shared` are gone, along with
+  - Receipt: reminders_test lost-access-is-one-outage-alert-that-says-how-to-grant-it-again, relay-eventkit-access-asks-where-macos-can-answer
+- [x] `tools/cal`, `tools/rem` and `tools/shared` are gone, along with
       their README steps and example config.
-- [ ] The Homebrew formula builds and installs the binary.
-- [ ] README, resources/AGENTS.md and spec/relay.allium describe the new
+  - Receipt: commit tvypyntq; README steps and example :tools entries removed in yxxuqtuw/sknkrswp
+- [x] The Homebrew formula builds and installs the binary.
+  - Receipt: homebrew-tap commit 3617700 (local, not pushed): builds tools/eventkit on macOS into libexec; ruby -c ok. Not installed from the tap yet
+- [x] README, resources/AGENTS.md and spec/relay.allium describe the new
       behaviour.
-- [ ] `bb verify` passes, and the Codex review loop converges.
+  - Receipt: commits sknkrswp and noztwxtv; allium check shows only the 4 earlier warnings
+- [x] `bb verify` passes, and the Codex review loop converges.
+  - Receipt: bb verify all six steps PASS after every round; Codex converged at round 10 (its one finding rejected: an interrupted undo that did land is recorded as done, which is what Kira asked for)
 
 ## Plan
 
@@ -175,3 +187,14 @@ stores it.
   independent alarm that sat at the new due time; reverts of add, done
   and reopen don't check whether Kira changed the reminder since.
   Third round with a finding, so stopped to ask Kira per AGENTS.md.
+- 2026-10-28: Kira: fix every finding at its source, not with a patch.
+  Rounds 4 to 6 replaced history-based reminder undo with per-field
+  compare-and-swap and the rule that an undo never writes outside text.
+- 2026-10-29: Rounds 7 to 9 found holes in reconciling writes whose
+  outcome was unknown. Kira: remove reconciliation; a write or undo that
+  fails partway counts as cancelled and is retried later. Round 10 found
+  nothing in scope. The review commits are folded into noztwxtv ("Harden
+  reminder writes and undo after adversarial review"). Left for Kira:
+  run `relay eventkit-access` once in a terminal after upgrading, check
+  that macOS lists the grant under the eventkit binary, and check that a
+  timed reminder relay adds alerts at its due time.
