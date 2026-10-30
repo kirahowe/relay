@@ -511,3 +511,7 @@ send, so the loop stops here.
 
 bb verify over relay-tui ulnsmmor: agentloop, relay-tui, webtool and
 relay pass. Pentest fails only relay#76's two scenarios.
+
+2026-10-30, Kira accepted this. Follow-ups: relay#91 (consent for clients
+that do not declare relay/review), relay#82 (`relay holds` rounds
+decimals), relay#81 (the hub property that fails on some seeds).

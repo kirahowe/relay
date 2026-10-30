@@ -24,3 +24,6 @@ Rerun with
 - The shrunk case becomes a fixed regression test.
 
 ## Log
+
+- 2026-10-25: failed again on a second relay test run during relay#79's
+  verification, with :not-told-settled after a detach and a race.

@@ -29,3 +29,7 @@ MCP structured results.
 - The numbers relay sums and shows (spend) still compare and add up.
 
 ## Log
+
+- 2026-10-25: relay#79 round 5 noted that `relay holds` lists inputs from
+  the log's doubles, so it can show a decimal rounded. It is a browsing
+  view, not a consent surface, so this covers it and relay#79 did not.

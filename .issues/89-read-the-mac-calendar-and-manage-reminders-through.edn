@@ -1,10 +1,10 @@
 {:id 89
  :title "Read the Mac calendar and manage reminders through ingestors and an actuator"
- :status :review
+ :status :done
  :type :feature
  :priority :p1
  :created "2026-10-28"
- :updated "2026-10-29"
+ :updated "2026-10-30"
  :tags #{"eventkit" "house"}
  :blocked-by #{}
  :related #{}
