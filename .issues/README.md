@@ -33,12 +33,7 @@
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
 | [83](83-speed-up-the-slowest-remaining-test-namespaces.md) | Speed up the slowest remaining test namespaces | chore | P3 |
 | [86](86-fix-agentloop-s-flaky-testgroupleaderisasentinel.md) | Fix agentloop's flaky TestGroupLeaderIsASentinel | bug | P3 |
-
-### Review
-
-| ID | Title | Type | Priority |
-| --- | --- | --- | --- |
-| [37](37-let-the-hub-see-which-role-owns-what.md) | Let the hub see which role owns what | bug | P2 |
+| [92](92-add-an-eval-case-that-makes-the-hub-use-roles-to-route.md) | Add an eval case that makes the hub use roles to route | feature | P3 |
 
 ## Done
 
@@ -79,6 +74,7 @@
 | [20](20-send-one-morning-brief.md) | Send one morning brief | feature | P2 |
 | [27](27-show-findings-again-when-their-hidden-match-is-rejected-as.md) | Show findings again when their hidden match is rejected as fake | bug | P2 |
 | [35](35-make-the-test-suites-fast-enough-to-deploy-without-waiting.md) | Make the test suites fast enough to deploy without waiting | chore | P2 |
+| [37](37-let-the-hub-see-which-role-owns-what.md) | Let the hub see which role owns what | bug | P2 |
 | [52](52-show-large-numbers-in-a-permission-request-exactly-in-acp.md) | Show large numbers in a permission request exactly in acp-tui | bug | P2 |
 | [53](53-let-the-personal-agent-move-and-rename-my-files.md) | Let the personal agent move and rename my files | feature | P2 |
 | [62](62-keep-a-live-conversation-with-each-role-that-any-client-can.md) | Keep a live conversation with each role that any client can switch to | feature | P2 |

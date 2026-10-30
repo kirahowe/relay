@@ -67,3 +67,8 @@ filter, since a role's text is private unless written with `--public`.
   commit before this change, they fail the same way, so they are filed
   as relay#90 and are not this change's.
 - Spend: $3.84 in all.
+
+2026-10-30 (Claude):
+
+- Filed relay#92 for an eval case that exercises `roles`, since
+  route-to-owner no longer does. Kira closed this issue.

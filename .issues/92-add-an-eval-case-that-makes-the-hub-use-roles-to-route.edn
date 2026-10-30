@@ -1,0 +1,11 @@
+{:id 92
+ :title "Add an eval case that makes the hub use roles to route"
+ :status :ready
+ :type :feature
+ :priority :p3
+ :created "2026-10-30"
+ :updated "2026-10-30"
+ :tags #{"evals"}
+ :blocked-by #{}
+ :related #{}
+ :details "92-add-an-eval-case-that-makes-the-hub-use-roles-to-route.md"}
