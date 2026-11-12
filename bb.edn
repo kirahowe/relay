@@ -5,7 +5,7 @@
        :task (shell "scripts/tck.sh")}
   test {:doc "Run the tests with volley (tests.edn). Pass namespace names to run only those, other volley flags (--workers, --skip, ...), and --agentloop <path> to use that agentloop build."
         :extra-paths ["test"]
-        :extra-deps {com.kirahowe/volley {:mvn/version "0.1.0-alpha.1"}}
+        :extra-deps {com.kirahowe/volley {:mvn/version "0.1.0-alpha.2"}}
         :requires ([relay.test-runner :as runner])
         :task (runner/run! *command-line-args*)}
   pentest {:doc "Attack relay, agentloop and relay-tui together on artificial data: bb pentest --help"
