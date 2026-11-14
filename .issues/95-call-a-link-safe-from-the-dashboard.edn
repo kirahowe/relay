@@ -1,0 +1,11 @@
+{:id 95
+ :title "Call a link safe from the dashboard"
+ :status :blocked
+ :type :feature
+ :priority :p2
+ :created "2026-11-14"
+ :updated "2026-11-14"
+ :tags #{}
+ :blocked-by #{94}
+ :related #{}
+ :details "95-call-a-link-safe-from-the-dashboard.md"}

@@ -26,6 +26,7 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [90](90-find-what-dropped-four-regression-cases-since-b12b.md) | Find what dropped four regression cases since B12b | bug | P1 |
+| [98](98-decide-what-a-button-on-a-role-built-screen-may-do.md) | Decide what a button on a role-built screen may do | feature | P1 |
 | [38](38-stop-the-hub-notifying-twice-for-one-stuck-memo.md) | Stop the hub notifying twice for one stuck memo | bug | P2 |
 | [57](57-make-hidden-characters-visible-in-card-text-that-roles-and.md) | Make hidden characters visible in card text that roles and resolve get | bug | P2 |
 | [61](61-fork-acp-go-sdk-and-decode-with-encoding-json-v2.md) | Fork acp-go-sdk and decode with encoding/json/v2 | feature | P2 |
@@ -34,6 +35,21 @@
 | [83](83-speed-up-the-slowest-remaining-test-namespaces.md) | Speed up the slowest remaining test namespaces | chore | P3 |
 | [86](86-fix-agentloop-s-flaky-testgroupleaderisasentinel.md) | Fix agentloop's flaky TestGroupLeaderIsASentinel | bug | P3 |
 | [92](92-add-an-eval-case-that-makes-the-hub-use-roles-to-route.md) | Add an eval case that makes the hub use roles to route | feature | P3 |
+
+### In progress
+
+| ID | Title | Type | Priority |
+| --- | --- | --- | --- |
+| [93](93-let-roles-build-their-own-screens-with-a2ui.md) | Let roles build their own screens with A2UI | feature | P1 |
+| [94](94-keep-a-link-live-when-relay-can-say-where-it-came-from.md) | Keep a link live when relay can say where it came from | feature | P1 |
+| [96](96-draw-a2ui-surfaces-in-relay-tui.md) | Draw A2UI surfaces in relay-tui | feature | P2 |
+
+### Blocked
+
+| ID | Title | Type | Priority |
+| --- | --- | --- | --- |
+| [95](95-call-a-link-safe-from-the-dashboard.md) | Call a link safe from the dashboard | feature | P2 |
+| [97](97-keep-role-built-surfaces-in-the-log-and-send-them-to-every.md) | Keep role-built surfaces in the log and send them to every client | feature | P2 |
 
 ## Done
 

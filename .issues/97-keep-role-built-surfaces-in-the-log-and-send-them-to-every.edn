@@ -1,0 +1,11 @@
+{:id 97
+ :title "Keep role-built surfaces in the log and send them to every client"
+ :status :blocked
+ :type :feature
+ :priority :p2
+ :created "2026-11-14"
+ :updated "2026-11-14"
+ :tags #{}
+ :blocked-by #{96 98}
+ :related #{}
+ :details "97-keep-role-built-surfaces-in-the-log-and-send-them-to-every.md"}
