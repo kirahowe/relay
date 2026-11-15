@@ -13,9 +13,9 @@
   "usage: bb verify [options]
 
 Runs, in order: agentloop, relay-tui and webtool's own tests and builds,
-relay's tests (the mock scenarios among them), the fuzz of link breaking
-and the pentests. With --live it also runs the behaviour evals against
-the real model, which costs a little.
+a check that relay-tui draws from relay's own A2UI catalog and fixtures, relay's tests
+(the mock scenarios among them), the fuzz of link breaking and the pentests. With
+--live it also runs the behaviour evals against the real model, which costs a little.
 
   --agentloop-dir <dir>  agentloop checkout (default ../agentloop)
   --relay-tui-dir <dir>  relay-tui checkout (default ../relay-tui)
@@ -58,6 +58,12 @@ the real model, which costs a little.
                 :cmd ["sh" "-c" "make test && make build"]}
                {:id "relay-tui" :what "relay-tui's checks, then its build" :dir tui
                 :cmd ["sh" "-c" "make check && make build"]}
+               {:id "catalog" :what "relay-tui's copies of relay's A2UI catalog and surface fixtures against relay's" :dir tui
+                :cmd ["sh" "-c" "cmp \"$1\" \"$2\" && diff -r \"$3\" \"$4\"" "catalog"
+                      (str (fs/path root "resources" "a2ui" "relay_catalog.json"))
+                      (str (fs/path tui "internal" "a2ui" "relay_catalog.json"))
+                      (str (fs/path root "testdata" "surfaces"))
+                      (str (fs/path tui "testdata" "surfaces"))]}
                {:id "webtool" :what "webtool's tests, then its release and fixture builds" :dir wt
                 :cmd ["sh" "-c" "make test && make build && make fixture"]}
                {:id "eventkit" :what "the EventKit binary's tests and build, then relay's read arguments through it" :dir root
