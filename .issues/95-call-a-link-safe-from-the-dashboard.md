@@ -325,13 +325,72 @@ Step 1 and the rounds on the new design, 2026-11-15:
   converged. A defect in scope would be the third round since the
   redesign to find one, and goes to Kira.
 
+After part one landed, 2026-11-15:
+
+- Round 6 (a fresh agent, on kxsoqlxu) found one defect in scope, the
+  third round since the redesign to find one, so it went to Kira. In a
+  contaminated session's conversation text a hidden character inside
+  the separator or inside `www.` was drawn unchanged (`https:`, a
+  zero-width joiner, `//evil.test`). kxsoqlxu had closed only a
+  character before the `://`. It is older than this issue, and no
+  terminal was shown to follow it. Rounds 5 and 6 were one class: a
+  card or a ready item is safe because relay lists its links, but a
+  reply reaches the client as written, so the client still breaks links
+  there by pattern, and a pattern can be dodged by a character a link
+  finder ignores.
+- Kira's answer, of four options (drop them, show them as escapes, do
+  relay#104 now, leave it filed): "Drop zero-width chars (Recommended)".
+- Built as relay-tui yuttxulq and vywmmpxm: `core.DropHidden` takes
+  every hidden character out of a contaminated session's text before
+  its links are broken, and out of the lines with no mark of their
+  source. Judgment call, at the coordinating session's request: what is
+  hidden is relay's own definition (`relay.text/hidden?`) with relay's
+  exception for the joiner or selector that holds an emoji together, so
+  the rule exists once. That also means emoji mostly do not come apart,
+  which was the cost Kira had accepted. The rule is in
+  docs/client-protocol.md for every client (zqxpvzpx).
+- The review of that rule, round 1: one defect in scope. The port did
+  not take an unassigned code point for hidden, because Go's unicode.C
+  holds those too and the test for "in no kind" never fired. No test
+  had such a case, and the coordinating session and I had both read the
+  port against relay's without running one. Fixed in vywmmpxm, with the
+  cases that were missing. Round 2, on that fix: nothing in scope.
+- Found on the way and fixed: a full stop after a broken link was drawn
+  as `[.]` once every word went through Defang (xmoskxsx). The property
+  that outside text is drawn as sent had missed it, because its skip
+  rule dropped every text Defang would change. It now has its own model
+  of what relay sends. Four other tests judged rows with the production
+  check and now use the tests' own reader (ottsqzmp); one of them, of
+  the relay#96 spike, failed on one seed since the first rendering
+  commit. A test of a safety check must not ask the code under test
+  what the right answer is; that went wrong three times here.
+- relay#118 landed, so relay-tui reads each card's and ready item's
+  `links` list (ppzxzvzp): a listed link's broken form is the hyperlink,
+  the target is the listed address, and it must be in the connection's
+  set too. Once relay#118 was in, the path that took a whole address
+  from a card's text was removed (pmuovtok). A reply's text has no
+  list and keeps it.
+- Filed from these rounds: relay#120 (a role's title), relay#126
+  (schemes with no double slash), relay#127 (a Markdown panic), and
+  relay#130 for an address hidden by a character with no width that is
+  not hidden, such as a combining mark. The session that filed it ran
+  Apple's link finder: it follows such an address after `https:`, relay's
+  own text already breaks the host's dots, and relay-tui's Defang leaves
+  it whole in a reply, so that half is this client's.
+- Known and left, each noted by a reviewer as out of scope or not
+  followable: `www.` before a closing mark that Markdown puts a host
+  after (`www.:@evil.test`); an unassigned code point of the emoji
+  blocks inside an address, which relay keeps too; `mywww.txt` drawn
+  with its dot broken where relay leaves it.
+
 Still to do:
 
-1. Record round 6.
-2. Step 2, once relay#118 is on `integration`: the list on `L` reads
-   relay's `links` field, a hyperlink is anchored on `shown`, and the
-   port of link-in goes from everything but conversation text.
-3. Part two lands: relay-tui xyksywky (rebased onto kxsoqlxu, its tests
-   and goldens already moved to the broken form) and relay ooorlxwl,
-   with relay-tui's half of relay#126.
-
+1. Part two: the list on `L` reads the `links` field (relay-tui, in
+   work), with relay-tui's half of relay#126, relay's docs for the list,
+   and a review loop of its own.
+2. Tick the last three criteria with receipts and move this to review.
+- `bb verify` on 2026-11-15 with relay-tui at vywmmpxm 13c740c5, on
+  relay's trunk with relay#118 in it: agentloop, relay-tui, webtool,
+  eventkit and the new fuzz step pass (seed 1794749875), relay passes
+  1196 of 1197 tests and the pentest 30 of 31, the two misses being
+  relay#99's as before. s27 passes.
