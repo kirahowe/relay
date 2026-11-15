@@ -306,6 +306,15 @@
                 h))
             h (sort-by key (:conns h)))))
 
+(defn- take-state
+  "The hub with relay's state as it now is (the one it has, when given
+  none). Each subscriber to the live links is sent what was kept or
+  dropped before anything else is made from the state. Every place the
+  hub takes a new state does it here, so no card, message or ready item
+  reaches a client ahead of the set its links are held to."
+  [h state]
+  (-> h (assoc :state (or state (:state h))) links-changes))
+
 (defn- links-request [h rid msg]
   (let [cid (:conn (record h rid))
         state (:state h)
@@ -392,7 +401,9 @@
       (not ok) (refuse h rid -32000 (or message (str "relay refused it" (when rejection (str " (" (name rejection) ")")) ".")))
       :else
       (as-> h h
-        (assoc h :state state)
+        ;; The state may hold more than this op: a link kept elsewhere
+        ;; since the log was last read. take-state sends that first.
+        (take-state h state)
         ;; The client gets this card in the answer, so it is not sent it
         ;; again; everyone else is sent whatever they lack.
         (if (get-in h [:conns conn :board])
@@ -1016,8 +1027,7 @@
   (if-not ok
     (refuse h rid -32000 (or message "relay refused it."))
     (as-> h h
-      (assoc h :state (or (:state result) (:state h)))
-      (links-changes h)
+      (take-state h (:state result))
       (board-changes h)
       (messages-changes h)
       (ready-changes h)
@@ -1101,8 +1111,8 @@
             :submit-result (submit-result h e)
             :log-changed
             (as-> h h
-              (assoc h :roster (vec (:roster e)) :state (or (:state e) (:state h)))
-              (links-changes h)
+              (assoc h :roster (vec (:roster e)))
+              (take-state h (:state e))
               (board-changes h)
               (messages-changes h)
               (ready-changes h)

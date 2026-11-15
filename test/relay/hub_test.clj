@@ -758,6 +758,39 @@
       (let [[_ fx] (say h 1 (note "_relay/links/keep" {:address fund}))]
         (is (empty? fx))))))
 
+(deftest a-link-change-comes-before-a-card-op-s-answer
+  ;; Found in review: a card op's result carries relay's state as it is,
+  ;; which may hold a link kept elsewhere since the log was last read.
+  ;; The op's answer and the card resends were made from it at once, and
+  ;; the set's change came only with the next read of the log.
+  (let [cmd (fn [state actor labels type args]
+              (first (core/run-command state {:type type :actor actor :labels labels :args args} {:now t0 :config ct/cfg})))
+        s0 (-> core/empty-state
+               (cmd "operator" [] :role/add {:id "clerk" :instructions "x"})
+               (cmd "clerk" ["contaminated"] :card/add {:kind "checklist" :title "Grants" :items [(str "Read " fund)]}))
+        card (first (keys (:cards s0)))
+        ;; Kept from the command line, then the tick: both in the state the
+        ;; op's result brings.
+        s1 (-> s0
+               (cmd "operator" [] :link/keep {:url fund})
+               (cmd "operator" [] :card/op {:card card :op "tick" :item 1}))
+        h (-> (fresh) (assoc :state s0) (opened 1) (opened 2))
+        h (reduce (fn [h [conn method]] (first (say h conn (req 1 method {}))))
+                  h [[1 "_relay/links"] [1 "_relay/cards"] [2 "_relay/links"] [2 "_relay/cards"]])
+        [h fx] (say h 1 (req 7 "_relay/cards/op" {:card card :op "tick" :item 1}))
+        [_ fx] (run h {:event :submit-result :ok true :changed true :state s1})
+        item-text #(get-in % ["items" 0 "text"])]
+    (testing "the one who asked: the set's change, then the answer with the link whole"
+      (let [[links answer] (writes fx 1)]
+        (is (= ["_relay/links/changed" 7] (take 2 (methods-of (writes fx 1)))))
+        (is (= [fund] (get-in links ["params" "live"])))
+        (is (= (str "Read <" fund ">") (item-text (get-in answer ["result" "card"]))))))
+    (testing "everyone else: the set's change, then the card"
+      (let [[links cards] (writes fx 2)]
+        (is (= ["_relay/links/changed" "_relay/cards/changed"] (methods-of (writes fx 2))))
+        (is (= [fund] (get-in links ["params" "live"])))
+        (is (= (str "Read <" fund ">") (item-text (get-in cards ["params" "cards" 0]))))))))
+
 ;; --- Codex round 3
 
 (deftest an-id-stays-reserved-while-its-request-is-outstanding
