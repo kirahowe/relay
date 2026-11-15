@@ -235,13 +235,15 @@
   (boolean (and (string? s) (<= (count s) max-link) (re-matches link-shape s))))
 
 (defn mend
-  "The address a broken link stood for, when `s` is one link as defang
-  shows it and nothing else: hxxp and hxxps are http and https again and
+  "The address a link on a screen stood for, when `s` is one link as
+  relay shows it and nothing else. A live link loses the angle brackets
+  around it. A broken one has hxxp and hxxps as http and https again and
   every [.] a dot. Any other text comes back trimmed and otherwise as it
-  is. The operator copies the broken form off a screen, so what keeps a
-  link takes either form."
+  is. The operator copies a link off a screen as it is shown, so what
+  keeps or drops a link takes any of these forms."
   [s]
-  (let [s (str/trim (str s))]
+  (let [s (str/trim (str s))
+        s (if-let [[_ inner] (re-matches #"<(\S+)>" s)] inner s)]
     (if-let [[_ scheme more] (re-matches #"(hxxps?)://(\S*)" s)]
       (str (if (= "hxxps" scheme) "https" "http") "://" (str/replace more "[.]" "."))
       s)))

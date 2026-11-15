@@ -166,8 +166,9 @@ Every command needs the data directory, from --data <dir> or from the file
   relay flag <wake> good|bad [note]   mark a wake or conversation (its id from relay
                                       status or relay week) to find it later
   relay link <address>                call a link safe: relay leaves it whole wherever
-                                      it shows it. Give the address in quotes, whole
-                                      or as relay shows a broken one (hxxps://x[.]org)
+                                      it shows it. Give the address in quotes, typed
+                                      out or as relay shows it (hxxps://x[.]org, or
+                                      <https://x.org> for one that is live)
   relay link drop <address>           take that back: the link stays broken, even
                                       when a scout is shown it again
   relay links                         the links relay leaves whole, and the dropped ones

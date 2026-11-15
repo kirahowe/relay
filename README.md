@@ -1463,9 +1463,11 @@ trusts a link for the host it points at. Two things make a link live:
   stays broken too: that is a machine on your own network, and nothing
   on the web should lead you there.
 - You called it safe. `relay link <address>` keeps a link. Give the
-  address in quotes, whole or as relay shows a broken one. `relay link
-  drop <address>` takes it back, and a dropped link stays broken even
-  when a scout is shown it again. `relay links` lists both kinds.
+  address in quotes, as you would type it or as relay shows it: a
+  broken one (`hxxps://x[.]example/a`), or a live one between its angle
+  brackets. `relay link drop <address>` takes it back, and a dropped
+  link stays broken even when a scout is shown it again. `relay links`
+  lists both kinds.
 
 relay shows a live link between angle brackets, as in
 `Apply at <https://x.example/a>.` Those are the marks RFC 3986 gives

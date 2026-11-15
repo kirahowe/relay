@@ -113,7 +113,11 @@
   (is (= fund (text/mend (text/defang fund))))
   (is (= fund (text/mend (str "  " fund "\n"))))
   (is (= apply-page (text/mend "hxxp://arts[.]example[.]net/apply")))
-  (is (= "not a link" (text/mend "not a link"))))
+  (is (= "not a link" (text/mend "not a link")))
+  (testing "a live link as relay shows it, between angle brackets"
+    (is (= fund (text/mend <fund>)))
+    (is (= fund (text/mend (str "<" (text/defang fund) ">"))))
+    (is (= "<<https://a.example/x>" (text/mend "<<<https://a.example/x>>")) "one pair only")))
 
 ;; --- which of a scout's links the web showed it
 
@@ -357,8 +361,10 @@
           (let [o (out (run "links"))]
             (is (str/includes? o fund))
             (is (str/includes? o apply-page))))
-        (testing "dropped, it is no longer live, and relay links says so"
-          (is (str/includes? (out (run "link" "drop" fund)) (str "Dropped " fund)))
+        (testing "dropped, as it is shown on a screen, it is no longer live, and relay links says so"
+          ;; Found by a second reader: a live link is shown between angle
+          ;; brackets, and that is what the operator copies.
+          (is (str/includes? (out (run "link" "drop" <fund>)) (str "Dropped " fund)))
           (is (= #{apply-page} (live)))
           (is (str/includes? (out (run "links")) "Dropped links"))
           (is (str/includes? (out (run "link" "drop" fund)) "already dropped")))
