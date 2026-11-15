@@ -1,0 +1,111 @@
+{
+  "addedAt": "2026-11-14T15:03:00Z",
+  "complete": false,
+  "id": 1840,
+  "kind": "surface",
+  "labels": [
+    "private"
+  ],
+  "links": [],
+  "linksLeftOut": 0,
+  "owner": "steward",
+  "rev": 1840,
+  "status": "active",
+  "surface": {
+    "a2ui": [
+      {
+        "createSurface": {
+          "catalogId": "urn:relay:catalog:v1",
+          "components": [
+            {
+              "children": [
+                "note",
+                "rule",
+                "items"
+              ],
+              "component": "Column",
+              "id": "root"
+            },
+            {
+              "component": "Text",
+              "id": "note",
+              "text": "For Saturday. Tick what is in the car.",
+              "variant": "caption"
+            },
+            {
+              "component": "Divider",
+              "id": "rule"
+            },
+            {
+              "children": [
+                "item__0",
+                "item__1",
+                "item__2",
+                "item__3"
+              ],
+              "component": "List",
+              "id": "items"
+            },
+            {
+              "component": "CheckBox",
+              "id": "item__0",
+              "label": "Tent and stakes",
+              "value": {
+                "@path": "/items/0/done"
+              }
+            },
+            {
+              "component": "CheckBox",
+              "id": "item__1",
+              "label": "Sleeping bags",
+              "value": {
+                "@path": "/items/1/done"
+              }
+            },
+            {
+              "component": "CheckBox",
+              "id": "item__2",
+              "label": "Camp stove and one full gas canister",
+              "value": {
+                "@path": "/items/2/done"
+              }
+            },
+            {
+              "component": "CheckBox",
+              "id": "item__3",
+              "label": "Paper map of the lake trails",
+              "value": {
+                "@path": "/items/3/done"
+              }
+            }
+          ],
+          "dataModel": {
+            "items": [
+              {
+                "done": true
+              },
+              {
+                "done": true
+              },
+              {
+                "done": false
+              },
+              {
+                "done": false
+              }
+            ]
+          },
+          "surfaceId": "card_1840"
+        },
+        "version": "1.0"
+      }
+    ],
+    "outsider": false
+  },
+  "text": "Card 1840: Pack for the lake weekend (surface, rev 1840) [[card:1840]]\n  │ For Saturday. Tick what is in the car.\n  │ ---\n  │ [x] Tent and stakes  /items/0/done\n  │ [x] Sleeping bags  /items/1/done\n  │ [ ] Camp stove and one full gas canister  /items/2/done\n  │ [ ] Paper map of the lake trails  /items/3/done",
+  "title": {
+    "outsider": false,
+    "rev": 1840,
+    "text": "Pack for the lake weekend"
+  }
+}

@@ -79,7 +79,12 @@
                          (gen/tuple (gen/return "List") (gen/vector (gen/return "item") 0 4)))
                (gen/fmap (fn [[rows cols]] {:kind "tracker" :title "Grid" :rows rows :columns cols})
                          (gen/tuple (gen/vector (gen/return "row") 0 3) (gen/vector (gen/return "col") 0 3)))
-               (gen/return {:kind "note" :title "Note" :text "first\nsecond"})]))
+               (gen/return {:kind "note" :title "Note" :text "first\nsecond"})
+               (gen/return {:kind "surface" :title "Surface"
+                            :components [{"id" "root" "component" "Column" "children" ["say" "box"]}
+                                         {"id" "say" "component" "Text" "text" {"@path" "/say"}}
+                                         {"id" "box" "component" "CheckBox" "label" "done" "value" {"@path" "/done"}}]
+                            :data {"say" "first\nsecond" "done" false}})]))
 
 (defn- gen-op-for
   "An op, mostly one of `kind`'s, with small element ids and mostly sound
@@ -192,7 +197,10 @@
           [op el] (case (:kind c)
                     "checklist" (let [i (first (:items c))] [(when i {:op "edit" :item (:id i)}) i])
                     "tracker" (let [r (first (:rows c))] [(when r {:op "rename_row" :row (:id r)}) r])
-                    "note" [{:op "write"} (:note c)])
+                    "note" [{:op "write"} (:note c)]
+                    ;; A surface's own ops go by the card's rev, which
+                    ;; relay.surfaces-test covers; its title is any card's.
+                    "surface" [nil nil])
           ;; The title too, for every kind.
           checks (cond-> [[{:op "retitle"} (:title c)]] op (conj [op el]))]
       (every? (fn [[op el]]
@@ -220,7 +228,7 @@
     (is (some? (cards/decide (:cards w) 1 {:op "edit" :item 1 :text "y" :seen rev})))))
 
 (deftest a-missing-kind-or-op-is-named-in-plain-words
-  (is (= "A card needs a kind: checklist, tracker or note."
+  (is (= "A card needs a kind: checklist, tracker, note or surface."
          (refusal-message #(cards/added {} {:title "T"}))))
   (let [w (new-card {:kind "note" :title "T" :text ""})]
     (doseq [op [{} {:op nil}]]
@@ -234,7 +242,8 @@
           on-element (case (:kind c)
                        "checklist" {:op "tick" :item n}
                        "tracker" {:op "set" :row n :column 1 :state "done"}
-                       "note" nil)]
+                       "note" nil
+                       "surface" {:op "input" :path (str "/nothing/" n) :value true :seen (:rev c)})]
       (and (= :invalid (refusal #(cards/decide (:cards w) 1 {:op op})))
            (= :not-found (refusal #(cards/decide (:cards w) 99 {:op "archive"})))
            (or (nil? on-element) (not (cards/active? c))

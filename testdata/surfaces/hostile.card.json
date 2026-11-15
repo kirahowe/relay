@@ -1,0 +1,119 @@
+{
+  "addedAt": "2026-11-14T15:03:00Z",
+  "complete": false,
+  "id": 1840,
+  "kind": "surface",
+  "labels": [
+    "contaminated",
+    "private"
+  ],
+  "links": [],
+  "linksLeftOut": 0,
+  "owner": "steward",
+  "rev": 1840,
+  "status": "active",
+  "surface": {
+    "a2ui": [
+      {
+        "createSurface": {
+          "catalogId": "urn:relay:catalog:v1",
+          "components": [
+            {
+              "children": [
+                "joined",
+                "row",
+                "kept",
+                "items"
+              ],
+              "component": "Column",
+              "id": "root"
+            },
+            {
+              "component": "Text",
+              "id": "joined",
+              "text": "Apply at hxxps://evil[.]example/apply?who=kira today"
+            },
+            {
+              "children": [
+                "left",
+                "right"
+              ],
+              "component": "Row",
+              "id": "row"
+            },
+            {
+              "component": "Text",
+              "id": "left",
+              "text": "hxxps://ev"
+            },
+            {
+              "component": "Text",
+              "id": "right",
+              "text": "il[.]example/apply?who=kira"
+            },
+            {
+              "component": "Text",
+              "id": "kept",
+              "text": "The fund's page is hxxps://kept[.]example/fund and its mirror is hxxps://kept[.]example/fund/x"
+            },
+            {
+              "children": [
+                "item__0",
+                "item__1",
+                "item__2"
+              ],
+              "component": "List",
+              "id": "items"
+            },
+            {
+              "component": "CheckBox",
+              "id": "item__0",
+              "label": "Read \\u{001b}]8;;hxxps://evil[.]example\\u{0007}the terms\\u{001b}]8;;\\u{0007}",
+              "value": {
+                "@path": "/items/0/done"
+              }
+            },
+            {
+              "component": "CheckBox",
+              "id": "item__1",
+              "label": "zero\\u{200b}width and a line break",
+              "value": {
+                "@path": "/items/1/done"
+              }
+            },
+            {
+              "component": "CheckBox",
+              "id": "item__2",
+              "label": "Q1 \\u{202e}etad at the arts council, evil[.]example",
+              "value": {
+                "@path": "/items/2/done"
+              }
+            }
+          ],
+          "dataModel": {
+            "items": [
+              {
+                "done": false
+              },
+              {
+                "done": true
+              },
+              {
+                "done": false
+              }
+            ]
+          },
+          "surfaceId": "card_1840"
+        },
+        "version": "1.0"
+      }
+    ],
+    "outsider": true
+  },
+  "text": "Card 1840: Grants worth a look (surface, rev 1840) [[card:1840]]\n  │ Apply at hxxps://evil[.]example/apply?who=kira today\n  │ hxxps://ev  il[.]example/apply?who=kira\n  │ The fund's page is hxxps://kept[.]example/fund and its mirror is hxxps://kept[.]example/fund/x\n  │ [ ] Read \\u{001b}]8;;hxxps://evil[.]example\\u{0007}the terms\\u{001b}]8;;\\u{0007}  /items/0/done\n  │ [x] zero\\u{200b}width and a line break  /items/1/done\n  │ [ ] Q1 \\u{202e}etad at the arts council, evil[.]example  /items/2/done",
+  "title": {
+    "outsider": true,
+    "rev": 1840,
+    "text": "Grants worth a look"
+  }
+}

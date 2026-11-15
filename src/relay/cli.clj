@@ -16,6 +16,7 @@
             [relay.export :as export]
             [relay.harness.agentloop :as agentloop]
             [relay.inbound :as inbound]
+            [relay.json :as strict]
             [relay.files :as files]
             [relay.eventkit-run :as eventkit-run]
             [relay.ingest-run :as ingest-run]
@@ -149,8 +150,19 @@ Every command needs the data directory, from --data <dir> or from the file
                                       add_row, add_column, rename_row, rename_column,
                                       remove_row, remove_column (a tracker); write
                                       (a note)
+  relay card <id> input --path <p> --value <v> --seen <rev>
+                                      tick (true) or untick (false) a box on a
+                                      surface: the card shows each box's path, and
+                                      its rev
+  relay card <id> data --path <p> --value <json> --seen <rev>
+  relay card <id> components --surface <file> --seen <rev>
+                                      write a surface's data at a path (null
+                                      removes it), or replace its components
   relay card add <kind> --title <t> [--item <t> ...] [--row <t> ...] [--column <t> ...]
                  [--text <t>]         put a checklist, tracker or note on the board
+  relay card add surface --title <t> --surface <file>
+                                      put a surface on the board, from a JSON file
+                                      holding its components and data
   relay docs                          the docs
   relay doc <path> [--version <n>] [--history]
                                       read a doc, or list its versions
@@ -448,7 +460,25 @@ id public too.")
 
 (def ^:private card-options
   "What relay card reads, and the options every command may be given."
-  #{:item :row :column :state :text :seen :title :data :public})
+  #{:item :row :column :state :text :seen :title :path :value :surface :data :public})
+
+(defn- surface-file
+  "The JSON object in the file --surface names: a surface's components
+  and data. Only a file on this machine: `slurp` would fetch an address
+  too, and what came back would be recorded as the operator's own."
+  [file]
+  (let [text (if (fs/regular-file? file)
+               (try (slurp (fs/file file))
+                    (catch Exception _ (fail! (str "relay could not read " file "."))))
+               (fail! (str "relay could not read " file ": --surface takes a file on this machine.")))]
+    (or (strict/object text)
+        (fail! (str file " does not hold one JSON object with components and data.")))))
+
+(defn- json-or-text
+  "What --value holds: the JSON it spells, or when it spells none, the
+  text itself, so plain words need no quotes."
+  [s]
+  (strict/parse-or s s))
 
 (defn- card!
   "relay card: show one card, change it with an op, or add one."
@@ -463,18 +493,23 @@ id public too.")
         unknown (sort (map name (remove card-options (keys opts))))]
     (when (seq unknown)
       (fail! (str "relay card has no option " (str/join ", " (map #(str "--" %) unknown))
-                  ". It takes --item, --row, --column, --state, --text, --seen and, to add, --title.")))
+                  ". It takes --item, --row, --column, --state, --text, --seen, for a surface --path, --value"
+                  " and --surface, and, to add, --title.")))
     (cond
       (nil? a)
       (fail! "usage: relay card <id> [<op> ...], or relay card add <kind> --title <t> ...")
       (and (= "add" a) (nil? b))
-      (fail! "usage: relay card add <kind> --title <t> [--item <t> ...] [--row <t> ...] [--column <t> ...] [--text <t>]")
+      (fail! (str "usage: relay card add <kind> --title <t> [--item <t> ...] [--row <t> ...] [--column <t> ...] [--text <t>]"
+                  "\n       relay card add surface --title <t> --surface <file>"))
       (= "add" a)
-      (let [e (first (operator-card! sys :card/add (cond-> {:kind b :title (:title opts)}
+      (let [surface (some-> (:surface opts) surface-file)
+            e (first (operator-card! sys :card/add (cond-> {:kind b :title (:title opts)}
                                                        (:item opts) (assoc :items (:item opts))
                                                        (:row opts) (assoc :rows (:row opts))
                                                        (:column opts) (assoc :columns (:column opts))
-                                                       (some? (:text opts)) (assoc :text (:text opts)))))]
+                                                       (some? (:text opts)) (assoc :text (:text opts))
+                                                       surface (assoc :components (get surface "components")
+                                                                      :data (get surface "data")))))]
         (result 0 (str "Added card " (:seq e) ".")))
       :else
       (let [id (or (parse-long a) (fail! (str "A card's id is a number, not " a ".")))]
@@ -488,9 +523,19 @@ id public too.")
                      (one :column) (assoc :column (one :column))
                      (:state opts) (assoc :state (:state opts))
                      (some? (:text opts)) (assoc :text (:text opts))
+                     (:path opts) (assoc :path (:path opts))
+                     (some? (:value opts)) (assoc :value (json-or-text (:value opts)))
+                     (:surface opts) (assoc :components
+                                            (let [held (surface-file (:surface opts))]
+                                              ;; Dropping it without a word would look as if it had been written.
+                                              (when (contains? held "data")
+                                                (fail! (str "relay card " id " components replaces the components and leaves the"
+                                                            " data as it is. Take data out of " (:surface opts)
+                                                            ", or write it with relay card " id " data.")))
+                                              (get held "components")))
                      (:seen opts) (assoc :seen (:seen opts)))]
             (if-let [e (first (operator-card! sys :card/op (assoc op :card id)))]
-              (result 0 (cards/confirmation id (get-in e [:data :op])))
+              (result 0 (cards/confirmation id (get-in e [:data :op]) (:seq e)))
               (result 0 (str "That changes nothing: "
                              (:unchanged (cards/decide (:cards (inbound/current-state sys)) id op)))))))))))
 
@@ -524,7 +569,8 @@ id public too.")
             :topic :string :from :string :to :string :why :string :text :string
             :socket :string :run-dir :string :since :string :until :string :out :string :agentloop :string
             :client-id :string :url :string :open :string :host :string
-            :item [:string] :row [:string] :column [:string] :state :string :seen :long :archived :boolean}})
+            :item [:string] :row [:string] :column [:string] :state :string :seen :long :archived :boolean
+            :path :string :value :string :surface :string}})
 
 (defn- house!
   "relay house build|up|down|status."

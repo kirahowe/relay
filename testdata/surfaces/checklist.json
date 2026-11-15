@@ -1,0 +1,14 @@
+{"title": "Pack for the lake weekend",
+ "labels": [],
+ "live": [],
+ "components": [
+  {"id": "root", "component": "Column", "children": ["note", "rule", "items"]},
+  {"id": "note", "component": "Text", "variant": "caption", "text": "For Saturday. Tick what is in the car."},
+  {"id": "rule", "component": "Divider"},
+  {"id": "items", "component": "List", "children": {"componentId": "item", "path": "/items"}},
+  {"id": "item", "component": "CheckBox", "label": {"@path": "text"}, "value": {"@path": "done"}}],
+ "data": {"items": [
+  {"text": "Tent and stakes", "done": true},
+  {"text": "Sleeping bags", "done": true},
+  {"text": "Camp stove and one full gas canister", "done": false},
+  {"text": "Paper map of the lake trails", "done": false}]}}

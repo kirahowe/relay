@@ -4496,7 +4496,8 @@
 
 (defmethod decide* :card/add [{:keys [state] :as tx} {:keys [args]}]
   (card-keeper! tx)
-  (emit tx "card/added" (cards/added (:cards state) (select-keys args [:kind :title :items :rows :columns :text]))))
+  (emit tx "card/added" (cards/added (:cards state) (select-keys args [:kind :title :items :rows :columns :text
+                                                                         :components :data]))))
 
 (defmethod decide* :card/op [{:keys [state] :as tx} {{id :card :as args} :args}]
   (card-keeper! tx)

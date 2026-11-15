@@ -14,6 +14,12 @@
   what a role reads and the command line prints, and `wire` is what a
   client is sent, with every text field already made safe to show.
 
+  Three kinds have a fixed meaning. The fourth, surface, is a screen a
+  role lays out itself from relay's catalog (relay.surfaces): components
+  and the data they read. relay resolves it before anyone is shown it, so
+  its text form and its wire form hold final strings. It is a card in
+  every other way: the same events, board, limits and labels.
+
   A card's id is the seq of the event that added it. Its elements
   (checklist items, tracker rows, tracker columns) get small integer ids
   from counters of the card's own, starting at 1. Nothing a role chooses
@@ -23,16 +29,25 @@
   note's text) keeps the labels of the event that last wrote it, and that
   event's seq as its :rev. Ticks, cell states, archive and restore carry no
   text, so they add no labels to the card. `text-labels` is the union of
-  the labels of the text the card shows now; relay.core adds private."
+  the labels of the text the card shows now; relay.core adds private.
+
+  A surface keeps labels for its components and for its data model, not
+  for each string: a path into a list is a position, and labels keyed by
+  position would move when the list did. Each of the two is replaced when
+  its whole part is, and every string of the surface is made safe with
+  both. The operator's input carries no text, so it adds none."
   (:require [clojure.string :as str]
+            [relay.json :as strict]
             [relay.provenance :as provenance]
+            [relay.surfaces :as surfaces]
             [relay.text :as text])
   (:import (java.time Instant)))
 
 (def kinds
   "The kinds of card, a closed set. A kind's meaning never changes once
-  shipped; a new one needs its own checks, ops, text form and wire form."
-  ["checklist" "tracker" "note"])
+  shipped; a new one needs its own checks, ops, text form and wire form.
+  A surface is the kind a role lays out itself (relay.surfaces)."
+  ["checklist" "tracker" "note" "surface"])
 
 (def cell-states
   "What a tracker cell can be. open is the default and is not stored."
@@ -58,12 +73,17 @@
    "rename_column" {:kinds #{"tracker"} :args [:column :text] :text :column}
    "remove_row" {:kinds #{"tracker"} :args [:row]}
    "remove_column" {:kinds #{"tracker"} :args [:column]}
-   "write" {:kinds #{"note"} :args [:text] :text :note}})
+   "write" {:kinds #{"note"} :args [:text] :text :note}
+   ;; A surface's ops all need :seen, the card's rev: a path into a list
+   ;; is a position, and against an older rev it could name another item.
+   "components" {:kinds #{"surface"} :args [:components :seen]}
+   "data" {:kinds #{"surface"} :args [:path :value :seen]}
+   "input" {:kinds #{"surface"} :args [:path :value :seen]}})
 
 (def op-fields
   "The fields of the one flat op shape that tools, the command line and
   clients all use."
-  [:op :item :row :column :state :text :seen])
+  [:op :item :row :column :state :text :components :path :value :seen])
 
 ;; --- limits
 
@@ -79,6 +99,12 @@
 (def max-rows "The most rows on a tracker." 40)
 (def max-columns "The most columns on a tracker." 24)
 (def max-active "The most cards on the board at once." 30)
+(def max-sent
+  "The most bytes a surface may come to as a client is sent it: its A2UI
+  message and its text form together, as UTF-8. A board of max-active
+  such cards is under half of the ten megabytes relay-tui reads in one
+  line."
+  128000)
 
 ;; --- refusals
 
@@ -123,10 +149,19 @@
   (let [{:keys [done total]} (progress card)]
     (boolean (and total (pos? total) (= done total)))))
 
+(defn surface-labels
+  "The labels of everything a surface holds now: those of the write that
+  last replaced its components, and those of every write to its data
+  model since that was last replaced whole."
+  [{:keys [labels]}]
+  (union (:components labels) (:data labels)))
+
 (defn text-elements
-  "The text the card shows now: its title, items, rows, columns and note."
-  [{:keys [title items rows columns note]}]
-  (concat [title] items rows columns (when note [note])))
+  "The text the card shows now: its title, items, rows, columns and note,
+  and for a surface everything it holds, as one element."
+  [{:keys [title items rows columns note surface]}]
+  (concat [title] items rows columns (when note [note])
+          (when surface [{:labels (surface-labels surface)}])))
 
 (defn text-labels
   "The union of the labels of the text the card shows now. Removing an
@@ -175,6 +210,40 @@
 
 ;; --- adding a card
 
+(declare safe-text)
+
+(defn- sendable!
+  "Refuses a surface that keeps too much, cannot be drawn
+  (relay.surfaces/drawn) or would be too large to send, so whatever is
+  recorded is a card a role can read and every client can be sent.
+
+  Every limit is checked on the surface with all its boxes unticked
+  (relay.surfaces/unticked), which is the surface at its longest. A tick
+  changes nothing about that surface, so a tick needs no check and is
+  never refused by a limit.
+
+  What is sent is measured as if an outsider had shaped it, with every
+  link broken, which is as long as its text gets. The card's links,
+  which travel beside its text, are not in the measure: each is an
+  address the surface's text holds, so together they are bounded by the
+  characters a surface may show."
+  [surface]
+  (let [longest (surfaces/unticked surface)
+        written (surfaces/written-size longest)
+        _ (when (> written surfaces/max-written)
+            (refuse! (str "The surface's components and data would be " written " characters as JSON, and the most is "
+                          surfaces/max-written ". Keep less in its data.")))
+        drawn (surfaces/drawn longest)
+        safe #(safe-text ["contaminated"] %)
+        bytes (fn [^String s] (alength (.getBytes s "UTF-8")))
+        ;; Both as the JSON they are sent in, since a quote or a
+        ;; backslash is two bytes there.
+        size (+ (bytes (strict/generate (surfaces/message "card" drawn safe)))
+                (bytes (strict/generate (str/join "\n" (map #(str text/gutter %) (surfaces/lines (:root drawn) safe))))))]
+    (when (> size max-sent)
+      (refuse! (str "The surface would be " size " bytes as a client is sent it, and the most is " max-sent
+                    ". Shorten its text or a list.")))))
+
 (defn- room! [cards]
   (when (>= (active-count cards) max-active)
     (refuse! :conflict (str "The board holds at most " max-active " active cards. Archive one first."))))
@@ -183,17 +252,22 @@
   "The data of the card/added event for a new card, or a refusal. `cards`
   are the cards there are now; `args` has :kind and :title, and :items for
   a checklist, :rows and :columns for a tracker, or :text for a note."
-  [cards {:keys [kind title items rows columns text] :as args}]
-  (when (nil? kind) (refuse! "A card needs a kind: checklist, tracker or note."))
+  [cards {:keys [kind title items rows columns text components data] :as args}]
+  (when (nil? kind) (refuse! "A card needs a kind: checklist, tracker, note or surface."))
   (when-not (all-kinds kind)
-    (refuse! (str "A card's kind is checklist, tracker or note, not " (pr-str kind) ".")))
+    (refuse! (str "A card's kind is checklist, tracker, note or surface, not " (pr-str kind) ".")))
   (let [others (keep (fn [k] (when (some? (get args k)) (name k)))
                      (case kind
-                       "checklist" [:rows :columns :text]
-                       "tracker" [:items :text]
-                       "note" [:items :rows :columns]))]
+                       "checklist" [:rows :columns :text :components :data]
+                       "tracker" [:items :text :components :data]
+                       "note" [:items :rows :columns :components :data]
+                       "surface" [:items :rows :columns :text]))]
     (when (seq others)
-      (refuse! (str "A " kind " takes " (case kind "checklist" "items" "tracker" "rows and columns" "note" "text")
+      (refuse! (str "A " kind " takes " (case kind
+                                          "checklist" "items"
+                                          "tracker" "rows and columns"
+                                          "note" "text"
+                                          "surface" "components and data")
                     ", not " (str/join " or " others) "."))))
   (room! cards)
   (let [title (line-text title "A card's title")]
@@ -204,7 +278,12 @@
                       columns (line-texts columns "A column" max-columns "Columns")]
                   {:card-kind kind :title title :rows rows :columns columns
                    :next {:row (inc (count rows)) :column (inc (count columns))}})
-      "note" {:card-kind kind :title title :text (note-text (or text "")) :next {}})))
+      "note" {:card-kind kind :title title :text (note-text (or text "")) :next {}}
+      "surface" (let [components (surfaces/components! components)
+                      data (surfaces/data! data)]
+                  ;; Whatever is recorded can be drawn and sent.
+                  (sendable! {:components components :data data})
+                  {:card-kind kind :title title :components components :data data :next {}}))))
 
 ;; --- deciding an op
 
@@ -241,7 +320,7 @@
   of a card changed in any way after it a refusal, so the card archived
   is the one the client showed. Ticks and cell states are last writer
   wins."
-  [cards id {:keys [op item row column state text seen]}]
+  [cards id {:keys [op item row column state text components path value seen] :as raw}]
   (let [card (get cards id)
         spec (get ops op)]
     (when-not card (refuse! :not-found (str "There is no card " id ".")))
@@ -254,7 +333,10 @@
     (when (some? seen)
       (when-not (integer? seen) (refuse! "seen must be a rev, a number."))
       (when (or (neg? seen) (> seen (:rev card)))
-        (refuse! (str "seen must be a rev you read: card " id " is at rev " (:rev card) "."))))
+        ;; A surface's op is not told the rev the card is at: see below.
+        (refuse! (if (#{"components" "data" "input"} op)
+                   "seen must be a rev you read. Read the card again for it."
+                   (str "seen must be a rev you read: card " id " is at rev " (:rev card) ".")))))
     (when-not ((:kinds spec) (:kind card))
       (refuse! (str op " is not an op on a " (:kind card) ". A " (:kind card) "'s ops are "
                     (str/join ", " (sort (keep (fn [[o s]] (when ((:kinds s) (:kind card)) o)) ops))) ".")))
@@ -318,7 +400,45 @@
                   (stale! "The note" (:note card) seen)
                   (if (= t (get-in card [:note :text]))
                     (unchanged (str "Card " id "'s note already says that.") (get-in card [:note :labels]))
-                    (decided {:text t})))))))
+                    (decided {:text t})))
+        ("components" "data" "input")
+        (let [{:keys [surface]} card
+              held (surface-labels surface)]
+          (when (nil? seen) (refuse! (str op " needs seen: the card's rev when you read it.")))
+          ;; The refusal does not say which rev the card is at. A caller
+          ;; given it could send the same op again without reading, and
+          ;; the path in it would name whatever moved into that place.
+          (when (> (:rev card) seen)
+            (refuse! :conflict (str "Card " id " has changed since rev " seen
+                                    ". Read the card again before you change it.")))
+          (case op
+            "components" (let [cs (surfaces/components! components)]
+                           (sendable! (assoc surface :components cs))
+                           (if (= cs (:components surface))
+                             (unchanged (str "Card " id " already has those components.") held)
+                             (decided {:components cs})))
+            "data" (let [p (surfaces/path path)]
+                     (when-not (:absolute? p)
+                       (refuse! "data needs a path from the top of the data model, such as /items/0/done, or / for all of it."))
+                     (when-not (contains? raw :value)
+                       (refuse! "data needs a value. A null value removes what is at the path."))
+                     (let [data (if (nil? value)
+                                  (surfaces/removed (:data surface) p)
+                                  (surfaces/written (:data surface) p value))]
+                       (sendable! (assoc surface :data data))
+                       (if (= data (:data surface))
+                         (unchanged (str "Card " id "'s data already holds that.") held)
+                         (decided {:path path :value (when (some? value) (surfaces/plain value))}))))
+            "input" (let [kind (when (string? path) (get (:inputs (surfaces/shown surface)) path))
+                          now (when kind (surfaces/at (:data surface) (:parts (surfaces/path path))))]
+                      (case kind
+                        :checkbox (do (when-not (boolean? value) (refuse! "A checkbox takes true or false."))
+                                      (if (= value (true? now))
+                                        (unchanged (str "That box is already " (if value "ticked" "unticked") "."))
+                                        ;; No limit is checked: they were, on the
+                                        ;; surface with this box unticked.
+                                        (decided {:path path :value value})))
+                        (refuse! :not-found (str "Nothing on card " id " takes input at that path."))))))))))
 
 ;; --- folding events
 
@@ -336,7 +456,7 @@
 (defn add
   "The cards once a card/added event is folded in."
   [cards {:keys [seq at actor data] :as event}]
-  (let [{:keys [card-kind title items rows columns text next]} data
+  (let [{:keys [card-kind title items rows columns text next components]} data
         el #(written event (select-keys % [:id :text]))]
     (assoc cards seq
            (cond-> {:id seq :kind card-kind :owner actor :added-at (Instant/parse at) :rev seq
@@ -344,7 +464,11 @@
                     :sources (event-sources event)}
              (= "checklist" card-kind) (assoc :items (mapv #(assoc (el %) :done false) items))
              (= "tracker" card-kind) (assoc :rows (mapv el rows) :columns (mapv el columns) :cells {})
-             (= "note" card-kind) (assoc :note (written event {:text text}))))))
+             (= "note" card-kind) (assoc :note (written event {:text text}))
+             (= "surface" card-kind) (assoc :surface {:components (surfaces/plain components)
+                                                      :data (surfaces/plain (:data data))
+                                                      :labels {:components (union (:labels event))
+                                                               :data (union (:labels event))}})))))
 
 (defn- update-element [card arg id f]
   (update card (element-key arg) (fn [els] (mapv #(if (= id (:id %)) (f %) %) els))))
@@ -362,7 +486,7 @@
 
 (defn apply-op
   "A card once a decided op, written by `event`, is applied to it."
-  [card {:keys [op item row column state text]} event]
+  [card {:keys [op item row column state text components path value]} event]
   (let [rewrite #(written event (assoc % :text text))]
     (case op
       "retitle" (update card :title rewrite)
@@ -384,7 +508,22 @@
                        (update :cells #(into {} (remove (fn [[[r _] _]] (= r row))) %)))
       "remove_column" (-> (remove-element card :column column)
                           (update :cells #(into {} (remove (fn [[[_ c] _]] (= c column))) %)))
-      "write" (update card :note rewrite))))
+      "write" (update card :note rewrite)
+      ;; Replacing a whole part of a surface replaces that part's labels;
+      ;; a write to one path of the data adds the writer's to them.
+      "components" (-> card
+                       (assoc-in [:surface :components] (surfaces/plain components))
+                       (assoc-in [:surface :labels :components] (union (:labels event))))
+      ;; The data's labels are replaced only when all of it was: a
+      ;; write at / of an object. Any other write, one that could not
+      ;; be applied included, adds the writer's to them.
+      "data" (let [p (surfaces/path path)
+                   whole? (and (:absolute? p) (empty? (:parts p)) (map? (surfaces/plain value)))]
+               (-> card
+                   (update-in [:surface :data] surfaces/folded p value)
+                   (update-in [:surface :labels :data] #(if whole? (union (:labels event)) (union % (:labels event))))))
+      ;; A box's true or false: no text, so no labels.
+      "input" (update-in card [:surface :data] surfaces/folded (surfaces/path path) value))))
 
 (defn change
   "The cards once a card/changed event is folded in. A card keeps the
@@ -435,7 +574,8 @@
   sure), and a note's text sits behind relay.text's gutter. `mark` (fn
   [labels text]) and `block` (fn [labels text] lines) render one-line
   and multi-line text from a source with those labels; by default they
-  leave it as it is."
+  leave it as it is. A surface is shown as relay resolved it, each of its
+  strings through `mark`."
   ([card] (text-lines card {}))
   ([{:keys [kind items note] :as card} {:keys [mark block] :or {mark plain-mark block plain-block}}]
    (vec (concat
@@ -449,6 +589,11 @@
            "note" (if (str/blank? (:text note))
                     ["The note is empty."]
                     (block (:labels note) (:text note)))
+           ;; Every line of a surface is the role's layout, so each sits
+           ;; behind the gutter, and none can pass for a line of relay's.
+           "surface" (let [labels (surface-labels (:surface card))]
+                       (map #(str text/gutter %)
+                            (surfaces/lines (:root (surfaces/shown (:surface card))) #(mark labels %))))
            [])))))
 
 (defn text-form
@@ -472,9 +617,10 @@
 
 (defn shown-texts
   "The text a card shows, as [labels text] pairs in the order it is
-  drawn: its title, items, rows, columns and note."
+  drawn: its title, items, rows, columns and note. A surface's element
+  carries its labels and no text, so it is not one of them."
   [card]
-  (for [el (text-elements card)] [(:labels el) (:text el)]))
+  (for [el (text-elements card) :when (string? (:text el))] [(:labels el) (:text el)]))
 
 (defn links
   "The live links a card's outside text holds, in order, each once, for
@@ -488,13 +634,15 @@
 (defn wire
   "A card as a client is sent it: string keys, JSON-ready, and every text
   field already safe to show (safe-text), with outsider beside it when it
-  is contaminated. A client works nothing out for itself. `labels` is what
+  is contaminated. A surface's strings all go by the surface's labels,
+  and its outsider is said once, for all of it. A client works nothing
+  out for itself. `labels` is what
   reading the card adds (relay.core/card-labels). `text` is the text form,
   for a client that does not know the kind. Its text is inert: every
   link in outside text is broken. The live links that text holds travel
   beside it, under links (relay.text/listed), for a card handed over
   with relay's live links under :live (relay.core/with-live)."
-  [{:keys [id kind status rev owner added-at title items rows columns cells note] :as card} labels]
+  [{:keys [id kind status rev owner added-at title items rows columns cells note surface] :as card} labels]
   (let [p (progress card)]
     (cond-> (merge (text/listed (links card))
                    {"id" id "kind" kind "status" (name status) "complete" (complete? card)
@@ -510,14 +658,26 @@
                                 ;; Only the cells that are not open.
                                 "cells" (vec (for [[[r c] s] (sort-by key cells)]
                                                {"row" r "column" c "state" s})))
-      (= "note" kind) (assoc "note" (wire-element note)))))
+      (= "note" kind) (assoc "note" (wire-element note))
+      ;; A surface as A2UI: one createSurface that builds it from nothing,
+      ;; resolved, so every string in it is one relay made safe whole.
+      (= "surface" kind) (assoc "surface"
+                                (let [held (surface-labels surface)]
+                                  {"outsider" (contaminated? held)
+                                   "a2ui" [(surfaces/message (str "card_" id) (surfaces/shown surface)
+                                                             #(safe-text held %))]})))))
 
 ;; --- what an op did, in words
 
 (defn confirmation
   "A short sentence saying what a decided op did to card `id`. It quotes
-  no card text, so it carries no labels."
-  [id {:keys [op item row column state]}]
+  no card text, so it carries no labels. With `rev`, the seq of the event
+  that recorded the op, an op on a surface also says the card's rev now,
+  which the next op on it has to give as seen."
+  ([id op rev]
+   (str (confirmation id op)
+        (when (#{"components" "data" "input"} (:op op)) (str " The card is at rev " rev " now."))))
+  ([id {:keys [op item row column state]}]
   (case op
     "retitle" (str "Retitled card " id ".")
     "archive" (str "Archived card " id ".")
@@ -534,4 +694,7 @@
     "rename_column" (str "Renamed column " column " on card " id ".")
     "remove_row" (str "Removed row " row " from card " id ".")
     "remove_column" (str "Removed column " column " from card " id ".")
-    "write" (str "Wrote the note on card " id ".")))
+    "write" (str "Wrote the note on card " id ".")
+    "components" (str "Replaced the components of card " id ".")
+    "data" (str "Wrote the data of card " id ".")
+    "input" (str "Set that input on card " id "."))))

@@ -1,0 +1,14 @@
+{"title": "Month-end routine",
+ "labels": [],
+ "live": [],
+ "components": [
+  {"id": "root", "component": "Column", "children": ["body", "rule", "steps", "source"]},
+  {"id": "body", "component": "Text", "text": {"@path": "/note"}},
+  {"id": "rule", "component": "Divider"},
+  {"id": "steps", "component": "List", "children": {"componentId": "step", "path": "/steps"}},
+  {"id": "step", "component": "Row", "children": ["n", "what"]},
+  {"id": "n", "component": "Text", "variant": "caption", "text": {"@call": "@index", "args": {"offset": 1}}},
+  {"id": "what", "component": "Text", "text": {"@path": ""}},
+  {"id": "source", "component": "Text", "variant": "caption", "text": "Kept by the house steward"}],
+ "data": {"note": "Statements land in the shared folder by the **third** of the month.\nIf one is late, say so here and move on.",
+  "steps": ["Export the bank CSVs", "Reconcile the card, oldest charge first", "Leave the line of credit for the end"]}}

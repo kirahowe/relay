@@ -1,0 +1,126 @@
+{
+  "addedAt": "2026-11-14T15:03:00Z",
+  "complete": false,
+  "id": 1840,
+  "kind": "surface",
+  "labels": [
+    "private"
+  ],
+  "links": [],
+  "linksLeftOut": 0,
+  "owner": "steward",
+  "rev": 1840,
+  "status": "active",
+  "surface": {
+    "a2ui": [
+      {
+        "createSurface": {
+          "catalogId": "urn:relay:catalog:v1",
+          "components": [
+            {
+              "children": [
+                "body",
+                "rule",
+                "steps",
+                "source"
+              ],
+              "component": "Column",
+              "id": "root"
+            },
+            {
+              "component": "Text",
+              "id": "body",
+              "text": "Statements land in the shared folder by the **third** of the month.\nIf one is late, say so here and move on."
+            },
+            {
+              "component": "Divider",
+              "id": "rule"
+            },
+            {
+              "children": [
+                "step__0",
+                "step__1",
+                "step__2"
+              ],
+              "component": "List",
+              "id": "steps"
+            },
+            {
+              "children": [
+                "n__0",
+                "what__0"
+              ],
+              "component": "Row",
+              "id": "step__0"
+            },
+            {
+              "component": "Text",
+              "id": "n__0",
+              "text": "1",
+              "variant": "caption"
+            },
+            {
+              "component": "Text",
+              "id": "what__0",
+              "text": "Export the bank CSVs"
+            },
+            {
+              "children": [
+                "n__1",
+                "what__1"
+              ],
+              "component": "Row",
+              "id": "step__1"
+            },
+            {
+              "component": "Text",
+              "id": "n__1",
+              "text": "2",
+              "variant": "caption"
+            },
+            {
+              "component": "Text",
+              "id": "what__1",
+              "text": "Reconcile the card, oldest charge first"
+            },
+            {
+              "children": [
+                "n__2",
+                "what__2"
+              ],
+              "component": "Row",
+              "id": "step__2"
+            },
+            {
+              "component": "Text",
+              "id": "n__2",
+              "text": "3",
+              "variant": "caption"
+            },
+            {
+              "component": "Text",
+              "id": "what__2",
+              "text": "Leave the line of credit for the end"
+            },
+            {
+              "component": "Text",
+              "id": "source",
+              "text": "Kept by the house steward",
+              "variant": "caption"
+            }
+          ],
+          "dataModel": {},
+          "surfaceId": "card_1840"
+        },
+        "version": "1.0"
+      }
+    ],
+    "outsider": false
+  },
+  "text": "Card 1840: Month-end routine (surface, rev 1840) [[card:1840]]\n  │ Statements land in the shared folder by the **third** of the month.\n  │ If one is late, say so here and move on.\n  │ ---\n  │ 1  Export the bank CSVs\n  │ 2  Reconcile the card, oldest charge first\n  │ 3  Leave the line of credit for the end\n  │ Kept by the house steward",
+  "title": {
+    "outsider": false,
+    "rev": 1840,
+    "text": "Month-end routine"
+  }
+}

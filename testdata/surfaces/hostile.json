@@ -1,0 +1,94 @@
+{
+ "title": "Grants worth a look",
+ "labels": [
+  "contaminated"
+ ],
+ "live": [
+  "https://kept.example/fund"
+ ],
+ "components": [
+  {
+   "id": "root",
+   "component": "Column",
+   "children": [
+    "joined",
+    "row",
+    "kept",
+    "items"
+   ]
+  },
+  {
+   "id": "joined",
+   "component": "Text",
+   "text": {
+    "@call": "formatString",
+    "args": {
+     "value": "Apply at ${/a}${/b} today"
+    }
+   }
+  },
+  {
+   "id": "row",
+   "component": "Row",
+   "children": [
+    "left",
+    "right"
+   ]
+  },
+  {
+   "id": "left",
+   "component": "Text",
+   "text": {
+    "@path": "/a"
+   }
+  },
+  {
+   "id": "right",
+   "component": "Text",
+   "text": {
+    "@path": "/b"
+   }
+  },
+  {
+   "id": "kept",
+   "component": "Text",
+   "text": "The fund's page is https://kept.example/fund and its mirror is https://kept.example/fund/x"
+  },
+  {
+   "id": "items",
+   "component": "List",
+   "children": {
+    "componentId": "item",
+    "path": "/items"
+   }
+  },
+  {
+   "id": "item",
+   "component": "CheckBox",
+   "label": {
+    "@path": "text"
+   },
+   "value": {
+    "@path": "done"
+   }
+  }
+ ],
+ "data": {
+  "a": "https://ev",
+  "b": "il.example/apply?who=kira",
+  "items": [
+   {
+    "text": "Read \u001b]8;;https://evil.example\u0007the terms\u001b]8;;\u0007",
+    "done": false
+   },
+   {
+    "text": "zero\u200bwidth and a line\nbreak",
+    "done": true
+   },
+   {
+    "text": "Q1 \u202eetad at the arts council, evil.example",
+    "done": false
+   }
+  ]
+ }
+}

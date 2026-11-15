@@ -46,7 +46,8 @@
             [relay.refs :as refs]
             [relay.reminders :as reminders]
             [relay.shell :as shell]
-            [relay.shown :as shown])
+            [relay.shown :as shown]
+            [relay.surfaces :as surfaces])
   (:import (java.time Instant LocalTime)
            (java.time.format DateTimeFormatter)))
 
@@ -748,36 +749,51 @@
     :description (str "Read the operator's board: cards for work the operator comes back to over days,"
                       " or a status worth a glance. With no arguments, the active cards. `card` shows one"
                       " card, archived or not; `archived` lists the archived cards too. Each card shows the"
-                      " numbers of its items, rows and columns, which card_op takes.")
+                      " numbers of its items, rows and columns, which card_op takes. A surface shows what"
+                      " the operator sees, with what they ticked or set, and read alone (`card`) also its"
+                      " components and data as you wrote them. `catalog` says what a surface may hold.")
     :parameters (obj {:card {:type "integer" :description "The card's number."}
-                      :archived flag})
-    :read (fn [{:keys [state config]} actor {:keys [card archived]}]
+                      :archived flag
+                      :catalog flag})
+    :read (fn [{:keys [state config]} actor {:keys [card archived catalog]}]
             ;; A public role has no board: cards are private only.
             (when (public-reader? state config actor)
               (throw (ex-info "You have no tool called cards." {})))
-            (let [cs (if card
-                       [(or (core/card state card) (core/reject! :not-found (str "There is no card " card ".")))]
-                       (core/board state archived))]
-              (if (empty? cs)
-                "The board is empty."
-                ;; A card keeps the sources of every event that wrote
-                ;; it, its edits included.
-                (show (for [c cs] (item (cards/text-form c) (core/card-labels c)
-                                        (or (:sources c) (src state c)))) "\n\n"))))}
+            (if catalog
+              ;; relay's own words, the same for every reader.
+              (surfaces/catalog-text)
+              (let [cs (if card
+                         [(or (core/card state card) (core/reject! :not-found (str "There is no card " card ".")))]
+                         (core/board state archived))]
+                (if (empty? cs)
+                  "The board is empty."
+                  ;; A card keeps the sources of every event that wrote
+                  ;; it, its edits included. A surface read alone comes
+                  ;; with what its role wrote, which a change starts from.
+                  (show (for [c cs] (item (str (cards/text-form c)
+                                               (when (and card (:surface c))
+                                                 (str "\n\n" (str/join "\n" (surfaces/source-lines (:surface c))))))
+                                          (core/card-labels c)
+                                          (or (:sources c) (src state c)))) "\n\n")))))}
 
    "card_add"
    {:class :write
     :grant :private
     :description (str "Put a card on the operator's board, for work they come back to over days or a status"
                       " worth a glance: a checklist (`items`), a tracker of rows by columns, such as accounts"
-                      " by month (`rows`, `columns`), or a note (`text`). Keep it current with card_op and"
+                      " by month (`rows`, `columns`), or a note (`text`). When none of those fits, lay the"
+                      " card out yourself as a surface (`components`, `data`): read `cards` with `catalog`"
+                      " first, which says what a surface may hold. Keep a card current with card_op and"
                       " archive it when it is finished.")
     :parameters (obj {:kind {:type "string" :enum cards/kinds}
                       :title {:type "string" :description "One line."}
                       :items {:type "array" :items text :description "A checklist's items, one line each."}
                       :rows {:type "array" :items text :description "A tracker's rows, one line each."}
                       :columns {:type "array" :items text :description "A tracker's columns, one line each."}
-                      :text {:type "string" :description "A note's text."}}
+                      :text {:type "string" :description "A note's text."}
+                      :components {:type "array" :items {:type "object"}
+                                   :description "A surface's components, a flat list, one with the id root."}
+                      :data {:type "object" :description "The JSON a surface's components read."}}
                      "kind" "title")
     :run (fn [sys actor labels args]
            (let [e (first (submit sys actor labels :card/add args))]
@@ -793,19 +809,26 @@
                       " card); add, tick, untick, edit, remove (a checklist, by `item`); set (a tracker cell,"
                       " by `row` and `column`, to open, done or skip), add_row, add_column, rename_row,"
                       " rename_column, remove_row, remove_column (a tracker); write (a note). `text` is the"
-                      " new text. Give `seen`, the card's rev when you last read it (the header shows"
-                      " it as \"rev N\"), with an edit so that you do not overwrite a newer one.")
+                      " new text. On a surface: data writes `value` at `path` of its data (null removes it),"
+                      " components replaces every component, and input ticks or unticks a box as the operator"
+                      " would. Give `seen`, the card's rev when you last read it (the header shows"
+                      " it as \"rev N\"), with an edit so that you do not overwrite a newer one. A surface's"
+                      " ops need it, and each answer gives the new rev.")
     :parameters (obj {:card {:type "integer" :description "The card's number."}
                       :op {:type "string" :enum (vec (sort (keys cards/ops)))}
                       :item {:type "integer"} :row {:type "integer"} :column {:type "integer"}
                       :state {:type "string" :enum cards/cell-states}
                       :text text
+                      :components {:type "array" :items {:type "object"}
+                                   :description "For components: the surface's whole new list."}
+                      :path {:type "string" :description "For data and input: a path in the surface's data, such as /items/0/done."}
+                      :value {:description "For data and input: the JSON to write there. For data, null removes what is there."}
                       :seen {:type "integer" :description "The rev in the card's header when you last read it."}}
                      "card" "op")
     :run (fn [sys actor labels args]
            (let [events (submit sys actor labels :card/op args)]
              (if-let [e (first events)]
-               (cards/confirmation (:card args) (get-in e [:data :op]))
+               (cards/confirmation (:card args) (get-in e [:data :op]) (:seq e))
                ;; Saying it changes nothing says something of what the
                ;; card holds, which is private.
                (let [{:keys [unchanged labels]} (try (cards/decide (:cards (inbound/current-state sys)) (:card args)
@@ -1691,6 +1714,8 @@
 
 (defn- type-ok? [{:keys [type items]} v]
   (case type
+    ;; A property with no type takes any JSON, null included.
+    nil true
     "string" (string? v)
     "integer" (integer? v)
     ;; The strict reader keeps a decimal as a BigDecimal, exactly.

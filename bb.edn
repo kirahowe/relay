@@ -31,6 +31,10 @@
          :extra-paths ["test"]
          :requires ([relay.verify :as verify])
          :task (verify/run! *command-line-args*)}
+  surfaces {:doc "Write the files made from relay.surfaces again: the catalog in resources/a2ui and each card in testdata/surfaces."
+            :extra-paths ["test"]
+            :requires ([relay.surfaces-test :as surfaces-test])
+            :task (surfaces-test/write-files!)}
   soak {:doc "Run the model-based property many more times: bb soak [trials]"
         :extra-paths ["test"]
         :requires ([relay.core-test :as core-test]
