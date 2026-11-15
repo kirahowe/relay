@@ -30,9 +30,11 @@ trial.
 ## Proposal
 
 The coordinating session's. relay breaks links in the stream itself,
-holding back a partial last word from one chunk to the next. It keeps
-its live links whole between angle brackets, as it does in messages and
-cards (relay#94). Every client draws what it gets. relay-tui then stops
+holding back a partial last word from one chunk to the next.
+Conversation text is sent inert, with every link broken. The live links
+it holds travel as data beside it in the update's `_meta`: `links` as
+`{"address", "shown"}` with `linksLeftOut`, as on a card (relay#118).
+Every client draws what it gets. relay-tui then stops
 breaking conversation links itself, which settles the question left
 open at the end of relay#95's proposal.
 
@@ -102,7 +104,9 @@ matches what Kira chose for relay-tui on 2026-11-15.
   chunks split it. A property test covers the splitting.
 - [ ] A Markdown image in such text reaches no client in a form it would
   fetch.
-- [ ] A live link reaches the client whole, between angle brackets.
+- [ ] A live link in conversation text reaches the client as data in
+  the update's `_meta`, `links` as `{"address", "shown"}` with
+  `linksLeftOut`, as on a card. The text beside it is inert.
 - [ ] The replay a client gets when it attaches holds the same text the
   live stream did.
 - [ ] Text in a session whose labels are clean is passed on unchanged.
@@ -136,3 +140,6 @@ relay#91 and relay#95.
   links travel as data beside it (docs/client-protocol.md). Whoever
   takes this should reword both. The criterion about a client's own link
   detection is my draft of the coordinating session's addition.
+- 2026-11-15, from the relay#93 session. Reworded the Proposal and the
+  third criterion for relay#118, in the coordinating session's words.
+  The line above describes them as they were.
