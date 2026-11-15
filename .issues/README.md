@@ -42,13 +42,13 @@
 | --- | --- | --- | --- |
 | [93](93-let-roles-build-their-own-screens-with-a2ui.md) | Let roles build their own screens with A2UI | feature | P1 |
 | [94](94-keep-a-link-live-when-relay-can-say-where-it-came-from.md) | Keep a link live when relay can say where it came from | feature | P1 |
-| [96](96-draw-a2ui-surfaces-in-relay-tui.md) | Draw A2UI surfaces in relay-tui | feature | P2 |
 
 ### Review
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [98](98-decide-what-a-button-on-a-role-built-screen-may-do.md) | Decide what a button on a role-built screen may do | feature | P1 |
+| [96](96-draw-a2ui-surfaces-in-relay-tui.md) | Draw A2UI surfaces in relay-tui | feature | P2 |
 
 ### Blocked
 

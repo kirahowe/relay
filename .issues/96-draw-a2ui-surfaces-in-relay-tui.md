@@ -15,6 +15,15 @@ relay-tui gets its own, for a small catalog.
   - Receipt: `internal/a2ui` (`Decode`, `ParseLines`, `Apply`);
     `TestDecodeRejects`, `TestDecodeNotSupported`, `TestDecodeAccepts`,
     `TestFoldLifecycle`, `TestApplyKeepsItsInput` in `a2ui_test.go`.
+  - Receipt: a second session compared the wire form with a2ui.org on
+    2026-11-14: the v1.0 specification page,
+    `catalogs/basic/catalog.json` and `json/common_types.json`. The
+    envelope, the six message kinds, `@path`, `@call`, `@catalogId`,
+    inline `components` and `dataModel`, the template form of
+    `children`, a button's `action` and null as the delete all match
+    what `Decode` reads and the fixtures hold. v1.0 calls a
+    `createSurface` that carries `theme` invalid, and `Decode` refuses
+    one.
 - [x] It draws Text, Column, Row, List, Card, Divider, CheckBox, Button,
   TextField and ChoicePicker, and relay's own Tracker, to lines of a given
   width.
@@ -31,6 +40,18 @@ relay-tui gets its own, for a small catalog.
   - Receipt: `TestA2UIDrawsNoControlBytesFromTheSurface`,
     `TestA2UIDefangsLinks`. The same hostile surface held an OSC 8 escape
     sequence, which came out as visible `\u001b` text.
+  - Receipt: a second session put escape sequences, an OSC 8 link, BEL,
+    a C1 control and a bidi override into every string a surface can
+    carry (texts, labels, values, placeholders, options, tracker labels
+    and cell states, a component type, a missing child's id) and ran it
+    through `a2uiview`, piped and under a pseudo-terminal, which turns
+    the colours on. The only escapes in the output were the renderer's
+    own colour codes, and every link came out broken.
+  - Receipt: the surface's id in `a2uiview`'s heading was the one
+    exception. Its control characters were dropped, but a URL in it
+    showed whole. Fixed in relay-tui 3645847b:
+    `TestRunNamesASurfaceSafely` failed before the fix, and
+    `TestA2UINameIsSafe` is the property.
 - [x] Fixtures express a checklist, a tracker and a note as surfaces, with
   golden renderings.
   - Receipt: `internal/a2ui/testdata/*.jsonl` and
@@ -45,6 +66,9 @@ relay-tui gets its own, for a small catalog.
 - [x] `make check` passes.
   - Receipt: run in the main session on 2026-11-14 at relay-tui ae0ce7d2,
     every package ok, the deep surface-rules run included.
+  - Receipt: a second session ran it on 2026-11-14 at ae0ce7d2 and again
+    at 3645847b, the second time with `make build` after it as `bb
+    verify` does. Every package was ok both times.
 
 ## Plan
 
@@ -56,7 +80,7 @@ result is a mock to show Kira and a count of what the renderer took.
 - 2026-11-14: built by a subagent from a written brief, reviewed and
   verified in the main session, committed as relay-tui ae0ce7d2 ("Draw
   A2UI v1.0 surfaces, as a spike").
-- What it cost: 1,741 lines of Go and 986 of tests, in about 13 minutes of
+- What it cost: 1,741 lines of Go and 996 of tests, in about 13 minutes of
   agent time. The model, fold, bindings, focus and actions are in
   `internal/a2ui` (1,172 lines). The drawing is in `internal/render`
   (459 lines), because it reuses render's own boxes, wrapping and the
@@ -88,3 +112,22 @@ result is a mock to show Kira and a count of what the renderer took.
   breaking links a second time.
 - The limits the package sets: 64 surfaces, 2,000 components, 1,500 drawn
   nodes, depth 16, 500 template items.
+- 2026-11-14, a second session, working in the `i96` workspaces of relay
+  and relay-tui: checked every receipt above again, from the code and
+  the published spec. Each one holds, and every test named exists and
+  passes.
+- Found and fixed in relay-tui 3645847b ("Break links in the surface id
+  a2uiview prints"): `a2uiview` printed a surface's id in its heading
+  through `render.Faint`, which drops control characters and leaves a
+  URL whole. `render.A2UIName` now draws the heading through the path
+  the drawing's other strings take, so the command prints no string from
+  a surface by itself.
+- The test count above read 986. The commit's own stat gives 996, and
+  the line now says so.
+- Judgment, mine: no Codex review for the spike. No role can author a
+  surface yet, and the renderer is wired to nothing: not the dashboard,
+  the network, labels or approvals. The review is due with relay#97,
+  when surfaces a role wrote reach this code.
+- The mock: the three fixtures at 60 columns, and the tracker at 34
+  where the grid gives way to a list, are in the hand-off message to
+  Kira.
