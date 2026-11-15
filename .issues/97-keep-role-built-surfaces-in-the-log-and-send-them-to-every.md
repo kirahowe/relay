@@ -109,54 +109,136 @@ any of them.
 
 ## Acceptance criteria
 
-- [ ] A role adds a surface with `card_add` (kind `surface`, a title,
+Tests named below are in `test/relay/surfaces_test.clj` unless another file is given.
+
+- [x] A role adds a surface with `card_add` (kind `surface`, a title,
   components and data) and changes it with the `card_op` ops `components`
   and `data`. It is a card in every other way: the board's limit,
   archive, restore, retitle, `[[card:N]]`, the ready finding and the
   prompt's board line.
-- [ ] relay refuses a surface that is outside catalog v1, says what to
+  - Receipt: `a-role-keeps-a-surface-with-the-card-tools` (card_add,
+    `data`, `components`, the read) and `a-surface-is-a-card-in-relay-core`
+    (the board, the prompt's line, the ref, retitle, archive).
+  - Receipt: the ready finding, run by hand on the tip: a surface a role
+    adds comes out of `relay.ready/ready` as
+    `{:id "card:2", :kind :finding, :title "Lake weekend", :lines [], :card 2}`.
+  - Receipt: change wxzmyzqp, "Add surface, a kind of card a role lays
+    out itself".
+- [x] relay refuses a surface that is outside catalog v1, says what to
   change, and records nothing: an unknown component or property, a
   function other than `formatString` and `@index`, no `root`, a child
   that is missing, used twice or its own ancestor, an id holding `__`, a
   number that is not whole, a data key outside `[A-Za-z0-9_-]`, or
   anything over a limit.
-- [ ] The wire form holds a resolved surface: final strings, `children`
+  - Receipt: `relay-refuses-what-its-catalog-does-not-have`,
+    `the-components-are-one-tree-under-root`,
+    `a-data-model-holds-plain-json-within-limits` and
+    `a-surface-is-drawn-before-it-is-recorded`, each on the refusal's
+    exact words.
+  - Receipt: `a-mistaken-surface-is-refused-not-an-error`, 500 surfaces
+    with properties replaced by any JSON: a refusal or an acceptance,
+    never an error.
+- [x] The wire form holds a resolved surface: final strings, `children`
   as ids, no `@call` and no template. The only binding is a CheckBox's
   `value`, and the data model holds only the values at those paths.
-- [ ] Every string of a surface that a client or the command line shows
+  - Receipt: `every-string-of-a-surface-is-made-safe-whole` checks it on
+    300 generated surfaces (`resolved?`, and no string in `dataModel`).
+  - Receipt: `the-fixture-cards-are-what-relay-sends` against the cards
+    in `testdata/surfaces`.
+- [x] Every string of a surface that a client or the command line shows
   is made safe with the surface's labels: hidden characters are shown
   escaped, and in a surface an outsider may have shaped every link is
   broken, a link that `formatString` joins from pieces included. The
   live links its strings hold are listed in the card's `links`.
-- [ ] The operator's `input` op, from the command line and from
+  - Receipt: `every-string-of-a-surface-is-made-safe-whole` and
+    `a-surface-a-session-with-outside-text-wrote-shows-nothing-live`.
+  - Receipt: `a-surfaces-strings-are-the-ones-it-shows`, where a live
+    link joined from two halves is listed in the form the text shows;
+    change lzslyxyt.
+- [x] The operator's `input` op, from the command line and from
   `_relay/cards/op`, is taken only at a path a CheckBox is bound to, with
   true or false and `seen` equal to the card's rev. It adds no labels and
   wakes no role, and every other subscribed client is sent the card.
-- [ ] A surface's labels are those of its title, its components and its
+  - Receipt: `the-operators-input-lands-only-on-an-input`,
+    `a-surfaces-ops-need-the-rev-the-caller-read` and
+    `every-box-relay-accepts-can-be-ticked-and-unticked`.
+  - Receipt: `a-clients-input-reaches-relay-and-then-every-client` (the
+    hub) and `the-operator-keeps-a-surface-from-the-command-line`.
+  - Receipt: `a-surface-is-a-card-in-relay-core` ("an input wakes
+    nobody") and `a-surface-is-as-tainted-as-every-write-still-in-it`
+    ("an input adds no labels, whoever sends it").
+- [x] A surface's labels are those of its title, its components and its
   data model. A whole replace of the components or of the data model
   resets that part's labels, and reading the card adds them all to the
   reader's session.
-- [ ] The text form is relay's header and then the drawn surface, every
+  - Receipt: `a-surface-is-as-tainted-as-every-write-still-in-it`, 300
+    random runs of writes against a model kept by the test.
+  - Receipt: `a-role-keeps-a-surface-with-the-card-tools`, the labels a
+    read comes back with.
+- [x] The text form is relay's header and then the drawn surface, every
   line of it behind the gutter. A role that reads one card is also shown
   its components and data as JSON, so it can change them.
-- [ ] Folding the decided events gives the same cards as folding them
+  - Receipt: `the-text-form-is-the-header-and-then-the-surface-behind-the-gutter`.
+  - Receipt: `a-role-keeps-a-surface-with-the-card-tools`, "read alone,
+    a surface comes with what its role wrote and what the operator set".
+- [x] Folding the decided events gives the same cards as folding them
   after a round trip through the log's JSON, for random surfaces and ops.
-- [ ] `resources/a2ui/relay_catalog.json` is generated from relay.surfaces
+  - Receipt: `a-surface-is-a-fold-of-its-events` (300 runs) and
+    `relay-core-folds-cards-as-replay-does` in
+    `test/relay/cards_test.clj`, which now adds surfaces too.
+  - Receipt: `whatever-a-log-holds-the-fold-and-the-forms-go-on`, a
+    surface's events holding any JSON.
+- [x] `resources/a2ui/relay_catalog.json` is generated from relay.surfaces
   and checked in. A test fails when the two differ, and `bb verify` fails
   when relay-tui's copy differs from it.
-- [ ] Wire forms for a checklist and a note built as surfaces, and for
+  - Receipt: `the-catalog-file-is-the-catalog` and
+    `the-catalog-says-what-relay-checks`; `bb surfaces` writes the file.
+  - Receipt: the `catalog` step of `bb verify`, change pxkpwqpp, and
+    `relay-tuis-catalog-is-compared-with-relays` in
+    `test/relay/verify_test.clj`.
+  - Receipt: the joint `bb verify` of 2026-11-15 (relay-54's run, relay
+    at lzslyxyt bdfc1086, relay-tui at mxpvltlm a2ce30c4): `catalog`
+    PASS.
+- [x] Wire forms for a checklist and a note built as surfaces, and for
   one a session with outside text wrote, are checked in as fixtures that
   relay-tui's renderer tests read. `bb verify` fails when relay-tui's
   copy of them differs.
-- [ ] `docs/client-protocol.md`, `README.md`, `resources/AGENTS.md` and
+  - Receipt: `testdata/surfaces`, and `the-fixture-cards-are-what-relay-sends`.
+  - Receipt: the same `catalog` step runs `diff -r` on the directory.
+    relay-tui's copy and the tests that draw it are relay#100's.
+- [x] `docs/client-protocol.md`, `README.md`, `resources/AGENTS.md` and
   `spec/relay.allium` describe surfaces. The role instructions say which
   read gives a role back what it wrote and what the operator ticked.
-- [ ] A pentest attacks a surface end to end: a role that read outside
+  - Receipt: "A surface card" in `docs/client-protocol.md` (changes
+    vorvxlrm, nlyokvuo); "Surfaces" in `README.md`, "The operator's
+    board" in `resources/AGENTS.md`, and `Surface` and `ChangeSurface` in
+    `spec/relay.allium` (change rzyuxqus).
+  - Receipt: `allium check spec/relay.allium` reports the same three
+    errors and six warnings as before the change, all in rules this
+    change does not touch.
+- [x] A pentest attacks a surface end to end: a role that read outside
   text builds one with hidden characters, an escape sequence and a link
   joined from pieces, and the operator is shown none of them live.
-- [ ] `bb verify` passes, apart from the two checks relay#99 covers.
+  - Receipt: `s6-hostile-text` in
+    `pentest/relay/pentest/scenarios/display.clj`, change ztpzsyul. It
+    passes, with the checks "an address the surface joins from two
+    pieces is broken as one" and "relay cards shows the row's two pieces
+    with a gap between them" among those it prints.
+- [x] `bb verify` passes, apart from the two checks relay#99 covers.
+  - Receipt: the joint `bb verify` of 2026-11-15 on relay lzslyxyt
+    bdfc1086 and relay-tui mxpvltlm a2ce30c4, run by relay-54:
+    agentloop, relay-tui, catalog, webtool, eventkit PASS; relay 1,224
+    of 1,225 (seed 759790736, the failure `shell-live-test`); fuzz
+    300,000 cases, none followed; pentest 30 of 31 (`s18-shell-walls`).
+    Both failures are relay#99 (Apple's container service stopped).
 - [ ] The Codex review loop ends with a round that finds no defect in
   scope.
+  - Not met as written. Rounds 1 and 2 were Codex, 3 and 4 a fresh
+    reviewer agent after Codex's quota ran out. Each found a defect in
+    scope, the fourth a low one, and rounds 3 and 4 found nothing that
+    exposes data or acts outside the house. Kira was asked after round
+    3 and chose one more round, and after round 4 chose to land. The
+    Log has each round.
 
 ## Plan
 
@@ -231,6 +313,10 @@ turn.
   Haiku (test/scenarios/BASELINES.md). The model's API takes the new
   tool schemas. One case passed three of three; the other, a known weak
   one, scored one of six here and none of six on the commit below.
+- 2026-11-15: after round 4 Kira chose to land. Landed with relay#100:
+  relay's `integration` at lzslyxyt bdfc1086, relay-tui's at mxpvltlm
+  a2ce30c4, after the joint verify above. Not pushed; relay-32 moves
+  `main`.
 - 2026-11-15: Kira, asked what to do after three rounds that each found
   a defect, chose one more round: land with relay#100 if it finds none
   in scope, back to her if it does.
