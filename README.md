@@ -1498,7 +1498,12 @@ so a role it adds starts every wake contaminated, and a routine it
 writes fires contaminated memos. Labels decide two things only. A public
 role's session may never hold `private` (agentloop's `forbid_labels`).
 And text an outsider may have written has its links broken wherever it
-is shown: links and hosts only, never file names, paths or times.
+is shown: links and hosts only, never file names, paths or times. One
+kind of word gets no such exception: a word that holds a combining mark
+or another character with no width of its own has every dot in it
+broken, a file name included, because a link finder and relay can read
+such a word differently. So an accented name that was written with
+separate marks reads `résumé[.]pdf`.
 
 What the operator is told about where a thing came from follows a
 narrower record, its sources: the outside text the session that made it

@@ -6,12 +6,19 @@
 ;; finder decides for itself, so the only proof that they agree is to
 ;; ask the finder. This builds random strings that try to pass for a web
 ;; address in ways finders accept (schemes written short, hosts hidden in
-;; file names and mail addresses, hidden characters, other alphabets) and
-;; prints each as three channels show it:
+;; file names and mail addresses, hidden characters, characters with no
+;; width of their own, emoji held together by a joiner, other alphabets)
+;; and prints each as it is shown four ways:
 ;;
 ;;   plain   a mail or a push (relay.messages/plain)
 ;;   shown   a client or a terminal (relay.messages/shown)
 ;;   wrap    relay ready's lines, cut at 60 columns (relay.render/wrap)
+;;   kept    hidden characters taken out but for the joiner or selector
+;;           that holds an emoji together, then links broken. No channel
+;;           shows this today: mail takes every hidden character out and
+;;           a screen shows each as an escape. It is how conversation
+;;           text is to be sent (relay#104), and the only way a kept
+;;           joiner reaches a link finder raw.
 ;;
 ;; One line per case: the string as written, U+0001, the shown form with
 ;; line breaks as spaces. scripts/inert-text-fuzz.sh runs this with the
@@ -24,7 +31,8 @@
 
 (require '[clojure.string :as str]
          '[relay.messages :as messages]
-         '[relay.render :as render])
+         '[relay.render :as render]
+         '[relay.text :as text])
 
 (def rng (java.util.Random. (parse-long (or (first *command-line-args*) "1"))))
 (def cases (parse-long (or (second *command-line-args*) "100000")))
@@ -41,7 +49,45 @@
   ["" "" "" "http://" "https://" "HTTPS://" "https:" "https:/" "http:\\\\" "https:\\" "ftp://" "www." "WWW." "_www."
    "ｈｔｔｐｓ://" "https：//" "https:／／" "hTtP://" "h\u200bttps://" "https\u200b://" "https:/\u200b/" "//"
    "https://user@" "https://a:b@" "feed:" "feed:https://" "view-source:https://" "itms-services://"
-   "x-web-search://" "https%3A%2F%2F" "https:%2F%2F" "ssh:" "ssh:x@" "file:" "file:/" "magnet:?xt=" "news:" "git:"])
+   "x-web-search://" "https%3A%2F%2F" "https:%2F%2F" "ssh:" "ssh:x@" "file:" "file:/" "magnet:?xt=" "news:" "git:"
+   ;; relay#130: a mark in or just after the scheme, which Apple's link
+   ;; finder reads straight through.
+   "https:\u0301//" "https:/\u0301/" "htt\u0301ps://" "https:\u1161//" "https:\ufe0f\u20e3//" "ww\u0323w."
+   "http:\u0301//" "https\u0301://" "https://\u0301"])
+
+(def marks
+  ;; Characters with no width of their own that relay.text/hidden? does not
+  ;; take (relay#130): combining marks, an enclosing mark, a conjoining
+  ;; jamo, keycap glue, and two that draw as nothing by design, the Brahmi
+  ;; number joiner and the Duployan thick letter selector. A reader that
+  ;; skips them reads an address straight through one.
+  ["\u0301" "\u0323" "\u0489" "\u1161" "\u20e3" "\ufe0f\u20e3"
+   (String. (Character/toChars 0x1107F)) (String. (Character/toChars 0x1BC9D))])
+
+(defn- cp [n] (String. (Character/toChars (int n))))
+
+(def glue
+  ;; Emoji sequences whose joiner or selector relay.text keeps when it
+  ;; takes hidden characters out (emoji-glue?): a family, a selector
+  ;; after a pictograph, keycaps. A kept joiner is a format character,
+  ;; not a mark, so no rule for marks sees it.
+  [(str (cp 0x1F468) "\u200d" (cp 0x1F469)) (str (cp 0x1F468) "\u200d" (cp 0x1F469) "\u200d" (cp 0x1F467))
+   (str (cp 0x1F44D) "\ufe0f") (str (cp 0x2764) "\ufe0f" "\u200d" (cp 0x1F525))
+   "1\ufe0f\u20e3" "#\ufe0f\u20e3"])
+
+(defn marked
+  "`s` with a mark or an emoji sequence put in at a random place, about
+  one time in three, and a second one now and then."
+  [s]
+  (let [put (fn [s]
+              ;; Never between the two halves of a pair.
+              (let [i (.nextInt rng (inc (count s)))
+                    i (if (and (< 0 i (count s)) (Character/isLowSurrogate (.charAt s i))) (dec i) i)]
+                (str (subs s 0 i) (if (< (.nextDouble rng) 0.3) (pick glue) (pick marks)) (subs s i))))
+        p (.nextDouble rng)]
+    (cond (< p 0.07) (put (put s))
+          (< p 0.33) (put s)
+          :else s)))
 
 (def label
   ["evil" "secret" "x" "a1" "a-b" "a_b" "évil" "пример" "例" "xn--e1afmkfd" "1" "123" "0x7f" "com" "co" "www" "data"
@@ -65,12 +111,13 @@
 (dotimes [_ cases]
   (let [n (inc (.nextInt rng 3))
         host (apply str (concat (interleave (repeatedly n #(pick label)) (repeatedly n #(pick dot))) [(pick ending)]))
-        s (str (pick before) (pick scheme) host (pick after) (maybe 0.3 after))
+        s (marked (str (pick before) (pick scheme) host (pick after) (maybe 0.3 after)))
         shown (messages/shown outside s)
         one-line #(str/replace % #"[\n\r]" " ")]
     (doseq [[channel out] [["plain" (messages/plain outside s)]
                            ["shown" shown]
-                           ["wrap" (str/join "\n" (render/wrap shown 60))]]]
+                           ["wrap" (str/join "\n" (render/wrap shown 60))]
+                           ["kept" (text/for-operator outside (first (#'text/strip s)))]]]
       ;; wrap keeps its line breaks: a link finder reads each line.
       (println (str channel " " (pr-str s) "\u0001"
                     (if (= "wrap" channel) (str/replace out "\n" "\u0002") (one-line out)))))))

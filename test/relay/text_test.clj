@@ -419,3 +419,104 @@
     (testing "a very long dotted word has every dot broken"
       (is (not (re-find #"[a-z]\.[a-z]" (text/defang (apply str (repeat 25000 "ab.c")))))))))
 
+
+;; --- relay#130: a character with no width of its own inside an address
+
+(def ^:private outside-text ["contaminated"])
+
+(defn- cp [n] (String. (Character/toChars (int n))))
+
+(def ^:private skipped
+  "What a reader that goes by what is drawn skips: marks and conjoining
+  jamo. The test's own list, so it does not judge with relay's."
+  #"[\p{Mn}\p{Me}\x{1160}-\x{11FF}\x{D7B0}-\x{D7FF}]")
+
+(defn- as-drawn [s] (str/replace s skipped ""))
+
+(defn- followable?
+  "Whether text holds something a link finder could follow once the
+  characters it skips are gone: a web scheme, or a dot between two
+  characters of a name."
+  [s]
+  (let [s (as-drawn s)]
+    (boolean (or (re-find #"(?i)(?<![a-z0-9+.\-])(?:https?|ftp):/{0,2}[a-z0-9\[]" s)
+                 (re-find #"(?i)(?<![\p{L}\p{N}])www\.[\p{L}\p{N}]" s)
+                 (re-find #"[\p{L}\p{N}_\-]\.[\p{L}\p{N}]" s)))))
+
+(deftest a-mark-in-an-address-does-not-hide-it-from-the-breaker
+  (testing "the forms Apple's link finder follows as written, and the others the review named"
+    (doseq [[what s] [["U+0301 after https:" "https:\u0301//evil.com/steal?d=1"]
+                      ["U+1161 after https:" "https:\u1161//evil.com/steal?d=1"]
+                      ["U+1107F after https:" (str "https:" (cp 0x1107F) "//evil.com/steal?d=1")]
+                      ["U+1BC9D after https:" (str "https:" (cp 0x1BC9D) "//evil.com/steal?d=1")]
+                      ["keycap glue after https:" "https:\ufe0f\u20e3//evil.com/steal?d=1"]
+                      ["U+0301 between the slashes" "https:/\u0301/evil.com/steal?d=1"]
+                      ["U+0301 inside https" "htt\u0301ps://evil.com/steal?d=1"]
+                      ["U+0323 inside www" "ww\u0323w.evil.com/steal?d=1"]
+                      ["U+0301 inside a bare host" "evil\u0301.com/steal?d=1"]
+                      ["U+0301 inside the ending" "evil.co\u0301m"]
+                      ["the Markdown case" "https:*\ufe0f\u20e3//evil.test*"]]]
+      (let [out (text/for-operator outside-text (str "see " s " now"))]
+        (is (not (followable? out)) (str what ": " (pr-str out)))
+        (is (= out (text/defang out)) (str what " is broken once and for all")))))
+  (testing "a scheme a mark was hiding is broken as the address it spells, the mark gone"
+    (is (= "hxxps://evil[.]com/steal?d=1" (text/defang "https:\u0301//evil.com/steal?d=1")))
+    (is (= "hxxps://evil[.]com/x" (text/defang "htt\u0301ps://evil.com/x"))))
+  (testing "the three things relay used to leave as written after such a scheme"
+    (testing "the scheme itself"
+      (is (str/starts-with? (text/defang "https:\u0301//evil.com/x") "hxxps://")))
+    (testing "a host with no dot"
+      (doseq [host ["localhost" "3232235777" "0xC0A80001" "[2001:db8::1]"]]
+        (is (= (str "hxxps://" host "/steal?d=1") (text/defang (str "https:\u0301//" host "/steal?d=1"))) host)))
+    (testing "a one-dot host that ends like a file, with nothing after it"
+      (doseq [[host broken] [["evil.md" "evil[.]md"] ["setup.sh" "setup[.]sh"] ["notes.zip" "notes[.]zip"]
+                             ["notes.py" "notes[.]py"]]]
+        (is (= (str "hxxps://" broken) (text/defang (str "https:\u0301//" host))) host))))
+  (testing "a word with a mark in it is taken for no file name and no mail address"
+    ;; Found by the fuzz once its alphabet had marks: Apple's link finder
+    ;; followed the host in each of these as relay showed it.
+    (doseq [[s broken] [["a@\u0301a-b.a1.rs" "a@\u0301a-b[.]a1[.]rs"]
+                        ["a@ww\u0323w.a-b.ly%2Fx" "a@ww\u0323w[.]a-b[.]ly%2Fx"]
+                        ["x@Quart\u0489erly-pack.a_b.co" "x@Quart\u0489erly-pack[.]a_b[.]co"]
+                        ["re\u0301sume\u0301.md" "re\u0301sume\u0301[.]md"]]]
+      (is (= broken (text/defang s)) s)))
+  (testing "a mark that hides nothing stays, in an address too"
+    (is (= "hxxps://x[.]example/re\u0301sume\u0301" (text/defang "https://x.example/re\u0301sume\u0301")))))
+
+(deftest ordinary-text-with-marks-comes-out-as-written
+  (doseq [s ["cafe\u0301 au lait, nai\u0308ve re\u0301sume\u0301."          ; marks on Latin letters
+             "नमस्ते दुनिया।" ; Devanagari, vowel signs and a virama
+             "สวัสดีครับ"        ; Thai
+             "\u1112\u1161\u11ab\u1100\u116e\u11a8\u110b\u1165."                 ; Korean in conjoining jamo
+             "שָׁלוֹם, 10:30."               ; Hebrew with points, then a time
+             "1\ufe0f\u20e3 first, then todo.md"]]                             ; a keycap, and a file name beside it
+    (is (= s (text/defang s)) (pr-str s))))
+
+(deftest the-two-marks-that-draw-as-nothing-are-hidden
+  (doseq [n [0x1107F 0x1BC9D]]
+    (is (text/hidden? n) (format "U+%X" n))
+    (is (= (format "a\\u{%x}b" n) (text/visible (str "a" (cp n) "b"))))))
+
+(def gen-marked-word
+  "One word that tries to pass for an address, with one mark or two put
+  in at random places."
+  (gen/let [before (gen/elements ["" "" "(" "a@" "x:" "+" "_" "a.b:1" "see:"])
+            scheme (gen/elements ["" "" "https://" "http://" "HTTPS://" "https:" "https:/" "ftp://" "www." "ssh:" "feed:"])
+            labels (gen/vector (gen/elements ["evil" "secret" "x" "a1" "a-b" "a_b" "évil" "com" "www" "0x7f" "123"]) 1 3)
+            ending (gen/elements ["com" "co" "md" "sh" "txt" "pdf" "zip" "py" "in" "ly" "rs" "example"])
+            after (gen/elements ["" "" "/" "/a?b=c" "?q=1" "#f" ":80" "." "," ")" "@x" "%2Fx"])
+            marks (gen/vector (gen/elements ["\u0301" "\u0323" "\u0489" "\u1161" "\u20e3" "\ufe0f\u20e3"
+                                             (cp 0x1107F) (cp 0x1BC9D)])
+                              1 2)
+            places (gen/vector (gen/double* {:min 0 :max 1 :NaN? false :infinite? false}) 2)]
+    (reduce (fn [s [mark at]]
+              (let [i (int (* at (count s)))] (str (subs s 0 i) mark (subs s i))))
+            (str before scheme (str/join "." labels) "." ending after)
+            (map vector marks places))))
+
+(defspec a-marked-word-is-left-with-nothing-to-follow 2000
+  ;; relay#130. Judged by the test's own rule for what a reader skips.
+  (prop/for-all [word gen-marked-word]
+    (let [out (text/defang word)]
+      (and (not (followable? out))
+           (= out (text/defang out))))))

@@ -37,9 +37,11 @@
 
 (def renders-blank
   "Code points that are not default-ignorable but draw as an empty space
-  all the same: the braille blank, the musical null notehead, the Khitan
-  filler, and the Hangul fillers (default-ignorable too)."
-  #{0x2800 0x1D159 0x16FE4 0x115F 0x1160 0x3164 0xFFA0})
+  or as nothing all the same: the braille blank, the musical null
+  notehead, the Khitan filler, the Hangul fillers (default-ignorable
+  too), and two marks that are invisible by design, the Brahmi number
+  joiner and the Duployan thick letter selector."
+  #{0x2800 0x1D159 0x16FE4 0x115F 0x1160 0x3164 0xFFA0 0x1107F 0x1BC9D})
 
 (defn blank-glyph?
   "Whether a code point draws as nothing or as an empty space without
@@ -229,6 +231,66 @@
       (str/replace #"(?<=\S)[。．｡](?=\S)" "[.]")
       (str/replace #"(?<=[^\s\[])\.(?=[^\s\]])" "[.]")))
 
+(defn- break-word-schemes
+  "A word with its schemes broken: one before a ://, a web scheme written
+  short, and a scheme a link finder follows with no slashes at all."
+  [word]
+  (-> (break-schemes word)
+      ;; A web scheme written short, https:/x.example, https:x.example or
+      ;; https:\\x.example, which a link finder still follows.
+      (str/replace #"(?i)(?<![a-z0-9+.\-])(https?|ftp):(?=[/\\A-Za-z0-9])(?!//)"
+                   (fn [[_ scheme]]
+                     (case (str/lower-case scheme) "http" "hxxp:" "https" "hxxps:" "fxp:")))
+      ;; The schemes a terminal's link finder follows with no slashes
+      ;; after them (Ghostty's takes each of these), relay#126.
+      (str/replace slashless-scheme (fn [[_ scheme]] (str scheme "[:]")))))
+
+(def ^:private no-width
+  ;; A character with no width of its own that is not hidden?: a
+  ;; combining or enclosing mark, or a conjoining jamo, which draws on the
+  ;; letter before it. A link finder may read straight through one
+  ;; (Apple's follows https: + U+0301 + //x.example), or stop at one that
+  ;; relay's own patterns read through (a@ + U+0301 + x.example is no
+  ;; mail address to it, and it follows the host).
+  #"[\p{Mn}\p{Me}\x{1160}-\x{11FF}\x{D7B0}-\x{D7FF}]")
+
+(defn- break-plain-word
+  "A word that holds no character without width, with its links broken
+  and its file names, mail addresses and times left alone."
+  [word]
+  (let [word (-> (break-word-schemes word)
+                 (str/replace #"(?<=\S)[。．｡](?=\S)" "[.]"))]
+    (if (or (> (count word) longest-plain-word)
+            (str/includes? word "://") (str/includes? word "[:]")
+            ;; www after anything but a letter or a
+            ;; digit: a link finder follows _www.x.txt.
+            (re-find #"(?i)(?<![\p{L}\p{N}])www\." word)
+            (re-find #"(?i)(?<![a-z0-9+.\-])(?:hxxps?|fxp):(?=\S)" word))
+      (break-every-dot word)
+      (-> word
+          (str/replace #"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?![\w.])" break-dots)
+          (str/replace host-candidate
+                       (fn [[m at host after]]
+                         (if (host? at host after)
+                           (str at (break-dots host) after)
+                           m)))))))
+
+(defn- break-marked-word
+  "A word that holds a character without width (no-width), relay#130.
+  Nothing in it is taken for a file name or a mail address: every dot is
+  broken, since relay and a link finder read such a word differently and
+  nobody can say which way. Its schemes are judged twice, as written and
+  with those characters taken out. Where the two agree the word keeps
+  its marks, so an accented name reads as written but for its dots.
+  Where they differ a mark was hiding a scheme, and the word is shown
+  without its marks, broken as the address it spells."
+  [word]
+  (let [strict #(break-every-dot (break-word-schemes %))
+        bare #(str/replace % no-width "")
+        as-written (strict word)
+        as-read (strict (bare word))]
+    (if (= as-read (bare as-written)) as-written as-read)))
+
 (defn defang
   "Text with every link broken so it cannot be followed, and nothing
   else changed: http becomes hxxp, https hxxps and ftp fxp, any other
@@ -243,36 +305,17 @@
   Doc paths (projects/choir.md), times (08:06:36.382648Z) and amounts
   (12.50) are left as they are.
 
+  A word that holds a combining mark or a conjoining jamo gets none of
+  those exceptions: every dot in it is broken, and a scheme a mark was
+  hiding is broken with the mark taken out (break-marked-word).
+
   Hidden characters (hidden?) are not looked through: a caller that
   removes them must do so first, or a host split by one would come
   together again after this has looked at it."
   [s]
-  (-> (break-schemes (str s))
-      ;; A web scheme written short, https:/x.example, https:x.example or
-      ;; https:\\x.example, which a link finder still follows.
-      (str/replace #"(?i)(?<![a-z0-9+.\-])(https?|ftp):(?=[/\\A-Za-z0-9])(?!//)"
-                   (fn [[_ scheme]]
-                     (case (str/lower-case scheme) "http" "hxxp:" "https" "hxxps:" "fxp:")))
-      ;; The schemes a terminal's link finder follows with no slashes
-      ;; after them (Ghostty's takes each of these), relay#126.
-      (str/replace slashless-scheme (fn [[_ scheme]] (str scheme "[:]")))
-      (str/replace #"\S+"
-                   (fn [word]
-                     (let [word (str/replace word #"(?<=\S)[。．｡](?=\S)" "[.]")]
-                       (if (or (> (count word) longest-plain-word)
-                               (str/includes? word "://") (str/includes? word "[:]")
-                               ;; www after anything but a letter or a
-                               ;; digit: a link finder follows _www.x.txt.
-                               (re-find #"(?i)(?<![\p{L}\p{N}])www\." word)
-                               (re-find #"(?i)(?<![a-z0-9+.\-])(?:hxxps?|fxp):(?=\S)" word))
-                         (break-every-dot word)
-                         (-> word
-                             (str/replace #"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?![\w.])" break-dots)
-                             (str/replace host-candidate
-                                          (fn [[m at host after]]
-                                            (if (host? at host after)
-                                              (str at (break-dots host) after)
-                                              m))))))))))
+  (str/replace (str s) #"\S+"
+               (fn [word]
+                 (if (re-find no-width word) (break-marked-word word) (break-plain-word word)))))
 
 (defn contaminated?
   "Whether labels say an outsider may have written the text: contaminated,
