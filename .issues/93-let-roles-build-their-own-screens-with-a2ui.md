@@ -134,8 +134,9 @@ live links a client is sent; relay#109 and relay#110, two bugs in
 today's board; relay#115 and relay#116, on relay as a product;
 relay#117, what Proton Mail follows in relay's mail; relay#119, whether
 a link in text no outsider shaped is left as written, which is Kira's to
-decide after relay#118; and relay#120, a role's title that relay sends
-with its links whole.
+decide after relay#118; relay#120, a role's title that relay sends with
+its links whole; and relay#121, how far outside text is broken, which is
+also Kira's.
 
 ## Acceptance criteria
 

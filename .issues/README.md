@@ -17,6 +17,7 @@
 | [112](112-let-kira-put-a-surface-back-as-it-was.md) | Let Kira put a surface back as it was | feature | P2 |
 | [113](113-decide-how-tabs-pages-and-placement-work-above-the-board.md) | Decide how tabs, pages and placement work above the board | feature | P2 |
 | [119](119-decide-whether-a-link-in-text-no-outsider-shaped-is-left-as.md) | Decide whether a link in text no outsider shaped is left as written | feature | P2 |
+| [121](121-decide-how-far-outside-text-is-broken-file-names-that-are.md) | Decide how far outside text is broken: file names that are also hosts, and schemes that are not web addresses | feature | P2 |
 | [56](56-serve-the-board-over-http-and-sse-on-the-tailnet-for-a-web.edn) | Serve the board over HTTP and SSE on the tailnet for a web client | feature | P3 |
 | [59](59-keep-large-integers-exact-in-mcp-structured-results.md) | Keep large integers exact in MCP structured results | bug | P3 |
 | [60](60-let-relay-acp-start-agentloop-with-a-relative-data-path.edn) | Let relay acp start agentloop with a relative --data path | bug | P3 |

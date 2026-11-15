@@ -1,0 +1,11 @@
+{:id 121
+ :title "Decide how far outside text is broken: file names that are also hosts, and schemes that are not web addresses"
+ :status :inbox
+ :type :feature
+ :priority :p2
+ :created "2026-11-15"
+ :updated "2026-11-15"
+ :tags #{}
+ :blocked-by #{}
+ :related #{"relay#117" "relay#118" "relay#119"}
+ :details "121-decide-how-far-outside-text-is-broken-file-names-that-are.md"}
