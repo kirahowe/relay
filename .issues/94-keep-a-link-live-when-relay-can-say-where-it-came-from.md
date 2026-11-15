@@ -226,4 +226,24 @@ Codex review, read-only, threat model given:
   1,182 of 1,183 tests and the pentests 30 of 31, `s27-live-links`
   among them. The two that fail are relay#99's: Apple's container
   service is not running on this Mac.
+- 2026-11-14, Kira, asked whether to accept the change as it stood or
+  run a fourth Codex round: "yes I think your recommendation is
+  correct." The recommendation was to accept it. No fourth round.
+- 2026-11-14, after that: relay#95's review found that Ghostty's link
+  finder stops at an apostrophe, so `<https://example.org/o'brien>`
+  printed by `relay ready` would be followed as `https://example.org/o`.
+  Ghostty is the terminal Kira runs. Nothing private leaves that way, but
+  it is an address nobody took. With relay-34 and relay-32 I narrowed a
+  live link to what every common finder reads whole: after the host,
+  letters, digits and `- . _ ~ / ? # & = % : + @`, ending in a letter or
+  a digit, or a slash right after one. relay-tui draws a link as text
+  under the same rule. The cost: an address with a comma, an apostrophe
+  or a bracket, or one that ends in `=`, stays broken, and `relay link`
+  refuses it.
+- The final slash has to come right after a letter or digit. relay-tui's
+  rule allowed any final slash, and Apple's finder cut 66 of 291,850
+  such addresses (`.../a._/`). With the stricter ending it followed all
+  188,381 of 600,000 exactly. Only Apple's finder was run. Ghostty's was
+  checked by relay-34's reviewer from its matcher expression, and the
+  other terminals by reading their rules, not by running them.
 
