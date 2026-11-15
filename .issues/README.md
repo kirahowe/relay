@@ -39,6 +39,7 @@
 | [92](92-add-an-eval-case-that-makes-the-hub-use-roles-to-route.md) | Add an eval case that makes the hub use roles to route | feature | P3 |
 | [99](99-the-live-shell-test-fails-while-apple-s-container-service.md) | The live shell test fails while Apple's container service is stopped | bug | P3 |
 | [105](105-bound-what-relay-cards-answers-when-it-includes-archived.md) | Bound what _relay/cards answers when it includes archived cards | bug | P3 |
+| [108](108-bound-the-live-links-a-client-is-sent.md) | Bound the live links a client is sent | feature | P3 |
 
 ### In progress
 
