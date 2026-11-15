@@ -16,6 +16,7 @@
             [relay.log :as log]
             [relay.push :as push]
             [relay.ready :as ready]
+            [relay.render :as render]
             [relay.shown :as shown]
             [relay.text :as text]
             [relay.workspace :as workspace]))
@@ -191,6 +192,24 @@
       (is (every? #(or (str/starts-with? % fund) (not (str/starts-with? fund (str/replace % "…" ""))))
                   (re-seq #"https?://\S*" body))
           body))))
+
+(deftest wrapping-never-cuts-a-link-that-can-be-followed
+  ;; relay ready wraps at 60 columns and used to cut any longer word,
+  ;; which left the start of a long live link on a line of its own.
+  (let [long-link (str "https://grants.example.org/" (apply str (repeat 70 "a")) "/apply")
+        lines (render/wrap (str "Apply at " long-link " before June. " (apply str (repeat 90 "x"))) 60)]
+    (is (some #{long-link} lines) "the link is whole, on a line of its own")
+    (is (every? #(or (= long-link %) (<= (count %) 60)) lines))
+    (testing "a broken link is cut like any long word"
+      (is (every? #(<= (count %) 60) (render/wrap (text/defang (str "Apply at " long-link)) 60))))
+    (testing "the list of what is ready cuts an item short without leaving the start of a link"
+      (let [item {"id" "message:1" "kind" "message" "at" "2026-11-14T12:00:00Z" "seq" 1 "title" "Grants"
+                  ;; The list shows four lines and marks the last as cut short.
+                  "lines" ["one" "two" "three" long-link "five"]
+                  "from" nil "outsider" true "messageKind" "note" "urgency" "normal"}
+            out (render/ready [item] (java.time.ZoneId/of "UTC") (java.time.Instant/parse "2026-11-14T12:30:00Z"))]
+        (is (some #(str/ends-with? % " …") out) "an item was cut short")
+        (is (every? #(or (str/includes? % long-link) (not (re-find #"https?://" %))) out) (pr-str out))))))
 
 ;; --- properties
 

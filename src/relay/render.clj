@@ -481,9 +481,13 @@
 
 (defn wrap
   "`s` as lines of at most `width` characters, broken at spaces. A word
-  longer than the width is cut."
+  longer than the width is cut, unless it holds a link that can be
+  followed: a cut would leave the start of it, which is a different
+  address, so such a word runs past the width on a line of its own."
   [s width]
-  (let [words (mapcat #(map (partial apply str) (partition-all width %))
+  (let [words (mapcat #(if (re-find #"(?i)https?://" %)
+                         [%]
+                         (map (partial apply str) (partition-all width %)))
                       (remove str/blank? (str/split (str s) #"\s+")))]
     (loop [words words line nil out []]
       (if-let [w (first words)]
@@ -556,7 +560,13 @@
   "`line` with the mark that more was cut after it, within `width`."
   [line width]
   (let [l (str line " …")]
-    (if (<= (count l) width) l (str (subs line 0 (- width 2)) " …"))))
+    (if (<= (count l) width)
+      l
+      ;; A link the cut falls inside is broken, since what is left of it
+      ;; is a different address, and then cut again.
+      (let [room (- width 2)
+            safe (text/break-cut-word line (subs line 0 room))]
+        (str (if (> (count safe) room) (subs safe 0 room) safe) " …")))))
 
 (defn ready
   "What is ready, from the wire items (relay.ready/wire), as lines of at
@@ -599,7 +609,7 @@
                               (body lines (ready-lines-each it) (ready-ref it))
                               (when from (map #(str indent %) (wrap from room)))
                               (for [r (take-last 1 replies)]
-                                (str indent "You replied: " (let [t (get r "text")] (if (> (count t) 30) (str (subs t 0 29) "…") t))))
+                                (str indent "You replied: " (text/clip-shown (get r "text") 30)))
                               (when (and (get it "replyTo") (empty? replies))
                                 [(str indent "Reply: relay reply " (get it "replyTo") " -m \"...\"")])
                               (when-let [u (get it "undo")]
