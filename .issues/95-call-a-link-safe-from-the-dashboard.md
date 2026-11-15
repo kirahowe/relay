@@ -383,11 +383,59 @@ After part one landed, 2026-11-15:
   blocks inside an address, which relay keeps too; `mywww.txt` drawn
   with its dot broken where relay leaves it.
 
+- The `bb verify` below was the last on part one.
+
+Part two, 2026-11-15:
+
+- Built as relay-tui zykmxoqs (the list on `L`), xyoullmx (relay-tui's
+  half of relay#126) and kwxlsxtv (a surface card's links), on pmuovtok
+  (a card's links from relay's list alone), all over relay#100's
+  surface work, with relay's docs in murqutlq.
+- A live row is a link relay listed for the thing whose address is in
+  the set, drawn as a hyperlink to that address. A broken row is any
+  other broken http address in what the thing draws, read only to be
+  shown and sent back as shown to `_relay/links/keep`; it is never a
+  hyperlink. Judgment call, at the coordinating session's request: a
+  ready item's `outsider` flag is not asked, since relay's own daily
+  note can hold a line that drew on outside text, and a surface card's
+  rows come from the strings its surface draws.
+- Fixed on the way, older than part two: on a short screen a notice
+  above a tall draft could push the first row of the pane's question
+  (the archive question too) off the top while `y` still answered. It
+  was on trunk; it is fixed and pinned in zykmxoqs.
+- Review, a fresh read-only agent each time (Codex's quota is out):
+  1. Round 1, per commit. pmuovtok: nothing. zykmxoqs: the bar could
+     move to another link when relay sent the item again while a
+     question was open; on a small screen the question hid its link.
+     xyoullmx: a scheme stuck to a dot or hyphen was left whole, and a
+     wrap could drop characters. kwxlsxtv: the list read strings the
+     card does not draw (an obscured field's value among them) and its
+     test asked the code under test. All fixed.
+  2. Round 2: a long link still pushed its host and the question off a
+     small screen. Fixed by cutting the link's tail.
+  3. Round 3: a long host (a bank's name as another site's subdomain)
+     was cut before the site it belongs to. That was the third round on
+     the question to find something, so it went to Kira.
+- Kira's answer, of three options (never cut the host, refuse `y`
+  whenever any of the link is cut, land and file): "Never cut the host
+  (Recommended)". The question shows the link's whole host before any
+  of its path. Each frame says whether it showed the host and the words
+  that ask ("Keep it?", "Drop this link?"); one that did not look
+  counts as not, and core refuses a `y` to such a question beside one
+  pressed too soon, with a note to make the screen larger.
+- Round 4, on that rule: the question's words could scroll off a short
+  pane while the host and `y` showed. Fixed by checking the words too.
+  Round 5: nothing in scope; at 80x24 and above a `y` is always
+  allowed.
+- `bb verify` on relay-tui kwxlsxtv 940b0c03: agentloop, relay-tui,
+  webtool, eventkit, catalog and fuzz pass; relay 1224 of 1225 and the
+  pentest 30 of 31, the misses relay#99's as before; s27 passes.
+
 Still to do:
 
-1. Part two: the list on `L` reads the `links` field (relay-tui, in
-   work), with relay-tui's half of relay#126, relay's docs for the list,
-   and a review loop of its own.
+1. When relay#130 lands: rebase, run the "drawn as sent" property over
+   its sweep lines, and land part two after the coordinating session
+   has read it.
 2. Tick the last three criteria with receipts and move this to review.
 - `bb verify` on 2026-11-15 with relay-tui at vywmmpxm 13c740c5, on
   relay's trunk with relay#118 in it: agentloop, relay-tui, webtool,
