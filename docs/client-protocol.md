@@ -392,6 +392,21 @@ the session's labels say an outsider may have shaped it
 (`agentloop/labels`), and can make a hyperlink of the ones `_relay/links`
 names.
 
+Before it breaks them, the client takes every hidden character out of
+that text, and it does so first. A link breaker goes by letters, so a
+zero-width joiner inside `://` or `www.` hides the link from it, and a
+terminal's link finder may read straight past the same character. Taken
+out first, the pieces come together and the breaker is given the word a
+terminal would read. What is hidden is what `relay.text/hidden?` names:
+controls, format characters, private use and unassigned code points,
+the line and paragraph separators, and anything that draws as nothing
+or as an empty space. Two things are kept, as `relay.text/sanitize`
+keeps them: the joiner or variation selector that holds an emoji
+together (`emoji-glue?`), and a line or paragraph separator, which
+becomes a line break. This is every client's to do until relay makes
+conversation text safe itself (relay#104). relay-tui: `core.DropHidden`,
+with relay's own cases for the emoji rule in its tests.
+
 A prompt's text is cleaned before the agent sees it: the text of text
 blocks, embedded resources (`text` and `uri`) and resource links. Image and
 blob data are not touched. When something changed, relay sends the
