@@ -381,3 +381,25 @@ commit before it (`zlxzyztx`, digest `7b791ddf4506`) Opus failed the same
 four cases (`20261028T155829Z-b943`) and Haiku scored close-only-handled
 and no-internals-to-operator 1/3 each (`20261028T155935Z-3890`). They
 arrived between B12b and relay#37 and are filed as their own issue.
+
+## Surfaces, a fourth kind of card (relay#97, 2026-11-15)
+
+The card tools' descriptions and the board section of the role
+instructions now cover surfaces. Prompt digest `0a511b158ba0`, relay
+`uqlnywmt` (`a4471d83d773`, the empty change on `nlyokvuo`), agentloop
+`wrpuxzyz` (`6dd30f4f72ab`, the empty change on main, `62724841`). Only
+the two cases that involve the board were run, on Haiku at effort low.
+
+- look-ahead-offers-interview-help: `20261115T042343Z-8b55` 3/3.
+- grant-digest-skips-the-board: the same run, 0/3, each on
+  `skips-what-the-board-has`. The digest repeats the board's grants with
+  their deadlines, which is the limitation recorded above. Six more
+  trials, `20261115T043419Z-f965`: 1/6.
+- The same case on the commit this change sits on (`tuzooksz`, digest
+  `e70820025ed4`), `20261115T043305Z-e9f1`: 0/6, the same graders
+  failing. So the case is no worse for this change. It was already
+  below the 1/3 recorded on 2026-10-18.
+
+Every wake ran, so the model's API takes the new tool schemas, in which
+`card_op`'s `value` has no type and `components` is a list of objects.
+No case asks a role to build a surface yet. That is relay#101.
