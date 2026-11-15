@@ -54,7 +54,6 @@
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
-| [98](98-decide-what-a-button-on-a-role-built-screen-may-do.md) | Decide what a button on a role-built screen may do | feature | P1 |
 | [96](96-draw-a2ui-surfaces-in-relay-tui.md) | Draw A2UI surfaces in relay-tui | feature | P2 |
 
 ### Blocked
@@ -98,6 +97,7 @@
 | [79](79-review-what-the-operator-consents-to-on-a-screen-of-its-own.md) | Review what the operator consents to on a screen of its own, with text relay made | feature | P1 |
 | [88](88-install-relay-through-homebrew-and-remove-bb-deploy.md) | Install relay through Homebrew and remove bb deploy | feature | P1 |
 | [89](89-read-the-mac-calendar-and-manage-reminders-through.md) | Read the Mac calendar and manage reminders through ingestors and an actuator | feature | P1 |
+| [98](98-decide-what-a-button-on-a-role-built-screen-may-do.md) | Decide what a button on a role-built screen may do | feature | P1 |
 | [3](3-run-agentloop-s-live-smoke-tests-from-a-flag-not-an-env-var.md) | Run agentloop's live smoke tests from a flag, not an env var | chore | P2 |
 | [5](5-support-reminder-sections-in-rem.md) | Support reminder sections in rem | feature | P2 |
 | [7](7-add-bb-deploy-and-bb-rollback-for-kira-to-run.md) | Add bb deploy and bb rollback for Kira to run | feature | P2 |

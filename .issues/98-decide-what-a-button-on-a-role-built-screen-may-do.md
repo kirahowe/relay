@@ -47,8 +47,8 @@ Kira, 2026-11-14, asked in the relay#93 session:
 She chose this over two narrower rules: relay's own functions only, where
 no press ever starts a turn, and no buttons at all.
 
-What follows for relay#97. These readings are mine, and Kira may overrule
-them:
+What follows for relay#97. These readings are mine. Kira read them on
+2026-11-14 and said they are fine:
 
 - In A2UI v1.0 a Button's `action` is an `event` or a `functionCall`. An
   `event` is the press that tells the role. A `functionCall` has to name a
@@ -82,3 +82,6 @@ them:
 - 2026-11-14: asked Kira in the relay#93 session, with a mock of the same
   checklist under each of three rules, and a second question on the form
   for adding an agent. Her answers are under Decision.
+- 2026-11-14: Kira read the five readings under Decision, said they are
+  fine, and said the issue is good to close. relay#106 builds buttons on
+  them.
