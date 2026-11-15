@@ -28,7 +28,8 @@
 -- world time and are recorded at a moment of real time, notes and a journal
 -- for each role, and docs. It also keeps the operator's board: cards the
 -- operator works through over days, which roles and the operator change
--- with ops.
+-- with ops. A card is one of three fixed kinds, or a surface, which a
+-- role lays out itself from relay's catalog.
 --
 -- Every event carries labels, private and contaminated, saying where the
 -- text in it came from. A role's session gathers the labels of what it
@@ -385,7 +386,7 @@ enum FactChange { added | superseded | corrected | retracted }
 enum CalendarChange { added | changed | removed }
 enum MoveStatus { moving | moved }
 enum ReminderCallStatus { changing | changed | failed }
-enum CardKind { checklist | tracker | note }
+enum CardKind { checklist | tracker | note | surface }
 enum CardStatus { active | archived }
 enum CellState { open | done | skip }
 
@@ -1118,6 +1119,7 @@ entity Card {
     -- Cells that are not open, by row and column. A cell not listed is open.
     cells: Set<Cell> when kind = tracker
     note: CardText when kind = note
+    surface: Surface when kind = surface
 
     -- The next id for each kind of element. Ids are never reused, and
     -- decide assigns them and writes them into the event.
@@ -1132,8 +1134,46 @@ entity Card {
 
     -- What reading the card adds: private, and the labels of the text it
     -- shows now. Ticks, cell states, archive and restore carry no text,
-    -- so they add none.
+    -- so they add none. Neither does the operator's input on a surface.
     labels: {private} + title.labels + items.labels + rows.labels + columns.labels + note.labels
+            + surface.labels
+}
+
+-- A screen a role lays out for the board, in A2UI v1.0: components from
+-- relay's catalog (Text, Row, Column, List, Card, Divider, CheckBox) and
+-- the data they read. A component reads the data through a path, a text
+-- may fill spots from it with formatString, and a container may draw one
+-- child for each item of a list in the data. relay resolves all of that
+-- itself before anyone is shown the surface, so every string it shows is
+-- one it made safe whole.
+value Surface {
+    -- A flat list, one tree under the component with the id root.
+    components: List<SurfaceComponent>
+    -- What the components read, as JSON text. black box: an object of
+    -- text, whole numbers, true and false, lists and objects, with keys
+    -- of letters, digits, _ and - (relay.surfaces/data!).
+    data: String
+
+    -- Labels are kept for each of the two parts, not for each string: a
+    -- path into a list is a position, and labels keyed by position would
+    -- move when the list did. Replacing a part whole replaces its labels;
+    -- a write to one path of the data adds the writer's.
+    component_labels: Set<Label>
+    data_labels: Set<Label>
+    labels: component_labels + data_labels
+}
+
+value SurfaceComponent {
+    -- Letters and digits with single underscores between them. relay
+    -- puts two underscores and an item's position after the id of a
+    -- component a list draws, so the two never collide.
+    id: String
+    -- One of the catalog's seven.
+    component: String
+    -- black box: only the properties its type takes, each text, true or
+    -- false, a path into the data, a formatString or @index call, or
+    -- the ids of its children (relay.surfaces/components!).
+    properties: Map<String, String>
 }
 
 value CardText {
@@ -1312,6 +1352,23 @@ config {
     max_checklist_items: Integer = 100
     max_tracker_rows: Integer = 40
     max_tracker_columns: Integer = 24
+    -- A surface: its components as written and once its lists are
+    -- drawn, how deep they nest, the items of one list, and the
+    -- characters of one string. Each is within what relay-tui draws.
+    max_surface_components: Integer = 200
+    max_surface_drawn: Integer = 1000
+    max_surface_depth: Integer = 12
+    max_surface_list: Integer = 200
+    surface_text_length: Integer = 8000
+    -- All of a surface's strings together, once it is resolved, and
+    -- the bytes it comes to as a client is sent it. Both are checked
+    -- with every box unticked, the surface at its longest.
+    surface_shown_length: Integer = 16000
+    surface_sent_bytes: Integer = 128000
+    -- Its components and data together, as JSON, shown or not, and the
+    -- times a draw may read the data.
+    surface_written_length: Integer = 64000
+    max_surface_reads: Integer = 20000
 }
 
 ------------------------------------------------------------
@@ -4060,10 +4117,11 @@ rule RemoveDoc {
 -- It is refused when the text it changes was written after that rev, so
 -- a stale edit never overwrites a newer one. A seen past the card's
 -- rev is refused: no client can have read it. Ticks and cell states are
--- last writer wins.
+-- last writer wins. A surface's own ops must carry seen, and it must be
+-- the card's rev (ChangeSurface).
 
 rule AddCard {
-    when: CardAddRequested(caller, kind, title, items, rows, columns, text)
+    when: CardAddRequested(caller, kind, title, items, rows, columns, text, components, data)
 
     requires: caller.is_operator or (caller.is_role and not caller.is_public)
     requires: Cards.count(c => c.status = active) < config.max_active_cards
@@ -4076,6 +4134,14 @@ rule AddCard {
                                       and columns.count <= config.max_tracker_columns)
     requires: kind = note implies (items = null and rows = null and columns = null
                                    and text.length <= config.card_note_length)
+    -- Only a surface takes components and data, and it takes nothing
+    -- else. They must be in relay's catalog and drawable within the
+    -- limits, or nothing is recorded and the refusal says what to change.
+    requires: kind != surface implies (components = null and data = null)
+    requires: kind = surface implies (items = null and rows = null and columns = null and text = null
+                                      and in_catalog(components)        -- black box: relay.surfaces/components!
+                                      and is_surface_data(data)         -- black box: relay.surfaces/data!
+                                      and drawable(components, data))   -- black box: relay.surfaces/drawn
 
     ensures: Card.created(
         kind: kind,
@@ -4117,6 +4183,48 @@ rule ChangeCard {
         -- the next number, written into the op.
 }
 
+-- A surface's own ops. components replaces every component. data writes
+-- one path of the data model, removes what is there when the value is
+-- null, and adds to a list when the path ends in -. input is the
+-- operator's: it sets the value a CheckBox is bound to, and nothing else
+-- on a surface can be changed that way.
+rule ChangeSurface {
+    when: SurfaceOpRequested(caller, card, op)
+
+    requires: caller.is_operator or (caller.is_role and not caller.is_public)
+    requires: card.kind = surface and card.status = active
+    -- A path into a list is a position, so an op made against an older
+    -- rev could name another item. It is refused instead.
+    requires: op.seen = card.rev
+    requires: op.name = components implies in_catalog(op.components)
+    requires: op.name = data implies writable(card.surface.data, op.path, op.value)   -- black box: relay.surfaces/written
+    -- A box is bound only where the data already holds true or false,
+    -- so an input puts one of the two where the other was.
+    requires: op.name = input implies (card.surface.binds_checkbox_at(op.path)        -- black box: relay.surfaces/drawn
+                                       and is_boolean(op.value))
+    -- Whatever is recorded can be drawn within the limits in config.
+    -- The limits are checked on the surface with every box unticked, so
+    -- an input, which changes nothing about that, is never refused by
+    -- one.
+    requires: op.name = input or drawable_after(card.surface, op)
+    requires: op.changes(card)
+
+    ensures: card.rev = now_seq
+    ensures:
+        if op.name = components:
+            card.surface.component_labels = caller.session_labels
+        else if op.name = data and op.path = "/":
+            card.surface.data_labels = caller.session_labels
+        else if op.name = data:
+            card.surface.data_labels = card.surface.data_labels + caller.session_labels
+
+    @guidance
+        -- An input carries true or false and no text, so it adds no
+        -- labels, whoever sends it, and like a tick it wakes no role.
+        -- Folding a recorded op never refuses: a surface another relay
+        -- recorded under other limits is shown as one relay cannot draw.
+}
+
 rule ReadCard {
     when: CardRead(caller, card)
 
@@ -4133,6 +4241,14 @@ rule ReadCard {
         -- A client is sent each card's wire form: every text field made
         -- visible, with its links broken and outsider set when
         -- contaminated. No text is stamped.
+        -- A surface is shown as relay resolved it. Each of its strings
+        -- is made safe with the labels of the whole surface: while
+        -- either part holds an outsider's, every link in it is broken,
+        -- one that formatString joined from pieces included. A client is sent it as one A2UI createSurface with
+        -- final strings, the paths the operator's inputs write, and a
+        -- data model holding only the values at those paths. A role that
+        -- reads one surface is also shown its components and data as
+        -- written.
 }
 
 ------------------------------------------------------------

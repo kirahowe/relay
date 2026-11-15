@@ -1116,12 +1116,15 @@ browsing. Nothing reads an export back.
 A card is a small structured thing on your board that you work through
 over days, or a status worth a glance. Roles make them, mostly the steward,
 and you change them from the command line or a client's pane. There are
-three kinds, and the set is closed:
+four kinds. Three have a fixed meaning:
 
 - a checklist: items, each done or not
 - a tracker: rows and columns, each cell open, done or skip, such as
   accounts by month
 - a note: one text of up to 8000 characters
+
+The fourth is a surface, which the role that makes it lays out itself
+(see Surfaces).
 
 There is one board, and every active card is on it, at most 30 at once.
 A card's id is the seq of the event that added it. Its items, rows and
@@ -1180,6 +1183,89 @@ Card 1840: Catch up monthly financials (tracker, 6 of 24 done, rev 1842) [[card:
 Columns: 1 Jun, 2 Jul, 3 Aug, 4 Sep
 Row 1 BMO: Jun done, Jul done, Aug open, Sep open
 Row 2 RBC: all open
+```
+
+#### Surfaces
+
+When none of the three kinds fits, a role lays a card out itself. That
+card is a surface. It is written in [A2UI](https://a2ui.org) v1.0, an
+open format in which an agent describes a screen and a client draws it.
+The role gives relay two things: components, a flat list in which each
+names its children, and the data they read.
+
+relay takes components from its own catalog and nothing else: Text, Row,
+Column, List, Card, Divider and CheckBox, each with only the properties
+a terminal can draw. There is no button, picture or text field.
+`resources/a2ui/relay_catalog.json` holds the catalog as A2UI writes
+one, and a role reads it in words with its `cards` tool. A surface that
+holds anything else is refused with what to change, and nothing is
+recorded.
+
+A component reads the data through a path (`{"@path": "/items/0/text"}`),
+a text can fill spots from it with `formatString`, and a list can draw
+one child for each item of a list in the data. relay does that reading
+itself, before it shows the surface to anyone, so the check runs on the
+words you read: hidden characters are shown escaped, and in a surface an
+outsider may have shaped, every link is broken, even one that
+`formatString` joins from pieces. A client is sent the finished
+strings and the paths your ticks write, and none of the role's data.
+
+The one thing you can change on a surface is a CheckBox bound to the
+data. Ticking it is an op, `input`, with the box's path and `true` or
+`false`. It carries no text, so it adds no labels, and like any change
+to a card it wakes no role. A role changes its surface with `data`,
+which writes one path of the data (`null` removes what is there, and a
+path ending in `/-` adds to a list), and with `components`, which
+replaces them all.
+
+`input`, `data` and `components` each need `seen` and are refused
+unless it is the card's rev now. A path into a list is a position, and
+against an older rev it could name another item. The refusal does not
+say which rev the card is at, so the card has to be read again. `retitle`, `archive`
+and `restore` name no path, so they follow the rules of any card.
+
+A surface keeps labels for its components and for its data, not for
+each string. Replacing all of one part resets that part's labels, and a
+write to one path of the data adds the writer's. While either part
+holds an outsider's, all of the surface's text is treated as outside
+text.
+
+A surface has at most 200 components, 1,000 once its lists are drawn,
+nested 12 deep, with 200 items in a list, 8,000 characters in a text and
+16,000 in all. Its components and data together are at most 64,000
+characters of JSON, whether shown or not, since a role that reads the
+card is handed all of it. As a client is sent it, it is at most 128,000
+bytes, so a full board always fits in one message. Numbers in the data
+are whole numbers, and its keys are letters, digits, `_` and `-`. A path
+to a list or an object reads as nothing in a text. A write makes a key
+that is missing on its way but never a list, so `/list/-` needs the
+list to be there.
+
+A box can be bound only where the data already holds true or false, so
+a tick swaps one for the other and nothing else. relay checks every
+limit with the boxes unticked, when a surface is at its longest, so a
+tick is never refused by one.
+
+```
+relay card add surface --title "Lake weekend" --surface trip.json
+relay card 1860
+relay card 1860 input --path /items/1/done --value true --seen 1860
+relay card 1860 data --path /items/- --value '{"text": "Stove", "done": false}' --seen 1861
+relay card 1860 components --surface layout.json --seen 1862
+```
+
+`trip.json` holds `{"components": [...], "data": {...}}`, and
+`layout.json` only `{"components": [...]}`, since `components` leaves
+the data as it is. A surface
+prints as relay resolved it, every line behind the gutter, with the
+path of each box you can tick:
+
+```
+Card 1860: Lake weekend (surface, rev 1862) [[card:1860]]
+  │ For Saturday. Tick what is in the car.
+  │ ---
+  │ [x] Tent and stakes  /items/0/done
+  │ [ ] Sleeping bags  /items/1/done
 ```
 
 ### Settings
