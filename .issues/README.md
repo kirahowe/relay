@@ -26,7 +26,6 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [90](90-find-what-dropped-four-regression-cases-since-b12b.md) | Find what dropped four regression cases since B12b | bug | P1 |
-| [98](98-decide-what-a-button-on-a-role-built-screen-may-do.md) | Decide what a button on a role-built screen may do | feature | P1 |
 | [38](38-stop-the-hub-notifying-twice-for-one-stuck-memo.md) | Stop the hub notifying twice for one stuck memo | bug | P2 |
 | [57](57-make-hidden-characters-visible-in-card-text-that-roles-and.md) | Make hidden characters visible in card text that roles and resolve get | bug | P2 |
 | [61](61-fork-acp-go-sdk-and-decode-with-encoding-json-v2.md) | Fork acp-go-sdk and decode with encoding/json/v2 | feature | P2 |
@@ -44,6 +43,12 @@
 | [93](93-let-roles-build-their-own-screens-with-a2ui.md) | Let roles build their own screens with A2UI | feature | P1 |
 | [94](94-keep-a-link-live-when-relay-can-say-where-it-came-from.md) | Keep a link live when relay can say where it came from | feature | P1 |
 | [96](96-draw-a2ui-surfaces-in-relay-tui.md) | Draw A2UI surfaces in relay-tui | feature | P2 |
+
+### Review
+
+| ID | Title | Type | Priority |
+| --- | --- | --- | --- |
+| [98](98-decide-what-a-button-on-a-role-built-screen-may-do.md) | Decide what a button on a role-built screen may do | feature | P1 |
 
 ### Blocked
 

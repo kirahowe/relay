@@ -1,6 +1,6 @@
 {:id 98
  :title "Decide what a button on a role-built screen may do"
- :status :ready
+ :status :review
  :type :feature
  :priority :p1
  :created "2026-11-14"
