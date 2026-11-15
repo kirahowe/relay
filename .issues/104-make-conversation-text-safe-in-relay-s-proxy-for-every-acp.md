@@ -34,9 +34,11 @@ holding back a partial last word from one chunk to the next.
 Conversation text is sent inert, with every link broken. The live links
 it holds travel as data beside it in the update's `_meta`: `links` as
 `{"address", "shown"}` with `linksLeftOut`, as on a card (relay#118).
-Every client draws what it gets. relay-tui then stops
-breaking conversation links itself, which settles the question left
-open at the end of relay#95's proposal.
+Every client draws what it gets. For a session that comes through
+relay, relay-tui stops reading addresses out of conversation text, and
+its own breaker stays as a second line, which changes nothing in text
+relay has already broken. That settles the question left open at the
+end of relay#95's proposal.
 
 Added by the coordinating session on 2026-11-15: a client that draws
 text itself and not through a terminal, such as the Mac client, should
