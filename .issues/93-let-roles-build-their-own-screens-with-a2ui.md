@@ -100,6 +100,16 @@ The coordinating session's, 2026-11-14, and Kira may overrule them:
   surfaces
 - relay#106 Put buttons on role-built surfaces by Kira's rule
 - relay#107 Let Kira fill in a form a role built
+- relay#111 Keep a new surface in the conversation until Kira pins it
+- relay#112 Let Kira put a surface back as it was
+- relay#113 Decide how tabs, pages and placement work above the board
+- relay#114 Let a surface show relay's own data without the role
+  rewriting it
+
+relay#111, relay#113 and relay#114 each wait on a decision of Kira's.
+relay#111 questions a decision recorded above: the coordinating session
+has a surface on the board from the start, and the relay-macos session
+reads Kira as wanting it kept in the conversation until she pins it.
 
 The order of building: relay#97 and relay#100 first, with a catalog that
 shows things and takes ticks. Buttons next (relay#106), then forms
@@ -163,3 +173,8 @@ answer to `_relay/cards` that grows with the archive.
   relay#101, which now holds it. The other is relay#105. Buttons and
   forms had no issue, so I filed relay#106 and relay#107 as parts, and
   moved the form for adding an agent from relay#101 to relay#107.
+- 2026-11-14: the relay-macos session, where Kira is talking through the
+  Mac app, sent four more parts (relay#111 to relay#114) and two issues
+  about relay as a product (relay#115 on secrets, relay#116 on the
+  threat model). Kira told that session to file what was relevant.
+  relay#98 is done.

@@ -13,6 +13,9 @@
 | [81](81-tell-every-connection-a-request-was-settled-after-a-detach.md) | Tell every connection a request was settled after a detach and a race | bug | P2 |
 | [82](82-read-the-log-s-decimals-exactly.md) | Read the log's decimals exactly | bug | P2 |
 | [91](91-decide-what-consent-means-for-acp-clients-that-do-not.md) | Decide what consent means for ACP clients that do not declare relay/review | feature | P2 |
+| [111](111-keep-a-new-surface-in-the-conversation-until-kira-pins-it.md) | Keep a new surface in the conversation until Kira pins it | feature | P2 |
+| [112](112-let-kira-put-a-surface-back-as-it-was.md) | Let Kira put a surface back as it was | feature | P2 |
+| [113](113-decide-how-tabs-pages-and-placement-work-above-the-board.md) | Decide how tabs, pages and placement work above the board | feature | P2 |
 | [56](56-serve-the-board-over-http-and-sse-on-the-tailnet-for-a-web.edn) | Serve the board over HTTP and SSE on the tailnet for a web client | feature | P3 |
 | [59](59-keep-large-integers-exact-in-mcp-structured-results.md) | Keep large integers exact in MCP structured results | bug | P3 |
 | [60](60-let-relay-acp-start-agentloop-with-a-relative-data-path.edn) | Let relay acp start agentloop with a relative --data path | bug | P3 |
@@ -21,6 +24,9 @@
 | [80](80-fix-the-labels-test-property-that-fails-on-seed.md) | Fix the labels-test property that fails on seed 1792892445485 | bug | P3 |
 | [87](87-list-the-pane-s-keys-in-the-help-overlay.md) | List the pane's keys in the help overlay | feature | P3 |
 | [102](102-decide-whether-checklist-tracker-and-note-become-built-in.md) | Decide whether checklist, tracker and note become built-in surfaces | feature | P3 |
+| [114](114-let-a-surface-show-relay-s-own-data-without-the-role.md) | Let a surface show relay's own data without the role rewriting it | feature | P3 |
+| [115](115-replace-relay-s-long-lived-secrets-with-short-lived-grants.md) | Replace relay's long-lived secrets with short-lived grants | feature | P3 |
+| [116](116-write-the-threat-model-for-relay-as-something-other-people.md) | Write the threat model for relay as something other people install | feature | P3 |
 
 ### Ready
 
