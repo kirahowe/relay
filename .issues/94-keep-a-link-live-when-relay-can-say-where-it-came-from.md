@@ -94,7 +94,11 @@ its links broken.
   - Receipt: zlxwuxkm "Describe live links for Kira, roles and clients",
     and the pentest list in yxslrllw.
 - [ ] `bb verify` passes.
+  - It passes but for relay#99's two tests, which need Apple's container
+    service and fail on the baseline too. See the Log.
 - [ ] An adversarial Codex review finds nothing in scope.
+  - Three rounds, twelve findings, all fixed; no clean round. With Kira,
+    per AGENTS.md. See the Log.
 
 ## Plan
 
@@ -196,4 +200,30 @@ Codex review, read-only, threat model given:
   5. The web's text was split at a pipe, so the start of a longer
      address counted as shown. It is now split only where Apple's finder
      stops.
+- Round 3, 2026-11-14: three findings, all in scope, all fixed. The
+  rule in AGENTS.md is that a third round which still finds something
+  goes to Kira, so no fourth round was run.
+  1. Apple's finder dropped the last `]` of `<https://x/?q=[[1,2]]>`. I
+     fuzzed it to find the whole class: 400,000 random addresses between
+     angle brackets, with text before and after. Every one it followed
+     differently held a bracket, or had a full stop, comma, semicolon or
+     exclamation mark after its last letter or digit. `relay.text/link?`
+     now admits neither, and of the 203,013 addresses of that shape the
+     finder followed all exactly. The check is in the repo as
+     `scripts/link-finder-fuzz.swift`.
+  2. A soft hyphen or a zero-width joiner after an address in the web's
+     text was taken for its end, and Apple's finder takes both into the
+     address. The web's text is now split only at a space, a tab, a line
+     break and `< > " { }`, so an address a hidden character runs into is
+     no address.
+  3. `relay links` and the answer to `relay link drop` showed a dropped
+     link whole. Both show it broken now.
+- A second session (relay-c3) read the whole diff independently and found
+  no in-scope defect. It did find that `relay link drop` refused a live
+  link pasted with its angle brackets, fixed in vpolxxoz.
+- `bb verify`, run by this session and again by relay-c3 on the same
+  chain: agentloop, relay-tui, webtool and eventkit pass; relay passes
+  1,182 of 1,183 tests and the pentests 30 of 31, `s27-live-links`
+  among them. The two that fail are relay#99's: Apple's container
+  service is not running on this Mac.
 
