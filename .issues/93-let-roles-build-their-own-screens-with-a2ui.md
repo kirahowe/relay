@@ -206,3 +206,9 @@ link breaker.
   is a part. It took over the half of relay#117 about a push. Kira
   answered relay#117's questions here: she reads relay's mail in Proton
   Mail on her phone, and she left how a push looks to the session.
+- 2026-11-15: Kira told the relay#97 session that the user should not
+  have to know anything about how surfaces work, and that the agent
+  decides what makes sense and acts as the designer. That session
+  recorded it in relay#101, with its own undecided proposal of a
+  designer role the steward consults, and her always-on UX agent as
+  later work, since she said most users will not need it.
