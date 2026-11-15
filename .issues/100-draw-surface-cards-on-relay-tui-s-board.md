@@ -25,50 +25,126 @@ The session that built relay#96 builds this.
 ## Acceptance criteria
 
 Tightened on 2026-11-14 against the wire form relay#97 fixed
-(`docs/client-protocol.md`, "A surface card").
+(`docs/client-protocol.md`, "A surface card"), and again on 2026-11-15
+where the reviews and the contract moved a rule. The receipts name tests
+in relay-tui at plulklqq 9d24c5f7, the tip of ten commits on its
+`integration` (kxsoqlxu c1716fc8).
 
-- [ ] relay-tui reads a card of kind `surface` from `_relay/cards` and
+- [x] relay-tui reads a card of kind `surface` from `_relay/cards` and
   `_relay/cards/changed` as the contract gives it, and folds
   `surface.a2ui` from nothing each time the card arrives.
-- [ ] The board draws a surface card in a panel with the other cards, at
+  - Receipt: `TestTheContractsSurfaceCardIsNative`,
+    `TestRelaysSurfaceFixtureCardsAreNative` (relay#97's three fixture
+    cards) and the round trip in `TestWireFormRoundTrip`, in
+    `internal/wire`.
+- [x] The board draws a surface card in a panel with the other cards, at
   any pane width: Text, Row, Column, List, Card, Divider and CheckBox,
   the whole of relay's catalog. A Card at the root has no frame of its
-  own, since the panel is one. Text and a CheckBox's label are dressed as
-  a note card's text is and no further.
-- [ ] A surface relay sends again in `_relay/cards/changed` is redrawn,
+  own, since the panel is one. A Text is dressed as a note card's text
+  is and no further, and text an outsider may have written is drawn as
+  sent, with no dressing.
+  - Receipt: goldens `surface`, `surface_detail` and `surface_outside`
+    of `TestBoardGolden`; `TestSurfaceCardsGolden`;
+    `TestSurfaceRowsRootCardHasNoFrame`; `TestSurfaceRowsDressText`;
+    `TestSurfaceRowsDoNotDressAnOutsidersText`.
+  - Receipt: width: `TestBoardNeverEmitsRawControls` draws surface cards
+    at random widths, and `TestSurfaceRowsLoseNothingAtOrAboveTheirLeast`
+    says a drawing no narrower than the surface's narrowest only wraps.
+- [x] A surface relay sends again in `_relay/cards/changed` is redrawn,
   and an archived one leaves the board.
-- [ ] A surface relay-tui cannot draw in full shows the card's text form
+  - Receipt: `TestHubTicksASurfaceCardsBox` (the answer redraws the
+    box); `TestAnotherClientsTickThatChangesTheCaptionSendsTheCursorToTheTitle`
+    (a notification replaces the card). Leaving the board when archived
+    is the board's own rule for every kind, `TestBoardEditAndNotifications`.
+- [x] A surface relay-tui cannot draw in full shows the card's text form
   and takes no input: one that does not fold, holds a component outside
-  the catalog, names a child that is not there, or still holds a call, a
-  template or a binding anywhere but a CheckBox's value.
-- [ ] The renderer breaks no link itself. Every string of a surface goes
+  the catalog, names a child that is not there, reaches a component
+  twice or not at all, or still holds a call, a template or a binding
+  anywhere but a CheckBox's value.
+  - Receipt: `TestResolvedRejects` and the two properties in
+    `internal/a2ui/resolved_property_test.go`;
+    `TestABrokenSurfaceCardShowsItsText` (twelve cases) and
+    `TestAWronglyTypedSurfaceMemberKeepsTheCardInItsTextForm` in
+    `internal/wire`; golden `surface_text`.
+  - Receipt: `TestSurfaceRowsOfAResolvedSurface`: a surface that passes
+    the check draws with no placeholder.
+- [x] The renderer breaks no link itself. Every string of a surface goes
   through relay#95's functions with the surface's `outsider` flag and
   the connection's live links, every row of an outsider's surface goes
   through the board's last check on drawn rows, and no two strings of a
   surface are drawn on one line with nothing between them.
-- [ ] In an open card the keys move between the CheckBoxes whose value is
+  - Receipt: a surface's strings are cases of relay#95's own properties,
+    `TestOutsideTextIsDrawnAsItWasSent` and
+    `TestNothingFromOutsideIsFollowedButALiveLink`;
+    `TestSurfaceCardsHostileKeepsOneLink`;
+    `TestSurfaceRowsKeepTwoColumnsBetweenChildren`.
+- [x] In an open card the keys move between the CheckBoxes whose value is
   bound to a path, and the key that ticks a checklist item sends `input`
   with that path, the new value and the card's rev as `seen`. The board
   draws the card relay answers with and never its own write first. A
   CheckBox with a literal value cannot be selected.
-- [ ] When relay's newer copy of an open surface moves or removes the
-  CheckBox the cursor was on, the cursor follows it or the board says it
-  has gone, as for a checklist item.
-- [ ] relay's refusal of an input is shown as relay wrote it.
-- [ ] relay-tui's `relay_catalog.json` is relay's
+  - Receipt: `TestTickingAnInputSendsTheInputOpAndWaits`,
+    `TestALiteralCheckBoxIsNotALine`,
+    `TestAnInputOpsParamsAreExactlyTheContractsFive`; end to end
+    `TestHubTicksASurfaceCardsBox` and `TestBoardTicksASurfaceCard`.
+- [x] The cursor is on a box only where the operator put it. It stays
+  there across relay's answer to the operator's own tick and across a
+  copy with the same components. Anything else that replaces the card,
+  a restart, or a refusal that opens another card leaves the cursor on
+  the title, where the key that ticks does nothing, and the board says
+  when the boxes changed.
+  - Receipt: `TestTheCursorStaysOnABoxWhileTheListOfBoxesIsTheSame`,
+    `TestAChangedListOfBoxesSendsTheCursorToTheTitle`,
+    `TestTheCursorLeavesABoxWhenARoleEditsTheTextAroundIt`,
+    `TestALineThatStoppedExistingDoesNotComeBack`,
+    `TestASavedViewDoesNotPutTheCursorOnABoxNobodyChose`,
+    `TestALateRefusalDoesNotPutALineOnAnotherCardsBox`,
+    `TestACardThatChangesKindKeepsNoLine`.
+  - Receipt: the property `TestSurfaceCursorAcrossEveryPath`, 100,000
+    runs: every input sent is for a box the operator moved onto on the
+    components held. With the binding switched off it fails.
+- [x] relay's refusal of an input is shown as relay wrote it.
+  - Receipt: `TestARefusedInputShowsRelaysText`; a stale rev on screen
+    in `TestHubTicksASurfaceCardsBox`.
+- [x] The card's frame is relay-tui's own: it names the card's owner and
+  says "from outside" when the surface, the title or the labels say so,
+  and nothing of a surface is drawn outside it. (The contract's fourth
+  client rule, added on 2026-11-15.)
+  - Receipt: `TestASurfaceCardsFrameNamesItsOwnerAndSaysWhenItIsFromOutside`,
+    `TestAnOutsidersSurfaceIsMarked`.
+- [x] relay-tui's `relay_catalog.json` is relay's
   `resources/a2ui/relay_catalog.json`, byte for byte, and the spike's
   Tracker is gone from the surface renderer.
-- [ ] fakehub serves surface cards and applies `input` by the contract's
+  - Receipt: `cmp` of the two files on 2026-11-15 after the third copy
+    (qsnkqulv); `TestCatalogs`. The catalog step of the early joint
+    `bb verify` passed on the second copy.
+- [x] fakehub serves surface cards and applies `input` by the contract's
   rules, refusals included.
-- [ ] Properties: no surface card draws past the pane's width, and no
+  - Receipt: `TestAnInputSetsTheBoxAndBumpsTheRev`,
+    `TestAnInputIsRefusedAsRelayRefusesIt` in `internal/fakehub`.
+- [x] Properties: no surface card draws past the pane's width, and no
   control character and no link relay did not keep live reaches a row,
   whatever the surface's strings hold. relay#96's saved failing case is
   one of the tests.
+  - Receipt: `TestBoardNeverEmitsRawControls`,
+    `TestA2UINeverDrawsPastTheWidth`,
+    `TestA2UIDrawsNoControlBytesFromTheSurface`; the saved case is
+    `TestSurfaceRowsBrokenLinkWrappedAfterTheSchemeIsNotFollowable`.
 - [ ] Kira has seen a mock of a surface on the board first.
-- [ ] relay-tui's README says what the board draws.
+- [x] relay-tui's README says what the board draws.
+  - Receipt: the paragraph on surface cards under "The board", in
+    uqwynqos, urpkvpun and plulklqq.
 - [ ] `make check` passes, and so does `bb verify` from a relay workspace
   that has relay#97.
-- [ ] An adversarial Codex review finds nothing in scope.
+  - `make check` passes at plulklqq 9d24c5f7. The early joint run, relay
+    at relay#97's nlyokvuorvpu 2d0c8e8a against relay-tui urpkvpun
+    7efde4e4: agentloop, relay-tui, catalog, webtool and eventkit pass,
+    relay 1,212 of 1,213 and pentest 30 of 31, the two failures being
+    relay#99's. The run that counts is on both rebased tips and is not
+    made yet.
+- [ ] An adversarial review finds nothing in scope.
+  - Three rounds each found something in scope, so the loop stopped and
+    it is with Kira. The Log has the rounds.
 
 ## Plan
 
@@ -76,18 +152,13 @@ Without Tracker and without Button. relay's catalog v1 holds neither:
 the tracker card kind stays as it is (relay#93), and Button waits for a
 step of its own under relay#98's rule.
 
-1. `internal/a2ui` and the surface drawing: relay's catalog, no Tracker,
-   the inputs of a surface, the check that a surface is one relay could
-   have sent, and drawing with the board's own text functions.
-2. `internal/core` and `internal/wire`: the kind, the `surface` field,
-   the `input` op and the cursor on a surface's inputs.
-3. `internal/render`: the card on the board.
-4. fakehub, the end-to-end tests and the README.
-5. Verify and review.
+Built in four steps, then three rounds of review fixes. What is left:
+Kira's word on the review, the joint `bb verify` on the rebased tips,
+and landing together with relay#97, relay-tui first.
 
 ## Log
 
-Judgment calls, mine unless one says otherwise, 2026-11-14:
+Judgment calls, mine unless one says otherwise, 2026-11-14 and 15:
 
 - A surface with anything relay-tui does not draw shows the card's text
   form, whole. The first draft had an unknown component draw as one line
@@ -96,22 +167,74 @@ Judgment calls, mine unless one says otherwise, 2026-11-14:
 - Text is drawn with the note card's code and not through Markdown. I ran
   relay's strings through the spike's Markdown drawing: a live link in
   angle brackets lost its brackets, `ht**tp**s` came out as `https`, and
-  line breaks inside a paragraph went. The contract now says a text is
-  plain and a client dresses it only as it dresses a note.
+  line breaks inside a paragraph went. The contract says a text is plain
+  and a client dresses it only as it dresses a note.
+- Text an outsider may have written is not dressed at all. relay#97's
+  review found `ev**il.**example/steal?d=1`: dressing the bold leaves an
+  address relay never saw. relay#95 then made the note card follow the
+  same rule, and a surface's body text calls the same function.
 - A Card at the root is drawn without a frame. The board already puts
   every card in a panel with its title on the border.
 - One op at a time, as the board already does: a key pressed while an
-  input is on its way is not sent, and the board says so. Each input
-  moves the card's rev, and `seen` has to match it.
-- The corner of the panel says "surface" where a checklist shows its
-  progress. relay sends no progress for a surface, and the board counts
-  nothing itself. The mock asks Kira whether she wants something else
-  there.
-- The spike's Tracker comes out of the surface renderer. relay's catalog
+  input is on its way is not sent, and the board says so.
+- The corner of the panel names the card's owner, such as "steward",
+  where a checklist shows its progress. The contract's frame rule asks
+  for the owner. I left the word "surface" out because with both the
+  title was cut at the usual pane width. The mock asked Kira what she
+  wants there and she has not said.
+- The spike's Tracker is out of the surface renderer. relay's catalog
   has no component of its own (relay#93), so nothing could reach it.
 - `a2ui.Activate` still writes a CheckBox's value into the data model.
   The board does not call it. It stays for the step that adds Button.
+- The check that a surface is one relay could have sent takes the
+  properties it allows from the embedded catalog file. If relay adds a
+  property or a component, relay-tui shows the text form until it
+  learns it.
 - The mock went into this session's messages on 2026-11-14: relay#97's
-  checklist and note fixtures, drawn by the spike's renderer inside the
-  board's panels, between a checklist card and a tracker card. No answer
-  yet, so that criterion stays open.
+  checklist and note fixtures, drawn inside the board's panels between a
+  checklist card and a tracker card. No answer yet, so that criterion
+  stays open.
+
+The review, read-only, with the threat model:
+
+- Round 1, Codex, 2026-11-14: eight findings. Fixed in xqxnqoxp: the
+  cursor took another box with the same label; a Row squeezed boxes to
+  bare ellipses that stayed tickable; a `surface` member of the wrong
+  type dropped the card; the check accepted more children than are
+  drawn and ignored a component nothing lists. Filed, both the board's
+  behaviour on trunk: relay#109 (the "gone" notice hidden behind a
+  refusal, for checklists and trackers) and relay#110 (an open card
+  taller than the pane cannot be scrolled). Rejected: extra values in a
+  surface's data (never drawn or sent), and the decoder folding a list
+  of messages where relay sends one (the contract says a list, and the
+  result must pass the check).
+- Round 2, Codex, 2026-11-14: five findings. Fixed in rnlyrwvk: a role
+  sorting the text beside boxes that all read Done left the cursor on a
+  box that then belonged to another row; a card that fell back to text
+  and came back revived a stored line; fixed minimum widths still cut a
+  wide emoji label and a list line, so the minimum is measured from the
+  content; a2uiview printed an error quoting an id with a control
+  character and a whole address. Rejected: a surface with no outside
+  text shows a link as the role wrote it. That is relay's rule for
+  every card and is with Kira as relay#119.
+- Round 3, 2026-11-15, by a fresh reviewer agent with a scratch copy to
+  reproduce in, since Codex was out of quota until 19 November. Three
+  findings in scope: the saved view put the cursor back on a line number
+  after a restart, on whatever box then had it; a refused retitle that
+  arrived late reopened its card under the line chosen on another card;
+  and the frame did not name the owner. It found nothing in the check,
+  the drawing or the wire decoding after several hundred thousand
+  generated cases each. Filed from what it did not count: relay#128
+  (drawing cost at relay's limits) and relay#129 (a card member of the
+  wrong type drops the card, for every kind). relay#122 is a rare
+  failure of a ready-view property on trunk, found while running the
+  properties deep.
+- Three rounds each found the cursor on a box nobody chose, by another
+  path each time, so the loop stopped as AGENTS.md says and the question
+  went to Kira on 2026-11-15. The root: the cursor on a box was a bare
+  line number, and a box has no id, so every path that carried the
+  number to another copy of the card or to another card could land it
+  on the wrong box. plulklqq fixes that where the number is read: the
+  board holds the copy of the surface a key press put the cursor on,
+  and reports the title unless that copy is the one shown. It has not
+  had a review round. relay-32 recommends one.
