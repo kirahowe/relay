@@ -135,8 +135,14 @@ today's board; relay#115 and relay#116, on relay as a product;
 relay#117, what Proton Mail follows in relay's mail; relay#119, whether
 a link in text no outsider shaped is left as written, which is Kira's to
 decide after relay#118; relay#120, a role's title that relay sends with
-its links whole; and relay#121, how far outside text is broken, which is
-also Kira's.
+its links whole; relay#121, how far outside text is broken, which is
+also Kira's; relay#122, a ready-view property in relay-tui that fails on
+one seed; relay#123, a check that relay-macos's copies of the shared
+test data match relay's; relay#124, relay#125 and relay#126, three
+faults in how links are broken; relay#127, relay#128 and relay#129,
+three relay-tui follow-ups from the reviews of relay#95 and relay#100;
+and relay#130, an address that a character with no width hides from the
+link breaker.
 
 ## Acceptance criteria
 
