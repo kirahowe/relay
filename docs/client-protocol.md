@@ -622,6 +622,13 @@ What a client must do so that this stays safe:
   side could spell an address it never saw.
 - Pass a surface's strings through whatever decides which links it draws
   as followable, as it does for any card text.
+- Draw a surface only inside the client's own frame for its card. The
+  frame is the client's: it names the card's owner and shows whether
+  the surface drew on outside text (`surface.outsider`), and nothing a
+  surface holds is drawn over it or outside it. A surface is a role's
+  layout, so it must never be able to pass for one of the client's own
+  screens, for relay's review and consent screens, or for a question
+  the client itself asks.
 
 The operator changes a surface with one op:
 
