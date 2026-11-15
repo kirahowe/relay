@@ -130,7 +130,15 @@ in relay-tui at plulklqq 3ba7dadd, the tip of ten commits on its
     `TestA2UINeverDrawsPastTheWidth`,
     `TestA2UIDrawsNoControlBytesFromTheSurface`; the saved case is
     `TestSurfaceRowsBrokenLinkWrappedAfterTheSchemeIsNotFollowable`.
-- [ ] Kira has seen a mock of a surface on the board first.
+- [x] Kira has seen a mock of a surface on the board first.
+  - Receipt: shown to her in the session on 2026-11-15: the board's
+    list with two surface cards between a checklist and a tracker, drawn
+    by the renderer from relay#97's fixture cards, and then the corner
+    that names the owner. Her answer the same day: "yes the mock looks
+    great."
+  - Receipt: the drawing as built is held by the goldens `surface`,
+    `surface_detail`, `surface_outside` and `surface_text` under
+    `internal/render/testdata/TestBoardGolden/`.
 - [x] relay-tui's README says what the board draws.
   - Receipt: the paragraph on surface cards under "The board", in
     uqwynqos, urpkvpun and plulklqq.
@@ -259,3 +267,11 @@ The review, read-only, with the threat model:
     3,000 checks. Mine had the same judge in four places. The test
     bodies are as they were. The surface and link properties pass on
     that seed and at 5,000 checks.
+- 2026-11-15: Kira answered the three questions put to her: "ok great.
+  these seem reasonable, and yes the mock looks great." My reading: the
+  binding is the right root fix, the review round relay-32 and I
+  recommended goes ahead, and the mock is accepted. Round four started
+  the same day, by a fresh reviewer agent with a scratch copy of
+  plulklqq 3ba7dadd, since Codex is still out of quota. It is aimed at
+  the cursor binding, the frame and the weight clamp, with a fresh look
+  at the rest because the base moved.
