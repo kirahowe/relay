@@ -1590,7 +1590,9 @@ the live links themselves (`_relay/links`) and keep or drop one for you
 (`_relay/links/keep`, `_relay/links/drop`), which is the same act as
 `relay link`: yours, and no role's. relay-tui uses the set as its own
 check. It draws a link in outside text so that a click follows it only
-when relay named that exact address.
+when relay named that exact address. In relay-tui, `L` on a card or on
+something ready for you lists the links in it, and from that list you
+keep a broken one or drop a live one, each after one question.
 
 A live link is plain ASCII, with no user name before its host. After
 the host it holds only letters, digits and `- . _ ~ / ? # & = % : + @`,

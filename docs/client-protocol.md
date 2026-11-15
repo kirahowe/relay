@@ -330,7 +330,12 @@ command line instead.
 - After it: every subscribed connection, this one included, is sent
   `_relay/links/changed`, and then the cards, messages and ready items
   that read differently for it.
-- relay-tui: not used yet.
+- relay-tui: `L` on a card or on something in the ready view lists the
+  links in it, the live ones relay listed and the broken ones in its
+  text. Enter on a broken link asks first and then sends
+  `_relay/links/keep` with the link as the list shows it. `d` on a live
+  one asks first and then sends `_relay/links/drop` with the address
+  relay listed. When relay refuses, the list shows its reason.
 
 ## Methods: a session
 
