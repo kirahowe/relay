@@ -45,12 +45,13 @@ func followed(_ s: String) -> [String] {
 func isAlnum(_ c: Character) -> Bool { c.isASCII && (c.isLetter || c.isNumber) }
 
 /// relay.text/link?, for the addresses this builds: after the scheme only
-/// letters, digits and - . _ ~ / ? # & = % : + @, ending in a letter or a
-/// digit, or a slash right after one.
+/// letters, digits and - . _ ~ / ? # & = % : + @, with no second ://,
+/// ending in a letter or a digit, or a slash right after one.
 func relayShape(_ link: String) -> Bool {
     guard let r = link.range(of: "://") else { return false }
     let rest = Array(link[r.upperBound...])
     guard rest.allSatisfy({ isAlnum($0) || "-._~/?#&=%:+@".contains($0) }) else { return false }
+    guard !String(rest).contains("://") else { return false }
     let n = rest.count
     return isAlnum(rest[n - 1]) || (rest[n - 1] == "/" && n >= 2 && isAlnum(rest[n - 2]))
 }

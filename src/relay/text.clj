@@ -237,14 +237,19 @@
   end of one from a full stop, comma, semicolon or exclamation mark,
   even between angle brackets. Ghostty's stops at an apostrophe. So a
   live link holds only letters, digits and - . _ ~ / ? # & = % : + @,
-  and ends in a letter or a digit, or a slash right after one. An
-  address of any other shape is never live. Of 600,000 random addresses
-  shown between angle brackets with text before and after, 188,381 were
-  of this shape, and NSDataDetector followed every one of them exactly
-  (scripts/link-finder-fuzz.swift, 2026-11-14)."
+  one :// and no second, and ends in a letter or a digit, or a slash
+  right after one. An address of any other shape is never live. Of
+  600,000 random addresses shown between angle brackets with text
+  before and after, 188,377 were of this shape, and NSDataDetector
+  followed every one of them exactly (scripts/link-finder-fuzz.swift,
+  2026-11-14)."
   [s]
   (boolean (and (string? s) (<= (count s) max-link) (re-matches link-shape s)
-                (re-find whole-ending s))))
+                (re-find whole-ending s)
+                ;; One address, never a second inside it: a finder that
+                ;; looks back for a scheme (kitty's) would follow the
+                ;; inner one.
+                (= 1 (count (re-seq #"://" s))))))
 
 (defn mend
   "The address a link on a screen stood for, when `s` is one link as
@@ -268,14 +273,18 @@
 
 (def link-closers
   "What a role may write straight after a link without it being part of
-  the link: address-closers, and the marks of a question, a list and
-  Markdown's links and emphasis."
-  (into address-closers #{\] \' \: \? \* \_ \~}))
+  the link: the marks that end a clause or close a bracket or a quote,
+  and the marks of a question, a list and Markdown's links and emphasis.
+  Never a closing angle bracket: relay puts one after a live link
+  itself, and a finder that reads to the last one in a word (WezTerm's)
+  would take what stands between the two into the address."
+  (-> address-closers (disj \>) (into #{\] \' \: \? \* \_ \~})))
 
 (def ^:private max-closers
   "How many link-closers may follow a link a role wrote, as in
-  **[a fund](https://x.example/a)**."
-  6)
+  **[a fund](https://x.example/a)**. Few, so that they can spell nothing
+  out to a finder that takes them for part of the address."
+  3)
 
 (defn- first-scheme
   "Where a word's first scheme starts, or nil."
@@ -302,21 +311,26 @@
   "For one word a role wrote (no space in it), [before link after] when
   `ok?` takes a link it holds, or nil. The link starts at the word's
   first scheme and runs to the end of the word, less at most max-closers
-  link-closers; the longest that `ok?` takes wins, so a link that ends
-  in such a mark is found before a shorter one. Text that runs on after
-  an address is part of it, so it makes a different address, never a
-  taken one with more after it."
+  link-closers; the longest that `ok?` takes wins. A role that wrote the
+  link between angle brackets of its own has its closing one counted
+  with the link, not with the marks. Text that runs on after an address
+  is part of it, so it makes a different address, never a taken one with
+  more after it."
   [ok? word]
   (when-let [start (first-scheme word)]
-    (let [run (subs word start)]
+    (let [before (subs word 0 start)
+          run (subs word start)
+          bracketed? (str/ends-with? before "<")]
       (some (fn [n]
               (let [cut (- (count run) n)]
                 (when (pos? cut)
                   (let [link (subs run 0 cut)
-                        after (subs run cut)]
-                    (when (and (every? link-closers after) (link? link) (ok? link))
-                      [(subs word 0 start) link after])))))
-            (range 0 (inc max-closers))))))
+                        after (subs run cut)
+                        marks (if (and bracketed? (str/starts-with? after ">")) (subs after 1) after)]
+                    (when (and (<= (count marks) max-closers) (every? link-closers marks)
+                               (link? link) (ok? link))
+                      [before link after])))))
+            (range 0 (+ 2 max-closers))))))
 
 (defn defang-but
   "defang, except that a link in `live` (a set of addresses) is left

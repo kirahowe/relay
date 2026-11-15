@@ -1474,19 +1474,21 @@ relay shows a live link between angle brackets, as in
 for an address in running text, and whatever reads the text (your mail,
 your phone, a terminal) follows exactly what is between them, whatever a
 role wrote before or after. A role may write a link in Markdown, in
-brackets or before a question mark, and relay still finds it. Text run
-on after an address makes a different address, and relay breaks that
-one.
+brackets or before a question mark, and relay still finds it, as long
+as no more than three marks follow it and none is a closing angle
+bracket. Text run on after an address makes a different address, and
+relay breaks that one.
 
 A live link is plain ASCII, with no user name before its host. After
 the host it holds only letters, digits and `- . _ ~ / ? # & = % : + @`,
-and it ends in a letter or a digit, or a slash right after one. That is
-the shape every common link finder reads to its end. They disagree
+it holds no second address (no `://` after the first), and it ends in a
+letter or a digit, or a slash right after one. That is the shape every
+common link finder reads to its end. They disagree
 about the rest: Apple's, which your mail and phone use, balances
 brackets across whatever follows an address and drops a full stop or a
 comma from its end, even between angle brackets, and Ghostty's stops at
 an apostrophe. `scripts/link-finder-fuzz.swift` checks the rule against
-Apple's finder itself: it followed all 188,381 addresses of this shape
+Apple's finder itself: it followed all 188,377 addresses of this shape
 exactly, out of 600,000 random ones. An address of any other shape
 stays broken, and `relay link` refuses it: one with a comma, an
 apostrophe or a bracket in it, or one that ends in `=`. Write a host in

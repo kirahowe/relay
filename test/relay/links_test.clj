@@ -45,11 +45,22 @@
   ;; nothing a role wrote around it. Checked against Apple's
   ;; NSDataDetector on 2026-11-14 for every mark below, before and after.
   (doseq [[before after] [["(" ")."] ["[the fund](" ")"] ["\"" "\"!"] ["" ";"] ["**" "**"] ["_" "_"] ["" "?"]
-                          ["" ":"] ["" "'"] ["[" "]"] ["**[the fund](" ")**."] ["Row:" ","] ["x=" ""] ["" "~"]]]
+                          ["" ":"] ["" "'"] ["[" "]"] ["**[the fund](" ")**"] ["Row:" ","] ["x=" ""] ["" "~"]]]
     (is (= (str before <fund> after) (text/for-operator live outside (str before fund after)))
         (str before "…" after)))
   (testing "brackets a role already wrote are not doubled"
-    (is (= (str "See " <fund> ", please") (text/for-operator live outside (str "See " <fund> ", please")))))
+    (is (= (str "See " <fund> ", please") (text/for-operator live outside (str "See " <fund> ", please"))))
+    (is (= (str "(" <fund> ").") (text/for-operator live outside (str "(" <fund> ").")))))
+  (testing "nothing a role wrote puts a second closing bracket after a live link"
+    ;; Found in relay#95's review: WezTerm reads <...> to the last > in a
+    ;; word, so what stood between the two would ride in the address.
+    (doseq [s [(str fund ">") (str fund ">>") (str <fund> ">") (str fund ").>") (str <fund> "SECRET>") (str fund "?>")]]
+      (is (= (text/defang s) (text/for-operator live outside s)) s)
+      (is (not (str/includes? (text/for-operator live outside s) "https://")) s)))
+  (testing "at most three marks follow a live link"
+    (is (= (str <fund> ").!") (text/for-operator live outside (str fund ").!"))))
+    (doseq [s [(str fund ")**.") (str fund "....") (str fund "!?!?")]]
+      (is (= (text/defang s) (text/for-operator live outside s)) s)))
   (testing "the marks after a link are no part of it, and a slash is"
     (is (= ["" "https://a.example/x" "?"] (text/link-in #{"https://a.example/x"} "https://a.example/x?")))
     (is (= ["" "https://a.example/x/" ")."] (text/link-in #{"https://a.example/x/" "https://a.example/x"} "https://a.example/x/).")))
@@ -97,6 +108,13 @@
     ;; the rest (found in relay#95's review).
     (doseq [s ["https://example.org/o'brien" "https://a.example/x*y" "https://a.example/x!y" "https://a.example/x$y"
                "https://a.example/x,y" "https://a.example/x;y" "https://a.example/x?q=a,b;c&d='e'*f~g"]]
+      (is (not (text/link? s)) s)
+      (is (= (text/defang (str "See " s " now")) (text/for-operator #{s} outside (str "See " s " now"))) s)))
+  (testing "one address, never a second inside it"
+    ;; Found in relay#95's review: kitty looks back from the pointer for
+    ;; a scheme, and would follow the inner address.
+    (doseq [s ["https://safe.example/#https://evil.example/action" "https://a.example/?u=http://b.example/x"
+               "https://a.example/x://y"]]
       (is (not (text/link? s)) s)
       (is (= (text/defang (str "See " s " now")) (text/for-operator #{s} outside (str "See " s " now"))) s)))
   (testing "it ends in a letter or a digit, or a slash right after one"
@@ -158,10 +176,13 @@
     (is (= ["https://grants.example.org/"]
            (shown/links page "https://grants.example.org/ and again https://grants.example.org/"))))
   (testing "however the scout writes it: in Markdown, in a question, in a list"
-    (doseq [written ["**[the trust](https://harbour.example.net/apply)**." "Is it https://harbour.example.net/apply?"
+    (doseq [written ["**[the trust](https://harbour.example.net/apply)**" "Is it https://harbour.example.net/apply?"
                      "_https://harbour.example.net/apply_" "trust:https://harbour.example.net/apply:"
                      "<https://harbour.example.net/apply>"]]
-      (is (= ["https://harbour.example.net/apply"] (shown/links page written)) written))))
+      (is (= ["https://harbour.example.net/apply"] (shown/links page written)) written))
+    (testing "but not behind more than three marks, or a closing bracket of the scout's own"
+      (doseq [written ["**[the trust](https://harbour.example.net/apply)**." "https://harbour.example.net/apply>"]]
+        (is (= [] (shown/links page written)) written)))))
 
 (deftest a-link-the-scout-built-is-not-handed-on
   (doseq [l ["https://grants.example.org/?q=SECRET"
