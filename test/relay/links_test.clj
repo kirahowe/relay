@@ -82,7 +82,8 @@
 
 (deftest a-live-link-has-one-plain-shape
   (doseq [s [fund apply-page "https://a.example" "https://a.example:8443/x#top" "http://localhost/"
-             "https://a.example/x[1]?q=a,b;c&d='e'*f~g"]]
+             "https://a.example/x?q=a,b;c&d='e'*f~g" "https://a.example/x/" "https://a.example/x?q="
+             "https://a.example/x_" "https://a.example/x?" "https://a.example/a.b/c!d" "https://a.example/x%2C"]]
     (is (text/link? s) s))
   (doseq [s ["ftp://a.example/x" "HTTPS://a.example/" "https://user@a.example/" "https://a.example\\x"
              "https://a.ex\u0430mple/" "https://a.example/x y" "https://a.example/\u200b" "https://" "a.example/x"
@@ -90,8 +91,17 @@
              "https://a.example/a|b" "https://a.example/a`b" "https://a.example/{a}"
              (str "https://a.example/" (apply str (repeat text/max-link "x"))) nil 3]]
     (is (not (text/link? s)) (pr-str s)))
-  (testing "no round bracket: Apple's link finder balances them across what follows the address"
-    (doseq [s ["https://en.example.org/wiki/Fund_(arts)" "https://a.example/a(b" "https://a.example/a)b" "https://a.example/a)"]]
+  (testing "no full stop, comma, semicolon or exclamation mark with no letter or digit after it"
+    ;; Apple's link finder drops the end of an address from such a mark,
+    ;; even between angle brackets (fuzzed against NSDataDetector).
+    (doseq [s ["https://a.example/x." "https://a.example/x," "https://a.example/x;" "https://a.example/x!"
+               "https://a.example/x,-" "https://a.example/x.=" "https://a.example/a;/" "https://a.example/a&c%;="
+               "https://a.example/zz9=A@*.=" "https://a.example/?,_/"]]
+      (is (not (text/link? s)) s)
+      (is (= (text/defang (str "See " s " now")) (text/for-operator #{s} outside (str "See " s " now"))) s)))
+  (testing "no bracket: Apple's link finder balances them across what follows the address"
+    (doseq [s ["https://en.example.org/wiki/Fund_(arts)" "https://a.example/a(b" "https://a.example/a)b" "https://a.example/a)"
+               "https://x.example/?q=[[1,2]]" "https://a.example/x[1]" "https://a.example/a]"]]
       (is (not (text/link? s)) s)
       (is (= (text/defang (str "See " s)) (text/for-operator #{s} outside (str "See " s))) s)))
   (testing "a live set cannot make a misshapen address whole"
@@ -168,12 +178,20 @@
                             ["https://safe.example/a^b" "https://safe.example/a"]
                             ["https://safe.example/a_" "https://safe.example/a"]
                             ["https://safe.example/a?" "https://safe.example/a"]
+                            ;; Hidden characters: Apple's finder takes a soft hyphen
+                            ;; and a zero-width joiner into an address (found in review).
+                            ["https://safe.example/a\u00adb" "https://safe.example/a"]
+                            ["https://safe.example/a\u200db" "https://safe.example/a"]
+                            ["https://safe.example/a\u200bnext" "https://safe.example/a"]
+                            ["https://safe.example/a\u00a0next" "https://safe.example/a"]
+                            ["https://safe.example/a\u0000b" "https://safe.example/a"]
+                            ["https://x.example/?q=[[1,2]]" "https://x.example/?q=[[1,2]]"]
                             ["xhttps://safe.example/a" "https://safe.example/a"]]]
       (is (= [] (shown/links (str "Read " seen " today") (str "See " written))) seen)))
   (testing "what HTML and JSON put around an address, and the marks that end a clause, end it"
     (doseq [seen ["<a href=\"https://safe.example/a\">Title</a>" "{\"url\": \"https://safe.example/a\"}"
-                  "[the page](https://safe.example/a)." "https://safe.example/a\u00a0next" "(https://safe.example/a),"
-                  "https://safe.example/a\u200bnext" "https://safe.example/a...." "Read https://safe.example/a!"]]
+                  "[the page](https://safe.example/a)." "https://safe.example/a next" "(https://safe.example/a),"
+                  "https://safe.example/a\tnext" "https://safe.example/a...." "Read https://safe.example/a!"]]
       (is (= ["https://safe.example/a"] (shown/links seen "See https://safe.example/a.")) seen)))
   (testing "an address with a round bracket is never handed on"
     (is (= [] (shown/links "https://safe.example/wiki/Fund_(arts)" "See https://safe.example/wiki/Fund_(arts)."))))
@@ -364,9 +382,14 @@
         (testing "dropped, as it is shown on a screen, it is no longer live, and relay links says so"
           ;; Found by a second reader: a live link is shown between angle
           ;; brackets, and that is what the operator copies.
-          (is (str/includes? (out (run "link" "drop" <fund>)) (str "Dropped " fund)))
+          (is (str/includes? (out (run "link" "drop" <fund>)) (str "Dropped " (text/defang fund))))
           (is (= #{apply-page} (live)))
           (is (str/includes? (out (run "links")) "Dropped links"))
+          ;; Found in review: the list and the answer showed a dropped
+          ;; link whole, which a terminal follows.
+          (is (not (str/includes? (out (run "links")) fund)) "a dropped link is listed broken")
+          (is (str/includes? (out (run "links")) (text/defang fund)))
+          (is (str/includes? (out (run "links")) apply-page) "a live one is listed whole")
           (is (str/includes? (out (run "link" "drop" fund)) "already dropped")))
         (testing "and kept again, it is live again"
           (run "link" fund)

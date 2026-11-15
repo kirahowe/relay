@@ -1212,8 +1212,10 @@ value Source {
 -- trusted for where it came from, never for the host it points at.
 entity LiveLink {
     -- One http or https address in plain ASCII, with no user name before
-    -- its host and no round bracket, at most config.max_link_length
-    -- characters.
+    -- its host, no bracket, and no full stop, comma, semicolon or
+    -- exclamation mark after its last letter or digit, at most
+    -- config.max_link_length characters. A link finder follows an
+    -- address of this shape whole.
     address: String
     -- shown: the web showed it, whole, to a scout that wrote it in a
     -- memo. kept: the operator called it safe.

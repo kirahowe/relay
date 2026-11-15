@@ -121,12 +121,13 @@
 (def max-links "The most links one memo keeps live." 100)
 
 (def ^:private edge
-  "What ends an address in a result's text: a space or any separator, a
-  control or format character, and the angle brackets, double quote and
-  braces that HTML and JSON put around one. These are where Apple's link
-  finder stops. Anything else, a letter outside ASCII or a pipe, runs
-  on: the address is the longer one, which is no live link's shape."
-  #"[\p{Z}\p{C}<>\"{}]+")
+  "What ends an address in a result's text: a space, a tab or a line
+  break, and the angle brackets, double quote and braces that HTML and
+  JSON put around one. Nothing else does. A hidden character, a letter
+  outside ASCII or a pipe runs on, as it does for a link finder (Apple's
+  takes a soft hyphen into an address): the address is then the longer
+  one, which is no live link's shape, so none is taken."
+  #"[ \t\n\r\f\x0B<>\"{}]+")
 
 (defn- public-host?
   "Whether a link's host is a name on the open web: dotted, with a last

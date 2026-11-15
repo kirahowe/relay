@@ -463,8 +463,11 @@
      (if (seq live)
        (cons "Live links, which relay leaves whole wherever it shows them:" (map #(str "  " %) (sort live)))
        ["No live links."])
+     ;; A dropped link is shown broken here too: the operator dropped it
+     ;; so that nothing shows it whole.
      (when (seq dropped)
-       (concat ["" "Dropped links, which stay broken whoever shows them:"] (map #(str "  " %) (sort dropped)))))))
+       (concat ["" "Dropped links, which stay broken whoever shows them:"]
+               (map #(str "  " (text/defang %)) (sort dropped)))))))
 
 (defn board
   "The cards on the board, a blank line between them."

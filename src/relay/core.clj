@@ -2754,7 +2754,7 @@
   (let [s (if (string? url) (text/mend url) "")
         [before link] (when-not (re-find #"\s" s) (text/address-in s))]
     (when-not (and link (= "" before))
-      (reject! :invalid (str "A link is one http or https address in plain ASCII, with no spaces, no round"
+      (reject! :invalid (str "A link is one http or https address in plain ASCII, with no spaces, no"
                              " brackets and no user name before its host. Write a host in other letters in"
                              " its xn-- form.")))
     link))

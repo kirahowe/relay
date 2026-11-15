@@ -893,8 +893,8 @@ id public too.")
                (let [e (first (submit! sys (if drop? :link/drop :link/keep) {:url url}))
                      link (get-in e [:data :link])]
                  (result 0 (cond
-                             (and e drop?) (str "Dropped " link ". relay breaks it wherever it shows it,"
-                                                " whoever shows it again.")
+                             (and e drop?) (str "Dropped " (text/defang link) ". relay breaks it wherever it"
+                                                " shows it, whoever shows it again.")
                              e (str "Kept " link ". relay leaves it whole wherever it shows it.")
                              drop? "That link is already dropped."
                              :else "That link is already live."))))
