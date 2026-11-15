@@ -239,32 +239,35 @@
         dir (str (fs/create-temp-dir {:prefix "relay-ingest-ics"}))
         sys (assoc (system dir {:ingest {"cal" {:kind :ics :url (str base "/secret-token/basic.ics") :to "steward"}}})
                    :clock (constantly (Instant/parse "2026-10-26T12:00:00Z")))]
-    (try
-      (inbound/submit! sys {:type :role/add :actor core/operator :args {:id "steward" :title "Steward" :instructions "x"}})
-      (testing "relay poll checks it now and says what came in"
-        (is (= {:exit 0 :out ["cal: 1 new (Interview, Thu 2026-10-29 14:00 to 15:00)."]}
-               (update (cli/execute ["--data" (:data-dir sys) "poll"]) :out vec)))
-        (is (= {:exit 0 :out ["cal: nothing new."]} (update (cli/execute ["--data" (:data-dir sys) "poll" "cal"]) :out vec)))
-        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no source nope"
-                              (cli/execute ["--data" (:data-dir sys) "poll" "nope"]))))
-      (let [[m] (memos-since sys 0)]
-        (is (= ["calendar:cal" "contaminated"] (:labels m)))
-        (is (str/includes? (:body m) "New: Interview, Thu 2026-10-29 14:00 to 15:00")))
-      (let [sys (system dir {:ingest {"cal" {:kind :ics :url (str base "/moved-token/basic.ics") :to "steward"}}})
-            [e] (ingest-run/poll! sys "cal")]
-        (is (= "ingest/failed" (:type e)))
-        (is (= "the calendar answered 302" (get-in e [:data :error])))
-        (is (not (str/includes? (pr-str e) "token")) "the URL, a secret, is not recorded")
-        (is (= 3 (count @requests)) "the redirect was not followed")
-        (testing "relay poll says so, again and again, and fails"
-          ;; Regression: it exited 0, and a failure the same as the last
-          ;; read as nothing new.
-          (spit (str (:data-dir sys) "/relay.edn")
-                (pr-str (assoc (clojure.edn/read-string (slurp (str (:data-dir sys) "/relay.edn")))
-                               :ingest {"cal" {:kind :ics :url (str base "/moved-token/basic.ics") :to "steward"}})))
-          (is (= {:exit 1 :out ["cal: could not check it: the calendar answered 302"]}
-                 (update (cli/execute ["--data" (:data-dir sys) "poll"]) :out vec)))))
-      (finally (stop) (fs/delete-tree dir)))))
+    ;; relay poll at the command line reads the clock itself, so it is
+    ;; given the test's: the feed's event must still lie ahead.
+    (binding [cli/*clock* (:clock sys)]
+     (try
+       (inbound/submit! sys {:type :role/add :actor core/operator :args {:id "steward" :title "Steward" :instructions "x"}})
+       (testing "relay poll checks it now and says what came in"
+         (is (= {:exit 0 :out ["cal: 1 new (Interview, Thu 2026-10-29 14:00 to 15:00)."]}
+                (update (cli/execute ["--data" (:data-dir sys) "poll"]) :out vec)))
+         (is (= {:exit 0 :out ["cal: nothing new."]} (update (cli/execute ["--data" (:data-dir sys) "poll" "cal"]) :out vec)))
+         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no source nope"
+                               (cli/execute ["--data" (:data-dir sys) "poll" "nope"]))))
+       (let [[m] (memos-since sys 0)]
+         (is (= ["calendar:cal" "contaminated"] (:labels m)))
+         (is (str/includes? (:body m) "New: Interview, Thu 2026-10-29 14:00 to 15:00")))
+       (let [sys (system dir {:ingest {"cal" {:kind :ics :url (str base "/moved-token/basic.ics") :to "steward"}}})
+             [e] (ingest-run/poll! sys "cal")]
+         (is (= "ingest/failed" (:type e)))
+         (is (= "the calendar answered 302" (get-in e [:data :error])))
+         (is (not (str/includes? (pr-str e) "token")) "the URL, a secret, is not recorded")
+         (is (= 3 (count @requests)) "the redirect was not followed")
+         (testing "relay poll says so, again and again, and fails"
+           ;; Regression: it exited 0, and a failure the same as the last
+           ;; read as nothing new.
+           (spit (str (:data-dir sys) "/relay.edn")
+                 (pr-str (assoc (clojure.edn/read-string (slurp (str (:data-dir sys) "/relay.edn")))
+                                :ingest {"cal" {:kind :ics :url (str base "/moved-token/basic.ics") :to "steward"}})))
+           (is (= {:exit 1 :out ["cal: could not check it: the calendar answered 302"]}
+                  (update (cli/execute ["--data" (:data-dir sys) "poll"]) :out vec)))))
+       (finally (stop) (fs/delete-tree dir))))))
 
 (deftest a-calendar-that-answers-with-something-else-removes-nothing
   ;; A 200 whose body is not a calendar (an error or login page, nothing,
