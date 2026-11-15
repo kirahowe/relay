@@ -27,6 +27,15 @@ Kira, 2026-11-14:
 - Kira can call a link safe herself (relay#94, relay#95).
 - Scouts' links arrive live (relay#94).
 
+Kira, 2026-11-14, on how a live link is shown, in the relay#95 session
+and reported here by the relay#94 session: "I think you have the right
+analysis, we should stop trying to fix the symptom and get to the root
+of the issue. Links as data is a better direction."
+
+- Shown text is always inert, and a link is data relay attaches to it.
+  Only a channel's own mechanism carries the address (relay#118). This
+  replaces relay#94's live link left whole between angle brackets.
+
 Kira, 2026-11-14, on buttons (relay#98 has her answers in full):
 
 - A press on a role-built button does one of two things. It tells the
@@ -105,6 +114,7 @@ The coordinating session's, 2026-11-14, and Kira may overrule them:
 - relay#113 Decide how tabs, pages and placement work above the board
 - relay#114 Let a surface show relay's own data without the role
   rewriting it
+- relay#118 Carry a live link as data beside inert text
 
 relay#111, relay#113 and relay#114 each wait on a decision of Kira's.
 relay#111 questions a decision recorded above: the coordinating session
@@ -118,8 +128,11 @@ an agent. relay#101 can run once relay#97 has landed.
 
 Filed along the way and not parts of this: relay#103, a seed lost when a
 property failed in `bb verify`; relay#104, conversation text that
-reaches a plain ACP client as the agent wrote it; and relay#105, an
-answer to `_relay/cards` that grows with the archive.
+reaches a plain ACP client as the agent wrote it; relay#105, an answer
+to `_relay/cards` that grows with the archive; relay#108, a bound on the
+live links a client is sent; relay#109 and relay#110, two bugs in
+today's board; relay#115 and relay#116, on relay as a product; and
+relay#117, what Proton Mail follows in relay's mail.
 
 ## Acceptance criteria
 
@@ -178,3 +191,8 @@ answer to `_relay/cards` that grows with the archive.
   about relay as a product (relay#115 on secrets, relay#116 on the
   threat model). Kira told that session to file what was relevant.
   relay#98 is done.
+- 2026-11-14: the relay#94 session sent relay#118, the rework of how a
+  live link is shown that Kira approved in the relay#95 session, and it
+  is a part. It took over the half of relay#117 about a push. Kira
+  answered relay#117's questions here: she reads relay's mail in Proton
+  Mail on her phone, and she left how a push looks to the session.

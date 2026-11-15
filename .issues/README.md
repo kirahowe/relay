@@ -16,7 +16,6 @@
 | [111](111-keep-a-new-surface-in-the-conversation-until-kira-pins-it.md) | Keep a new surface in the conversation until Kira pins it | feature | P2 |
 | [112](112-let-kira-put-a-surface-back-as-it-was.md) | Let Kira put a surface back as it was | feature | P2 |
 | [113](113-decide-how-tabs-pages-and-placement-work-above-the-board.md) | Decide how tabs, pages and placement work above the board | feature | P2 |
-| [117](117-carry-a-live-link-in-a-push-as-an-action-and-check-the.md) | Carry a live link in a push as an action, and check the readers nobody has run | feature | P2 |
 | [56](56-serve-the-board-over-http-and-sse-on-the-tailnet-for-a-web.edn) | Serve the board over HTTP and SSE on the tailnet for a web client | feature | P3 |
 | [59](59-keep-large-integers-exact-in-mcp-structured-results.md) | Keep large integers exact in MCP structured results | bug | P3 |
 | [60](60-let-relay-acp-start-agentloop-with-a-relative-data-path.edn) | Let relay acp start agentloop with a relative --data path | bug | P3 |
@@ -35,6 +34,7 @@
 | --- | --- | --- | --- |
 | [90](90-find-what-dropped-four-regression-cases-since-b12b.md) | Find what dropped four regression cases since B12b | bug | P1 |
 | [104](104-make-conversation-text-safe-in-relay-s-proxy-for-every-acp.md) | Make conversation text safe in relay's proxy for every ACP client | bug | P1 |
+| [118](118-carry-a-live-link-as-data-beside-inert-text.md) | Carry a live link as data beside inert text | feature | P1 |
 | [38](38-stop-the-hub-notifying-twice-for-one-stuck-memo.md) | Stop the hub notifying twice for one stuck memo | bug | P2 |
 | [57](57-make-hidden-characters-visible-in-card-text-that-roles-and.md) | Make hidden characters visible in card text that roles and resolve get | bug | P2 |
 | [61](61-fork-acp-go-sdk-and-decode-with-encoding-json-v2.md) | Fork acp-go-sdk and decode with encoding/json/v2 | feature | P2 |
@@ -73,6 +73,7 @@
 | [101](101-teach-roles-when-and-how-to-build-a-surface-with-eval-cases.md) | Teach roles when and how to build a surface, with eval cases | feature | P2 |
 | [106](106-put-buttons-on-role-built-surfaces-by-kira-s-rule.md) | Put buttons on role-built surfaces by Kira's rule | feature | P2 |
 | [107](107-let-kira-fill-in-a-form-a-role-built.md) | Let Kira fill in a form a role built | feature | P2 |
+| [117](117-carry-a-live-link-in-a-push-as-an-action-and-check-the.md) | Check what Proton Mail on the phone follows in relay's mail | feature | P2 |
 
 ## Done
 

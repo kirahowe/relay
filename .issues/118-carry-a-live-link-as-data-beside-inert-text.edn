@@ -1,0 +1,11 @@
+{:id 118
+ :title "Carry a live link as data beside inert text"
+ :status :ready
+ :type :feature
+ :priority :p1
+ :created "2026-11-14"
+ :updated "2026-11-14"
+ :tags #{}
+ :blocked-by #{}
+ :related #{"relay#117" "relay#94" "relay#95" "relay#97"}
+ :details "118-carry-a-live-link-as-data-beside-inert-text.md"}

@@ -1,28 +1,23 @@
-# Carry a live link in a push as an action, and check the readers nobody has run
+# Check what Proton Mail on the phone follows in relay's mail
 
 ## Context
 
-Sent by the relay#94 session on 2026-11-14, at the coordinating
-session's request. The text is that session's own. It waits on Kira and
-is not ready to build.
+Sent by the relay#94 session on 2026-11-14 as a wider issue, "Carry a
+live link in a push as an action, and check the readers nobody has
+run". The half about a push is now part of relay#118. This issue keeps
+the question about readers.
 
-relay#94 shows a live link in outside text between angle brackets,
-`<https://x.example/a>`, and holds it to a shape that every common link
-finder reads whole. That rests on a link finder reading text. Three
-terminals were found to read a bracketed link differently (Ghostty,
-kitty, WezTerm), which is why the coordinating session has asked Kira
-whether terminals should show the broken form inside an OSC 8 hyperlink
-instead (relay#95 for the dashboard, the same question for `relay
-ready`, `relay cards` and `relay inbox`).
+relay#118 makes shown text inert in every channel and carries a live
+link as data. Mail is the one channel where that still ends in text: an
+item's live links follow it on lines of their own, one address to a
+line, and the mail app's link finder decides what is followed.
 
-A push has the same weakness and a way out. Its body is read by whatever
-link finder the ntfy app uses on the phone, which nobody has run. ntfy
-can carry a click target and up to three action buttons, so the body
-could be the broken form with each address as an action. That changes
-how a push looks and caps a push at three links, so it is Kira's to
-decide.
+Kira reads relay's mail in Proton Mail on her phone (her answer on
+2026-11-14). Proton's app has its own link finder, and nobody has run
+it.
 
-## What has been checked, and what has not
+What the relay#94 session had checked for a link shown in text, and
+what it had not:
 
 - Apple's NSDataDetector: run. Of 600,000 random bracketed addresses it
   followed all 188,377 of relay's shape exactly
@@ -31,27 +26,39 @@ decide.
   the app.
 - kitty, WezTerm, iTerm2, Alacritty, VTE: read from their rules, not
   run.
-- Not checked at all: the app Kira reads relay's mail in on her phone
-  (Apple Mail, or Proton's own app, which has its own link finder);
+- Not checked at all: the app Kira reads relay's mail in on her phone;
   whatever shows an ntfy push on her phone; an ssh client on the phone
   running `relay ready`.
 
-## For Kira
-
-1. Which app do you read relay's mail in on your phone?
-2. Should a push carry its links as ntfy actions, with the body in the
-   broken form?
+Once relay#118 is built, a terminal gets the broken form inside an OSC 8
+hyperlink and a push gets actions, so of that list only the mail app
+still reads an address as text.
 
 ## Acceptance criteria
 
-- [ ] Kira has answered both questions, and the answers are recorded
-  here.
-- [ ] If she reads mail in an app other than Apple Mail, its link finder
-  is run against relay's link shape, or mail stops depending on one.
-- [ ] If she says yes to 2: a push shows no followable text, each of up
-  to three live links is an action that opens exactly that address, and
-  a message with more says so.
+- [x] Kira has said which app she reads relay's mail in on her phone.
+  - Receipt: "I use protonmail on my phone", Kira in the relay#93
+    session, 2026-11-14.
+- [ ] Proton Mail's link finder is checked against the link lines
+  relay#118 puts in a mail, and it follows exactly the address on each
+  line. Or mail stops depending on a link finder.
 
 ## Plan
 
+Needs relay#118 for the form of the lines. Two ways to do the check,
+both mine:
+
+- Send a test mail with link lines of relay's shape and look at what
+  Proton Mail makes followable on the phone. That needs Kira's phone.
+- Give mail an HTML part beside the plain one, with each address in the
+  markup of a link, so that no finder decides. That is a change to
+  relay#118's "still text/plain" and belongs to whoever builds it.
+
+Proton publishes the source of its phone apps, which may show what finds
+the links before anything is run.
+
 ## Log
+
+- 2026-11-14: the relay#93 session put both of the first version's
+  questions to Kira. She answered the one about mail, above. On a push
+  she left the call to the session; that is recorded in relay#118.
