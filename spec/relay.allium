@@ -1212,7 +1212,8 @@ value Source {
 -- trusted for where it came from, never for the host it points at.
 entity LiveLink {
     -- One http or https address in plain ASCII, with no user name before
-    -- its host, at most config.max_link_length characters.
+    -- its host and no round bracket, at most config.max_link_length
+    -- characters.
     address: String
     -- shown: the web showed it, whole, to a scout that wrote it in a
     -- memo. kept: the operator called it safe.
@@ -1472,9 +1473,10 @@ rule SendAPublicRoleMemo {
         labels: session_labels(caller) + {contaminated}
     )
     -- black box: the http and https addresses written in the subject or
-    -- body, each cut where a mail app or a terminal would cut it, that an
-    -- earlier egress result of the caller's session showed whole (not as
-    -- the start of a longer address), on a dotted host name, at most
+    -- body, in Markdown or before a mark of punctuation as may be, that
+    -- an earlier egress result of the caller's session showed whole (cut
+    -- once, where a link finder cuts an address, never the start of a
+    -- longer one), on a dotted host name, at most
     -- config.max_shown_links of them.
     ensures: for address in shown_links(caller.session, subject, body):
         if not exists link in LiveLinks where link.address = address:
@@ -4211,16 +4213,16 @@ invariant OnlyALinkRelayCanAccountForIsWhole {
     -- I10. In text an outsider may have shaped, relay breaks every link
     -- it shows the operator, in a message, a mail, a push, a card, the
     -- ready view and the inbox, except a live link: one the web showed
-    -- a scout, whole, or one the operator kept. A live link is whole
-    -- only as a word of its own, with at most three closing marks after
-    -- it (a full stop, comma, semicolon, exclamation mark, closing
-    -- round or angle bracket, double quote: what a link finder leaves
-    -- off an address); text run on after it makes a different address,
-    -- which is broken. Where relay cuts shown text short, a link the
-    -- cut falls inside is broken. Whatever shows text without the live
-    -- links breaks every link. A client that holds a card or a message
-    -- with a link in it is sent it again when that link becomes live or
-    -- is dropped.
+    -- a scout, whole, or one the operator kept. A live link is shown
+    -- between angle brackets, so that whatever reads the text follows
+    -- exactly that address, and only where a word holds it with nothing
+    -- after it but the marks that follow a link in prose or Markdown;
+    -- text run on after it makes a different address, which is broken.
+    -- Where relay cuts or wraps shown text, it leaves no part of a live
+    -- link. Whatever shows text without the live links breaks every
+    -- link. A client that holds a card or a message that reads
+    -- differently once a link becomes live or is dropped is sent it
+    -- again.
     for link in whole_links_shown_in_outside_text:   -- black box: each address a reader could follow in such text as shown
         exists live in LiveLinks where live.address = link and live.status = live
 }

@@ -333,8 +333,8 @@ command line instead.
 | method | scope | params | relay-tui |
 |---|---|---|---|
 | `_relay/roles/changed` | connection | `{"roles": [Role]}`, the whole roster, sent when any of it changed since this connection was last sent it | replaces the roster whole |
-| `_relay/cards/changed` | connection | `{"rev", "cards": [Card]}`, every card whose rev is not the one this connection was last sent, archived cards included so the client can drop them, and every card holding a link that became live or was dropped since, which reads differently at the same rev | updates the one board, open conversation or not; a changed card brings the board into view unless the operator is busy in the pane |
-| `_relay/messages/changed` | connection | `{"rev", "messages": [Message]}`, oldest first: every message made, or whose deliveries changed, since this connection was last sent messages, and every one holding a link that became live or was dropped since | not used yet |
+| `_relay/cards/changed` | connection | `{"rev", "cards": [Card]}`, every card whose rev is not the one this connection was last sent, archived cards included so the client can drop them, and every card that reads differently because a link became live or was dropped since, at the same rev | updates the one board, open conversation or not; a changed card brings the board into view unless the operator is busy in the pane |
+| `_relay/messages/changed` | connection | `{"rev", "messages": [Message]}`, oldest first: every message made, or whose deliveries changed, since this connection was last sent messages, and every one that reads differently because a link became live or was dropped since | not used yet |
 | `_relay/ready/changed` | connection | `{"rev", "items": [Item], "gone": [id]}`: every item new or different from what this connection was last sent, and the ids of those that left (an event that ended, a card archived, an item that fell past the newest 60) | applies them to the view it holds, which is the same as asking again |
 | `_relay/replayed` | session | `{"sessionId", "truncated": bool}`, after the replay that follows `session/load` or an attaching `session/new`; `truncated` says the oldest updates were dropped | marks the conversation loaded, says so at the top when truncated, and stops calls the replay left open once the roster says the turn is idle |
 
@@ -407,9 +407,11 @@ when its text was last written, which is what `seen` is checked against.
 Like a card, a message uses string keys and is ready to show: hidden
 characters are shown as `\u{XXXX}`, refs read as words, and text an
 outsider may have written has its links broken, with `"outsider": true`
-beside it. A link among relay's live links is left whole in that text:
-the web showed it to a scout, or the operator called it safe with
-`relay link`. A client does nothing about either kind. No text is stamped: a role's message that drew on outside
+beside it. A link among relay's live links is left whole in that text,
+between angle brackets (`<https://x.example/a>`), so a client or a
+terminal follows exactly that address: the web showed it to a scout, or
+the operator called it safe with `relay link`. A client does nothing
+about either kind, and must not cut a word that holds one. No text is stamped: a role's message that drew on outside
 text carries `"drewOn"`, one line to show once, such as `"Drew on: the
 web page office-holidays.html"`. An item may carry `"link"`, a link relay
 built itself (a GitHub item's), to show as a live link. Nothing internal

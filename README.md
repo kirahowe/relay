@@ -1467,22 +1467,27 @@ trusts a link for the host it points at. Two things make a link live:
   drop <address>` takes it back, and a dropped link stays broken even
   when a scout is shown it again. `relay links` lists both kinds.
 
-A live link is plain ASCII with no user name before its host. Write a
-host in other letters in its `xn--` form. relay keeps one set of live
+relay shows a live link between angle brackets, as in
+`Apply at <https://x.example/a>.` Those are the marks RFC 3986 gives
+for an address in running text, and whatever reads the text (your mail,
+your phone, a terminal) follows exactly what is between them, whatever a
+role wrote before or after. A role may write a link in Markdown, in
+brackets or before a question mark, and relay still finds it. Text run
+on after an address makes a different address, and relay breaks that
+one.
+
+A live link is plain ASCII, with no user name before its host and no
+round bracket in it: Apple's link finder balances round brackets across
+whatever follows an address, so it would follow a different one. Write
+a host in other letters in its `xn--` form. relay keeps one set of live
 links, so a link in it is whole wherever relay shows it to you: in a
 message, in mail, in a push, on a card, in `relay ready` and in your
-inbox. It is whole only as a word of its own. Text run on after it
-makes a different address, and relay breaks that one. A full stop, a
-comma, a semicolon, an exclamation mark, a closing round or angle
-bracket or a double quote may follow it, up to three of them: those are
-the marks Apple's link finder, which your mail and phone use, leaves off
-an address. Any other mark, such as a question mark, a colon or
-Markdown's `**`, is taken as part of the address, so relay breaks the
-link. Where relay cuts text short, as in a push, a link the cut falls
-inside is broken too.
+inbox. Where relay cuts text short, as in a push, a link the cut falls
+inside is broken, and `relay ready` leaves a long link on a line of its
+own.
 
 When you keep or drop a link, a client that already holds a card or a
-message with that link in it is sent it again.
+message that reads differently for it is sent it again.
 
 Every other view (`relay status`, `relay log`, a role's notes, a
 calendar entry) still breaks every link in outside text.

@@ -492,6 +492,15 @@ found: a role that writes a live link adds nothing to it, and one that
 changes it by a character has written a different address, which is
 broken. Whatever shows text without the set breaks every link.
 
+relay shows a live link between angle brackets, `<https://x.example/a>`.
+A link left bare in running text is followed wherever each reader
+decides it ends, and readers disagree: Apple's link finder takes a
+colon, `**` or a closing bracket after an address into it. Between the
+brackets RFC 3986 gives for this, every reader follows the same
+address, the one relay judged. Two rules follow from the same tests
+against Apple's link finder: a live link holds no round bracket, and
+where relay cuts or wraps shown text it never leaves part of one.
+
 ## The steward's shell
 
 A house role granted `:shell` gets `sh`, which runs a command in a Linux
