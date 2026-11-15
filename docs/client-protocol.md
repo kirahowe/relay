@@ -92,13 +92,15 @@ command line instead.
 - Scope: connection.
 - Params: `{"card": int, "op": string}` and the op's fields: `item`,
   `row`, `column` (ints), `state` (`"open"`, `"done"` or `"skip"`),
-  `text`, and `seen` (the rev the client last saw). The ops are
+  `text`, `components` (a list), `path` (a string), `value` (any JSON)
+  and `seen` (the rev the client last saw). The ops are
   `retitle`, `archive`, `restore`, `add`, `tick`, `untick`, `edit`,
   `remove` (checklists), `set`, `add_row`, `add_column`, `rename_row`,
-  `rename_column`, `remove_row`, `remove_column` (trackers) and `write`
-  (notes); `relay.cards/ops` has the fields each needs. Any other
-  parameter, `sessionId` included, is refused and named, so a typo such
-  as `iten` or `sen` fails instead of passing as success.
+  `rename_column`, `remove_row`, `remove_column` (trackers), `write`
+  (notes) and `input`, `data`, `components` (surfaces, described under
+  a surface card below); `relay.cards/ops` has the fields each needs.
+  Any other parameter, `sessionId` included, is refused and named, so a
+  typo such as `iten` or `sen` fails instead of passing as success.
 - Answer: `{"card": Card, "changed": bool}`. `changed` is false when the
   op would change nothing, and then nothing is recorded.
   `notes` (strings) is present when relay cleaned hidden characters out of
@@ -107,7 +109,9 @@ command line instead.
   card or item that does not exist, a limit, or a stale edit: an op that
   changes text is refused when that text was written after `seen`, an
   archive is refused when the card changed in any way after `seen`, and
-  a `seen` past every rev in the log is refused too.
+  a `seen` past every rev in the log is refused too. A surface's `input`,
+  `data` and `components` need `seen` and are refused unless it is the
+  card's rev now.
 - The op is the operator's, with no labels. Every other subscribed connection is sent
   the card in `_relay/cards/changed`; this one gets it in the answer.
 - relay-tui: every key that changes a card. It sends `seen` with every
@@ -531,6 +535,135 @@ A checklist has `"items": [{"id", "text", "done", "outsider", "rev"}]`
 and a note `"note": {"text", "outsider", "rev"}`. Only cells that are not
 open are listed, and a note has no `progress`. An element's `rev` is
 when its text was last written, which is what `seen` is checked against.
+
+### A surface card
+
+A card of kind `surface` is a screen a role built from relay's catalog,
+`urn:relay:catalog:v1` (`resources/a2ui/relay_catalog.json`). It has the
+fields every card has, no `progress`, and `surface`, which carries
+[A2UI](https://a2ui.org) v1.0 messages:
+
+```json
+{"id": 1840, "kind": "surface", "status": "active", "complete": false,
+ "rev": 1852, "owner": "steward", "addedAt": "2026-11-14T15:03:00Z",
+ "title": {"text": "Pack for the lake weekend", "outsider": false, "rev": 1840},
+ "labels": ["private"],
+ "surface": {
+   "outsider": false,
+   "a2ui": [{"version": "1.0", "createSurface": {
+     "surfaceId": "card_1840",
+     "catalogId": "urn:relay:catalog:v1",
+     "components": [
+       {"id": "root", "component": "Column", "children": ["count", "items"]},
+       {"id": "count", "component": "Text", "variant": "caption", "text": "1 of 2 done"},
+       {"id": "items", "component": "List", "children": ["item__0", "item__1"]},
+       {"id": "item__0", "component": "CheckBox", "label": "Tent and stakes",
+        "value": {"@path": "/items/0/done"}},
+       {"id": "item__1", "component": "CheckBox", "label": "Sleeping bags",
+        "value": {"@path": "/items/1/done"}}],
+     "dataModel": {"items": [{"done": true}, {"done": false}]}}}]},
+ "text": "Card 1840: ..."}
+```
+
+- `a2ui` is a list of agent-to-renderer messages that build the surface
+  from nothing: one `createSurface` with its components and data model
+  inline. A client drops what it held for the card and folds the list.
+  The `surfaceId` is `card_` and the card's id.
+- relay has already resolved the surface. No component holds a function
+  call or a template: every `text` and `label` is the final string, and
+  `children` is always a list of ids. A component drawn once per item of
+  a list has the role's id, `__` and the item's position (`item__1`, or
+  `cell__1__0` for a list inside a list).
+- Every string is made safe like any card text, with the labels of the
+  whole surface: if an outsider may have written any of it,
+  `surface.outsider` is true and every link in all of it is broken.
+- Only an input keeps a binding. A CheckBox's `value` is either a
+  literal, which the operator cannot change, or
+  `{"@path": "/an/absolute/path"}`. `dataModel` holds the values at
+  those paths and nothing else, so it holds none of the role's text. A
+  slot of a list that no input reads is null. A bound CheckBox always
+  has `true` or `false` at its path: relay takes a binding only where
+  the role's data holds one of the two.
+- The components are Text (`text`, `variant` of `"body"` or
+  `"caption"`), Row, Column and List (`children`; a List may have
+  `direction` of `"vertical"` or `"horizontal"`), Card (`child`), Divider
+  (`axis` of `"horizontal"` or `"vertical"`) and CheckBox (`label`,
+  `value`).
+- A Text's `text` and a CheckBox's `label` are plain text, not Markdown.
+  When `surface.outsider` is false, a client may dress a Text as it
+  dresses a note card: `**bold**`, a `#` heading line and `-` list
+  lines. When it is true, a client draws every string exactly as sent.
+  Dressing takes characters away, and what is left could be an address
+  relay never saw: `ev**il.**example` is no address until its
+  asterisks go. A label is one line: relay turns its line breaks into
+  spaces.
+- relay's limits are under relay-tui's, so a surface relay accepts is
+  one a client draws whole: at most 1,000 components once lists are
+  drawn (200 as the role writes them), 12 deep and 200 children in one
+  container. A string is at most 8,000 characters and all of a
+  surface's strings together 16,000, counted before relay makes them
+  safe: a hidden character is sent as `\u{XXXX}`, so a string can
+  arrive several times that long. What bounds the size as sent is a
+  limit in bytes: `surface.a2ui` and the lines of `text` below its
+  first are together at most 128,000 bytes of UTF-8 as JSON, measured
+  with every link broken, as it is sent. The card's other fields come
+  to a few thousand bytes at most. A board of 30 surfaces is so under
+  5 MB, inside the 10 MiB relay-tui
+  reads in one line. relay refuses a change that would pass any of
+  these, and checks them with every box unticked, the surface at its
+  longest, so no `input` is ever refused by one.
+
+What a client must do so that this stays safe:
+
+- Draw only what `a2ui` holds, and show `text` for a kind or a component
+  it does not know.
+- Never draw two strings of a surface on one line with nothing between
+  them. relay checked each string by itself, and two of them side by
+  side could spell an address it never saw.
+- Pass a surface's strings through whatever decides which links it draws
+  as followable, as it does for any card text.
+
+The operator changes a surface with one op:
+
+```json
+{"card": 1840, "op": "input", "path": "/items/1/done", "value": true, "seen": 1852}
+```
+
+- `path` is where the input's value is in `dataModel`: the path a
+  CheckBox's `value` is bound to, exactly as relay sent it. A path is
+  `/` and then keys or positions with `/` between them. A key is 1 to 64
+  of `A-Z`, `a-z`, `0-9`, `_` and `-`, never a `-` by itself, so
+  neither side ever escapes anything in one.
+- `value` is the new value, never "the other one", so sending an op
+  twice does no harm: `true` or `false` for a CheckBox.
+- relay applies every input. The client sends the op and draws the card
+  that comes back, in the answer or in `_relay/cards/changed`. It does
+  not show its own write first.
+- `seen` is the card's `rev` as the client drew it, and it is required. A
+  path into a list is a position, so an op made against an older rev
+  could land on another item. relay refuses it instead.
+- The answer is that of any op, and so is what the other connections are
+  sent. An `input` carries no text, so it adds no labels and wakes no
+  role.
+
+relay's refusals (-32000), which a client shows as they are:
+
+| message | when |
+|---|---|
+| `input needs seen: the card's rev when you read it.` | no `seen`; the same for `data` and `components` |
+| `Card 1840 has changed since rev 1852. Read the card again before you change it.` | `seen` is older than the card's rev. The message does not say which rev the card is at, so the op cannot be sent again without the card being read |
+| `seen must be a rev you read. Read the card again for it.` | `seen` is past the card's rev |
+| `Nothing on card 1840 takes input at that path.` | no CheckBox is bound to `path` |
+| `A checkbox takes true or false.` | the value is not a boolean |
+| `input is not an op on a checklist. ...` | the card is of another kind |
+| `Card 1840 is archived. Restore it first.` | the card is archived |
+
+A role changes its surface with `data` (`path`, `value`, `seen`), which
+writes one path of the data model or, with a null `value`, removes what
+is there, and with `components` (`components`, `seen`), which replaces
+every component. A client may send them too, as the operator. relay
+checks the result against the catalog before it records anything, and
+its refusal says what to change.
 
 ## A message's wire form
 
