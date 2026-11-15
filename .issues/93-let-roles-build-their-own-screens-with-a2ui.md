@@ -98,10 +98,18 @@ The coordinating session's, 2026-11-14, and Kira may overrule them:
 - relay#101 Teach roles when and how to build a surface, with eval cases
 - relay#102 Decide whether checklist, tracker and note become built-in
   surfaces
+- relay#106 Put buttons on role-built surfaces by Kira's rule
+- relay#107 Let Kira fill in a form a role built
+
+The order of building: relay#97 and relay#100 first, with a catalog that
+shows things and takes ticks. Buttons next (relay#106), then forms
+(relay#107), which carry the epic's own example, the screen for adding
+an agent. relay#101 can run once relay#97 has landed.
 
 Filed along the way and not parts of this: relay#103, a seed lost when a
-property failed in `bb verify`, and relay#104, conversation text that
-reaches a plain ACP client as the agent wrote it.
+property failed in `bb verify`; relay#104, conversation text that
+reaches a plain ACP client as the agent wrote it; and relay#105, an
+answer to `_relay/cards` that grows with the archive.
 
 ## Acceptance criteria
 
@@ -150,3 +158,8 @@ reaches a plain ACP client as the agent wrote it.
   parts: relay#96 and relay#98 are in review, relay#94, relay#95,
   relay#97 and relay#100 have sessions on them, relay#101 waits on
   relay#97, and relay#102 is Kira's to decide after real use.
+- 2026-11-14: the relay#97 session reported that its first landing has
+  no Button, and sent two follow-ups. One was the first eval case of
+  relay#101, which now holds it. The other is relay#105. Buttons and
+  forms had no issue, so I filed relay#106 and relay#107 as parts, and
+  moved the form for adding an agent from relay#101 to relay#107.

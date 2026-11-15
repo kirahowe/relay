@@ -2,40 +2,49 @@
 
 ## Context
 
-Part of relay#93. Once a role can put a surface on the board (relay#97),
-it has to know when one is worth making and how to write one relay will
-accept. Roles learn the board today from one section of
-`resources/AGENTS.md` ("The operator's board") and from the tools'
-descriptions. Two scenarios touch cards: `grant-digest-skips-the-board`
-and `look-ahead-offers-interview-help`.
+Part of relay#93. relay#97 gives roles a fourth kind of card, a surface,
+which they lay out from relay's catalog. What a role is told is the text
+`cards` gives with `catalog`, the card tools' descriptions and a section
+of `resources/AGENTS.md`, all written in relay#97. relay's tests show
+that relay checks, resolves and makes safe whatever a role writes.
+Nothing yet shows that a real model, given that text, writes a surface
+relay accepts, or that it makes no surface when a checklist, a tracker
+or a note would do.
 
-The epic's own example belongs here as a case. Kira asks for a way to
-add an agent, the steward builds a form for it, and submitting the form
-ends with the steward adding the role through `role_add`, as it can
-today (Kira's answer in relay#98).
+These are the eval cases for it, made the way AGENTS.md describes for a
+case from real use, on artificial data. The relay#97 session asked for
+the first of them on 2026-11-14 and wrote its criteria.
+
+The epic's own example, a form for adding an agent, needs Button and a
+text field. It is in relay#107.
 
 ## Acceptance criteria
 
-- [ ] `resources/AGENTS.md` says when a surface is the right thing to
-  make, when a checklist, a note or a plain message is, and how to keep a
-  surface current.
-- [ ] A scenario where a surface is the right answer, with an oracle that
-  passes every grader and a foil that fails the grader for it.
-- [ ] A scenario where a surface is the wrong answer, such as a one-off
-  question, with an oracle and a foil.
-- [ ] A scenario for the form that adds an agent: the role builds the
-  form, a press with Kira's fields reaches the steward, and the steward
-  adds the role. It has an oracle and a foil.
-- [ ] Each case is run live on Haiku (`--trials 3`) and once on Opus. The
-  run ids are recorded here and the cases are in
+- [ ] A case in `test/scenarios` asks the steward for something none of
+  the three fixed kinds fits, such as a packing list grouped by bag with
+  a note above it. Its oracle adds a surface relay accepts.
+- [ ] A foil fails that case's grader: one that adds a checklist
+  instead, or a surface relay refuses.
+- [ ] A second case asks for something a checklist, a tracker, a note or
+  a plain message fits. Its oracle makes no surface, and a foil that
+  makes one fails the grader.
+- [ ] Both cases ran live on Haiku (`--trials 3`) and once on Opus, the
+  transcripts were read, and the run ids are here and in
   `test/scenarios/BASELINES.md`.
-- [ ] In those live runs relay accepts the surfaces the role writes
-  without a refused attempt, or the Log says what the tool's description
-  lacked and how it changed.
+- [ ] If the model's first surface is often refused, the catalog text or
+  the refusals were changed until it is not, and the Log says what
+  changed.
+- [ ] `resources/AGENTS.md` says when a surface is the right thing to
+  make and when one of the fixed kinds or a message is. If relay#97's
+  section already does, the receipt points at it.
 
 ## Plan
 
-Needs relay#97. The form case also needs Button and a text field in
-relay's catalog, which come after the first catalog.
+Needs relay#97.
 
 ## Log
+
+- 2026-11-14: first filed with three cases, the form for adding an agent
+  among them. The relay#97 session then sent the first case in the form
+  it has now. The form case went to relay#107, so this issue no longer
+  waits on Button.
