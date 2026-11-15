@@ -7,5 +7,5 @@
  :updated "2026-11-15"
  :tags #{}
  :blocked-by #{}
- :related #{"relay#130" "relay#84" "relay#91" "relay#95"}
+ :related #{"relay#118" "relay#126" "relay#130" "relay#84" "relay#91" "relay#95"}
  :details "104-make-conversation-text-safe-in-relay-s-proxy-for-every-acp.md"}

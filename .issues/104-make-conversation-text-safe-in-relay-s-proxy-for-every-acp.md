@@ -41,6 +41,60 @@ text itself and not through a terminal, such as the Mac client, should
 turn its own link detection off for conversation text and make links
 only from relay's data.
 
+## What a client needs from this
+
+From the relay#95 session on 2026-11-15, at the coordinating session's
+request. It is design input for whoever takes this issue. Kira has not
+yet said that this issue comes next.
+
+What relay-tui would drop for a relay session: `LinkIn` and
+`fangSource`'s whole-address rule, which is the last place it reads an
+address out of text, and `DropHidden` in the reply path. A reply's
+hyperlinks would come from `core.Anchored` over the listed `shown`
+forms, the same rule as a card, with the target checked against the
+`_relay/links` set by `gate`.
+
+What it would keep:
+
+- `Defang` as a second line. It changes nothing in text relay broke.
+- `Defang` as the first line for a plain ACP agent that is not relay,
+  and for rows after Markdown has dressed a reply, where marks taken out
+  can put pieces together.
+- `said`, for lines with no mark of their source.
+- `gate`.
+
+What relay should send, so that a reply needs no finder in the client:
+
+1. The text in `agent_message_chunk` is already inert once the session
+   is contaminated. Hidden characters are handled first, by relay's own
+   rule: they are stripped, with the exception for emoji, as
+   `relay.text/sanitize` does it, and are not shown as escapes. The
+   protocol says which.
+2. Whole words only. relay holds back a chunk's last partial word until
+   the next space or the end of the turn, so a `shown` form never
+   straddles two chunks.
+3. The live links of that text, as data in the update's `_meta`: `links`
+   as `{"address", "shown"}` and `linksLeftOut`, in the same shape and
+   with the same limits as a card's. A client keeps the union for the
+   message it is building.
+4. Thoughts, and a call's title, input and output, broken the same way,
+   with no links listed.
+5. The same on replay (`session/load`, and a `session/new` that
+   attaches). Text written before the session was contaminated is left
+   as written.
+6. One fact in `initialize`'s `_meta`, beside `relay/hub`, that says
+   relay does this, so a client can tell such a relay from a plain
+   agent.
+7. The operator's own prompt, echoed back, as written.
+
+With that, the relay-tui halves of relay#126 and relay#130 shrink to the
+plain-agent case. That case is to be decided separately: port relay's
+rules once more, or accept a weaker second line there and say so.
+
+The coordinating session's note: these seven are the starting contract
+it would hold a design to. Point 1's choice to strip and not escape
+matches what Kira chose for relay-tui on 2026-11-15.
+
 ## Acceptance criteria
 
 - [ ] In a contaminated session, no link outside relay's live links
