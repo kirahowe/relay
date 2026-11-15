@@ -427,7 +427,7 @@
   [msg n]
   (let [it (first (mapcat :items (:sections msg)))]
     (if it
-      (let [l (clip-cp (plain-line (:live msg) (item-labels msg it) (:text it)) n)]
+      (let [l (text/clip-shown (plain-line (:live msg) (item-labels msg it) (:text it)) n)]
         (if (:link it) (str l " " (:link it)) l))
       "")))
 

@@ -230,11 +230,26 @@
   [state]
   (dec (:next-seq state)))
 
+(defn- links-changed
+  "The links that are live in `now` and were not in `was`, and the ones
+  that no longer are, or nil. A card or message that shows one of them
+  reads differently now, whatever its rev."
+  [was now]
+  (let [was (or was #{}) now (or now #{})]
+    (seq (concat (remove now was) (remove was now)))))
+
+(defn- holds-any?
+  "Whether any of `texts` holds any of `links`."
+  [texts links]
+  (boolean (some (fn [t] (some #(str/includes? (str t) %) links)) texts)))
+
 (defn subscribed
-  "A subscriber's record ({:cards revs}) once it has been sent every card
-  as it is in `state`, so it is told of each change from here on."
+  "A subscriber's record ({:cards revs :links live}) once it has been
+  sent every card as it is in `state`, so it is told of each change from
+  here on: a card's own, and a link in it that became live or stopped
+  being."
   [conv state]
-  (assoc conv :cards (cards/revs (:cards state))))
+  (assoc conv :cards (cards/revs (:cards state)) :links (core/live-links state)))
 
 (defn cards-params-error
   "Why relay refuses a _relay/cards request's params, or nil. The board
@@ -254,12 +269,19 @@
 (defn cards-changed
   "The _relay/cards/changed notification's params for a subscriber's
   record: every card whose rev is not the one the client was last
-  sent, archived ones included, so the client can drop them. Nil when
-  nothing changed or the client has not subscribed."
+  sent, archived ones included, so the client can drop them, and every
+  card that holds a link that became live or was dropped since, which
+  reads differently at the same rev. Nil when nothing changed or the
+  client has not subscribed."
   [state conv]
   (when-let [sent (:cards conv)]
-    (when-let [ids (seq (cards/changed-since sent (:cards state)))]
-      {"rev" (log-rev state) "cards" (mapv #(card-wire state (core/card state %)) ids)})))
+    (let [links (links-changed (:links conv) (core/live-links state))
+          relinked (when links
+                     (for [[id c] (:cards state)
+                           :when (holds-any? (map :text (cards/text-elements c)) links)]
+                       id))]
+      (when-let [ids (seq (sort (distinct (concat (cards/changed-since sent (:cards state)) relinked))))]
+        {"rev" (log-rev state) "cards" (mapv #(card-wire state (core/card state %)) ids)}))))
 
 (defn notification-line [method params]
   (strict/generate {"jsonrpc" "2.0" "method" method "params" params}))
@@ -328,13 +350,26 @@
                    (take (or (get params "limit") default-messages-limit))
                    (mapv #(note-wire state %)))})
 
+(defn messages-sent
+  "A subscriber's record once it has been sent the messages as they are
+  in `state`: the log's rev, and the live links they were shown with."
+  [state]
+  {:rev (log-rev state) :links (core/live-links state)})
+
 (defn messages-changed
-  "The _relay/messages/changed params for a subscriber last sent the
-  messages as of `rev`: every message made or changed since, oldest
-  first. Nil when there is none."
-  [state rev]
-  (when-let [ms (seq (filter #(> (:rev %) rev) (sort-by :id (vals (:messages state)))))]
-    {"rev" (log-rev state) "messages" (mapv #(note-wire state %) ms)}))
+  "The _relay/messages/changed params for a subscriber's record
+  (messages-sent, or a bare rev): every message made or changed since,
+  and every one that holds a link that became live or was dropped since,
+  oldest first. Nil when there is none."
+  [state sent]
+  (let [{:keys [rev links]} (if (map? sent) sent {:rev sent :links (core/live-links state)})
+        changed (links-changed links (core/live-links state))
+        texts (fn [m] (concat [(:subject m)]
+                              (for [sec (:sections m)] (:heading sec))
+                              (for [sec (:sections m) it (:items sec)] (:text it))))]
+    (when-let [ms (seq (filter #(or (> (:rev %) rev) (and changed (holds-any? (texts %) changed)))
+                               (sort-by :id (vals (:messages state)))))]
+      {"rev" (log-rev state) "messages" (mapv #(note-wire state %) ms)})))
 
 ;; --- ready: what relay prepared and told the operator (relay.ready)
 ;;

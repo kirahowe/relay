@@ -120,10 +120,13 @@
 
 (def max-links "The most links one memo keeps live." 100)
 
-(def ^:private link-char "[A-Za-z0-9\\-._~:/?#\\[\\]@!$&'()*+,;=%]")
-
-(def ^:private closer
-  (str "[" (java.util.regex.Pattern/quote (apply str (sort text/link-closers))) "]"))
+(def ^:private edge
+  "What ends an address in a result's text: a space or any separator, a
+  control or format character, and the marks HTML, JSON and Markdown put
+  around an address, none of which an address holds. A letter outside
+  ASCII ends nothing: an address that runs into one is a longer address,
+  which is no live link's shape."
+  #"[\p{Z}\p{C}<>\"`{}|\\^]+")
 
 (defn- public-host?
   "Whether a link's host is a name on the open web: dotted, with a last
@@ -134,27 +137,29 @@
   (let [host (second (re-find #"^https?://([^/?#:]+)" link))]
     (boolean (and host (re-matches #"(?:[A-Za-z0-9\-]+\.)+[A-Za-z][A-Za-z0-9\-]*" host)))))
 
-(defn- shown-whole?
-  "Whether `shown` holds `link` as a whole address: not as the tail of a
-  longer scheme, and with nothing after it that an address could go on
-  with, apart from at most three marks that close a clause. A page that
-  shows https://x.example/a/b has not shown https://x.example/a."
-  [shown link]
-  (boolean (re-find (re-pattern (str "(?<![A-Za-z0-9+.\\-])" (java.util.regex.Pattern/quote link)
-                                     closer "{0,3}(?!" link-char ")"))
-                    shown)))
+(defn- addresses-shown
+  "Every address `shown` holds whole, as a set: each piece of it between
+  edges is read as a word of a memo is (relay.text/link-in), so an
+  address is cut in what the web showed exactly where it is cut in what
+  the scout wrote. A page that shows https://x.example/a/b, or
+  https://x.example/a_(b), has not shown https://x.example/a or
+  https://x.example/a_(b."
+  [shown]
+  (into #{}
+        (comp (filter #(str/includes? % "://"))
+              (keep #(second (text/link-in public-host? %))))
+        (str/split (str shown) edge)))
 
 (defn links
   "The addresses in `text`, a scout's memo, that `shown`, the text of its
-  session's earlier :egress results, showed whole: each a live link's
-  shape (relay.text/link?), on a public host, in the order written, at
-  most max-links. Pure. Every one passes `refusal`, so it is an address
-  the scout could have fetched."
+  session's earlier :egress results, showed whole (addresses-shown): each
+  a live link's shape (relay.text/link?), on a public host, in the order
+  written, at most max-links. Pure. Every one passes `refusal`, so it is
+  an address the scout could have fetched."
   [shown text]
-  (let [shown (str shown)]
+  (let [seen (addresses-shown shown)]
     (->> (re-seq #"\S+" (str text))
-         (keep (fn [word]
-                 (second (text/link-in #(and (public-host? %) (shown-whole? shown %)) word))))
+         (keep #(second (text/link-in seen %)))
          distinct
          (take max-links)
          vec)))

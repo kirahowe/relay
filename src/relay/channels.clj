@@ -111,8 +111,11 @@
 (defn- re-subject [s]
   (str "Re: " (str/replace (str s) #"^(?i)(re:\s*)+" "")))
 
-(defn- clip [s n]
-  (let [s (messages/squeeze-line s)] (if (> (count s) n) (str (subs s 0 (dec n)) "…") s)))
+(defn- clip
+  "Shown text as one line of at most `n` characters. A link the cut
+  falls inside is broken (relay.text/clip-shown)."
+  [s n]
+  (text/clip-shown (messages/squeeze-line s) n))
 
 (defn- from-header [{:keys [from from-name]}]
   (if (messages/from-name? from-name)
@@ -216,7 +219,7 @@
     (cond-> {:title (batch-subject msgs)
              :body (if (next msgs)
                      (let [s (str/join " · " (map subject-text (rest msgs)))]
-                       (if (> (count s) body-limit) (str (subs s 0 (dec body-limit)) "…") s))
+                       (text/clip-shown s body-limit))
                      (messages/one-line (first msgs) body-limit))
              :labels (vec (sort (distinct (mapcat :labels msgs))))}
       link (assoc :click (str/replace link "{id}" (str (:id (first msgs))))))))

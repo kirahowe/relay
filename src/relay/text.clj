@@ -8,8 +8,9 @@
     defang      breaks links and hosts so a tap or click cannot follow
                 them, and leaves file names, paths and times alone.
     for-operator  defang, for text whose labels say an outsider may have
-                written it. The edge that shows text applies visible to
-                it once, last.
+                written it, all but relay's live links, which stay whole
+                (defang-but). The edge that shows text applies visible
+                to it once, last.
 
     sanitize    cleans what the operator pastes, at the entry (see
                 sanitize-input, the one function every entry point calls),
@@ -146,6 +147,14 @@
                    (not (or (never-domains ending)
                             (and (file-extensions ending) (= 2 (count labels)))))))))))
 
+(defn- break-every-dot
+  "A word that holds a link, with every dot in it broken: the ASCII dot
+  and the fullwidth and ideographic full stops a browser reads as one."
+  [word]
+  (-> word
+      (str/replace #"(?<=\S)[。．｡](?=\S)" "[.]")
+      (str/replace #"(?<=[^\s\[])\.(?=[^\s\]])" "[.]")))
+
 (defn defang
   "Text with every link broken so it cannot be followed, and nothing
   else changed: http becomes hxxp, https hxxps and ftp fxp, any other
@@ -176,7 +185,7 @@
                      (let [word (str/replace word #"(?<=\S)[。．｡](?=\S)" "[.]")]
                        (if (or (str/includes? word "://") (str/includes? word "[:]//")
                                (re-find #"(?i)\bwww\." word))
-                         (str/replace word #"(?<=[^\s\[])\.(?=[^\s\]])" "[.]")
+                         (break-every-dot word)
                          (-> word
                              (str/replace #"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?![\w.])" break-dots)
                              (str/replace host-candidate
@@ -235,8 +244,13 @@
 
 (def link-closers
   "What may follow a link in a word without being part of it: a closing
-  bracket or quote, the marks that end a clause, and Markdown's emphasis."
-  #{\) \] \> \" \' \. \, \; \: \! \? \* \_})
+  round or angle bracket, a double quote, and the full stop, comma,
+  semicolon and exclamation mark that end a clause. These are the marks
+  Apple's link finder, which mail and the phone use, leaves off the end
+  of an address. It takes a colon, a question mark, a square bracket, a
+  single quote, an asterisk and an underscore as part of the address, so
+  a link with one of those after it is a different address."
+  #{\) \> \" \. \, \; \!})
 
 (def ^:private max-closers
   "How many link-closers may follow a live link. A longer run could spell
@@ -247,16 +261,15 @@
   "[address after] for a run from a scheme to the end of its word, where
   `after` is the link-closers a reader's link finder leaves off the end.
   A closing bracket is left off only when the run closes more of them
-  than it opens, so https://x.example/a_(b) keeps its bracket. This is
-  the rule mail apps and terminals follow, so the address relay judges
-  is the one a click opens."
+  than it opens, so https://x.example/a_(b) keeps its bracket. The
+  address relay judges is then the one a click opens."
   [^String run]
   (loop [end (count run)]
     (let [head (subs run 0 end)
           c (when (pos? end) (.charAt run (dec end)))
           more-closed? (fn [open close] (> (count (filter #{close} head)) (count (filter #{open} head))))]
       (if (and c (link-closers c)
-               (case c \) (more-closed? \( \)) \] (more-closed? \[ \]) true))
+               (or (not= \) c) (more-closed? \( \))))
         (recur (dec end))
         [head (subs run end)]))))
 
@@ -278,16 +291,46 @@
 (defn defang-but
   "defang, except that a link in `live` (a set of addresses) is left
   whole where a word holds it and nothing runs on after it but
-  link-closers. What comes before it in the word is broken as defang
-  breaks it. With no live links this is defang."
+  link-closers. What comes before it in the word has every dot broken,
+  as defang breaks a word that holds a link, so nothing before a live
+  link can pass for a host. With no live links this is defang."
   [live s]
   (if (empty? live)
     (defang s)
     (str/replace (str s) #"\S+"
                  (fn [word]
                    (if-let [[before link after] (link-in #(contains? live %) word)]
-                     (str (defang before) link after)
+                     (str (break-every-dot before) link after)
                      (defang word))))))
+
+(defn break-cut-word
+  "`head`, the start a cut kept of `s`, text already made safe to show,
+  with the links in its last word broken (defang) when the cut fell
+  inside that word. A cut word holds only the start of what it held, and
+  the start of a live link is an address nobody took."
+  [^String s ^String head]
+  (let [mid-word? (and (< (count head) (count s))
+                       (not (Character/isWhitespace (.charAt s (count head)))))
+        start (if-let [m (re-find #"^(?s)(.*\s)\S*$" head)] (count (second m)) 0)]
+    (if mid-word?
+      (str (subs head 0 start) (defang (subs head start)))
+      head)))
+
+(defn clip-shown
+  "`s`, text already made safe to show, cut to at most `n` code points
+  with an ellipsis at its end when it was longer. The links in a word
+  the cut fell inside are broken (break-cut-word). Breaking a link makes
+  it longer, so the text is then cut once more; a broken link cut short
+  is still broken."
+  [s n]
+  (let [s (str s)
+        over? (fn [^String t m] (> (.codePointCount t 0 (count t)) m))
+        cut (fn [^String t] (subs t 0 (.offsetByCodePoints t 0 (dec n))))]
+    (if-not (over? s n)
+      s
+      (let [head (cut s)
+            safe (break-cut-word s head)]
+        (str (if (over? safe (dec n)) (cut safe) safe) "…")))))
 
 (defn for-operator
   "Text for the operator from a source with these labels: when an

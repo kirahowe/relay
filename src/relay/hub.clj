@@ -261,7 +261,7 @@
   (let [state (:state h)]
     (reduce (fn [h [cid c]]
               (if-let [params (when (and state (:messages c)) (workspace/messages-changed state (:messages c)))]
-                (-> h (assoc-in [:conns cid :messages] (workspace/log-rev state))
+                (-> h (assoc-in [:conns cid :messages] (workspace/messages-sent state))
                     (write cid (workspace/notification-line "_relay/messages/changed" params)))
                 h))
             h (sort-by key (:conns h)))))
@@ -273,7 +273,7 @@
     (cond
       why (refuse h rid -32602 why)
       (nil? state) (refuse h rid -32000 "relay has not read its messages yet. Try again.")
-      :else (-> h (assoc-in [:conns cid :messages] (workspace/log-rev state))
+      :else (-> h (assoc-in [:conns cid :messages] (workspace/messages-sent state))
                 (answer rid (workspace/messages-answer state (params-of msg)))))))
 
 (def ^:private ready-limit 60)

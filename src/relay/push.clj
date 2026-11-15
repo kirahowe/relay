@@ -20,7 +20,8 @@
             [babashka.http-client :as http]
             [babashka.process :as p]
             [cheshire.core :as json]
-            [clojure.string :as str])
+            [clojure.string :as str]
+            [relay.text :as text])
   (:import (java.time Instant)))
 
 (def ntfy-message-limit
@@ -49,17 +50,23 @@
   "`s`, already shown by text/visible, cut to at most `n` UTF-16 units
   with an ellipsis after it when it is longer. The cut falls between
   whole code points, escapes (\\u{...}) and escaped backslashes, so it
-  never leaves half a surrogate pair or half an escape."
+  never leaves half a surrogate pair or half an escape. The links in a
+  word the cut fell inside are broken, since the start of a live link is
+  an address nobody took (relay.text/break-cut-word), and the text is
+  then cut once more."
   [s n]
-  (let [s (str s)]
+  (let [s (str s)
+        cut (fn [t]
+              (str (reduce (fn [^StringBuilder sb t]
+                             (if (> (+ (.length sb) (count t)) n) (reduced sb) (.append sb ^String t)))
+                           (StringBuilder.)
+                           ;; In Java regex . is one code point, a pair included.
+                           (re-seq #"(?s)\\\\|\\u\{[0-9a-f]+\}|." t))))]
     (if (<= (count s) n)
       s
-      (str (reduce (fn [^StringBuilder sb t]
-                     (if (> (+ (.length sb) (count t)) n) (reduced sb) (.append sb ^String t)))
-                   (StringBuilder.)
-                   ;; In Java regex . is one code point, a pair included.
-                   (re-seq #"(?s)\\\\|\\u\{[0-9a-f]+\}|." s))
-           "…"))))
+      (let [head (cut s)
+            safe (text/break-cut-word s head)]
+        (str (if (= safe head) head (cut safe)) "…")))))
 
 (defn push!
   "Sends one push. Throws when it could not be sent."
