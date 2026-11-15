@@ -1,0 +1,11 @@
+{:id 110
+ :title "Scroll an open card that is taller than the pane"
+ :status :ready
+ :type :bug
+ :priority :p2
+ :created "2026-11-14"
+ :updated "2026-11-14"
+ :tags #{}
+ :blocked-by #{}
+ :related #{"relay#100"}
+ :details "110-scroll-an-open-card-that-is-taller-than-the-pane.md"}

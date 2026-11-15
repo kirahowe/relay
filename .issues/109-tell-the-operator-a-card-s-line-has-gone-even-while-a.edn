@@ -1,0 +1,11 @@
+{:id 109
+ :title "Tell the operator a card's line has gone even while a refusal is showing"
+ :status :ready
+ :type :bug
+ :priority :p2
+ :created "2026-11-14"
+ :updated "2026-11-14"
+ :tags #{}
+ :blocked-by #{}
+ :related #{"relay#100"}
+ :details "109-tell-the-operator-a-card-s-line-has-gone-even-while-a.md"}
