@@ -145,3 +145,9 @@ relay#91 and relay#95.
 - 2026-11-15, from the relay#93 session. Reworded the Proposal and the
   third criterion for relay#118, in the coordinating session's words.
   The line above describes them as they were.
+- 2026-11-15, from the relay#118 session, out of relay#130's fourth
+  review round: the planned path for conversation text strips hidden
+  characters with relay.text's `strip`, which keeps unassigned code
+  points in the emoji blocks (`emoji-block-unassigned?`). So that path
+  must still escape them (relay.text/visible or the like) after links
+  are broken, or they reach a client raw.
