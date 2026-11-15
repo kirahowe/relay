@@ -1,0 +1,11 @@
+{:id 119
+ :title "Decide whether a link in text no outsider shaped is left as written"
+ :status :inbox
+ :type :feature
+ :priority :p2
+ :created "2026-11-14"
+ :updated "2026-11-14"
+ :tags #{}
+ :blocked-by #{}
+ :related #{"relay#100" "relay#104" "relay#118" "relay#94"}
+ :details "119-decide-whether-a-link-in-text-no-outsider-shaped-is-left-as.md"}
