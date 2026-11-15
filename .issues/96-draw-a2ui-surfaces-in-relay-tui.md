@@ -61,6 +61,11 @@ relay-tui gets its own, for a small catalog.
   - Receipt: `TestNoInputPanicsTheFold`, `TestWellFormedMessagesFold`,
     `TestA2UINeverDrawsPastTheWidth`, `TestSetReadsBack`,
     `TestDataModelMessageReadsBack`.
+  - Receipt: `TestSetReadsBack` failed for another session on seed
+    15639078114469465116, and relay-tui 9a143c2d fixes it; the seed's
+    case is `TestSetNullClosesAnArray`. The four properties in
+    `internal/a2ui` then passed at 300,000 cases each, and
+    `TestA2UINeverDrawsPastTheWidth` at 200,000.
 - [x] A command prints a surface file's rendering, for mocks.
   - Receipt: `cmd/a2uiview`, `go run ./cmd/a2uiview -width 60 <file>`.
 - [x] `make check` passes.
@@ -69,6 +74,9 @@ relay-tui gets its own, for a small catalog.
   - Receipt: a second session ran it on 2026-11-14 at ae0ce7d2 and again
     at 3645847b, the second time with `make build` after it as `bb
     verify` does. Every package was ok both times.
+  - Receipt: and at 9a143c2d. It can still fail about once in two
+    thousand runs, on `TestA2UIDefangsLinks`; the Log says why and where
+    that is to be closed.
 
 ## Plan
 
@@ -131,3 +139,17 @@ result is a mock to show Kira and a count of what the renderer took.
 - The mock: the three fixtures at 60 columns, and the tracker at 34
   where the grid gives way to a list, are in the hand-off message to
   Kira.
+- 2026-11-14, after the hand-off: the seed failure above. The code was
+  right and the property was wrong about arrays. A null write takes an
+  element out and the rest move down, as JSON Patch's remove does, so the
+  path can hold the element that came after; the property said nothing
+  may be left there. A2UI says only that null removes a key, and `Set`'s
+  comment now records the choice.
+- Running the render properties at 200,000 cases found one more rare
+  failure, in `TestA2UIDefangsLinks`. A broken link that is hard-wrapped
+  between `hxxps` and `://` leaves a row that starts
+  `://evil[.]test/...`, and the dashboard's own check counts that as a
+  link. Nothing can follow that text, so nothing leaks. It is left for
+  relay#100, which will send every row of a surface through the board's
+  last check on drawn rows, with the saved rapid case as its test. It is
+  not patched here because relay#95 rewrote that path.
