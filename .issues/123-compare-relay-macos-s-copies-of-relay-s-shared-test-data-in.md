@@ -41,3 +41,15 @@ or take its directory as an argument like the other siblings.
 - 2026-11-15: when this was filed, the relay#93 session compared the two
   case tables with `cmp`. relay-macos's copy was the same as relay's on
   `integration` at tuzooksz.
+- 2026-11-15: relay-macos now holds copies of the catalog and the
+  surface fixtures as well, taken from relay-tui main a2ce30c4, as the
+  relay-macos session reported through the coordinating session. They
+  are Tests/RelayCoreTests/Fixtures/a2ui/relay_catalog.json and
+  Tests/RelayCoreTests/Fixtures/surfaces/ (README.md, and checklist,
+  note and hostile, each as .json and .card.json), beside the
+  strict-JSON table at Tests/RelayCoreTests/Fixtures/strict-json/cases.jsonl.
+  So the second criterion's "once it has them" has come. The relay#93
+  session ran `cmp` on each: all eight match relay-tui a2ce30c4
+  (internal/a2ui/relay_catalog.json, testdata/surfaces/), and the case
+  table still matches relay's testdata/strict-json/cases.jsonl on
+  `integration` at 53a496c5.
