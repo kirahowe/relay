@@ -53,29 +53,54 @@ What is new:
 
 ## Acceptance criteria
 
-- [ ] In text an outsider may have shaped, relay shows no link that can
+- [x] In text an outsider may have shaped, relay shows no link that can
   be followed, in any channel or view, whatever is live. A property
   checks it.
-- [ ] A card, a message and a ready item each carry `links`: every live
+  - Receipt: `links_test`: `outside-text-is-broken-whatever-is-live` and
+    `cutting-shown-text-leaves-no-link-to-follow`; the fuzz against
+    Apple's link finder in `scripts/`, none followed.
+- [x] A card, a message and a ready item each carry `links`: every live
   link their outside text holds, in order, each once, with the broken
   form the text shows. docs/client-protocol.md states the contract,
   agreed with the sessions on relay#95, relay#96 and relay#97 before it
   is built.
-- [ ] A mail lists an item's live links after it, one address to a line,
+  - Receipt: `links_test`:
+    `a-listed-link-is-live-and-its-shown-form-is-in-the-text`,
+    `a-client-is-sent-the-links-beside-the-text`,
+    `a-card-carries-its-links-beside-its-text`. A surface card's strings
+    join the list once relay#97 has landed; see the Log.
+- [x] A mail lists an item's live links after it, one address to a line,
   alone.
-- [ ] On a terminal the command line shows a live link as the broken
+  - Receipt: `links_test`:
+    `a-mail-lists-an-items-links-after-it-one-address-to-a-line`.
+- [x] On a terminal the command line shows a live link as the broken
   form inside OSC 8; piped, it writes no OSC 8.
-- [ ] A push carries up to three live links as actions and says when
+  - Receipt: `links_test`:
+    `a-terminal-is-told-the-address-and-reads-none-from-text`,
+    `a-terminal-follows-only-live-links-and-the-text-is-unchanged`, and
+    `the-operator-keeps-and-drops-a-link-on-the-command-line`, which
+    runs `relay links` piped.
+- [x] A push carries up to three live links as actions and says when
   there are more.
-- [ ] Keeping or dropping a link sends again every card, message and
+  - Receipt: `links_test`: `a-push-carries-up-to-three-links-as-actions`.
+- [x] Keeping or dropping a link sends again every card, message and
   ready item whose `links` changed.
-- [ ] Pentest s27 reads the links from the data and from the mail's
+  - Receipt: `links_test`:
+    `a-link-kept-or-dropped-reaches-a-client-that-holds-it`;
+    `links_acp_test` over relay acp.
+- [x] Pentest s27 reads the links from the data and from the mail's
   lines, and still finds no address holding the canary that can be
   followed.
-- [ ] README, resources/AGENTS.md, spec/relay.allium,
+  - Receipt: `s27-live-links` passes, the dashboard checks included,
+    against relay-tui a17a265d.
+- [x] README, resources/AGENTS.md, spec/relay.allium,
   docs/architecture.md and docs/client-protocol.md say what changed.
-- [ ] `bb verify` passes but for relay#99's two tests.
-- [ ] An adversarial Codex review finds nothing in scope.
+  - Receipt: uormplut on this chain.
+- [x] `bb verify` passes but for relay#99's two tests.
+  - Receipt: 2026-11-15, tip slposyyt, with relay-tui a17a265d; the
+    numbers are in the Log.
+- [ ] An adversarial Codex review finds nothing in scope. (Three rounds,
+  none clean. It waits for Kira; see the Log.)
 
 ## Plan
 
@@ -170,4 +195,30 @@ What is new:
   relay-tui, webtool and eventkit pass; relay 1,188 of 1,189 and the
   pentests 30 of 31, the rest being relay#99's two. relay's suite after
   the fixes: 1,190 of 1,191.
-
+- 2026-11-15: relay#124, relay#125 and relay#126 came out of the reviews
+  of relay#97 and relay#95 while this waited. All three are in
+  `relay.text`, so they are fixed on this chain, in slposyyt, and each
+  issue has its receipts. relay#124 was round 3's port finding, already
+  fixed; its three strings are tests now. relay#126 is half relay-tui's
+  and stays open.
+- 2026-11-15: rebased over the first part of relay#95 (`_relay/links`,
+  keeping and dropping from a client, and s27 run against the real
+  relay-tui).
+  - Its tests that expected a live link whole in a card's text now check
+    the card's `links` beside text that stays broken: `links_acp_test`,
+    and three tests in `hub_test`. Three sentences of its docs and spec
+    say "listed" where they said "whole".
+  - s27 keeps relay#95's dashboard checks: relay-tui is given the
+    address the web showed as a hyperlink's target, writes no address as
+    text, and is given nothing once the link is dropped.
+  - relay-tui on its `integration` (c1716fc8) finds a live link by
+    reading a whole address in the text. Against this chain it is safe
+    but has nothing to follow, and s27 fails that one check. The
+    relay#95 session built the reader for the `links` list (relay-tui
+    a17a265d, not landed when this was written), and s27 passes every
+    check against it. So relay#118 and that relay-tui change have to
+    reach `main` together.
+  - `bb verify --relay-tui-dir` on an export of a17a265d, tip slposyyt:
+    agentloop, relay-tui, webtool and eventkit pass; relay 1,196 of
+    1,197 and the pentests 30 of 31, the rest being relay#99's two.
+  - The fuzz after the rebase, seed 11: 1,350,000 cases, none followed.

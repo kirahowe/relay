@@ -39,10 +39,16 @@ nothing between can make one by mistake, as the surface did.
 
 ## Acceptance criteria
 
-- [ ] In outside text, a host that directly follows `host:port` is
+- [x] In outside text, a host that directly follows `host:port` is
   broken, with a test for each of the three strings above.
-- [ ] The issue says whether Apple's link finder or a terminal follows
+  - Receipt: `relay.text-test/defang-leaves-file-names-paths-and-times-alone`,
+    under "a host written straight after a port's digit is broken too",
+    has the three. They read `a[.]bc:1evil[.]com/steal?d=1`,
+    `x[.]yz:9www[.]evil[.]com` and `me@a[.]bc:1evil[.]com/x`.
+- [x] The issue says whether Apple's link finder or a terminal follows
   any of the three as they are shown today.
+  - Receipt: the Log. Apple's finder followed all three as they were
+    shown, and follows none as fixed. No terminal was run on them.
 
 ## Plan
 
@@ -54,3 +60,15 @@ generate this case.
 
 - 2026-11-15: Apple's link finder follows all three, as above. No
   terminal has been checked, so the second criterion stays open.
+- 2026-11-15, the relay#118 session: fixed on relay#118's chain. The
+  fix is the one made for the third round of relay#118's review, in
+  sxskvylu: the pattern now only looks ahead at a port's first digit, so
+  the host after it is read as a host. The three strings are cases in
+  `relay.text-test/defang-leaves-file-names-paths-and-times-alone`,
+  under "a host written straight after a port's digit is broken too",
+  added in slposyyt. They now read `a[.]bc:1evil[.]com/steal?d=1`,
+  `x[.]yz:9www[.]evil[.]com` and `me@a[.]bc:1evil[.]com/x`. Apple's link
+  finder follows none of the three as fixed, alone or with a word either
+  side (`scripts/inert-text-check.swift`). `scripts/inert-text-fuzz.clj`
+  generates the shape (`a.bc:1`, `x.yz:9` and `me@a.bc:1` before a
+  host). No terminal was run on the strings, before the fix or after.

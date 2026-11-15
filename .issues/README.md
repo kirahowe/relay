@@ -44,7 +44,6 @@
 | [103](103-keep-the-seed-when-core-test-s-any-sequence-property-fails.md) | Keep the seed when core-test's any-sequence property fails in bb verify | bug | P2 |
 | [109](109-tell-the-operator-a-card-s-line-has-gone-even-while-a.md) | Tell the operator a card's line has gone even while a refusal is showing | bug | P2 |
 | [110](110-scroll-an-open-card-that-is-taller-than-the-pane.md) | Scroll an open card that is taller than the pane | bug | P2 |
-| [124](124-break-a-host-that-follows-another-host-s-port-with-nothing.md) | Break a host that follows another host's port with nothing between | bug | P2 |
 | [126](126-break-a-link-whose-scheme-has-no-double-slash.md) | Break a link whose scheme has no double slash | bug | P2 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
 | [83](83-speed-up-the-slowest-remaining-test-namespaces.md) | Speed up the slowest remaining test namespaces | chore | P3 |
@@ -55,7 +54,6 @@
 | [108](108-bound-the-live-links-a-client-is-sent.md) | Bound the live links a client is sent | feature | P3 |
 | [122](122-fix-the-ready-view-property-that-fails-on-seed.md) | Fix the ready-view property that fails on seed 6561552371814650667 | bug | P3 |
 | [123](123-compare-relay-macos-s-copies-of-relay-s-shared-test-data-in.md) | Compare relay-macos's copies of relay's shared test data in bb verify | chore | P3 |
-| [125](125-keep-link-breaking-quick-on-one-very-long-word.md) | Keep link breaking quick on one very long word | bug | P3 |
 | [127](127-do-not-panic-on-markdown-quoted-deeper-than-half-the-width.md) | Do not panic on Markdown quoted deeper than half the width | bug | P3 |
 | [128](128-keep-the-board-fast-when-surface-cards-are-at-relay-s-limits.md) | Keep the board fast when surface cards are at relay's limits | chore | P3 |
 | [129](129-show-a-card-s-text-form-when-one-of-its-members-has-the.md) | Show a card's text form when one of its members has the wrong type | bug | P3 |
@@ -74,6 +72,8 @@
 | --- | --- | --- | --- |
 | [94](94-keep-a-link-live-when-relay-can-say-where-it-came-from.md) | Keep a link live when relay can say where it came from | feature | P1 |
 | [96](96-draw-a2ui-surfaces-in-relay-tui.md) | Draw A2UI surfaces in relay-tui | feature | P2 |
+| [124](124-break-a-host-that-follows-another-host-s-port-with-nothing.md) | Break a host that follows another host's port with nothing between | bug | P2 |
+| [125](125-keep-link-breaking-quick-on-one-very-long-word.md) | Keep link breaking quick on one very long word | bug | P3 |
 
 ### Blocked
 
