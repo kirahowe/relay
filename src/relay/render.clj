@@ -54,11 +54,12 @@
   from and when, and its text behind the gutter, links broken when an
   outsider may have written it."
   [state zone {:keys [id subject body sent-at labels] :as m}]
-  (concat
-   ["" (str "[" id "] " (text/for-operator labels subject))
-    (str "    " (came-from state m) ", " (local sent-at zone))]
-   ;; Refs read as words, as in every message.
-   (text/block labels (text/refs-as-words body))))
+  (let [live (core/live-links state)]
+    (concat
+     ["" (str "[" id "] " (text/for-operator live labels subject))
+      (str "    " (came-from state m) ", " (local sent-at zone))]
+     ;; Refs read as words, as in every message.
+     (text/block live labels (text/refs-as-words body)))))
 
 (defn inbox
   [state zone memos]
@@ -448,9 +449,22 @@
 (defn card
   "One card as relay card shows it: its text form, with each element's
   text marked and defanged when it came from outside, and a note's text
-  behind the gutter."
+  behind the gutter. A card handed over with relay's live links
+  (relay.core/with-live) keeps those whole."
   [c]
-  (cards/text-lines c {:mark text/for-operator :block text/block}))
+  (cards/text-lines c {:mark (partial text/for-operator (:live c)) :block (partial text/block (:live c))}))
+
+(defn links
+  "The links relay leaves whole wherever it shows them, and the ones the
+  operator dropped, as relay links shows them."
+  [state]
+  (let [{:keys [live dropped]} (:links state)]
+    (concat
+     (if (seq live)
+       (cons "Live links, which relay leaves whole wherever it shows them:" (map #(str "  " %) (sort live)))
+       ["No live links."])
+     (when (seq dropped)
+       (concat ["" "Dropped links, which stay broken whoever shows them:"] (map #(str "  " %) (sort dropped)))))))
 
 (defn board
   "The cards on the board, a blank line between them."

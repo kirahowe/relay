@@ -372,34 +372,36 @@
 (defn display
   "Text of a message as the operator reads it, before the edge makes it
   safe for its screen: refs as words, links broken when it came from
-  outside (relay.text/for-operator)."
-  [labels s]
-  (text/for-operator labels (text/refs-as-words s)))
+  outside, all but relay's live links, `live` (relay.text/for-operator).
+  Without `live` every link is broken."
+  ([labels s] (display nil labels s))
+  ([live labels s] (text/for-operator live labels (text/refs-as-words s))))
 
 (defn shown
   "display, with every hidden character made visible once, for a
   terminal or the client."
-  [labels s]
-  (text/visible (display labels s)))
+  ([labels s] (shown nil labels s))
+  ([live labels s] (text/visible (display live labels s))))
 
 (defn shown-line
   "shown, as one line."
-  [labels s]
-  (text/visible-line (display labels (squeeze-line s))))
+  ([labels s] (shown-line nil labels s))
+  ([live labels s] (text/visible-line (display live labels (squeeze-line s)))))
 
 (defn plain
   "display, for a mail app or a phone: hidden characters taken out and
   said so (relay.text/visible-plain). They are taken out first, before
   links are broken: one inside a host would hide it from defang, and
   taking it out after would put the live link together again."
-  [labels s]
-  (let [[t n] (text/strip-hidden s)]
-    (str (display labels t) (text/hidden-note n))))
+  ([labels s] (plain nil labels s))
+  ([live labels s]
+   (let [[t n] (text/strip-hidden s)]
+     (str (display live labels t) (text/hidden-note n)))))
 
 (defn plain-line
   "plain, as one line."
-  [labels s]
-  (plain labels (squeeze-line s)))
+  ([labels s] (plain-line nil labels s))
+  ([live labels s] (plain live labels (squeeze-line s))))
 
 (defn item-labels
   "The labels an item is shown with: its own and the message's."
@@ -425,7 +427,7 @@
   [msg n]
   (let [it (first (mapcat :items (:sections msg)))]
     (if it
-      (let [l (clip-cp (plain-line (item-labels msg it) (:text it)) n)]
+      (let [l (clip-cp (plain-line (:live msg) (item-labels msg it) (:text it)) n)]
         (if (:link it) (str l " " (:link it)) l))
       "")))
 

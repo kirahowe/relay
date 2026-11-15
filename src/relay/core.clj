@@ -26,7 +26,8 @@
             [relay.schedule :as schedule]
             [relay.search :as search]
             [relay.skills :as skills]
-            [relay.spend :as spend])
+            [relay.spend :as spend]
+            [relay.text :as text])
   (:import (java.time Duration Instant LocalDate LocalDateTime ZoneId)
            (java.time.format DateTimeFormatter)))
 
@@ -179,8 +180,27 @@
    ;; text the session that wrote each one read directly in its wake
    ;; (relay.provenance), which is what the operator is shown.
    :sources {}
+   ;; The live links: the addresses relay leaves whole in text an
+   ;; outsider may have shaped, because it can say where each came from
+   ;; (the web showed it to a scout, whole, or the operator called it
+   ;; safe), and the ones the operator dropped, which stay broken
+   ;; whoever shows them again.
+   :links {:live #{} :dropped #{}}
    ;; When the log began, and its latest event.
    :next-seq 1 :first-at nil :last-at nil})
+
+(defn live-links
+  "The links relay leaves whole wherever it shows them (relay.text/for-operator)."
+  [state]
+  (get-in state [:links :live]))
+
+(defn with-live
+  "A message, a card or a ready item as it is handed to what shows it:
+  with relay's live links under :live, which its text may keep whole.
+  Whatever shows one without them breaks every link in outside text.
+  Nil stays nil."
+  [state x]
+  (when x (assoc x :live (live-links state))))
 
 (defn- blank? [s] (or (not (string? s)) (str/blank? s)))
 
@@ -1058,12 +1078,31 @@
 (defmethod evolve* "role/removed" [state {:keys [at data]}]
   (update-in state [:roles (:id data)] assoc :status :removed :removed-at (inst at)))
 
+(defn- with-live-links
+  "The state with each of `links` live, except one the operator dropped."
+  [state links]
+  (let [dropped (get-in state [:links :dropped])]
+    (update-in state [:links :live] into (remove dropped (filter text/link? links)))))
+
 (defmethod evolve* "memo/sent" [state {:keys [seq at data labels public]}]
-  (let [{:keys [from to subject body routine about]} data]
-    (assoc-in state [:memos seq] {:id seq :from from :to to :subject subject :body body
-                                  :routine routine :about about :sent-at (inst at) :status :unread
-                                  :attempts 0 :retry-at nil :labels (union labels)
-                                  :public (true? public)})))
+  (let [{:keys [from to subject body routine about links]} data]
+    (-> state
+        (assoc-in [:memos seq] {:id seq :from from :to to :subject subject :body body
+                                :routine routine :about about :sent-at (inst at) :status :unread
+                                :attempts 0 :retry-at nil :labels (union labels)
+                                :public (true? public)})
+        ;; A scout's memo names the links in it that the web showed it.
+        (with-live-links links))))
+
+(defmethod evolve* "link/kept" [state {:keys [data]}]
+  (-> state
+      (update-in [:links :dropped] disj (:link data))
+      (update-in [:links :live] conj (:link data))))
+
+(defmethod evolve* "link/dropped" [state {:keys [data]}]
+  (-> state
+      (update-in [:links :live] disj (:link data))
+      (update-in [:links :dropped] conj (:link data))))
 
 (defmethod evolve* "memo/closed" [state {:keys [at actor data labels sources]}]
   (update-in state [:memos (:memo data)]
@@ -1622,11 +1661,14 @@
   known."
   ([tx m] (send-memo tx m []))
   ([tx m copied] (send-memo tx m copied nil))
-  ([tx {:keys [from to subject body routine about]} copied copied-sources]
+  ([tx {:keys [from to subject body routine about links]} copied copied-sources]
    (let [tx (emit tx "memo/sent" (cond-> {:from from :to to :subject subject :body body}
                                    routine (assoc :routine routine)
                                    ;; A dead letter's memo names the letter it is about.
-                                   about (assoc :about about))
+                                   about (assoc :about about)
+                                   ;; A scout's memo names the links in it
+                                   ;; that the web showed it, which stay live.
+                                   (seq links) (assoc :links (vec links)))
                   copied copied-sources)]
      (if (= operator to)
        (tell tx "memo-for-operator" "note" "normal" subject
@@ -1775,6 +1817,11 @@
       (reject! :invalid (str "Memo " id " is not open; it is " (name (:status m)) ".")))
     m))
 
+(def max-shown-links
+  "The most links one command of a scout's may name as shown to it
+  (relay.shown/max-links)."
+  100)
+
 (defmulti decide* (fn [_tx command] (:type command)))
 
 (defmethod decide* :default [_ command]
@@ -1797,6 +1844,10 @@
   (when (and (contains? command :sources)
              (not (and (sequential? (:sources command)) (every? provenance/source? (:sources command)))))
     (reject! "A command's sources are labels naming where something came from."))
+  (when (and (contains? command :shown-links)
+             (not (and (sequential? (:shown-links command)) (<= (count (:shown-links command)) max-shown-links)
+                       (every? text/link? (:shown-links command)))))
+    (reject! (str "A command's shown links are at most " max-shown-links " whole http or https addresses.")))
   (let [public-role (and (active-role? state actor) (public-caller? state config actor (:session-wake command)))]
     ;; A public role's session never holds private (agentloop forbids it),
     ;; so a call claiming it is refused before it can write anything.
@@ -1819,7 +1870,12 @@
                                                             (and (= actor (:role w)) (= :running (:status w))
                                                                  (:public-session w)))
                                               :else false))}
-                        (contains? command :sources) (assoc :sources (provenance/sources (:sources command))))
+                        (contains? command :sources) (assoc :sources (provenance/sources (:sources command)))
+                        ;; What the web showed a scout's session, which only
+                        ;; relay's tool command works out (relay.tools). No
+                        ;; other actor's command makes a link live this way.
+                        (and public-role (contains? command :shown-links))
+                        (assoc :shown-links (vec (distinct (:shown-links command)))))
                       command))))
 
 (defn run-command
@@ -1939,8 +1995,13 @@
     (cond
       ;; A scout's memo comes from the web, whatever its session has read
       ;; so far.
+      ;; The links in it that the web showed its session, whole, stay live
+      ;; (relay.shown/links). Only a link written in the memo counts, so a
+      ;; caller cannot make one live that the memo does not show.
       (public-actor? tx)
-      (send-memo tx {:from actor :to to :subject subject :body body} [contaminated-label]
+      (send-memo tx {:from actor :to to :subject subject :body body
+                     :links (filter #(or (str/includes? subject %) (str/includes? body %)) (:shown-links tx))}
+                 [contaminated-label]
                  (conj (vec (:sources tx)) "search:web"))
       ;; A house role's memo to a scout is public as written (decision 6):
       ;; the role chose what to put in it, and nobody signs it off. Its
@@ -2678,6 +2739,38 @@
     (reject! :invalid (str "A flag is good or bad, not " (pr-str value) ".")))
   (emit tx "wake/flagged" (cond-> {:wake wake :value value}
                             (not (blank? note)) (assoc :note (str/trim note)))))
+
+;; The operator calls a link safe, or takes that back. A live link is
+;; left whole wherever relay shows it, whoever wrote the text around it
+;; (relay.text/for-operator). So only two things make one: the operator,
+;; here, and a scout's memo, for the links the web showed it (memo/send).
+;; The operator gives the address, whole or as relay shows a broken one.
+
+(defn- link-arg
+  "The address the operator named: mended when it is in its broken form
+  (relay.text/mend), and without the marks that close a clause after it.
+  A refusal when it is not one http or https address in plain ASCII."
+  [url]
+  (let [s (if (string? url) (text/mend url) "")
+        [before link] (when-not (re-find #"\s" s) (text/link-in (constantly true) s))]
+    (when-not (and link (= "" before))
+      (reject! :invalid (str "A link is one http or https address in plain ASCII, with no spaces and no user"
+                             " name before its host. Write a host in other letters in its xn-- form.")))
+    link))
+
+(defmethod decide* :link/keep [{:keys [state] :as tx} {{:keys [url]} :args}]
+  (operator-only! tx "keeps a link live")
+  (let [link (link-arg url)]
+    (if (contains? (live-links state) link)
+      tx
+      (emit tx "link/kept" {:link link}))))
+
+(defmethod decide* :link/drop [{:keys [state] :as tx} {{:keys [url]} :args}]
+  (operator-only! tx "drops a link")
+  (let [link (link-arg url)]
+    (if (contains? (get-in state [:links :dropped]) link)
+      tx
+      (emit tx "link/dropped" {:link link}))))
 
 ;; relay connect: the operator looked at a remote server's tools and
 ;; pinned the definition of each one relay proposed. Every later session,

@@ -460,13 +460,15 @@
 ;; --- the wire form
 
 (defn safe-text
-  "Text as a client is sent it: defanged when its labels are
-  contaminated, then with every hidden character made visible."
-  [labels s]
-  (text/visible (if (contaminated? labels) (text/defang s) (str s))))
+  "Text as a client is sent it: its links broken when its labels are
+  contaminated, all but relay's live links, `live`
+  (relay.text/for-operator), then with every hidden character made
+  visible. Without `live` every link is broken."
+  ([labels s] (safe-text nil labels s))
+  ([live labels s] (text/visible (text/for-operator live labels s))))
 
-(defn- wire-element [{:keys [id text labels rev]}]
-  (cond-> {"text" (safe-text labels text) "outsider" (contaminated? labels) "rev" rev}
+(defn- wire-element [live {:keys [id text labels rev]}]
+  (cond-> {"text" (safe-text live labels text) "outsider" (contaminated? labels) "rev" rev}
     id (assoc "id" id)))
 
 (defn wire
@@ -474,15 +476,18 @@
   field already safe to show (safe-text), with outsider beside it when it
   is contaminated. A client works nothing out for itself. `labels` is what
   reading the card adds (relay.core/card-labels). `text` is the text form,
-  for a client that does not know the kind."
-  [{:keys [id kind status rev owner added-at title items rows columns cells note] :as card} labels]
-  (let [p (progress card)]
+  for a client that does not know the kind. A card handed over with
+  relay's live links under :live (relay.core/with-live) keeps those
+  whole; any other has every link in outside text broken."
+  [{:keys [id kind status rev owner added-at title items rows columns cells note live] :as card} labels]
+  (let [p (progress card)
+        wire-element (partial wire-element live)]
     (cond-> {"id" id "kind" kind "status" (name status) "complete" (complete? card)
              "rev" rev "owner" owner "addedAt" (str added-at)
              "title" (wire-element title)
              "labels" (vec labels)
-             "text" (text-form card {:mark (fn [ls s] (text/visible (text/for-operator ls s)))
-                                     :block (fn [ls s] (map text/visible (text/block ls s)))})}
+             "text" (text-form card {:mark (fn [ls s] (text/visible (text/for-operator live ls s)))
+                                     :block (fn [ls s] (map text/visible (text/block live ls s)))})}
       p (assoc "progress" {"done" (:done p) "total" (:total p)})
       (= "checklist" kind) (assoc "items" (mapv #(assoc (wire-element %) "done" (:done %)) items))
       (= "tracker" kind) (assoc "rows" (mapv wire-element rows)

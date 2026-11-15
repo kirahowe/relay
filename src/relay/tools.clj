@@ -69,10 +69,25 @@
 
 (declare ^:dynamic *wake* ^:dynamic *sources*)
 
-(defn- submit [sys actor labels type args]
-  (inbound/submit! sys (cond-> {:type type :actor actor :args args :labels labels}
-                         *wake* (assoc :session-wake *wake*)
-                         *sources* (assoc :sources *sources*))))
+(defn- submit
+  ([sys actor labels type args] (submit sys actor labels type args nil))
+  ([sys actor labels type args more]
+   (inbound/submit! sys (cond-> (merge {:type type :actor actor :args args :labels labels} more)
+                          *wake* (assoc :session-wake *wake*)
+                          *sources* (assoc :sources *sources*)))))
+
+(defn- shown-links
+  "The links in a scout's memo that the web showed its session whole
+  (relay.shown/links), which the memo keeps live for the operator. Nil
+  for any other role, whose memos make no link live, and for a call that
+  names no wake of the scout's, which has no session to have been shown
+  anything."
+  [sys actor {:keys [subject body]}]
+  (let [state (inbound/current-state sys)
+        data-dir (:data-dir sys)]
+    (when (and data-dir (core/public-caller? state (:config sys) actor *wake*))
+      (when-let [wakes (seq (shown/session-wakes state actor *wake*))]
+        (shown/links (shown/read-shown data-dir actor wakes) (str subject "\n" body))))))
 
 (defn- created-memo [events]
   (:seq (first (filter #(= "memo/sent" (:type %)) events))))
@@ -272,7 +287,9 @@
                       " may leave the house.")
     :parameters (obj {:to text :subject text :body text} "to" "subject" "body")
     :run (fn [sys actor labels args]
-           (let [id (created-memo (submit sys actor labels :memo/send args))]
+           (let [links (shown-links sys actor args)
+                 id (created-memo (submit sys actor labels :memo/send args
+                                          (when (seq links) {:shown-links links})))]
              (str "Sent memo " id " to " (:to args) "."
                   (when (and (not (config/public? (:config sys) actor)) (config/public? (:config sys) (:to args)))
                     (str " " (:to args) " works on the open web, so this memo is public as you wrote it:"

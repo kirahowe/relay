@@ -3,11 +3,16 @@
   broken unless relay can say where it came from. These are the pure
   parts: what a live link looks like, how text keeps one whole, and which
   of a scout's links the web showed it."
-  (:require [clojure.string :as str]
+  (:require [babashka.fs :as fs]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
+            [relay.cli :as cli]
+            [relay.core :as core]
+            [relay.inbound :as inbound]
+            [relay.log :as log]
             [relay.shown :as shown]
             [relay.text :as text]))
 
@@ -189,3 +194,70 @@
       (and (every? text/link? kept)
            (every? #(nil? (shown/refusal seen {:url %})) kept)
            (every? #(str/includes? memo %) kept)))))
+
+;; --- the operator calls a link safe
+
+(defn- with-data [f]
+  (let [dir (str (fs/create-temp-dir {:prefix "relay-links-test"}))
+        data (str dir "/data")]
+    (log/init! data)
+    (spit (str data "/relay.edn")
+          (pr-str {:timezone "UTC" :default-harness :agentloop
+                   :harnesses {:agentloop {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}}}))
+    (try (f data) (finally (fs/delete-tree dir)))))
+
+(deftest the-operator-keeps-and-drops-a-link-on-the-command-line
+  (with-data
+    (fn [data]
+      (let [run (fn [& args] (binding [cli/*stdin* ""] (cli/execute (concat ["--data" data] args))))
+            out (fn [r] (str/join "\n" (flatten [(:out r)])))
+            live #(core/live-links (inbound/current-state (inbound/system data)))]
+        (testing "whole, and it says what it kept"
+          (let [r (run "link" fund)]
+            (is (= 0 (:exit r)))
+            (is (str/includes? (out r) (str "Kept " fund)))
+            (is (= #{fund} (live)))))
+        (testing "as relay shows a broken one, with the full stop that ended its sentence"
+          (is (str/includes? (out (run "link" "hxxp://arts[.]example[.]net/apply.")) (str "Kept " apply-page)))
+          (is (= #{fund apply-page} (live))))
+        (testing "twice changes nothing"
+          (is (str/includes? (out (run "link" fund)) "already live"))
+          (is (= 2 (count (filter #(= "link/kept" (:type %)) (log/read-events data))))))
+        (testing "relay links lists them"
+          (let [o (out (run "links"))]
+            (is (str/includes? o fund))
+            (is (str/includes? o apply-page))))
+        (testing "dropped, it is no longer live, and relay links says so"
+          (is (str/includes? (out (run "link" "drop" fund)) (str "Dropped " fund)))
+          (is (= #{apply-page} (live)))
+          (is (str/includes? (out (run "links")) "Dropped links"))
+          (is (str/includes? (out (run "link" "drop" fund)) "already dropped")))
+        (testing "and kept again, it is live again"
+          (run "link" fund)
+          (is (= #{fund apply-page} (live))))
+        (testing "what is not one plain http or https address is refused, and nothing is kept"
+          (doseq [bad ["ftp://a.example/x" "https://user@a.example/" "https://a.ex\u0430mple/"
+                       "https://a.example/x https://b.example/y" "a.example/x" "javascript:alert(1)" "not a link"
+                       "see https://a.example/x"]]
+            (is (thrown-with-msg? Exception #"one http or https address" (run "link" bad)) bad))
+          (is (= #{fund apply-page} (live))))
+        (testing "with no address it says how"
+          (is (thrown-with-msg? Exception #"usage: relay link" (run "link"))))))))
+
+(deftest only-the-operator-keeps-or-drops-a-link
+  (with-data
+    (fn [data]
+      (let [sys (inbound/system data)]
+        (inbound/submit! sys {:type :role/add :actor "operator"
+                              :args {:id "hub" :title "Hub" :instructions "Help."}})
+        (doseq [type [:link/keep :link/drop]]
+          (is (thrown-with-msg? Exception #"Only the operator"
+                                (inbound/submit! sys {:type type :actor "hub" :args {:url fund}}))))
+        (testing "an address with a hidden character in it is refused where the command is decided"
+          ;; The command line takes hidden characters out of what the
+          ;; operator pastes and says so, before this is asked.
+          (doseq [bad ["https://a.example/\u200b" "https://a.\u200bexample/" nil 3 ""]]
+            (is (thrown-with-msg? Exception #"one http or https address"
+                                  (inbound/submit! sys {:type :link/keep :actor "operator" :args {:url bad}}))
+                (pr-str bad))))
+        (is (= #{} (core/live-links (inbound/current-state sys))))))))

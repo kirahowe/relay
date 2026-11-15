@@ -187,7 +187,9 @@
         (mapcat #(% state))
         (sort newer-first)
         (take limit)
-        vec)))
+        ;; Each item carries relay's live links, which its text may keep
+        ;; whole when it is shown (wire).
+        (mapv #(core/with-live state %)))))
 
 ;; --- what an edit call prepared
 
@@ -219,15 +221,17 @@
   (\"(a hidden character removed)\"), as mail says it, so a screen that
   escapes what it prints never shows an escape twice. The \"from\" line
   says where it came from, so the text carries no mark of its own."
-  [labels s]
-  (messages/plain labels s))
+  ([labels s] (safe nil labels s))
+  ([live labels s] (messages/plain live labels s)))
 
-(defn- safe-line [labels s]
-  (messages/plain-line labels s))
+(defn- safe-line [live labels s]
+  (messages/plain-line live labels s))
 
-(defn- wire-item [{:keys [labels] :as it}]
+(defn- wire-item [{:keys [labels live] :as it}]
   (let [sources (sources-of-item it)
-        from (provenance sources)]
+        from (provenance sources)
+        safe (fn [labels s] (safe live labels s))
+        safe-line (fn [labels s] (safe-line live labels s))]
     (cond-> {"id" (:id it) "kind" (name (:kind it)) "at" (str (:at it)) "seq" (:seq it)
              "title" (safe-line labels (:title it))
              "lines" (vec (map-indexed (fn [i l]

@@ -165,6 +165,12 @@ Every command needs the data directory, from --data <dir> or from the file
                                       last 7 days unless dates (YYYY-MM-DD) say
   relay flag <wake> good|bad [note]   mark a wake or conversation (its id from relay
                                       status or relay week) to find it later
+  relay link <address>                call a link safe: relay leaves it whole wherever
+                                      it shows it. Give the address in quotes, whole
+                                      or as relay shows a broken one (hxxps://x[.]org)
+  relay link drop <address>           take that back: the link stays broken, even
+                                      when a scout is shown it again
+  relay links                         the links relay leaves whole, and the dropped ones
   relay traces --out <dir> [--since <date>] [--until <date>] [--agentloop <bin>]
                                       write the wakes and conversations as OpenTelemetry
                                       traces to <dir>/traces.otlp.jsonl, offline; they
@@ -473,7 +479,7 @@ id public too.")
       :else
       (let [id (or (parse-long a) (fail! (str "A card's id is a number, not " a ".")))]
         (if (nil? b)
-          (if-let [c (core/card (inbound/current-state sys) id)]
+          (if-let [c (let [st (inbound/current-state sys)] (core/with-live st (core/card st id)))]
             {:exit 0 :out (render/card c)}
             (fail! (str "There is no card " id ".")))
           (let [op (cond-> {:op b}
@@ -876,7 +882,22 @@ id public too.")
       "journal" (let [[r] more]
                   (when-not r (fail! "usage: relay journal <role> [-n <count>]"))
                   (knowledge sys :journal {:owner r :limit (:tail opts)}))
-      "cards" (lines (render/board (core/board (state) (:archived opts))))
+      "cards" (lines (let [st (state)]
+                       (render/board (map #(core/with-live st %) (core/board st (:archived opts))))))
+      "link" (let [[a b] more
+                   drop? (= "drop" a)
+                   url (if drop? b a)]
+               (when (str/blank? url)
+                 (fail! "usage: relay link <address>   or   relay link drop <address>"))
+               (let [e (first (submit! sys (if drop? :link/drop :link/keep) {:url url}))
+                     link (get-in e [:data :link])]
+                 (result 0 (cond
+                             (and e drop?) (str "Dropped " link ". relay breaks it wherever it shows it,"
+                                                " whoever shows it again.")
+                             e (str "Kept " link ". relay leaves it whole wherever it shows it.")
+                             drop? "That link is already dropped."
+                             :else "That link is already live."))))
+      "links" (lines (render/links (state)))
       "card" (card! sys more opts)
       "docs" (knowledge sys :docs {})
       "doc" (let [[path a b] more]

@@ -46,14 +46,14 @@
   text it drew on, if any (relay.messages/drew-on). For a mail app:
   hidden characters are taken out and said so."
   [msg]
-  (str (body-with messages/plain msg)
+  (str (body-with (partial messages/plain (:live msg)) msg)
        (when-let [d (messages/drew-on msg)] (str "\n\n" (messages/plain [] d)))))
 
 (defn subject-text
   "A message's subject as one line the operator is shown, as written:
   never marked, so the real subject shows in a list of mail."
   [msg]
-  (messages/plain-line (:labels msg) (:subject msg)))
+  (messages/plain-line (:live msg) (:labels msg) (:subject msg)))
 
 (defn- batch-subject [msgs]
   (let [s (subject-text (first msgs))]
@@ -223,8 +223,9 @@
 
 ;; --- the client
 
-(defn- element [labels s]
-  {"text" (messages/shown labels s) "outsider" (text/contaminated? labels)})
+(defn- element
+  ([labels s] (element nil labels s))
+  ([live labels s] {"text" (messages/shown live labels s) "outsider" (text/contaminated? labels)}))
 
 (defn wire
   "A message as a client is sent it (_relay/messages): string keys, and
@@ -232,14 +233,14 @@
   outsider may have written it, and drewOn, the one line saying what
   outside text a role's message drew on, when it did. Nothing internal:
   no origin, no labels' names."
-  [{:keys [id kind urgency subject sections in-reply-to thread created-at rev deliveries labels replies acted] :as msg}]
+  [{:keys [id kind urgency subject sections in-reply-to thread created-at rev deliveries labels replies acted live] :as msg}]
   (cond->
    {"id" id "kind" kind "urgency" urgency "at" (str created-at) "rev" rev
     "thread" thread "inReplyTo" in-reply-to
-    "subject" (element labels (messages/squeeze-line subject))
+    "subject" (element live labels (messages/squeeze-line subject))
     "sections" (vec (for [{:keys [heading list items]} sections]
                       (cond-> {"items" (vec (for [{:keys [action link] :as it} items]
-                                              (cond-> (assoc (element (messages/item-labels msg it) (:text it))
+                                              (cond-> (assoc (element live (messages/item-labels msg it) (:text it))
                                                              "refs" (vec (:refs it)))
                                                 ;; A link relay built itself.
                                                 link (assoc "link" link)
@@ -248,7 +249,7 @@
                                                 ;; it was done.
                                                 action (assoc "action" {"op" (:op action) "n" (:n action)
                                                                         "done" (get acted (:n action))}))))}
-                        heading (assoc "heading" (element labels heading))
+                        heading (assoc "heading" (element live labels heading))
                         list (assoc "list" true))))
     "deliveries" (vec (for [[ch {:keys [status]}] deliveries]
                         {"channel" ch "status" (name status)}))

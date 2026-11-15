@@ -75,12 +75,13 @@
   whatever happens here."
   [{:keys [config] :as sys} channel-name ids]
   (let [state (current-state sys)
-        msgs (keep #(core/message state %) ids)
+        message #(core/with-live state (core/message state %))
+        msgs (keep message ids)
         channel (get-in config [:messages :channels channel-name])
         result (cond
                  (empty? msgs) nil
                  (nil? channel) {:error (str "relay.edn no longer has the channel " channel-name ".") :final true}
-                 :else (try (send! channel msgs #(core/message state %)
+                 :else (try (send! channel msgs message
                                    {:mailed? #(= :delivered (get-in (core/message state %) [:deliveries channel-name :status]))
                                     :replies? (ingest/reads-replies? config)})
                             {:ok true}

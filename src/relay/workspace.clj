@@ -220,9 +220,10 @@
 ;; role.
 
 (defn card-wire
-  "A card as a client is sent it (relay.cards/wire)."
-  [c]
-  (cards/wire c (core/card-labels c)))
+  "A card as a client is sent it (relay.cards/wire). With `state`, the
+  links relay keeps live are whole in it (relay.core/with-live)."
+  ([c] (cards/wire c (core/card-labels c)))
+  ([state c] (card-wire (core/with-live state c))))
 
 (defn log-rev
   "The seq of the log's last event, which a client can compare revs with."
@@ -248,7 +249,7 @@
   archived ones too when asked."
   [state {:strs [archived]}]
   {"rev" (log-rev state)
-   "cards" (mapv card-wire (core/board state (true? archived)))})
+   "cards" (mapv #(card-wire state %) (core/board state (true? archived)))})
 
 (defn cards-changed
   "The _relay/cards/changed notification's params for a subscriber's
@@ -258,7 +259,7 @@
   [state conv]
   (when-let [sent (:cards conv)]
     (when-let [ids (seq (cards/changed-since sent (:cards state)))]
-      {"rev" (log-rev state) "cards" (mapv #(card-wire (core/card state %)) ids)})))
+      {"rev" (log-rev state) "cards" (mapv #(card-wire state (core/card state %)) ids)})))
 
 (defn notification-line [method params]
   (strict/generate {"jsonrpc" "2.0" "method" method "params" params}))
@@ -289,7 +290,7 @@
   "The _relay/cards/op answer once the op is decided: the card as it is
   now, and whether the op changed it."
   [state card-id changed?]
-  {"card" (card-wire (core/card state card-id)) "changed" (boolean changed?)})
+  {"card" (card-wire state (core/card state card-id)) "changed" (boolean changed?)})
 
 ;; --- messages: the client channel (relay.messages)
 ;;
@@ -316,7 +317,7 @@
   "A message's wire form, a daily note's items marked done by whatever
   note or command did them (core/note-acted)."
   [state m]
-  (channels/wire (cond-> m (seq (:numbered m)) (assoc :acted (core/note-acted state m)))))
+  (channels/wire (cond-> (core/with-live state m) (seq (:numbered m)) (assoc :acted (core/note-acted state m)))))
 
 (defn messages-answer
   "The _relay/messages answer: the newest messages as wire forms, newest
