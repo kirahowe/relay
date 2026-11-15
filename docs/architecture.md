@@ -497,12 +497,15 @@ A link left bare in running text is followed wherever each reader
 decides it ends, and readers disagree: Apple's link finder takes a
 colon, `**` or a closing bracket after an address into it. Between the
 brackets RFC 3986 gives for this, every reader follows the same
-address, the one relay judged. Two rules follow from tests against
-Apple's link finder (`scripts/link-finder-fuzz.swift`). A live link
-holds no bracket and has no full stop, comma, semicolon or exclamation
-mark after its last letter or digit, because the finder balances the
-one and drops the other even between angle brackets. And where relay
-cuts or wraps shown text, it never leaves part of a live link.
+address, the one relay judged. Two rules follow from testing link
+finders. A live link holds only letters, digits and
+`- . _ ~ / ? # & = % : + @`, and ends in a letter or a digit, or a slash
+right after one: Apple's finder balances brackets and drops a full stop
+or a comma from an address's end even between angle brackets
+(`scripts/link-finder-fuzz.swift`), and Ghostty's stops at an
+apostrophe, so relay admits only what every common finder reads whole.
+And where relay cuts or wraps shown text, it never leaves part of a
+live link.
 
 ## The steward's shell
 

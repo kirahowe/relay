@@ -218,31 +218,33 @@
 
 (def ^:private link-shape
   ;; http or https in lower case, a host of ASCII letters, digits, dots
-  ;; and hyphens, a port, then only what RFC 3986 allows in a path, a
-  ;; query or a fragment, less every bracket. No user name before the
-  ;; host, which could pass for the host, and no backslash or character
-  ;; outside ASCII, so `visible` leaves a live link exactly as it is.
-  #"https?://[A-Za-z0-9](?:[A-Za-z0-9.\-]*[A-Za-z0-9])?(?::\d{1,5})?(?:[/?#][A-Za-z0-9\-._~:/?#@!$&'*+,;=%]*)?")
+  ;; and hyphens, a port, then letters, digits and - . _ ~ / ? # & = % : +
+  ;; @ and nothing else. No user name before the host, which could pass
+  ;; for the host, and no backslash or character outside ASCII, so
+  ;; `visible` leaves a live link exactly as it is.
+  #"https?://[A-Za-z0-9](?:[A-Za-z0-9.\-]*[A-Za-z0-9])?(?::\d{1,5})?(?:[/?#][A-Za-z0-9\-._~/?#&=%:+@]*)?")
 
-(def ^:private trimmed-tail
-  ;; A full stop, comma, semicolon or exclamation mark with no letter or
-  ;; digit after it.
-  #"[.,;!][^A-Za-z0-9]*$")
+(def ^:private whole-ending
+  ;; A letter or a digit, or a slash right after one.
+  #"[A-Za-z0-9]/?$")
 
 (defn link?
   "Whether a string can be a live link: one http or https address in
-  plain ASCII (link-shape), at most max-link characters, that a link
-  finder follows whole. Apple's link finder, which mail and the phone
-  use, balances round and square brackets across whatever follows an
-  address, and drops the end of one from a full stop, comma, semicolon
-  or exclamation mark that no letter or digit follows, even between
-  angle brackets. So a live link holds no bracket and has no such tail.
-  Of 400,000 random addresses shown between angle brackets with text
-  before and after, NSDataDetector followed every one of this shape
-  exactly, and every one it got wrong was not of this shape (2026-11-14)."
+  plain ASCII (link-shape), at most max-link characters, that every
+  common link finder reads to its end. Finders disagree about the rest
+  of what RFC 3986 allows. Apple's, which mail and the phone use,
+  balances brackets across whatever follows an address and drops the
+  end of one from a full stop, comma, semicolon or exclamation mark,
+  even between angle brackets. Ghostty's stops at an apostrophe. So a
+  live link holds only letters, digits and - . _ ~ / ? # & = % : + @,
+  and ends in a letter or a digit, or a slash right after one. An
+  address of any other shape is never live. Of 600,000 random addresses
+  shown between angle brackets with text before and after, 188,381 were
+  of this shape, and NSDataDetector followed every one of them exactly
+  (scripts/link-finder-fuzz.swift, 2026-11-14)."
   [s]
   (boolean (and (string? s) (<= (count s) max-link) (re-matches link-shape s)
-                (not (re-find trimmed-tail s)))))
+                (re-find whole-ending s))))
 
 (defn mend
   "The address a link on a screen stood for, when `s` is one link as

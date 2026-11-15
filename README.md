@@ -1478,15 +1478,19 @@ brackets or before a question mark, and relay still finds it. Text run
 on after an address makes a different address, and relay breaks that
 one.
 
-A live link is plain ASCII, with no user name before its host. It holds
-no bracket, round or square, and after its last letter or digit it has
-no full stop, comma, semicolon or exclamation mark. Apple's link finder
-balances brackets across whatever follows an address and drops such a
-tail, even between angle brackets, so it would follow a different
-address. `scripts/link-finder-fuzz.swift` checks that rule against the
-finder itself: of 400,000 random addresses it followed every one of this
-shape exactly. An address of any other shape stays broken. Write a host
-in other letters in its `xn--` form. relay keeps one set of live
+A live link is plain ASCII, with no user name before its host. After
+the host it holds only letters, digits and `- . _ ~ / ? # & = % : + @`,
+and it ends in a letter or a digit, or a slash right after one. That is
+the shape every common link finder reads to its end. They disagree
+about the rest: Apple's, which your mail and phone use, balances
+brackets across whatever follows an address and drops a full stop or a
+comma from its end, even between angle brackets, and Ghostty's stops at
+an apostrophe. `scripts/link-finder-fuzz.swift` checks the rule against
+Apple's finder itself: it followed all 188,381 addresses of this shape
+exactly, out of 600,000 random ones. An address of any other shape
+stays broken, and `relay link` refuses it: one with a comma, an
+apostrophe or a bracket in it, or one that ends in `=`. Write a host in
+other letters in its `xn--` form. relay keeps one set of live
 links, so a link in it is whole wherever relay shows it to you: in a
 message, in mail, in a push, on a card, in `relay ready` and in your
 inbox. Where relay cuts text short, as in a push, a link the cut falls

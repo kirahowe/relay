@@ -45,14 +45,15 @@
   ;; nothing a role wrote around it. Checked against Apple's
   ;; NSDataDetector on 2026-11-14 for every mark below, before and after.
   (doseq [[before after] [["(" ")."] ["[the fund](" ")"] ["\"" "\"!"] ["" ";"] ["**" "**"] ["_" "_"] ["" "?"]
-                          ["" ":"] ["" "'"] ["[" "]"] ["**[the fund](" ")**."] ["Row:" ","] ["x=" ""]]]
+                          ["" ":"] ["" "'"] ["[" "]"] ["**[the fund](" ")**."] ["Row:" ","] ["x=" ""] ["" "~"]]]
     (is (= (str before <fund> after) (text/for-operator live outside (str before fund after)))
         (str before "…" after)))
   (testing "brackets a role already wrote are not doubled"
     (is (= (str "See " <fund> ", please") (text/for-operator live outside (str "See " <fund> ", please")))))
-  (testing "a link that ends in a mark is found before a shorter one"
-    (is (= ["" "https://a.example/x?" ""] (text/link-in #{"https://a.example/x?" "https://a.example/x"} "https://a.example/x?")))
-    (is (= ["" "https://a.example/x" "?"] (text/link-in #{"https://a.example/x"} "https://a.example/x?")))))
+  (testing "the marks after a link are no part of it, and a slash is"
+    (is (= ["" "https://a.example/x" "?"] (text/link-in #{"https://a.example/x"} "https://a.example/x?")))
+    (is (= ["" "https://a.example/x/" ")."] (text/link-in #{"https://a.example/x/" "https://a.example/x"} "https://a.example/x/).")))
+    (is (nil? (text/link-in #{"https://a.example/x"} "https://a.example/x/")))))
 
 (deftest text-run-on-after-a-live-link-breaks-it
   (doseq [s [(str fund "&d=SECRET")
@@ -81,9 +82,9 @@
       (is (= (str broken <fund>) (text/for-operator live outside (str before fund))) before))))
 
 (deftest a-live-link-has-one-plain-shape
-  (doseq [s [fund apply-page "https://a.example" "https://a.example:8443/x#top" "http://localhost/"
-             "https://a.example/x?q=a,b;c&d='e'*f~g" "https://a.example/x/" "https://a.example/x?q="
-             "https://a.example/x_" "https://a.example/x?" "https://a.example/a.b/c!d" "https://a.example/x%2C"]]
+  (doseq [s [fund apply-page "https://a.example" "https://a.example/" "https://a.example:8443/x#top" "http://localhost/"
+             "https://a.example/x?q=a&b=c%2Cd#e:f+g@h~i" "https://a.example/x/" "https://a.example/a.b/c-d_e"
+             "https://a.example/x%2C"]]
     (is (text/link? s) s))
   (doseq [s ["ftp://a.example/x" "HTTPS://a.example/" "https://user@a.example/" "https://a.example\\x"
              "https://a.ex\u0430mple/" "https://a.example/x y" "https://a.example/\u200b" "https://" "a.example/x"
@@ -91,12 +92,21 @@
              "https://a.example/a|b" "https://a.example/a`b" "https://a.example/{a}"
              (str "https://a.example/" (apply str (repeat text/max-link "x"))) nil 3]]
     (is (not (text/link? s)) (pr-str s)))
-  (testing "no full stop, comma, semicolon or exclamation mark with no letter or digit after it"
-    ;; Apple's link finder drops the end of an address from such a mark,
-    ;; even between angle brackets (fuzzed against NSDataDetector).
-    (doseq [s ["https://a.example/x." "https://a.example/x," "https://a.example/x;" "https://a.example/x!"
-               "https://a.example/x,-" "https://a.example/x.=" "https://a.example/a;/" "https://a.example/a&c%;="
-               "https://a.example/zz9=A@*.=" "https://a.example/?,_/"]]
+  (testing "only the marks every link finder reads through: no ' * ! $ , ;"
+    ;; Ghostty's finder stops at an apostrophe, and terminals differ on
+    ;; the rest (found in relay#95's review).
+    (doseq [s ["https://example.org/o'brien" "https://a.example/x*y" "https://a.example/x!y" "https://a.example/x$y"
+               "https://a.example/x,y" "https://a.example/x;y" "https://a.example/x?q=a,b;c&d='e'*f~g"]]
+      (is (not (text/link? s)) s)
+      (is (= (text/defang (str "See " s " now")) (text/for-operator #{s} outside (str "See " s " now"))) s)))
+  (testing "it ends in a letter or a digit, or a slash right after one"
+    ;; Apple's link finder drops the end of an address from a full stop
+    ;; with no letter or digit after it, even between angle brackets and
+    ;; even before a final slash (fuzzed against NSDataDetector).
+    (doseq [s ["https://a.example/x." "https://a.example/x?" "https://a.example/x?q=" "https://a.example/x_"
+               "https://a.example/x-" "https://a.example/x~" "https://a.example/x:" "https://a.example/x#"
+               "https://a.example/x.=" "https://a.example/a./" "https://a.example/a._/" "https://a.example/a//"
+               "https://a.example/?"]]
       (is (not (text/link? s)) s)
       (is (= (text/defang (str "See " s " now")) (text/for-operator #{s} outside (str "See " s " now"))) s)))
   (testing "no bracket: Apple's link finder balances them across what follows the address"
@@ -112,12 +122,13 @@
   ;; operator typed.
   (doseq [[word address] [["https://a.example/x." "https://a.example/x"] ["(https://a.example/x)," "https://a.example/x"]
                           ["https://a.example/x!!!" "https://a.example/x"] ["\"https://a.example/x\";" "https://a.example/x"]
-                          ["https://a.example/x?" "https://a.example/x?"] ["https://a.example/x:" "https://a.example/x:"]
-                          ["https://a.example/x_" "https://a.example/x_"] ["https://a.example/x**" "https://a.example/x**"]
-                          ["href=https://a.example/x" "https://a.example/x"]]]
+                          ["https://a.example/x/." "https://a.example/x/"] ["href=https://a.example/x" "https://a.example/x"]]]
     (is (= address (second (text/address-in word))) word))
-  (doseq [word ["https://a.example/x|y" "xhttps://a.example/x" "https://a.example/x(y)" "a.example/x" "https://a.example/\u00e9"]]
-    (is (nil? (text/address-in word)) word)))
+  (testing "a mark a link finder would take into the address makes it no address relay takes"
+    (doseq [word ["https://a.example/x?" "https://a.example/x:" "https://a.example/x_" "https://a.example/x**"
+                  "https://a.example/x|y" "xhttps://a.example/x" "https://a.example/x(y)" "a.example/x"
+                  "https://a.example/\u00e9" "https://a.example/o'brien"]]
+      (is (nil? (text/address-in word)) word))))
 
 (deftest a-broken-link-mends-to-its-address
   (is (= fund (text/mend (text/defang fund))))
@@ -266,12 +277,16 @@
 (def gen-word (gen/fmap #(apply str %) (gen/vector (gen/elements (seq "abcXYZ019-_")) 1 8)))
 
 (def gen-link
+  "An address of a live link's shape: it ends in a letter or a digit, or
+  a slash right after one."
   (gen/let [scheme (gen/elements ["https" "http"])
             host (gen/fmap #(apply str %) (gen/vector (gen/elements (seq "abcxyz019")) 1 8))
             tld (gen/elements ["example.org" "example.net" "test"])
             path (gen/vector gen-word 0 3)
-            query (gen/one-of [(gen/return "") (gen/fmap #(str "?q=" %) gen-word)])]
-    (str scheme "://" host "." tld (when (seq path) (str "/" (str/join "/" path))) query)))
+            query (gen/one-of [(gen/return "") (gen/fmap #(str "?q=" %) gen-word)])
+            end (gen/elements ["a" "9" "Z" "b/" "0/"])]
+    (str scheme "://" host "." tld (when (seq path) (str "/" (str/join "/" path))) query
+         (if (or (seq path) (seq query)) end (when (str/ends-with? end "/") "/")))))
 
 (def gen-piece
   "A piece of text: a link, a word, a mark, a host with no scheme, or

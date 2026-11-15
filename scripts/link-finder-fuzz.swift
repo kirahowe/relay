@@ -1,12 +1,14 @@
 // Checks relay's rule for a live link against Apple's link finder.
 //
 // relay shows a live link between angle brackets, <https://x.example/a>,
-// so that whatever reads the text follows exactly that address. Apple's
-// NSDataDetector, which Mail and the phone use, has rules of its own: it
-// balances brackets across what follows an address, and drops the end of
-// one from a full stop, comma, semicolon or exclamation mark that no
-// letter or digit follows. relay.text/link? therefore admits only an
-// address that holds no bracket and has no such tail.
+// so that whatever reads the text follows exactly that address. Link
+// finders have rules of their own, and they disagree. Apple's
+// NSDataDetector, which Mail and the phone use, balances brackets across
+// what follows an address, and drops the end of one from a full stop,
+// comma, semicolon or exclamation mark that no letter or digit follows.
+// Ghostty's stops at an apostrophe. relay.text/link? therefore admits
+// only letters, digits and - . _ ~ / ? # & = % : + @, and an address must
+// end in a letter or a digit, or a slash right after one.
 //
 // This builds random addresses, puts each between angle brackets with
 // text before and after, and asks NSDataDetector what it would follow.
@@ -42,18 +44,21 @@ func followed(_ s: String) -> [String] {
 
 func isAlnum(_ c: Character) -> Bool { c.isASCII && (c.isLetter || c.isNumber) }
 
-/// relay.text/link?, for the addresses this builds: no bracket, and no
-/// full stop, comma, semicolon or exclamation mark after the last letter
-/// or digit.
+/// relay.text/link?, for the addresses this builds: after the scheme only
+/// letters, digits and - . _ ~ / ? # & = % : + @, ending in a letter or a
+/// digit, or a slash right after one.
 func relayShape(_ link: String) -> Bool {
-    if link.contains(where: { "()[]".contains($0) }) { return false }
-    let tail = link.reversed().prefix { !isAlnum($0) }
-    return !tail.contains { ".,;!".contains($0) }
+    guard let r = link.range(of: "://") else { return false }
+    let rest = Array(link[r.upperBound...])
+    guard rest.allSatisfy({ isAlnum($0) || "-._~/?#&=%:+@".contains($0) }) else { return false }
+    let n = rest.count
+    return isAlnum(rest[n - 1]) || (rest[n - 1] == "/" && n >= 2 && isAlnum(rest[n - 2]))
 }
 
 let cases = CommandLine.arguments.count > 1 ? Int(CommandLine.arguments[1]) ?? 100_000 : 100_000
-// What RFC 3986 allows in a path, a query or a fragment.
-let marks = Array("-._~:/?#[]@!$&'()*+,;=%").map(String.init)
+// What RFC 3986 allows in a path, a query or a fragment, with the marks
+// relay admits listed twice so that many of the addresses are of its shape.
+let marks = Array("-._~:/?#[]@!$&'()*+,;=%-._~/?#&=%:+@").map(String.init)
 let alnum = Array("abcxyzABC0189").map(String.init)
 // What a role might write straight before and after a link.
 let before = ["", "See ", "**", "(", "[t](", "x=", "\"", "'", "_", "Row 1 ", "evil[.]example/SECRET/", "a:", "~", "((", "[", "<"]
