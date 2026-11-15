@@ -16,6 +16,7 @@
 | [111](111-keep-a-new-surface-in-the-conversation-until-kira-pins-it.md) | Keep a new surface in the conversation until Kira pins it | feature | P2 |
 | [112](112-let-kira-put-a-surface-back-as-it-was.md) | Let Kira put a surface back as it was | feature | P2 |
 | [113](113-decide-how-tabs-pages-and-placement-work-above-the-board.md) | Decide how tabs, pages and placement work above the board | feature | P2 |
+| [117](117-carry-a-live-link-in-a-push-as-an-action-and-check-the.md) | Carry a live link in a push as an action, and check the readers nobody has run | feature | P2 |
 | [56](56-serve-the-board-over-http-and-sse-on-the-tailnet-for-a-web.edn) | Serve the board over HTTP and SSE on the tailnet for a web client | feature | P3 |
 | [59](59-keep-large-integers-exact-in-mcp-structured-results.md) | Keep large integers exact in MCP structured results | bug | P3 |
 | [60](60-let-relay-acp-start-agentloop-with-a-relative-data-path.edn) | Let relay acp start agentloop with a relative --data path | bug | P3 |
