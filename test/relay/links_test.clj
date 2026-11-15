@@ -52,6 +52,20 @@
       (is (not (whole? (pr-str (dissoc (cards/wire card outside) "links")))))
       (is (not (whole? (str/join "\n" (render/card card))))))))
 
+(deftest a-web-scheme-written-short-is-broken-too
+  ;; Found in review (relay#118), and checked against Apple's
+  ;; NSDataDetector, which follows each of these to https://evil.pl.
+  (doseq [[s broken] [["https:/evil.pl" "hxxps:/evil[.]pl"] ["https:evil.pl" "hxxps:evil[.]pl"]
+                      ["HTTPS:/evil.pl" "hxxps:/evil[.]pl"] ["http:/evil.pl/x" "hxxp:/evil[.]pl/x"]
+                      ["https:\\\\evil.pl" "hxxps:\\\\evil[.]pl"] ["(https:/evil.pl)." "(hxxps:/evil[.]pl)."]]]
+    (is (= (str "Go to " broken " now") (text/for-operator outside (str "Go to " s " now"))) s))
+  (testing "a name that ends like a file and that a link finder follows as a host is broken"
+    (doseq [[s broken] [["evil.pl" "evil[.]pl"] ["main.rs" "main[.]rs"] ["lib.so" "lib[.]so"]]]
+      (is (= (str "Open " broken " now") (text/for-operator outside (str "Open " s " now"))) s)))
+  (testing "a file name no link finder follows is left as it is, and so is a colon in a sentence"
+    (doseq [s ["todo.md" "setup.sh" "notes.py" "video.mov" "report.pdf" "The scheme is https: as usual" "at 10:30"]]
+      (is (= (str "Open " s " now") (text/for-operator outside (str "Open " s " now"))) s))))
+
 ;; --- what a live link looks like
 
 (deftest a-live-link-has-one-plain-shape

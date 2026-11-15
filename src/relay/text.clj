@@ -96,14 +96,17 @@
   "Endings that mark a file name rather than a host. A name with one dot
   and one of these endings (todo.md, setup.sh, video.mov) is left as
   written when nothing follows it that only a link has: a path, a port,
-  a query or a fragment."
+  a query or a fragment. An ending that Apple's link finder follows as a
+  host when it stands bare is not here, though it names a file too: pl,
+  rs and so (checked against NSDataDetector with every ending in this
+  set). A name such as script.pl is broken like any host."
   #{"md" "markdown" "txt" "rtf" "tex" "pdf" "doc" "docx" "odt" "xls" "xlsx" "ods" "ppt" "pptx" "odp"
     "csv" "tsv" "json" "jsonl" "edn" "yaml" "yml" "toml" "ini" "cfg" "conf" "xml" "html" "htm" "css"
-    "scss" "js" "mjs" "cjs" "ts" "tsx" "jsx" "clj" "cljs" "cljc" "bb" "java" "kt" "go" "py" "rb" "rs"
-    "c" "h" "cpp" "hpp" "cs" "sh" "zsh" "bash" "pl" "lua" "sql" "db" "sqlite" "log" "diff" "patch"
+    "scss" "js" "mjs" "cjs" "ts" "tsx" "jsx" "clj" "cljs" "cljc" "bb" "java" "kt" "go" "py" "rb"
+    "c" "h" "cpp" "hpp" "cs" "sh" "zsh" "bash" "lua" "sql" "db" "sqlite" "log" "diff" "patch"
     "bak" "tmp" "png" "jpg" "jpeg" "gif" "webp" "heic" "svg" "ico" "tif" "tiff" "bmp" "mp3" "m4a"
     "wav" "flac" "ogg" "aac" "mp4" "m4v" "mov" "mkv" "avi" "webm" "zip" "tar" "gz" "tgz" "bz2" "xz"
-    "7z" "rar" "dmg" "pkg" "ics" "vcf" "eml" "mbox" "epub" "ps" "so" "dylib" "pem" "crt" "allium"})
+    "7z" "rar" "dmg" "pkg" "ics" "vcf" "eml" "mbox" "epub" "ps" "dylib" "pem" "crt" "allium"})
 
 (def never-domains
   "The file-extensions that are no top-level domain, so a name ending in
@@ -181,11 +184,17 @@
                        "http" "hxxp://" "https" "hxxps://" "ftp" "fxp://"
                        ("hxxp" "hxxps" "fxp") (str scheme "://")
                        (str scheme "[:]//"))))
+      ;; A web scheme written short, https:/x.example, https:x.example or
+      ;; https:\\x.example, which a link finder still follows.
+      (str/replace #"(?i)(?<![a-z0-9+.\-])(https?|ftp):(?=[/\\A-Za-z0-9])(?!//)"
+                   (fn [[_ scheme]]
+                     (case (str/lower-case scheme) "http" "hxxp:" "https" "hxxps:" "fxp:")))
       (str/replace #"\S+"
                    (fn [word]
                      (let [word (str/replace word #"(?<=\S)[。．｡](?=\S)" "[.]")]
                        (if (or (str/includes? word "://") (str/includes? word "[:]//")
-                               (re-find #"(?i)\bwww\." word))
+                               (re-find #"(?i)\bwww\." word)
+                               (re-find #"(?i)(?<![a-z0-9+.\-])(?:hxxps?|fxp):(?=\S)" word))
                          (break-every-dot word)
                          (-> word
                              (str/replace #"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?![\w.])" break-dots)

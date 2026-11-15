@@ -14,6 +14,9 @@
             [relay.config :as config]
             [relay.core :as core]
             [relay.digest :as digest]
+            [relay.ready :as ready]
+            [relay.render :as render]
+            [relay.text :as text]
             [relay.tools :as tools]
             [relay.workspace :as workspace])
   (:import (java.time Instant)))
@@ -124,6 +127,34 @@
       (is (contains? (tools/offered cfg "steward") "daily_note_draft"))
       (is (not (contains? (tools/offered cfg "clerk") "daily_note_write")))
       (is (not (contains? (tools/offered cfg "scout") "daily_note_draft"))))))
+
+(deftest an-outside-part-of-the-note-is-broken-wherever-the-note-is-read
+  ;; Found in review (relay#118): the note itself is relay's and carries
+  ;; no outside label, while a part of it may come from a session that
+  ;; read outside text. The ready view showed every line by the note's
+  ;; labels, so such a part kept its link whole there, though mail broke
+  ;; it.
+  (let [w (-> (seed)
+              (run "steward" :digest/write-part
+                   {:part "grants" :items [{:text "Apply at https://evil.example/SECRET today"}]}
+                   ["contaminated" "private"])
+              ok
+              (compose "2026-10-26") ok)
+        m (note w)
+        item (first (filter #(= (:id m) (:message %)) (ready/ready (:state w))))
+        wire (ready/wire item)
+        whole? #(re-find #"https?://" %)]
+    (is (not (text/contaminated? (:labels m))) "the note's own labels say nothing of outside text")
+    (is (some #(str/includes? % "hxxps://evil[.]example/SECRET") (get wire "lines")))
+    (is (not (whole? (pr-str wire))) "what a client is sent")
+    (is (not (whole? (str/join "\n" (render/ready [wire] (java.time.ZoneId/of "UTC") (:now w))))) "relay ready")
+    (is (not (whole? (str/join "\n" (render/ready-one wire (java.time.ZoneId/of "UTC") (:now w))))) "relay ready <id>")
+    (is (not (whole? (channels/body-text m))) "and mail, as before")
+    (testing "a live link in that part is listed, though the note is clean"
+      (let [live #{"https://evil.example/SECRET"}
+            wire (ready/wire (assoc item :live live))]
+        (is (= ["https://evil.example/SECRET"] (map #(get % "address") (get wire "links"))))
+        (is (not (whole? (pr-str (dissoc wire "links")))))))))
 
 ;; I-flag at the core: a model cannot keep a flagged change out of the note.
 

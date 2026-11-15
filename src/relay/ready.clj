@@ -74,10 +74,15 @@
      :message (:id m) :message-kind (:kind m) :urgency (:urgency m) :thread (:thread m)
      :title (:subject m)
      :lines (vec (for [sec (:sections m) it (:items sec)] (line sec it)))
+     ;; Each line's own labels: an item may come from a session that read
+     ;; outside text in a message that is clean otherwise, as a part of
+     ;; the daily note does. A line is shown by its own labels.
+     :line-labels (vec (for [sec (:sections m) it (:items sec)] (messages/item-labels m it)))
      ;; The same lines under their sections' headings, for a message read
      ;; whole; :lines stays flat, and an act's :line indexes it.
      :sections (vec (for [sec (:sections m)]
-                      {:heading (:heading sec) :lines (mapv #(line sec %) (:items sec))}))
+                      {:heading (:heading sec) :lines (mapv #(line sec %) (:items sec))
+                       :line-labels (mapv #(messages/item-labels m %) (:items sec))}))
      ;; Links relay built itself, by line, kept followable.
      :links (into {} (keep-indexed (fn [i it] (when (:link it) [i (:link it)]))
                                    (for [sec (:sections m) it (:items sec)] it)))
@@ -227,16 +232,25 @@
 (defn- safe-line [labels s]
   (messages/plain-line labels s))
 
+(defn- line-labels
+  "The labels line `i` of an item is shown by: its own, when the item
+  keeps them for each line (a message does), else the item's."
+  [it i]
+  (get (:line-labels it) i (:labels it)))
+
 (defn- item-links
   "The live links an item's outside text holds, in order, each once: its
-  title, its lines and its sections' headings, as `safe` shows them. For
-  an item that carries relay's live links under :live
-  (relay.core/with-live). Clean text has none: it is shown as written."
+  title, its lines and its sections' headings, as `safe` shows them,
+  each by the labels it is shown with. For an item that carries relay's
+  live links under :live (relay.core/with-live). Clean text has none: it
+  is shown as written."
   [{:keys [labels live] :as it}]
-  (if (text/contaminated? labels)
-    (vec (distinct (mapcat #(text/links-in live (text/refs-as-words (first (text/strip-hidden (str %)))))
-                           (concat [(:title it)] (:lines it) (keep :heading (:sections it))))))
-    []))
+  (let [links (fn [ls s]
+                (when (text/contaminated? ls)
+                  (text/links-in live (text/refs-as-words (first (text/strip-hidden (str s)))))))]
+    (vec (distinct (concat (links labels (:title it))
+                           (mapcat (fn [i l] (links (line-labels it i) l)) (range) (:lines it))
+                           (mapcat #(links labels (:heading %)) (:sections it)))))))
 
 (defn- wire-item [{:keys [labels] :as it}]
   (let [sources (sources-of-item it)
@@ -245,8 +259,10 @@
              (text/listed (item-links it))
              {"id" (:id it) "kind" (name (:kind it)) "at" (str (:at it)) "seq" (:seq it)
              "title" (safe-line labels (:title it))
+             ;; Each line by its own labels (line-labels): an outside
+             ;; item in a message that is clean otherwise is still broken.
              "lines" (vec (map-indexed (fn [i l]
-                                         (cond-> (safe labels l)
+                                         (cond-> (safe (line-labels it i) l)
                                            (get (:links it) i) (str "\n" (text/visible-line (get (:links it) i)))))
                                        (:lines it)))
              "from" from
@@ -261,9 +277,9 @@
                                            (:acts it)))
       ;; Headed sections, so a message read whole keeps its headings.
       (some :heading (:sections it))
-      (assoc "sections" (mapv (fn [{:keys [heading lines]}]
+      (assoc "sections" (mapv (fn [{:keys [heading lines line-labels]}]
                                 {"heading" (when heading (safe-line labels heading))
-                                 "lines" (mapv #(safe labels %) lines)})
+                                 "lines" (vec (map-indexed (fn [i l] (safe (get line-labels i labels) l)) lines))})
                               (:sections it)))
       (:start it) (assoc "start" (str (:start it)) "end" (str (:end it)))
       (:start-date it) (assoc "allDay" true "startDate" (str (:start-date it))
