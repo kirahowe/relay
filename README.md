@@ -2113,6 +2113,12 @@ house (`docs/plans/house.md`) are covered from the attacker's side:
 - I9, the calendar is the agent's: the feed needs the token, refuses a
   web page's origin, holds only what a role wrote, and is reachable only
   on 127.0.0.1 (s26-calendar-feed).
+- I10, only a link relay can account for is whole: a page shows the
+  scout one address on the open web. The scout sends it on with others
+  built around the steward's canary, and the steward tells you all of
+  it with more of its own. The address the web showed reaches you whole,
+  in the client, in mail and in what is ready, and no address that holds
+  the canary does. No tool lets a role keep a link (s27-live-links).
 
 It also checks that a crash does not lose a label or run a call twice
 (s7-*), that no view the operator reads passes a raw control or format
@@ -2151,7 +2157,7 @@ data directory, a scripted stand-in for the Anthropic API on localhost
 stand-in ntfy server, and stand-in tools (`pentest/standins/`) for
 Reminders, the web and a mail campaign service, which only write to files in that
 directory. The mail scenarios start a mailpit of their own on free ports
-on 127.0.0.1, and s22 a web server there for webtool's fixture build;
+on 127.0.0.1, and s22 and s27 a web server there for webtool's fixture build;
 each is stopped by the PID the scenario started. It never calls a model,
 touches Reminders, the keychain or launchctl, or reads `~/.config/relay`, and it refuses to start if any
 path it would use lies under `~/Sync` or `~/.config/relay`. Every
