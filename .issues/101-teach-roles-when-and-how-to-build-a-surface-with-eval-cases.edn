@@ -1,11 +1,11 @@
 {:id 101
  :title "Teach roles when and how to build a surface, with eval cases"
- :status :blocked
+ :status :ready
  :type :feature
  :priority :p2
  :created "2026-11-14"
- :updated "2026-11-14"
+ :updated "2026-11-15"
  :tags #{}
- :blocked-by #{97}
+ :blocked-by #{}
  :related #{}
  :details "101-teach-roles-when-and-how-to-build-a-surface-with-eval-cases.md"}

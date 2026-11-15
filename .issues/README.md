@@ -41,7 +41,9 @@
 | [57](57-make-hidden-characters-visible-in-card-text-that-roles-and.md) | Make hidden characters visible in card text that roles and resolve get | bug | P2 |
 | [61](61-fork-acp-go-sdk-and-decode-with-encoding-json-v2.md) | Fork acp-go-sdk and decode with encoding/json/v2 | feature | P2 |
 | [84](84-try-relay-from-the-phone-with-agmente.md) | Try relay from the phone with Agmente | chore | P2 |
+| [101](101-teach-roles-when-and-how-to-build-a-surface-with-eval-cases.md) | Teach roles when and how to build a surface, with eval cases | feature | P2 |
 | [103](103-keep-the-seed-when-core-test-s-any-sequence-property-fails.md) | Keep the seed when core-test's any-sequence property fails in bb verify | bug | P2 |
+| [106](106-put-buttons-on-role-built-surfaces-by-kira-s-rule.md) | Put buttons on role-built surfaces by Kira's rule | feature | P2 |
 | [109](109-tell-the-operator-a-card-s-line-has-gone-even-while-a.md) | Tell the operator a card's line has gone even while a refusal is showing | bug | P2 |
 | [110](110-scroll-an-open-card-that-is-taller-than-the-pane.md) | Scroll an open card that is taller than the pane | bug | P2 |
 | [126](126-break-a-link-whose-scheme-has-no-double-slash.md) | Break a link whose scheme has no double slash | bug | P2 |
@@ -84,8 +86,6 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [93](93-let-roles-build-their-own-screens-with-a2ui.md) | Let roles build their own screens with A2UI | feature | P1 |
-| [101](101-teach-roles-when-and-how-to-build-a-surface-with-eval-cases.md) | Teach roles when and how to build a surface, with eval cases | feature | P2 |
-| [106](106-put-buttons-on-role-built-surfaces-by-kira-s-rule.md) | Put buttons on role-built surfaces by Kira's rule | feature | P2 |
 | [107](107-let-kira-fill-in-a-form-a-role-built.md) | Let Kira fill in a form a role built | feature | P2 |
 | [117](117-carry-a-live-link-in-a-push-as-an-action-and-check-the.md) | Check what Proton Mail on the phone follows in relay's mail | feature | P2 |
 

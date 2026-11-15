@@ -75,3 +75,5 @@ Needs relay#97.
 - 2026-11-15: added Kira's principle that the agent is the designer and
   the user needs to know nothing about surfaces, and the open question
   of a designer role (relay#97 session).
+- 2026-11-15, from the relay#93 session: relay#97, the only blocker,
+  is done, so this is ready.

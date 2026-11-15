@@ -46,3 +46,5 @@ form.
 Needs relay#97. relay-tui's side builds on relay#100.
 
 ## Log
+- 2026-11-15, from the relay#93 session: relay#97, the only blocker,
+  is done, so this is ready.
