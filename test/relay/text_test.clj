@@ -321,7 +321,22 @@
                         ["x.@secret.attacker.com" "x.@secret[.]attacker[.]com"]]]
       (is (= broken (text/defang s)) s))
     (is (= "dana@riverbend.test" (text/defang "dana@riverbend.test")))
-    (is (= "d_a+n-a@riverbend.test" (text/defang "d_a+n-a@riverbend.test"))))
+    (is (= "d_a+n-a@riverbend.test" (text/defang "d_a+n-a@riverbend.test")))
+    ;; Found in the third round: Apple's finder takes none of these for a
+    ;; mail address and follows the host (checked against NSDataDetector).
+    (doseq [before ["+" "see +" ".+" "-+" "+-" "__" "--" "(-" "a." "\u01c5"]]
+      (is (= (str before "@secret[.]attacker[.]com") (text/defang (str before "@secret.attacker.com"))) before)))
+  (testing "a host written straight after a port's digit is broken too"
+    ;; Found in the third round: the port took its first digit with it,
+    ;; and the host after it then began where no host may begin.
+    (doseq [[s broken] [["docs.example.org:1secret-token.attacker.com/x" "docs[.]example[.]org:1secret-token[.]attacker[.]com/x"]
+                        ["a.b:1secret.attacker.com" "a.b:1secret[.]attacker[.]com"]
+                        ["example.org:8080attacker.com" "example[.]org:8080attacker[.]com"]
+                        ["a.https:0x7f.evil.pl/x" "a[.]https:0x7f[.]evil[.]pl/x"]]]
+      (is (= broken (text/defang s)) s)))
+  (testing "www after an underscore or a hyphen is still www to a link finder"
+    (doseq [[s broken] [["_www.a1.docx" "_www[.]a1[.]docx"] ["-WWW.123.txt" "-WWW[.]123[.]txt"]]]
+      (is (= broken (text/defang s)) s)))
   (is (= "github[.]com/kira/tidy" (text/defang "github.com/kira/tidy")))
   (is (= "www[.]riverbend[.]zz" (text/defang "www.riverbend.zz")))
   (testing "a host is broken whatever its ending, once a path, query or port follows it"

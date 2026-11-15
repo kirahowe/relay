@@ -123,12 +123,14 @@
 (def ^:private host-candidate
   ;; A run of dotted labels, not inside a longer one, then what follows it
   ;; that only a link has: a path, a query, a fragment or a port. An @
-  ;; before it, after a letter, a digit or one of _ + -, says it is a mail
-  ;; address's domain. An @ after anything else is no mail address
-  ;; (.@secret.attacker.com), and a link finder follows what comes after
-  ;; it as a host. A ? or # counts only with something after it, so a
-  ;; question ending in a file name keeps it.
-  #"(?:(?<=[\p{L}\p{N}_+\-])(@)|(?<![\p{L}\p{M}\p{N}_\-])(?<![\p{L}\p{M}\p{N}_\-]\.))([\p{L}\p{M}\p{N}_\-]+(?:\.[\p{L}\p{M}\p{N}_\-]+)+)(/|[?#](?=\S)|:\d)?")
+  ;; before it, straight after an ASCII letter or digit, says it is a
+  ;; mail address's domain. An @ after anything else is no mail address
+  ;; to a link finder (.@x.example, +@x.example), which follows what
+  ;; comes after it as a host. A ? or # counts only with something after
+  ;; it, so a question ending in a file name keeps it. A port is its
+  ;; colon alone: taking a digit with it would hide a host written
+  ;; straight after (x.example:1secret.attacker.example).
+  #"(?:(?<=[A-Za-z0-9])(@)|(?<![\p{L}\p{M}\p{N}_\-])(?<![\p{L}\p{M}\p{N}_\-]\.))([\p{L}\p{M}\p{N}_\-]+(?:\.[\p{L}\p{M}\p{N}_\-]+)+)(/|[?#](?=\S)|:(?=\d))?")
 
 (defn- break-dots [s] (str/replace s "." "[.]"))
 
@@ -158,9 +160,11 @@
                                  (not-any? tld-like? (butlast (rest labels))))
                             (and (file-extensions ending) (= 2 (count labels)))))))))))
 
-(defn- break-every-dot
+(defn break-every-dot
   "A word that holds a link, with every dot in it broken: the ASCII dot
-  and the fullwidth and ideographic full stops a browser reads as one."
+  and the fullwidth and ideographic full stops a browser reads as one.
+  Also for a word about to be cut in two, since a piece of a name that
+  was no host can be one (notes.ini cut to notes.in)."
   [word]
   (-> word
       (str/replace #"(?<=\S)[。．｡](?=\S)" "[.]")
@@ -200,7 +204,9 @@
                    (fn [word]
                      (let [word (str/replace word #"(?<=\S)[。．｡](?=\S)" "[.]")]
                        (if (or (str/includes? word "://") (str/includes? word "[:]//")
-                               (re-find #"(?i)\bwww\." word)
+                               ;; www after anything but a letter or a
+                               ;; digit: a link finder follows _www.x.txt.
+                               (re-find #"(?i)(?<![\p{L}\p{N}])www\." word)
                                (re-find #"(?i)(?<![a-z0-9+.\-])(?:hxxps?|fxp):(?=\S)" word))
                          (break-every-dot word)
                          (-> word

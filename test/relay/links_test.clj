@@ -382,6 +382,17 @@
           lines (render/wrap (text/for-operator outside name) 60)]
       (is (not-any? #(re-find #"[a-z]\.[a-z]" %) lines) (pr-str lines))
       (is (= (str/replace name "." "[.]") (apply str lines)))))
+  (testing "a long file name is not cut into a piece that reads as a host"
+    ;; Found in the third round: ...-v02.ini, cut after 58 columns, left
+    ;; ...-v02.in on a line, which Apple's link finder follows.
+    (let [name "Quarterly-board-pack-for-the-trustees-meeting-final-v02.ini"
+          shown (text/for-operator outside (str "Open " name " first"))
+          lines (render/wrap shown 58)]
+      (is (str/includes? shown name) "the name itself is a file's, and left as written")
+      (is (not-any? #(re-find #"[A-Za-z0-9]\.[A-Za-z]" %) lines) (pr-str lines))
+      (is (some #(str/includes? % "v02[.]") lines) "its dot is broken where it was cut")
+      (testing "a name that fits is not touched"
+        (is (= ["Open notes.ini first"] (render/wrap "Open notes.ini first" 58))))))
   (testing "the list of what is ready cuts an item short without leaving the start of a link"
     (let [long-link (str "https://grants.example.org/" (apply str (repeat 70 "a")) "/apply")
           item {"id" "message:1" "kind" "message" "at" "2026-11-14T12:00:00Z" "seq" 1 "title" "Grants"

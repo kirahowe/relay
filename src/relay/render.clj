@@ -488,11 +488,16 @@
   A cut would leave the start of a link that can be followed, which is a
   different address; and a broken link has to stay one word for the
   command line to make it a hyperlink (relay.text/anchored). Such a word
-  runs past the width on a line of its own."
+  runs past the width on a line of its own. Any other long word has its
+  dots broken before it is cut, so that no piece of it reads as a host."
   [s width]
-  (let [words (mapcat #(if (re-find #"(?i)(?:https?|hxxps?)://" %)
-                         [%]
-                         (map (partial apply str) (partition-all width %)))
+  (let [words (mapcat #(cond
+                         (re-find #"(?i)(?:https?|hxxps?)://" %) [%]
+                         (<= (count %) width) [%]
+                         ;; A piece of a dotted name can be a host though
+                         ;; the name was none, so its dots are broken
+                         ;; before it is cut.
+                         :else (map (partial apply str) (partition-all width (text/break-every-dot %))))
                       (remove str/blank? (str/split (str s) #"\s+")))]
     (loop [words words line nil out []]
       (if-let [w (first words)]

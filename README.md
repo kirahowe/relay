@@ -1507,7 +1507,12 @@ to its end: Apple's balances brackets across whatever follows an address
 and drops a full stop or a comma from its end, and Ghostty's stops at an
 apostrophe. `scripts/link-finder-fuzz.swift` checks the rule against
 Apple's finder itself: it followed all 188,377 addresses of this shape
-exactly, out of 600,000 random ones. What Proton Mail follows has not
+exactly, out of 600,000 random ones. The other half, that broken text
+holds nothing a finder can follow, is checked the same way:
+`scripts/inert-text-fuzz.clj` writes hostile strings as relay shows them
+in mail, to a client and in `relay ready`, and
+`scripts/inert-text-check.swift` asks the finder whether any can be
+followed. Run both when link breaking changes. What Proton Mail follows has not
 been checked (relay#117). An address of any other shape is never live,
 and `relay link` refuses it: one with a comma, an apostrophe or a
 bracket in it, or one that ends in `=`. Write a host in other letters in
