@@ -4,11 +4,14 @@
   (I1), the operator's files cannot be changed from inside (I7), and the
   time limit holds inside the VM. Each run uses a fresh data directory, so
   its container and image have names of their own, and both are removed
-  by name at the end. Skipped only when `container` is not installed."
+  by name at the end. Skipped only when `container` is not installed.
+  When it is installed and Apple's container service is stopped, the test
+  fails once, saying so, and builds nothing."
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [clojure.string :as str]
-            [clojure.test :refer [deftest is testing]]
+            [clojure.test :refer [deftest do-report is testing]]
+            [relay.container-service :as service]
             [relay.inbound :as inbound]
             [relay.log :as log]
             [relay.shell :as shell]
@@ -30,9 +33,22 @@
     (shell/run-runner! (shell/remove-argv house names) {:ms 60000})
     (shell/run-runner! [container-bin "image" "rm" (:image names)] {:ms 60000})))
 
+(def ^:private stopped
+  "The line saying Apple's container service is not running, or nil."
+  (delay (some-> container-bin service/stopped)))
+
 (deftest ^:volley/serial the-shell-runs-in-a-real-container-with-no-way-out
-  (if-not container-bin
+  (cond
+    (not container-bin)
     (println "SKIPPED: Apple container is not installed, so the shell's live test cannot run")
+
+    ;; Nothing below can pass while the service is stopped, so the test
+    ;; fails here, once, with the reason.
+    @stopped
+    (do-report {:type :fail :message @stopped
+                :expected "Apple's container service to be running" :actual "it is stopped"})
+
+    :else
     (let [dir (str (fs/real-path (fs/create-temp-dir {:prefix "relay-shell-live"})))
           data (str dir "/data")
           notes (str dir "/notes")

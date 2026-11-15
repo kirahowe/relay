@@ -1,11 +1,13 @@
 (ns relay.verify
   "`bb verify`: every check relay has, in one run, with one summary. See
   VERIFY.md for what each step proves. The plan is data (`plan`), and so is
-  the summary (`summary-lines`); only `run!` starts processes."
+  the summary (`summary-lines`, `container-note`); only `run!` starts
+  processes."
   (:refer-clojure :exclude [run!])
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [relay.container-service :as service]))
 
 (def usage
   "usage: bb verify [options]
@@ -104,6 +106,30 @@ runs the behaviour evals against the real model, which costs a little.
         (str "Failed: " (str/join ", " (for [r results :when (not (passed? [r]))]
                                          (:id (:step r))))))])))
 
+(def needs-container
+  "The steps that hold a check on a real container, and that check. It
+  fails while Apple's container service is stopped."
+  {"relay" "the shell's live test" "pentest" "s18-shell-walls"})
+
+(defn failed-ids
+  "The ids of the steps that ran and did not exit 0."
+  [results]
+  (vec (for [{:keys [step exit skipped]} results :when (and (not skipped) (not (zero? exit)))]
+         (:id step))))
+
+(defn container-note
+  "The lines that name Apple's stopped container service as a reason
+  steps fail, or nil. `stopped` is the line saying it is not running
+  (relay.container-service/stopped), nil while it runs. `ids` are the
+  steps to speak of: the ones planned, before a run, and the ones that
+  failed, after it. Only those that hold a check on a real container are
+  named, and nothing is said when there is none. A step may have failed
+  for another reason too, so the lines claim only that it cannot pass."
+  [stopped ids]
+  (let [named (for [id ids :when (needs-container id)] (str id " (" (needs-container id) ")"))]
+    (when (and stopped (seq named))
+      [stopped (str "While it is stopped, " (str/join " and " named) " cannot pass.")])))
+
 (defn- run-step [{:keys [dir cmd what id] :as step}]
   (if-not (fs/directory? dir)
     {:step step :skipped (str "no checkout at " dir)}
@@ -117,7 +143,10 @@ runs the behaviour evals against the real model, which costs a little.
 
 (defn run!
   "Runs the plan and exits non-zero if any step failed or could not run.
-  A step whose checkout is missing is reported as SKIP and fails the run."
+  A step whose checkout is missing is reported as SKIP and fails the run.
+  While Apple's container service is stopped the run cannot pass, and it
+  says so twice: before the first step, so it can be stopped and the
+  service started, and under the summary, as a reason for what failed."
   [args]
   (let [opts (parse-args args)
         root (str (fs/parent (fs/parent (fs/parent here))))]
@@ -126,7 +155,16 @@ runs the behaviour evals against the real model, which costs a little.
       (:help opts) (println usage)
       (:list opts) (doseq [{:keys [id what live]} (plan (assoc opts :live true) root)]
                      (println (format "  %-10s %s%s" id what (if live "  (--live only)" ""))))
-      :else (let [results (mapv run-step (plan opts root))]
+      :else (let [steps (plan opts root)
+                  ;; Asked afresh each time: the service may be started
+                  ;; while the steps run.
+                  stopped #(some-> (service/bin) service/stopped)
+                  _ (when (some (comp needs-container :id) steps)
+                      (doseq [l (container-note (stopped) (map :id steps))] (println l)))
+                  results (mapv run-step steps)
+                  failed (failed-ids results)]
               (doseq [l (summary-lines results)] (println l))
+              (when (some needs-container failed)
+                (doseq [l (container-note (stopped) failed)] (println l)))
               (when-not (passed? results)
                 (System/exit 1))))))

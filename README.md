@@ -2148,7 +2148,9 @@ It takes agentloop and relay-tui from the sibling checkouts
 fixture build from `../webtool/bin/webtool-fixture` or `--webtool`; the
 release build does not count. `--build` builds a
 sibling that is missing. A scenario that needs a missing piece is reported as SKIP with the
-reason. It
+reason. One that needs something installed but stopped is reported as FAIL
+with the reason, without being run: `s18-shell-walls` needs Apple's
+container service (`container system start`). It
 needs a python3 (`/usr/bin/python3`, or `--python`) for `pty/drive.py`,
 which starts each process in a group of its own, and mailpit (from
 Homebrew) for s19 and s20. The MCP scenarios build agentloop's test server, `internal/cmd/mcpserver`, with Go. `--keep`

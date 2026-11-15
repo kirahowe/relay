@@ -43,3 +43,21 @@
       (is (some #(str/includes? % "FAIL  exit 3") lines))
       (is (some #(str/includes? % "SKIP  no checkout") lines)))
     (is (= "All passed." (last (verify/summary-lines [ok]))))))
+
+(deftest a-stopped-container-service-is-named-for-the-steps-it-fails
+  (let [stopped "Apple's container service is not running. Start it with: container system start"]
+    (testing "only the steps that hold a check on a real container are named"
+      (is (= [stopped "While it is stopped, relay (the shell's live test) and pentest (s18-shell-walls) cannot pass."]
+             (verify/container-note stopped ["agentloop" "relay" "pentest"])))
+      (is (= [stopped "While it is stopped, pentest (s18-shell-walls) cannot pass."]
+             (verify/container-note stopped ["webtool" "pentest"]))))
+    (testing "nothing is said while the service runs, or when no such step is spoken of"
+      (is (nil? (verify/container-note nil ["relay" "pentest"])))
+      (is (nil? (verify/container-note stopped ["agentloop" "relay-tui" "webtool" "eventkit"])))
+      (is (nil? (verify/container-note stopped []))))
+    (testing "after a run, the steps spoken of are those that ran and failed"
+      (is (= ["relay"] (verify/failed-ids [{:step {:id "agentloop"} :exit 0 :secs 1.0}
+                                           {:step {:id "relay"} :exit 21 :secs 2.0}
+                                           {:step {:id "pentest"} :skipped "no checkout at /p"}]))))
+    (testing "every step it can name is one the plan runs"
+      (is (every? (set (step-ids {})) (keys verify/needs-container))))))

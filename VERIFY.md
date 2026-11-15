@@ -32,6 +32,12 @@ Nothing here reads `~/Sync/relay` or `~/.config/relay`, sends a
 notification, or touches Reminders or the keychain, except that the live
 evals read the API key from the keychain.
 
+The relay and pentest steps each hold one check on a real container: the
+shell's live test and `s18-shell-walls`. Both need Apple's container
+service, which `container system start` starts. While it is stopped each
+of the two fails in one line that says so, and the run fails. `bb verify`
+says it before the first step and again under the table.
+
 ## Before handing work back
 
 1. Run `bb verify`. Every step must pass.
