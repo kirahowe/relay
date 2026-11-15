@@ -79,9 +79,10 @@ The coordinating session's, 2026-11-14, and Kira may overrule them:
 - relay resolves templates, `@path`, `formatString` and `@index` before
   any client sees a surface, so a client gets final strings.
 - The first catalog is what relay-tui can operate: Text, Row, Column,
-  List, Card, Divider and CheckBox. TextField and ChoicePicker come when
-  relay-tui can type and choose in them, and Button after them. relay
-  holds the catalog file, and relay-tui's copy is checked against it.
+  List, Card, Divider and CheckBox. Button is the second step, now that
+  relay#98 is decided. TextField and ChoicePicker come when relay-tui can
+  type and choose in them. relay holds the catalog file, and relay-tui's
+  copy is checked against it.
 - One function in relay-tui decides what is drawn as a followable link.
   relay#95 owns it and surfaces use it.
 
@@ -145,3 +146,7 @@ reaches a plain ACP client as the agent wrote it.
   wider. The coordinating session pointed out that the catalog needs no
   grid at all while the tracker card kind exists, which is what the
   Decisions now say. The test and its limits are in relay#102.
+- 2026-11-14: nothing is left to do on the epic itself. It waits on its
+  parts: relay#96 and relay#98 are in review, relay#94, relay#95,
+  relay#97 and relay#100 have sessions on them, relay#101 waits on
+  relay#97, and relay#102 is Kira's to decide after real use.
