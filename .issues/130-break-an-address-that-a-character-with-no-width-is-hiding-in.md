@@ -50,7 +50,9 @@ The coordinating session's triage, for Kira to confirm: in scope as
 hidden text, P2. An address written this way does not work in ordinary
 readers, so untargeted text is unlikely to carry it. The readers at risk
 are finders that go by cells and skip marks. It holds up neither
-relay#95's landing nor the surface work.
+relay#95's landing nor the surface work. It has since withdrawn the
+sentence about ordinary readers and changed the triage. Both are in
+the Log.
 
 ### What the relay#93 session ran before filing
 
@@ -127,8 +129,9 @@ A first draft, mine, for whoever builds this to tighten.
   finder followed in relay's output.
 - [ ] The Log says which terminal's link finder was run against these,
   or that none was.
-- [ ] Kira has confirmed or changed the triage: in scope as hidden text,
-  P2.
+- [ ] Kira has confirmed or changed the triage in the Log: in scope as
+  hidden text, relay's half P2, relay-tui's half ahead of it, and
+  relay#104 as the root fix with no stopgap in relay-tui.
 - [ ] `bb verify` passes, and an adversarial Codex review finds nothing
   in scope.
 
@@ -141,3 +144,21 @@ breaker is the only one.
 
 ## Log
 
+- 2026-11-15, from the coordinating session. It withdraws "an address
+  written this way does not work in ordinary readers" from its triage in
+  the Context. Apple's finder follows seven of the forms as written.
+  What holds is that relay's own breaker stops all of them, because it
+  breaks a host's dots whether or not it knew the scheme, and
+  relay-tui's does not.
+- 2026-11-15, the coordinating session's triage, still for Kira to
+  confirm. relay's half is P2: the three things relay leaves as written,
+  `hidden?` taking the two characters, and the fuzz alphabet. relay-tui's
+  half matters more, since for conversation text its breaker is the only
+  one and a second client is being written.
+- 2026-11-15, the coordinating session's recommendation. The root fix is
+  relay#104, in place of a second and a third port of the breaker. With
+  conversation text broken in relay's proxy by `relay.text`, the one
+  breaker that is fuzzed against Apple's finder covers every client, and
+  a client's own breaker becomes a second line. It recommends no stopgap
+  in relay-tui before that. It is putting this to Kira and asking the
+  relay#118 session whether it can take relay#104.

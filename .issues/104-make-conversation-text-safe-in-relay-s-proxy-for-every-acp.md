@@ -36,6 +36,11 @@ cards (relay#94). Every client draws what it gets. relay-tui then stops
 breaking conversation links itself, which settles the question left
 open at the end of relay#95's proposal.
 
+Added by the coordinating session on 2026-11-15: a client that draws
+text itself and not through a terminal, such as the Mac client, should
+turn its own link detection off for conversation text and make links
+only from relay's data.
+
 ## Acceptance criteria
 
 - [ ] In a contaminated session, no link outside relay's live links
@@ -51,6 +56,9 @@ open at the end of relay#95's proposal.
   link a second time.
 - [ ] README, docs/client-protocol.md and spec/relay.allium say that
   relay makes conversation text safe.
+- [ ] docs/client-protocol.md tells a client that draws text itself to
+  turn its own link detection off for conversation text and to make
+  links only from relay's data.
 - [ ] A pentest case attacks it through a plain ACP client.
 - [ ] An adversarial Codex review finds nothing in scope.
 
@@ -60,3 +68,17 @@ Related: relay#84 (the phone trial, which this should land before),
 relay#91 and relay#95.
 
 ## Log
+
+- 2026-11-15, from the relay#93 session. relay#130 is a reason to do
+  this one first. relay-tui's own breaker left six addresses whole that
+  `relay.text` breaks, each split by a character with no width, and
+  Apple's finder followed all six. The coordinating session recommends
+  this issue as the root fix, so that the one breaker fuzzed against
+  Apple's finder covers every client and a client's own breaker is a
+  second line. It is putting that to Kira.
+- 2026-11-15, from the relay#93 session. The Proposal and the third
+  criterion were written before relay#118. relay no longer keeps a live
+  link whole between angle brackets: the text it sends is inert and the
+  links travel as data beside it (docs/client-protocol.md). Whoever
+  takes this should reword both. The criterion about a client's own link
+  detection is my draft of the coordinating session's addition.
