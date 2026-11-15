@@ -1,0 +1,11 @@
+{:id 99
+ :title "The live shell test fails while Apple's container service is stopped"
+ :status :ready
+ :type :bug
+ :priority :p3
+ :created "2026-11-14"
+ :updated "2026-11-14"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "99-the-live-shell-test-fails-while-apple-s-container-service.md"}

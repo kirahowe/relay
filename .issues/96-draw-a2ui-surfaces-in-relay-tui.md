@@ -9,22 +9,42 @@ relay-tui gets its own, for a small catalog.
 
 ## Acceptance criteria
 
-- [ ] A pure package in relay-tui reads A2UI v1.0 `createSurface`,
+- [x] A pure package in relay-tui reads A2UI v1.0 `createSurface`,
   `updateComponents`, `updateDataModel` and `deleteSurface` strictly, and
   folds them into surfaces.
-- [ ] It draws Text, Column, Row, List, Card, Divider, CheckBox, Button,
+  - Receipt: `internal/a2ui` (`Decode`, `ParseLines`, `Apply`);
+    `TestDecodeRejects`, `TestDecodeNotSupported`, `TestDecodeAccepts`,
+    `TestFoldLifecycle`, `TestApplyKeepsItsInput` in `a2ui_test.go`.
+- [x] It draws Text, Column, Row, List, Card, Divider, CheckBox, Button,
   TextField and ChoicePicker, and relay's own Tracker, to lines of a given
   width.
-- [ ] Image, Video, AudioPlayer and any unknown component draw as one
+  - Receipt: `render.A2UI` in `internal/render/a2ui.go`;
+    `TestFixturesGolden`, `TestFixturesFitNarrow`,
+    `TestChecklistFocusAndToggle`, `TestTracker`.
+- [x] Image, Video, AudioPlayer and any unknown component draw as one
   plain line that names them. Nothing is fetched.
-- [ ] Every string drawn goes through relay-tui's existing path for text
+  - Receipt: `TestA2UIPlaceholdersAndLinks`. I also ran a surface with an
+    image URL carrying a query string through `a2uiview`: it printed
+    `[image not shown]` and no part of the URL.
+- [x] Every string drawn goes through relay-tui's existing path for text
   that may hold control characters.
-- [ ] Fixtures express a checklist, a tracker and a note as surfaces, with
+  - Receipt: `TestA2UIDrawsNoControlBytesFromTheSurface`,
+    `TestA2UIDefangsLinks`. The same hostile surface held an OSC 8 escape
+    sequence, which came out as visible `\u001b` text.
+- [x] Fixtures express a checklist, a tracker and a note as surfaces, with
   golden renderings.
-- [ ] Properties: no input panics the fold; no drawn line is wider than
+  - Receipt: `internal/a2ui/testdata/*.jsonl` and
+    `testdata/TestFixturesGolden/*_60.golden`, `*_100.golden`.
+- [x] Properties: no input panics the fold; no drawn line is wider than
   asked; a data-model write reads back.
-- [ ] A command prints a surface file's rendering, for mocks.
-- [ ] `make check` passes.
+  - Receipt: `TestNoInputPanicsTheFold`, `TestWellFormedMessagesFold`,
+    `TestA2UINeverDrawsPastTheWidth`, `TestSetReadsBack`,
+    `TestDataModelMessageReadsBack`.
+- [x] A command prints a surface file's rendering, for mocks.
+  - Receipt: `cmd/a2uiview`, `go run ./cmd/a2uiview -width 60 <file>`.
+- [x] `make check` passes.
+  - Receipt: run in the main session on 2026-11-14 at relay-tui ae0ce7d2,
+    every package ok, the deep surface-rules run included.
 
 ## Plan
 
@@ -32,3 +52,39 @@ Nothing is wired into the dashboard and nothing in relay changes. The
 result is a mock to show Kira and a count of what the renderer took.
 
 ## Log
+
+- 2026-11-14: built by a subagent from a written brief, reviewed and
+  verified in the main session, committed as relay-tui ae0ce7d2 ("Draw
+  A2UI v1.0 surfaces, as a spike").
+- What it cost: 1,741 lines of Go and 986 of tests, in about 13 minutes of
+  agent time. The model, fold, bindings, focus and actions are in
+  `internal/a2ui` (1,172 lines). The drawing is in `internal/render`
+  (459 lines), because it reuses render's own boxes, wrapping and the
+  board's tracker grid, which are not exported.
+- The tracker needs a component of relay's own. A2UI's basic catalog has
+  no grid, so `Tracker` lives in relay's catalog, `urn:relay:catalog:v1`
+  (`internal/a2ui/relay_catalog.json`), and is drawn by the board's own
+  grid code. The checklist and the note need only basic components.
+- My change in review: the subagent's relay catalog listed Image, Video
+  and AudioPlayer. relay#93 leaves them out, so I removed them, and
+  `TestCatalogs` now checks that. From the basic catalog they still draw
+  as the one-line placeholder.
+- What v1.0 looks like on the wire, which differs from the v0.9 most
+  renderers target: a binding is `{"@path": ...}`, a function call is
+  `{"@call": ..., "args": ...}`, and a component's own keys start with
+  `@` (`@catalogId`, `@checks`). `createSurface` can carry components and
+  the data model inline. A component whose catalog cannot be resolved
+  draws as a placeholder, since A2UI gives no fallback.
+- Not built, on purpose: `@checks`, `justify` and `align`, schema
+  validation of each component's properties, and typing into a TextField
+  or choosing in a ChoicePicker (both are drawn and take focus). Icon,
+  Tabs, Modal, Slider and DateTimeInput draw as placeholders.
+- A Card has no title slot in A2UI, so a card's title sits inside the box
+  as Text and not in the border, unlike the board today.
+- For relay#97: the renderer breaks every link in a surface's strings
+  itself, as relay-tui does for conversation text. Once relay sends
+  surfaces it will have made the text safe and kept its live links whole
+  (relay#94), so the renderer must then take relay's word and stop
+  breaking links a second time.
+- The limits the package sets: 64 surfaces, 2,000 components, 1,500 drawn
+  nodes, depth 16, 500 template items.

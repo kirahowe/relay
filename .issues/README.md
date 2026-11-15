@@ -35,6 +35,7 @@
 | [83](83-speed-up-the-slowest-remaining-test-namespaces.md) | Speed up the slowest remaining test namespaces | chore | P3 |
 | [86](86-fix-agentloop-s-flaky-testgroupleaderisasentinel.md) | Fix agentloop's flaky TestGroupLeaderIsASentinel | bug | P3 |
 | [92](92-add-an-eval-case-that-makes-the-hub-use-roles-to-route.md) | Add an eval case that makes the hub use roles to route | feature | P3 |
+| [99](99-the-live-shell-test-fails-while-apple-s-container-service.md) | The live shell test fails while Apple's container service is stopped | bug | P3 |
 
 ### In progress
 
