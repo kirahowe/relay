@@ -1,0 +1,11 @@
+{:id 103
+ :title "Keep the seed when core-test's any-sequence property fails in bb verify"
+ :status :ready
+ :type :bug
+ :priority :p2
+ :created "2026-11-14"
+ :updated "2026-11-14"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "103-keep-the-seed-when-core-test-s-any-sequence-property-fails.md"}

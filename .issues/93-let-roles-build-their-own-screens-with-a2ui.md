@@ -56,6 +56,32 @@ Mine, and Kira may overrule them:
 - A2UI has no binding for ACP. relay carries its messages in `_relay/`
   methods.
 
+The coordinating session's, 2026-11-14, and Kira may overrule them:
+
+- A role-built surface is a fourth card kind, beside checklist, tracker
+  and note. It reuses card events, the board, `_relay/cards` and its
+  notifications, refs and the ready view. Retiring the three older kinds
+  is optional and later (relay#102). This is less than the Context above
+  says, where A2UI replaces the card kinds.
+- A surface has one rev and one set of labels in the first version, not
+  one for each component or path.
+- relay resolves templates, `@path`, `formatString` and `@index` before
+  any client sees a surface, so a client gets final strings.
+- The first catalog is what relay-tui can operate: Text, Row, Column,
+  List, Card, Divider and CheckBox. TextField and ChoicePicker come when
+  relay-tui can type and choose in them, and Button after them. relay
+  holds the catalog file, and relay-tui's copy is checked against it.
+- One function in relay-tui decides what is drawn as a followable link.
+  relay#95 owns it and surfaces use it.
+
+## Open
+
+Whether relay's catalog holds a component of its own. relay#96's spike
+added `Tracker`, a grid, which the basic catalog lacks. Kira, asked on
+2026-11-14: "can we not build that from primitives available from a2ui?
+if not then yes we should keep it anyway." That is being tested. Nothing
+in relay#97 or relay#100 waits on it.
+
 ## The parts
 
 - relay#94 Keep a link live when relay can say where it came from
@@ -64,6 +90,14 @@ Mine, and Kira may overrule them:
 - relay#97 Keep role-built surfaces in the log and send them to every
   client
 - relay#98 Decide what a button on a role-built screen may do
+- relay#100 Draw surface cards on relay-tui's board
+- relay#101 Teach roles when and how to build a surface, with eval cases
+- relay#102 Decide whether checklist, tracker and note become built-in
+  surfaces
+
+Filed along the way and not parts of this: relay#103, a seed lost when a
+property failed in `bb verify`, and relay#104, conversation text that
+reaches a plain ACP client as the agent wrote it.
 
 ## Acceptance criteria
 
@@ -99,3 +133,7 @@ Mine, and Kira may overrule them:
   decision above says the catalog is a subset of A2UI's types. This is
   the one place the work so far steps outside it, and it is hers to
   accept or refuse.
+- 2026-11-14: filed relay#100 to relay#104 on behalf of every session.
+  Each session works in its own jj workspace, and each workspace would
+  have given its next issue the same number, so one session files them
+  all.

@@ -20,16 +20,20 @@
 | [78](78-keep-an-emoji-with-a-variation-selector-inside-the-width.md) | Keep an emoji with a variation selector inside the width relay-tui draws | bug | P3 |
 | [80](80-fix-the-labels-test-property-that-fails-on-seed.md) | Fix the labels-test property that fails on seed 1792892445485 | bug | P3 |
 | [87](87-list-the-pane-s-keys-in-the-help-overlay.md) | List the pane's keys in the help overlay | feature | P3 |
+| [102](102-decide-whether-checklist-tracker-and-note-become-built-in.md) | Decide whether checklist, tracker and note become built-in surfaces | feature | P3 |
 
 ### Ready
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [90](90-find-what-dropped-four-regression-cases-since-b12b.md) | Find what dropped four regression cases since B12b | bug | P1 |
+| [104](104-make-conversation-text-safe-in-relay-s-proxy-for-every-acp.md) | Make conversation text safe in relay's proxy for every ACP client | bug | P1 |
 | [38](38-stop-the-hub-notifying-twice-for-one-stuck-memo.md) | Stop the hub notifying twice for one stuck memo | bug | P2 |
 | [57](57-make-hidden-characters-visible-in-card-text-that-roles-and.md) | Make hidden characters visible in card text that roles and resolve get | bug | P2 |
 | [61](61-fork-acp-go-sdk-and-decode-with-encoding-json-v2.md) | Fork acp-go-sdk and decode with encoding/json/v2 | feature | P2 |
 | [84](84-try-relay-from-the-phone-with-agmente.md) | Try relay from the phone with Agmente | chore | P2 |
+| [100](100-draw-surface-cards-on-relay-tui-s-board.md) | Draw surface cards on relay-tui's board | feature | P2 |
+| [103](103-keep-the-seed-when-core-test-s-any-sequence-property-fails.md) | Keep the seed when core-test's any-sequence property fails in bb verify | bug | P2 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
 | [83](83-speed-up-the-slowest-remaining-test-namespaces.md) | Speed up the slowest remaining test namespaces | chore | P3 |
 | [86](86-fix-agentloop-s-flaky-testgroupleaderisasentinel.md) | Fix agentloop's flaky TestGroupLeaderIsASentinel | bug | P3 |
@@ -56,6 +60,7 @@
 | --- | --- | --- | --- |
 | [95](95-call-a-link-safe-from-the-dashboard.md) | Call a link safe from the dashboard | feature | P2 |
 | [97](97-keep-role-built-surfaces-in-the-log-and-send-them-to-every.md) | Keep role-built surfaces in the log and send them to every client | feature | P2 |
+| [101](101-teach-roles-when-and-how-to-build-a-surface-with-eval-cases.md) | Teach roles when and how to build a surface, with eval cases | feature | P2 |
 
 ## Done
 
