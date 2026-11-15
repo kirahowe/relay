@@ -92,13 +92,13 @@ What is new:
   lines, and still finds no address holding the canary that can be
   followed.
   - Receipt: `s27-live-links` passes, the dashboard checks included,
-    against relay-tui a17a265d.
+    against relay-tui ed33f90d, the reader on relay-tui's `integration`.
 - [x] README, resources/AGENTS.md, spec/relay.allium,
   docs/architecture.md and docs/client-protocol.md say what changed.
   - Receipt: uormplut on this chain.
 - [x] `bb verify` passes but for relay#99's two tests.
-  - Receipt: 2026-11-15, tip slposyyt, with relay-tui a17a265d; the
-    numbers are in the Log.
+  - Receipt: 2026-11-15, tip poxzoxsl, with relay-tui ed33f90d; the
+    numbers are in the Log's last entry.
 - [ ] An adversarial Codex review finds nothing in scope. (Not met as
   written: three rounds, none clean. Kira accepted it on 2026-11-15 with
   the fuzz as the standing check; see the Log.)
@@ -243,3 +243,17 @@ What is new:
     held back by it, and nothing reaches `main` on a run with one.
   - This goes to review with the last criterion unticked, as relay#94
     did.
+- 2026-11-15: landed on `integration`.
+  - The relay#95 session's reader for the `links` list reached
+    relay-tui's `integration` first, as relay-tui ppzxzvzp (ed33f90d).
+    It is the a17a265d of the entries above after its own review: a
+    card or a ready item that has a `links` key is read from the list
+    alone, an empty one included, and a list it cannot read leaves the
+    thing in place with no links. relay always sends the key.
+  - `bb verify --relay-tui-dir` on an export of ed33f90d, tip poxzoxsl:
+    agentloop, relay-tui, webtool, eventkit and fuzz pass (seed
+    1794748575, 300,000 cases, none followed); relay 1,196 of 1,197 and
+    the pentests 30 of 31, s27 among those that pass. The two failures
+    are relay#99's.
+  - Not in this change: a surface card's `links`. relay#97 lands after
+    this and adds them, read through `relay.surfaces/strings`.
