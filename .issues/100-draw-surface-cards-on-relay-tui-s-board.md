@@ -323,7 +323,8 @@ The review, read-only, with the threat model:
     relay#110, which I take next); keys held while "connecting…" shows
     are replayed onto a restored card; the saved view puts a
     checklist's cursor back by number; an op that times out reads as
-    refused. The last three are sent to relay-ed to file.
+    refused. The last three are filed as relay#131, relay#132 and
+    relay#133.
   - Rejected: keys acting on a card the unloaded board does not draw
     (two unlikely failures at once: a notification with no good first
     answer, and keys pressed blind); a line masked on a surface coming
