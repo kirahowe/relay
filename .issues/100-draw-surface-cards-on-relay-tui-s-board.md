@@ -27,8 +27,8 @@ The session that built relay#96 builds this.
 Tightened on 2026-11-14 against the wire form relay#97 fixed
 (`docs/client-protocol.md`, "A surface card"), and again on 2026-11-15
 where the reviews and the contract moved a rule. The receipts name tests
-in relay-tui at plulklqq 9d24c5f7, the tip of ten commits on its
-`integration` (kxsoqlxu c1716fc8).
+in relay-tui at plulklqq 3ba7dadd, the tip of ten commits on its
+`integration` (ottsqzmp 74b0d40e).
 
 - [x] relay-tui reads a card of kind `surface` from `_relay/cards` and
   `_relay/cards/changed` as the contract gives it, and folds
@@ -136,7 +136,8 @@ in relay-tui at plulklqq 9d24c5f7, the tip of ten commits on its
     uqwynqos, urpkvpun and plulklqq.
 - [ ] `make check` passes, and so does `bb verify` from a relay workspace
   that has relay#97.
-  - `make check` passes at plulklqq 9d24c5f7. The early joint run, relay
+  - `make check` passes at plulklqq 3ba7dadd, after the rebase of
+    2026-11-15 that the Log records. The early joint run, relay
     at relay#97's nlyokvuorvpu 2d0c8e8a against relay-tui urpkvpun
     7efde4e4: agentloop, relay-tui, catalog, webtool and eventkit pass,
     relay 1,212 of 1,213 and pentest 30 of 31, the two failures being
@@ -238,3 +239,23 @@ The review, read-only, with the threat model:
   board holds the copy of the surface a key press put the cursor on,
   and reports the title unless that copy is the one shown. It has not
   had a review round. relay-32 recommends one.
+- 2026-11-15: rebased the chain over three commits relay#95 put on
+  relay-tui's `integration`: the reader for the `links` list relay sends
+  with a card or a ready item, and a change of the judge in the tests
+  that check a drawn row. The tip is plulklqq 3ba7dadd on ottsqzmp
+  74b0d40e. Each of the ten commits vets, and `make check` passes at the
+  tip. Two things changed with the rebase.
+  - A surface card gets its live links the way every card does.
+    `cardLinesFor` takes the card's own list before it draws any kind,
+    so a broken form relay lists for a surface card becomes the
+    hyperlink to the listed address. A surface card with no list draws
+    as it did. No code of relay#100's changed for this.
+  - The surface tests judge a drawn row with `followable`, the tests'
+    own reader, where they used the production checks `unsafeRow` and
+    `linkable`. relay#95 found the production check wrong as a judge
+    for its version of `TestA2UIDefangsLinks`: a Row can put the cut
+    tail of a broken link in the middle of a line, which no terminal
+    follows but the check flags, on rapid seed 373474630933771000 at
+    3,000 checks. Mine had the same judge in four places. The test
+    bodies are as they were. The surface and link properties pass on
+    that seed and at 5,000 checks.
