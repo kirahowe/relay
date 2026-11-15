@@ -129,4 +129,45 @@ What is new:
   - A surface card (relay#97) will get its list from
     `relay.surfaces/strings`, the strings relay resolved, once relay#97
     has landed.
+- Review, read-only, threat model given. The findings were all in link
+  breaking older than this change, which the review of inert text
+  reached.
+  - Round 1 (Codex), 2026-11-14: two findings, both fixed in wxmtmmwq.
+    The ready view showed an outside part of the daily note by the
+    note's own clean labels, so its links stayed whole in the dashboard
+    and in `relay ready`. And `https:/x.pl` was not broken. Checking the
+    second against Apple's finder showed it also follows a bare name
+    ending in pl, rs or so, which relay took for a file. The wider
+    question that raised is relay#121.
+  - Round 2 (Codex), 2026-11-15: three findings, fixed in yxmtvusq. A
+    name such as `secret.attacker.com-report.txt` was left as a file,
+    and a link finder follows the host in it. `.@secret.attacker.com`
+    was left as a mail address. And `relay ready` cut a long file name
+    after the host inside it.
+  - Round 3 (a reviewer agent, not Codex): Codex ran out of quota on
+    this account until 19 November, so this round was a fresh agent with
+    the same brief, the threat model and the diff, none of this
+    session's conclusions, and Apple's link finder to try inputs
+    against. Three findings, fixed in the commit after yxmtvusq. A host
+    written straight after a port's digit was left whole
+    (`docs.example.org:1secret.attacker.com/x`). An `@` after a lone
+    `+`, `-` or `_` still counted as a mail address. And `relay ready`
+    cut a long file name into a piece that reads as a host
+    (`...-v02.ini` to `...-v02.in`). It found nothing in the rework
+    itself: the links list, the terminal hyperlinks, the mail's address
+    lines and the push's actions held, and it found no way for a role to
+    add a live link.
+  - Three rounds, eight findings, none clean, so by AGENTS.md this goes
+    to Kira and no fourth round was run. Every finding was in
+    `relay.text/defang`'s exemptions (file names, mail addresses, ports)
+    or in what cuts its output, not in links as data. The reviewer's
+    fuzz is now in the repo (`scripts/inert-text-fuzz.clj` and
+    `scripts/inert-text-check.swift`): random hostile strings as mail, a
+    client and `relay ready` show them, with Apple's link finder asked
+    whether any can be followed. After the fixes: 1,980,000 cases over
+    five seeds, none followed.
+- `bb verify` on the rework before the review fixes: agentloop,
+  relay-tui, webtool and eventkit pass; relay 1,188 of 1,189 and the
+  pentests 30 of 31, the rest being relay#99's two. relay's suite after
+  the fixes: 1,190 of 1,191.
 
