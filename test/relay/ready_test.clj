@@ -267,11 +267,11 @@
 (deftest a-source-reads-as-where-it-came-from
   (is (nil? (ready/provenance [])))
   (is (nil? (ready/provenance ["private"])) "her own things say nothing")
-  (is (= "Drew on: a mail from x@y.org" (ready/provenance ["private" "mail:x@y.org"])))
-  (is (= "Drew on: the web page office-holidays.html" (ready/provenance ["contaminated" "web:office-holidays.html"]))
+  (is (= "Drew on: a mail from x@y[.]org" (ready/provenance ["private" "mail:x@y.org"])))
+  (is (= "Drew on: the web page office-holidays[.]html" (ready/provenance ["contaminated" "web:office-holidays.html"]))
       "a source we know wins over the bare mark")
   (is (= "Drew on: something from outside" (ready/provenance ["contaminated"])))
-  (is (= "Drew on: a mail from a@b; the web page a.html" (ready/provenance ["web:a.html" "mail:a@b"]))))
+  (is (= "Drew on: a mail from a@b; the web page a[.]html" (ready/provenance ["web:a.html" "mail:a@b"]))))
 
 (def gen-label
   (gen/one-of [(gen/elements ["private" "contaminated" "web" "mail" "github" "mail:a@b.org" "web:x.org" "github:o/r"])
@@ -294,7 +294,7 @@
         it (assoc (first (items w)) :labels ["contaminated" "mail:booker@example.org" "private"]
                   :sources ["mail:booker@example.org"])
         wire (ready/wire it)]
-    (is (= "Drew on: a mail from booker@example.org" (get wire "from")))
+    (is (= "Drew on: a mail from booker@example[.]org" (get wire "from")))
     (is (not (str/includes? (json/generate-string wire) "mail:booker")))
     (is (= true (get wire "outsider")))))
 

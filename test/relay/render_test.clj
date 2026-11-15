@@ -164,7 +164,7 @@
     (is (some #(= (format "      routine %-16s %s (from a web page)" "pay" "every 1m") %)
               (render/status state utc t0))
         "status marks it the same way")
-    (is (some #(and (str/starts-with? % "skills/a/pay.md") (str/ends-with? % "(from a mail)"))
+    (is (some #(and (str/starts-with? % "skills/a/pay[.]md") (str/ends-with? % "(from a mail)"))
               (render/docs state utc (core/docs state nil)))
         "and so does a skill in relay docs")))
 

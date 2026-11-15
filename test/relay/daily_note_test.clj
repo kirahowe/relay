@@ -105,7 +105,7 @@
         m (note w)]
     (is (= "digest" (:kind m)))
     (is (= "Daily note for Monday 26 October: 1 change to check" (:subject m)))
-    (is (str/includes? (note-text (digest/with-hints m :reply)) "1. New how-to \"grants\" (1 line added), shaped by a mail from eve@example.net. It says: \"Grants\". Reply \"revert 1\" to undo it."))
+    (is (str/includes? (note-text (digest/with-hints m :reply)) "1. New how-to \"grants\" (1 line added), shaped by a mail from eve@example[.]net. It says: \"Grants\". Reply \"revert 1\" to undo it."))
     (is (str/includes? (note-text m) "2. Interview, Thu 10:00. Prep notes?"))
     (is (not (re-find #"relay revert|change:" (note-text m))) "one number per item, and no command for a phone")
     (is (not (str/includes? (note-text m) "venues")) "a quiet change is the writer's to describe")

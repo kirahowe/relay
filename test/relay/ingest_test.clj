@@ -161,7 +161,7 @@
           (doseq [w ["send" "contact" "files" "drafts" "facts" "close" "what you tell the operator"]]
             (is (str/includes? body w) w)))))
     (testing "the operator is shown where it came from, in words, once"
-      (is (= "Drew on: a mail from eve@example.net" (relay.provenance/drew-on (:labels m)))))
+      (is (= "Drew on: a mail from eve@example[.]net" (relay.provenance/drew-on (:labels m)))))
     (testing "the same mail is never recorded twice"
       (is (empty? (:last (receive w "u1" (mail "From: Eve <eve@example.net>")))))))
   (testing "a mail that says it is the operator's but is not verified says so, and is from outside"

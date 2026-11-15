@@ -1498,12 +1498,13 @@ so a role it adds starts every wake contaminated, and a routine it
 writes fires contaminated memos. Labels decide two things only. A public
 role's session may never hold `private` (agentloop's `forbid_labels`).
 And text an outsider may have written has its links broken wherever it
-is shown: links and hosts only, never file names, paths or times. One
-kind of word gets no such exception: a word that holds a combining mark
-or another character with no width of its own has every dot in it
-broken, a file name included, because a link finder and relay can read
-such a word differently. So an accented name that was written with
-separate marks reads `résumé[.]pdf`.
+is shown. relay does not try to tell a link from a file name or a mail
+address, since that means guessing what each reader's link finder will
+do. It breaks every dot a host name could have: one with a letter after
+it, because every top-level domain begins with a letter. So `todo[.]md`,
+`kira@mail[.]example[.]org` and `résumé[.]pdf`, while `12.50`,
+`08:06:36.382648Z`, `v1.2` and the full stop that ends a sentence stay
+as written. Your own text, and a clean session's, is never touched.
 
 What the operator is told about where a thing came from follows a
 narrower record, its sources: the outside text the session that made it

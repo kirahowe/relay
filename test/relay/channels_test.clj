@@ -310,10 +310,10 @@
                   :labels ["contaminated" "private"] :sources ["web:office-holidays.html"])
         b (channels/body-text m)]
     (is (= "Holiday hours" (channels/subject-text m)))
-    (is (= "Closed Monday. See hxxps://office[.]example/h\n\nDrew on: the web page office-holidays.html" b)
+    (is (= "Closed Monday. See hxxps://office[.]example/h\n\nDrew on: the web page office-holidays[.]html" b)
         "refs as words, links broken, one line at the end")
     (testing "the operator's own thread, and relay's own messages, say nothing of it"
       (is (not (str/includes? (channels/body-text (assoc m :sources [])) "Drew on")))
       (is (not (str/includes? (channels/body-text (assoc m :origin "work-abandoned")) "Drew on"))))
     (testing "the client is sent it as one field"
-      (is (= "Drew on: the web page office-holidays.html" (get (channels/wire m) "drewOn"))))))
+      (is (= "Drew on: the web page office-holidays[.]html" (get (channels/wire m) "drewOn"))))))

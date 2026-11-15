@@ -646,7 +646,7 @@
              (let [edit (:seq (last (core/recipe-changes (st sys))))]
                (inbound/submit! sys {:type :change/revert :actor core/operator :args {:change edit}})
                (let [[line] (reminders/settle-reverts! sys)]
-                 (is (str/includes? line "came from a mail from eve@example.net"))
+                 (is (str/includes? line "came from a mail from eve@example[.]net"))
                  (is (str/includes? line "change it by hand")))
                (is (not (contains? (:reverted (st sys)) edit)) "refused: the change stays not undone"))
              (is (= "Call the bank" (title-now bin)) "Eve's words were not written back")))))
@@ -814,7 +814,7 @@
                  (is (contains? (:reverted (st sys)) a))))
              (testing "undo C: its before value is Eve's title, which relay will not write; it says where it came from"
                (let [[line] (undo! sys c)]
-                 (is (str/includes? line "came from a mail from eve@example.net"))
+                 (is (str/includes? line "came from a mail from eve@example[.]net"))
                  (is (not (contains? (:reverted (st sys)) c)))))
              (is (= "Renew passport" (:title (fake-r bin))))))))
 
@@ -839,7 +839,7 @@
                  (undo! sys a)
                  (is (contains? (:reverted (st sys)) a) "already holds the before value")
                  (let [[line] (undo! sys c)]
-                   (is (str/includes? line "came from a mail from eve@example.net")))
+                   (is (str/includes? line "came from a mail from eve@example[.]net")))
                  (is (= n (count (writes bin))))
                  (is (= "Renew passport" (:title (fake-r bin))))))))))
 
@@ -922,7 +922,7 @@
                      (is (empty? more))
                      (is (str/includes? (get-in m [:data :subject]) "partly undone"))
                      (is (str/includes? (message-text m) "Put back the due date"))
-                     (is (str/includes? (message-text m) "Its earlier title came from a mail from eve@example.net"))
+                     (is (str/includes? (message-text m) "Its earlier title came from a mail from eve@example[.]net"))
                      (is (some #{"mail:eve@example.net"} (:labels m)) "labelled as the outside text it quotes"))
                    (swap! seen assoc entry (message-text m)))
                  (testing (str entry ": the change is recorded as undone, with the outcome on the log")

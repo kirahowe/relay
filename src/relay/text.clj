@@ -94,73 +94,7 @@
   [s]
   (escape s true))
 
-(def file-extensions
-  "Endings that mark a file name rather than a host. A name with one dot
-  and one of these endings (todo.md, setup.sh, video.mov) is left as
-  written when nothing follows it that only a link has: a path, a port,
-  a query or a fragment. An ending that Apple's link finder follows as a
-  host when it stands bare is not here, though it names a file too: pl,
-  rs and so (checked against NSDataDetector with every ending in this
-  set). A name such as script.pl is broken like any host."
-  #{"md" "markdown" "txt" "rtf" "tex" "pdf" "doc" "docx" "odt" "xls" "xlsx" "ods" "ppt" "pptx" "odp"
-    "csv" "tsv" "json" "jsonl" "edn" "yaml" "yml" "toml" "ini" "cfg" "conf" "xml" "html" "htm" "css"
-    "scss" "js" "mjs" "cjs" "ts" "tsx" "jsx" "clj" "cljs" "cljc" "bb" "java" "kt" "go" "py" "rb"
-    "c" "h" "cpp" "hpp" "cs" "sh" "zsh" "bash" "lua" "sql" "db" "sqlite" "log" "diff" "patch"
-    "bak" "tmp" "png" "jpg" "jpeg" "gif" "webp" "heic" "svg" "ico" "tif" "tiff" "bmp" "mp3" "m4a"
-    "wav" "flac" "ogg" "aac" "mp4" "m4v" "mov" "mkv" "avi" "webm" "zip" "tar" "gz" "tgz" "bz2" "xz"
-    "7z" "rar" "dmg" "pkg" "ics" "vcf" "eml" "mbox" "epub" "ps" "dylib" "pem" "crt" "allium"})
-
-(def never-domains
-  "The file-extensions that are no top-level domain, so a name ending in
-  one may have more dots and still be a file (notes.2026.txt), as long
-  as no label between its first and last could end a host: a link finder
-  reads secret.attacker.com-report.txt as the host secret.attacker.com,
-  and a host can carry data in its labels. Any other ending, such as md,
-  sh or zip, counts only in a name with one dot."
-  #{"markdown" "txt" "rtf" "pdf" "docx" "xlsx" "pptx" "csv" "tsv" "json" "jsonl" "edn" "yaml" "yml"
-    "toml" "xml" "html" "htm" "css" "scss" "js" "mjs" "cjs" "tsx" "jsx" "clj" "cljs" "cljc" "png"
-    "jpg" "jpeg" "gif" "webp" "heic" "svg" "mp3" "m4a" "wav" "flac" "mp4" "gz" "tgz" "bz2" "xz"
-    "ics" "eml" "allium"})
-
-(def ^:private host-candidate
-  ;; A run of dotted labels, not inside a longer one, then what follows it
-  ;; that only a link has: a path, a query, a fragment or a port. An @
-  ;; before it, straight after an ASCII letter or digit, says it is a
-  ;; mail address's domain. An @ after anything else is no mail address
-  ;; to a link finder (.@x.example, +@x.example), which follows what
-  ;; comes after it as a host. A ? or # counts only with something after
-  ;; it, so a question ending in a file name keeps it. A port is its
-  ;; colon alone: taking a digit with it would hide a host written
-  ;; straight after (x.example:1secret.attacker.example).
-  #"(?:(?<=[A-Za-z0-9])(@)|(?<![\p{L}\p{M}\p{N}_\-])(?<![\p{L}\p{M}\p{N}_\-]\.))([\p{L}\p{M}\p{N}_\-]+(?:\.[\p{L}\p{M}\p{N}_\-]+)+)(/|[?#](?=\S)|:(?=\d))?")
-
 (defn- break-dots [s] (str/replace s "." "[.]"))
-
-(defn- tld-like?
-  "Whether a label could end a host: a word of two or more letters, alone
-  or before a hyphen or underscore (com-x reads as com to a linker), or a
-  punycode label."
-  [label]
-  (boolean (or (re-matches #"[\p{L}\p{M}]{2,}(?:[_\-].*)?" label)
-               (str/starts-with? (str/lower-case label) "xn--"))))
-
-(defn- host?
-  "Whether a dotted word may be followed as a link: one with a label after
-  the first that could end a host (tld-like?), unless nothing that only a
-  link has follows it and it reads as a file name or is a mail address's
-  domain."
-  [at word after]
-  (let [labels (str/split word #"\.")
-        ending (str/lower-case (peek labels))]
-    (boolean
-     (and (some tld-like? (rest labels))
-          (or (some? after)
-              (and (str/blank? at)
-                   (not (or (and (never-domains ending)
-                                 ;; A label inside it that could end a host
-                                 ;; makes it one, whatever it ends in.
-                                 (not-any? tld-like? (butlast (rest labels))))
-                            (and (file-extensions ending) (= 2 (count labels)))))))))))
 
 (defn- scheme-char? [c]
   (let [c (int c)]
@@ -220,18 +154,10 @@
   ;; they have read this.
   #"(?i)(?<![a-z0-9])(ssh|sftp|file|magnet|news|git):(?=\S)(?!//)")
 
-(def ^:private longest-plain-word
-  "The longest word whose dots are looked at one name at a time. A
-  longer one has every dot broken: no file name or time is that long,
-  and the pattern that reads names takes stack for every label, so a
-  word of many thousand would overflow it."
-  500)
-
 (defn break-every-dot
   "A word that holds a link, with every dot in it broken: the ASCII dot
   and the fullwidth and ideographic full stops a browser reads as one.
-  Also for a word about to be cut in two, since a piece of a name that
-  was no host can be one (notes.ini cut to notes.in)."
+  Also for a word about to be cut in two."
   [word]
   (-> word
       (str/replace #"(?<=\S)[。．｡](?=\S)" "[.]")
@@ -243,86 +169,126 @@
   [word]
   (-> (break-schemes word)
       ;; A web scheme written short, https:/x.example, https:x.example or
-      ;; https:\\x.example, which a link finder still follows. After
-      ;; anything but a letter or a digit, as for slashless-scheme.
+      ;; https:\\x.example. After anything but a letter or a digit, as
+      ;; for slashless-scheme.
       (str/replace #"(?i)(?<![a-z0-9])(https?|ftp):(?=[/\\A-Za-z0-9])(?!//)"
                    (fn [[_ scheme]]
                      (case (str/lower-case scheme) "http" "hxxp:" "https" "hxxps:" "fxp:")))
-      ;; The schemes a terminal's link finder follows with no slashes
-      ;; after them (Ghostty's takes each of these), relay#126.
       (str/replace slashless-scheme (fn [[_ scheme]] (str scheme "[:]")))))
 
 (def ^:private no-width
   ;; A character with no width of its own that is not hidden?: a
   ;; combining or enclosing mark, or a conjoining jamo, which draws on the
-  ;; letter before it. A link finder may read straight through one
-  ;; (Apple's follows https: + U+0301 + //x.example), or stop at one that
-  ;; relay's own patterns read through (a@ + U+0301 + x.example is no
-  ;; mail address to it, and it follows the host).
+  ;; letter before it.
   #"[\p{Mn}\p{Me}\x{1160}-\x{11FF}\x{D7B0}-\x{D7FF}]")
 
-(defn- break-plain-word
-  "A word that holds no character without width, with its links broken
-  and its file names, mail addresses and times left alone."
-  [word]
-  (let [word (-> (break-word-schemes word)
-                 (str/replace #"(?<=\S)[。．｡](?=\S)" "[.]"))]
-    (if (or (> (count word) longest-plain-word)
-            (str/includes? word "://") (str/includes? word "[:]")
-            ;; www after anything but a letter or a
-            ;; digit: a link finder follows _www.x.txt.
-            (re-find #"(?i)(?<![\p{L}\p{N}])www\." word)
-            (re-find #"(?i)(?<![a-z0-9])(?:hxxps?|fxp):(?=\S)" word))
-      (break-every-dot word)
-      (-> word
-          (str/replace #"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?![\w.])" break-dots)
-          (str/replace host-candidate
-                       (fn [[m at host after]]
-                         (if (host? at host after)
-                           (str at (break-dots host) after)
-                           m)))))))
+(defn- mark?
+  "Whether a code point is a combining or enclosing mark, which draws on
+  the character before it."
+  [^long cp]
+  (let [t (Character/getType (int cp))]
+    (or (= t Character/NON_SPACING_MARK) (= t Character/ENCLOSING_MARK))))
 
-(defn- break-marked-word
-  "A word that holds a character without width (no-width), relay#130.
-  Nothing in it is taken for a file name or a mail address: every dot is
-  broken, since relay and a link finder read such a word differently and
-  nobody can say which way. Its schemes are judged twice, as written and
-  with those characters taken out. Where the two agree the word keeps
-  its marks, so an accented name reads as written but for its dots.
-  Where they differ a mark was hiding a scheme, and the word is shown
-  without its marks, broken as the address it spells."
+(defn- holds-an-address?
+  "Whether a word, its schemes already broken, holds a scheme or www.:
+  every dot in such a word is broken, before a digit too."
   [word]
-  (let [strict #(break-every-dot (break-word-schemes %))
-        bare #(str/replace % no-width "")
-        as-written (strict word)
-        as-read (strict (bare word))]
-    (if (= as-read (bare as-written)) as-written as-read)))
+  (boolean (or (str/includes? word "://") (str/includes? word "[:]")
+               (re-find #"(?i)(?<![a-z0-9])www\." word)
+               (re-find #"(?i)(?<![a-z0-9])(?:hxxps?|fxp):(?=\S)" word))))
+
+(defn- closes-a-sentence?
+  "Whether a code point is punctuation that may stand after a full stop
+  at the end of a sentence: a closing quote, a bracket, a comma, another
+  dot. Not an underscore, and not a fullwidth or ideographic full stop."
+  [^long cp]
+  (if (< cp 128)
+    (and (<= 0x21 cp 0x7E) (not (Character/isLetterOrDigit (int cp))) (not= cp (int \_)))
+    (let [t (Character/getType (int cp))]
+      (and (or (= t Character/DASH_PUNCTUATION) (= t Character/START_PUNCTUATION) (= t Character/END_PUNCTUATION)
+               (= t Character/INITIAL_QUOTE_PUNCTUATION) (= t Character/FINAL_QUOTE_PUNCTUATION)
+               (= t Character/OTHER_PUNCTUATION))
+           (not (#{0x3002 0xFF0E 0xFF61} cp))))))
+
+(defn- break-host-dots
+  "A word with every dot broken that a host name could have: a fullwidth
+  or ideographic full stop between two characters, and an ASCII dot with
+  something before it unless what follows it, marks aside, is an ASCII
+  digit or nothing but punctuation to the end of the word.
+
+  This rests on how addresses are written, not on any reader: a host is
+  labels joined by dots and ends in a top-level domain, and every
+  top-level domain begins with a letter. A dot before a digit can end no
+  host name, so amounts, times and versions (12.50, 08:06:36.382648Z,
+  v1.2) stay as written, and so does a full stop that ends a sentence,
+  inside a closing quote too. A host made only of digits is an IPv4
+  address, broken on its own (break-dotted-quads)."
+  [^String word]
+  (let [^String word (str/replace word #"(?<=\S)[。．｡](?=\S)" "[.]")
+        cps (vec (iterator-seq (.iterator (.codePoints word))))
+        n (count cps)
+        ;; From which index on the word holds nothing but punctuation and
+        ;; marks: one walk back from its end.
+        tail (loop [i n]
+               (if (and (pos? i) (let [cp (long (cps (dec i)))] (or (closes-a-sentence? cp) (mark? cp))))
+                 (recur (dec i))
+                 i))
+        sb (StringBuilder.)]
+    (dotimes [i n]
+      (let [cp (long (cps i))
+            keep? (or (not= cp 46) (zero? i) (= 91 (long (cps (dec i))))
+                      (let [j (loop [j (inc i)] (if (and (< j n) (mark? (cps j))) (recur (inc j)) j))]
+                        (or (>= j tail) (<= 0x30 (long (cps j)) 0x39))))]
+        (if keep? (.appendCodePoint sb (int cp)) (.append sb "[.]"))))
+    (str sb)))
+
+(defn- break-dotted-quads
+  "A word with the dots of any dotted quad in it broken, one with more
+  dots after it too (10.0.0.1.example): an IPv4 address is a host made
+  only of digits."
+  [word]
+  (str/replace word #"(?<![\w\]])\d{1,3}(?:\.\d{1,3}){3}(?!\w)" break-dots))
+
+(defn- break-word
+  "One word of outside text, with nothing in it left that could be
+  followed (see defang)."
+  [word]
+  (let [bare #(str/replace % no-width "")
+        as-written (break-word-schemes word)
+        as-read (break-word-schemes (bare word))
+        ;; Where taking the marks out finds a scheme the word as written
+        ;; does not show, a mark was hiding it: the word is shown without
+        ;; its marks, broken as the address it spells.
+        w (if (= as-read (bare as-written)) as-written as-read)]
+    (-> (if (or (holds-an-address? w) (holds-an-address? (bare w))) (break-every-dot w) w)
+        break-dotted-quads
+        break-host-dots)))
 
 (defn defang
-  "Text with every link broken so it cannot be followed, and nothing
-  else changed: http becomes hxxp, https hxxps and ftp fxp, any other
-  scheme's :// becomes [:]//, and in a word that holds a scheme or starts
-  www., every dot becomes [.]. A dotted quad such as 10.0.0.1 has its dots
-  broken, and so does any dotted name that ends in a word of letters
-  (evil.icu, пример.рф) or carries a punycode label, whatever its ending,
-  unless it is a file name (todo.md, interview.txt) with no path, port,
-  query or fragment after it, or the domain of a mail address with
-  nothing after it. Fullwidth and ideographic full stops, which a browser
-  reads as dots, are broken wherever they sit between two characters.
-  Doc paths (projects/choir.md), times (08:06:36.382648Z) and amounts
-  (12.50) are left as they are.
+  "Text with every link broken so it cannot be followed. http becomes
+  hxxp, https hxxps and ftp fxp, written with or without slashes; any
+  other scheme's :// becomes [:]//, and ssh:, file: and their kind
+  ssh[:]. In a word that holds a scheme or www. every dot becomes [.].
+  In any other word, every dot that a host name could have becomes [.]:
+  one with a letter, a symbol or anything but a digit after it, unless
+  only punctuation follows it to the end of the word (break-host-dots),
+  and the dots of a dotted quad. So todo[.]md, kira@mail[.]example and
+  résumé[.]pdf, while 12.50, 08:06:36.382648Z, v1.2 and the full stop
+  of a sentence stay as written.
 
-  A word that holds a combining mark or a conjoining jamo gets none of
-  those exceptions: every dot in it is broken, and a scheme a mark was
-  hiding is broken with the mark taken out (break-marked-word).
+  It recognises nothing as a file name, a mail address or a link it may
+  leave whole. Whether text can be followed then depends on a fact about
+  addresses, not on what any reader's link finder makes of it (relay#130:
+  three review rounds each found a name relay left whole and Apple's
+  finder followed).
 
-  Hidden characters (hidden?) are not looked through: a caller that
-  removes them must do so first, or a host split by one would come
-  together again after this has looked at it."
+  Text is taken a word at a time, a word being what stands between
+  spaces of any kind. A scheme a combining mark was hiding is broken
+  with the mark taken out. Hidden characters (hidden?) are not looked
+  through: a caller that removes them must do so first, or a host split
+  by one would come together again after this has looked at it."
   [s]
-  (str/replace (str s) #"\S+"
-               (fn [word]
-                 (if (re-find no-width word) (break-marked-word word) (break-plain-word word)))))
+  (str/replace (str s) #"[^\s\p{Z}]+" break-word))
 
 (defn contaminated?
   "Whether labels say an outsider may have written the text: contaminated,

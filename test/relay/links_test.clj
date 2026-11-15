@@ -62,8 +62,10 @@
   (testing "a name that ends like a file and that a link finder follows as a host is broken"
     (doseq [[s broken] [["evil.pl" "evil[.]pl"] ["main.rs" "main[.]rs"] ["lib.so" "lib[.]so"]]]
       (is (= (str "Open " broken " now") (text/for-operator outside (str "Open " s " now"))) s)))
-  (testing "a file name no link finder follows is left as it is, and so is a colon in a sentence"
-    (doseq [s ["todo.md" "setup.sh" "notes.py" "video.mov" "report.pdf" "The scheme is https: as usual" "at 10:30"]]
+  (testing "a file name is broken like any host (relay#130), and a colon in a sentence is left alone"
+    (doseq [s ["todo.md" "setup.sh" "notes.py" "video.mov" "report.pdf"]]
+      (is (= (str "Open " (str/replace s "." "[.]") " now") (text/for-operator outside (str "Open " s " now"))) s))
+    (doseq [s ["The scheme is https: as usual" "at 10:30"]]
       (is (= (str "Open " s " now") (text/for-operator outside (str "Open " s " now"))) s))))
 
 ;; --- what a live link looks like
@@ -388,7 +390,7 @@
     (let [name "Quarterly-board-pack-for-the-trustees-meeting-final-v02.ini"
           shown (text/for-operator outside (str "Open " name " first"))
           lines (render/wrap shown 58)]
-      (is (str/includes? shown name) "the name itself is a file's, and left as written")
+      (is (str/includes? shown (str/replace name "." "[.]")) "its dot is broken like any host's")
       (is (not-any? #(re-find #"[A-Za-z0-9]\.[A-Za-z]" %) lines) (pr-str lines))
       (is (some #(str/includes? % "v02[.]") lines) "its dot is broken where it was cut")
       (testing "a name that fits is not touched"

@@ -58,7 +58,7 @@
         (nil? line)))))
 
 (deftest sources-in-words
-  (is (= "Drew on: a mail from dana@riverbend.test; the web page office-holidays.html"
+  (is (= "Drew on: a mail from dana@riverbend[.]test; the web page office-holidays[.]html"
          (provenance/drew-on ["web:office-holidays.html" "mail:dana@riverbend.test" "private"])))
   (testing "a calendar called calendar is the operator's own, said once"
     (is (= ["your calendar"] (provenance/phrases ["calendar:calendar" "contaminated"])))
@@ -67,9 +67,9 @@
   (is (= ["GitHub (kira/tidy)"] (provenance/phrases ["github:kira/tidy"])))
   (testing "an address an outsider chose is never a link"
     (is (= ["the web page hxxps://evil[.]example/x"] (provenance/phrases ["web:https://evil.example/x"]))))
-  (is (= "the work calendar, GitHub (a/b), a mail from x@y.test and 1 more"
+  (is (= "the work calendar, GitHub (a/b), a mail from x@y[.]test and 1 more"
          (provenance/summary ["mail:x@y.test" "github:a/b" "calendar:work" "web:p.html"])))
-  (is (= "GitHub (a/b) and a mail from x@y.test" (provenance/summary ["mail:x@y.test" "github:a/b"])))
+  (is (= "GitHub (a/b) and a mail from x@y[.]test" (provenance/summary ["mail:x@y.test" "github:a/b"])))
   (testing "a folder of the operator's mounted in the shell, not marked trusted"
     (is (= ["your files in downloads"] (provenance/phrases ["files:downloads" "contaminated" "private"])))
     (is (= "(from your files)" (provenance/mark ["files:downloads"])))))
@@ -109,11 +109,11 @@
 ;; --- defanging only what is a link
 
 (def gen-plain-word
-  "Words that are not links: file names, paths, times, amounts."
-  (gen/elements ["todo.md" "interview.txt" "projects/choir.md" "hub/riverbend-interview-prep.md"
-                 "2026-10-26T08:06:36.382648Z" "08:15:02.662139Z" "setup.sh"
-                 "office-holidays.html" "$12.50" "1.5" "v1.2.3" "e.g." "dana@riverbend.test"
-                 "banana-bread.txt" "board" "mtg.md" "skills/clerk/office-hours-questions.md"]))
+  "Words with no dot a host name could have: times, amounts, versions,
+  the end of a sentence. A file name or a mail address is broken like
+  any host (relay#130)."
+  (gen/elements ["2026-10-26T08:06:36.382648Z" "08:15:02.662139Z" "$12.50" "1.5" "v1.2.3" "board"
+                 "ended." "(see" "10:30)." "wait..." "projects/choir" "3.5%"]))
 
 (defspec defang-leaves-text-without-links-alone 300
   (prop/for-all [ws (gen/vector gen-plain-word 1 8)]
@@ -147,17 +147,12 @@
       (and (= d (text/defang d))
            (not (re-find #"[\p{L}\p{N}]\.(?:\p{L}{2,}|xn--)[\p{L}\p{N}\-]*(?:/|\?|#|:\d)" d))))))
 
-(defspec a-bare-host-is-broken-unless-it-reads-as-a-file-name 300
+(defspec a-bare-host-is-broken-whatever-its-ending 300
+  ;; relay#130: no name is taken for a file name that may stay whole.
   (prop/for-all [labels (gen/vector (gen/elements ["evil" "d-secret" "a1"]) 1 3)
                  tld gen-tld]
-    (let [s (str (str/join "." labels) "." tld)
-          d (text/defang s)]
-      ;; A name stays whole only with a file-like ending, and with more
-      ;; than one dot only when that ending is no top-level domain: a host
-      ;; under one could carry data in its labels.
-      (or (= d (str/replace s "." "[.]"))
-          (and (= d s) (contains? text/file-extensions tld)
-               (or (= 1 (count labels)) (contains? text/never-domains tld)))))))
+    (let [s (str (str/join "." labels) "." tld)]
+      (= (str/replace s "." "[.]") (text/defang s)))))
 
 (def gen-hidden
   (gen/elements ["\u200b" "\u00ad" "\u2060" "\ufeff" "\u200d" "\u180e" "\udb40\udc41"]))
@@ -299,7 +294,7 @@
                 note (digest/compose {:date (java.time.LocalDate/parse "2026-10-26") :changes cs :since 0
                                       :written {} :dismissed #{}})
                 t (str/join "\n" (map :text (mapcat :items (:sections note))))]
-            (is (str/includes? t "shaped by the web page office-holidays.html."))
+            (is (str/includes? t "shaped by the web page office-holidays[.]html."))
             (is (str/includes? t "It says: \"Ask about holiday hours before booking.\""))))))))
 
 ;; --- what each kind of read counts
@@ -350,7 +345,7 @@
               c (last (core/recipe-changes st))]
           (is (= ["web:office-holidays.html"] (:sources c)))
           (is (= [(:seq c)] (mapv :seq (digest/flagged [c] 0))))
-          (is (str/includes? (note-text st) "shaped by the web page office-holidays.html")))
+          (is (str/includes? (note-text st) "shaped by the web page office-holidays[.]html")))
         (testing "a search counts as a web search"
           (is (:ok (call sys "web" {:query "choir grants"} session w)))
           (is (:ok (call sys "doc_put" {:path "skills/hub/grants.md"

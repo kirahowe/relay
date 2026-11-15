@@ -76,12 +76,12 @@
 
 (deftest the-source-is-named-in-plain-words
   (let [phrase #(digest/source-phrase {:labels %})]
-    (is (= "a mail from eve@example.net" (phrase ["contaminated" "mail:eve@example.net"])))
+    (is (= "a mail from eve@example[.]net" (phrase ["contaminated" "mail:eve@example.net"])))
     (is (= "GitHub (owner/repo)" (phrase ["contaminated" "github:owner/repo" "private"])))
     (is (= "the work calendar" (phrase ["calendar:work"])))
     (is (= "a mail that says it is from you, not verified" (phrase ["mail:unverified-operator"])))
     (is (= "something from outside" (phrase ["contaminated"])))
-    (is (= "the web page office-holidays.html" (digest/source-phrase {:sources ["web:office-holidays.html"]
+    (is (= "the web page office-holidays[.]html" (digest/source-phrase {:sources ["web:office-holidays.html"]
                                                                      :labels ["contaminated" "calendar:x"]}))
         "what the session read directly, not all it held")
     (is (= "the c calendar and GitHub (a/b)" (phrase ["calendar:c" "github:a/b"])))
@@ -246,11 +246,11 @@
     (is (= "Nothing on grants since the last note." (:text (first (:items (nth (:sections note) 2)))))
         "relay.edn names no grant search, so relay says nothing of one")
     (is (= (str "1. Changed the how-to \"grants\" (2 lines added), shaped by a mail from"
-                " eve@example.net.")
+                " eve@example[.]net.")
            (:text (first (:items (first (:sections note))))))
         "no channel's wording in the note itself")
     (is (= (str "1. Changed the how-to \"grants\" (2 lines added), shaped by a mail from"
-                " eve@example.net. Reply \"revert 1\" to undo it.")
+                " eve@example[.]net. Reply \"revert 1\" to undo it.")
            (:text (first (:items (first (:sections (digest/with-hints note :reply))))))))
     (is (str/ends-with? (:text (first (:items (first (:sections (digest/with-hints note :cli))))))
                         " relay revert 1 undoes it."))

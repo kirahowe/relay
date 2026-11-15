@@ -112,7 +112,7 @@
       (is (= 0 exit))
       (is (str/starts-with? venues "1.  ") "the note's number, the same one a reply and the client use")
       (is (not (some #(str/includes? % (str c)) (butlast out))) "never the log's own number")
-      (is (str/includes? venues "Changed the note \"venues\" (1 line added, 1 removed), shaped by a mail from eve@example.net"))
+      (is (str/includes? venues "Changed the note \"venues\" (1 line added, 1 removed), shaped by a mail from eve@example[.]net"))
       (is (str/starts-with? (last out) "To undo one: relay revert <n> for item n of the latest daily note"))
       ;; Regression (U1): `relay revert 1` took 1 as the log's number, and
       ;; removed the first role ever added.

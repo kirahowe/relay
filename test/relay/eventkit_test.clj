@@ -278,7 +278,7 @@
         b (assoc base :title "Renew passport" :completed false)
         a (assoc b :title "Pay the invoice")]
     (let [p (plan b a a o)]
-      (is (str/includes? (:refuse p) "came from a mail from eve@example.net")
+      (is (str/includes? (:refuse p) "came from a mail from eve@example[.]net")
           "refused: it is the only field, and it may not be written"))
     (testing "the other fields are still undone, and the outside one is named"
       (let [a2 (assoc a :completed true)
