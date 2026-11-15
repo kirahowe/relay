@@ -162,3 +162,9 @@ breaker is the only one.
   a client's own breaker becomes a second line. It recommends no stopgap
   in relay-tui before that. It is putting this to Kira and asking the
   relay#118 session whether it can take relay#104.
+- 2026-11-15, from the relay#93 session. This issue's review round found
+  four more classes of address that Apple's finder follows in relay's
+  output, each needing a character outside ASCII. Kira chose to keep
+  relay's exemptions for words in ASCII only. Her decision, and the rule
+  the relay#118 session is building from it in this chain, are in
+  relay#121 under Decision.

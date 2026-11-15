@@ -41,6 +41,95 @@ decide.
 2. Should `tel:`, `sms:` and `mailto:` in outside text be broken? A bare
    mail address would stay.
 
+## Decision
+
+Kira's, on 2026-11-15. The relay#118 session asked her in a dialog and
+sent the relay#93 session the dialog's text, which is quoted below. The
+rest reached me through the coordinating session. I did not see the
+dialog myself.
+
+relay#130's review round found four more classes of address that Apple's
+finder follows in relay's output. Every one needs a character outside
+ASCII:
+
+- `example.com²` and `evil.com第1`;
+- a modifier letter or a spacing mark in a mail address's domain, 1,108
+  code points;
+- a Hangul filler escaped after the word was judged;
+- circled and squared letters, such as `ⓔⓥⓘⓛ.com`.
+
+The relay#118 session put three choices to Kira, with examples of how
+each reads. She chose exemptions for ASCII only and typed no note. The
+dialog as that session sent it:
+
+The question, under the header "Exemptions":
+
+> relay#130's review found four more ways a link survives relay's
+> breaking in outside text, all using non-ASCII characters and all
+> confirmed against Apple's link finder (e.g. `example.com²` with a
+> footnote digit, `a@ʹevil.com`, `ⓔⓥⓘⓛ.com`). relay leaves file names
+> and mail addresses unbroken, and it keeps disagreeing with link
+> finders about what those are once Unicode is involved. How should
+> relay decide which dotted words to leave alone?
+
+Option 1, "ASCII-only exemptions (Recommended)":
+
+> A file name or mail address is left alone only when the whole word is
+> printable ASCII. Any word with a character outside ASCII gets its dots
+> broken. Fixes all four at the root and gives the fuzz an alphabet
+> small enough to cover. Cost: `résumé.pdf`, `отчёт.pdf` and
+> `jörg@müller.de` always read with `[.]`; plain English text is
+> unchanged.
+
+Its preview:
+
+```
+todo.md -> todo.md
+a@x.example -> a@x.example
+résumé.pdf -> résumé[.]pdf
+отчёт.pdf -> отчёт[.]pdf
+jörg@müller.de -> jörg@müller[.]de
+example.com² -> example[.]com²
+ⓔⓥⓘⓛ.com -> ⓔⓥⓘⓛ[.]com
+“It ended.” she said -> unchanged
+€12.50 -> €12[.]50
+```
+
+Option 2, "Patch the four shapes":
+
+> Keep exemptions for non-ASCII names and fix each shape the reviewer
+> found one by one (footnote digits, modifier letters after an @, Hangul
+> fillers, circled letters). `résumé.pdf` stays whole. This is the
+> approach the last three review rounds kept finding holes in, so
+> another round may find a fifth.
+
+Option 3, "No exemptions at all":
+
+> Break every dot that a letter or digit follows in outside text, ASCII
+> included. Nothing is left to get wrong and no pattern to review, but
+> every file name and mail address a scout or outside mail mentions
+> reads broken.
+
+Her answer: "ASCII-only exemptions (Recommended)", with that option's
+preview selected.
+
+The rule as the relay#118 session is building it in relay#130's chain:
+
+- A word that holds anything outside printable ASCII gets no exemption
+  as a file name, a mail address, a time or an amount.
+- A dot in such a word is broken unless the end of the word, a space or
+  punctuation follows it.
+- Marks are still judged for a scheme they hide.
+- The fuzz then draws random code points from all of Unicode.
+
+The coordinating session's notes:
+
+- Of relay#118's eight review findings, none needed a character outside
+  ASCII, so this rule does not touch that class. It bounds what the fuzz
+  has to cover.
+- The cost falls on text in other scripts, so the rule is worth another
+  look under the public-agent goal.
+
 ## Acceptance criteria
 
 - [ ] Kira has answered both, and the answers are recorded here and in
@@ -61,3 +150,16 @@ decide.
   to this question. relay#126 has a table of what relay shows for each
   and what Apple's finder follows. If Kira would rather decide the whole
   class here, relay#126 narrows to the web schemes written short.
+- 2026-11-15, from the relay#93 session, on what the Decision leaves
+  open here. Kira's choice keeps the exemption for a file name written
+  in ASCII, and the preview she picked shows `todo.md` left as written.
+  I read that as her answer to the first question, since she passed over
+  "No exemptions at all", the option that would have broken it. She was
+  not asked the question in its own words. The second question, about
+  `tel:`, `sms:` and `mailto:`, is untouched and still waits on her. The
+  Proton Mail run in the second criterion is not done either. The issue
+  stays open.
+- 2026-11-15, from the relay#93 session. The first criterion asks for
+  the answers in relay#118 as well. The rule is being built in
+  relay#130's chain, so I linked this Decision from relay#130 and did
+  not copy it into relay#118, which is in review.
