@@ -26,8 +26,10 @@
 (def live #{fund apply-page})
 (def outside ["contaminated"])
 
+(def <fund> (str "<" fund ">"))
+
 (deftest a-live-link-stays-whole-in-outside-text
-  (is (= (str "See " fund " and hxxps://evil[.]example/x")
+  (is (= (str "See " <fund> " and hxxps://evil[.]example/x")
          (text/for-operator live outside (str "See " fund " and https://evil.example/x"))))
   (testing "with no live links every link is broken, as before"
     (is (= "See hxxps://grants[.]example[.]org/fund?year=2027"
@@ -35,35 +37,33 @@
            (text/for-operator nil outside (str "See " fund))
            (text/for-operator #{} outside (str "See " fund)))))
   (testing "clean text is left as it is"
-    (is (= "See https://evil.example/x" (text/for-operator live [] "See https://evil.example/x")))))
+    (is (= "See https://evil.example/x" (text/for-operator live [] "See https://evil.example/x")))
+    (is (= (str "See " fund) (text/for-operator live [] (str "See " fund))))))
 
-(deftest closing-marks-after-a-live-link-are-not-part-of-it
-  (doseq [s [(str "(" fund ").")
-             (str "[the fund](" fund ")")
-             (str "<" fund ">,")
-             (str "\"" fund "\"!")
-             (str fund ";")]]
-    (is (= s (text/for-operator live outside s)) s))
-  (testing "a mark Apple's link finder takes into the address makes a different address"
-    ;; Checked against NSDataDetector on 2026-11-14: it leaves . , ; ! ) > \"
-    ;; off the end of an address and keeps each of these.
-    (doseq [mark ["**" "*" "_" "'" ":" "?" "]" "~"]]
-      (let [s (str "See " fund mark)]
-        (is (= (text/defang s) (text/for-operator live outside s)) mark))))
-  (testing "a bracket the address opened is part of it"
-    (let [wiki "https://en.example.org/wiki/Fund_(arts)"]
-      (is (= (str "(" wiki ")") (text/for-operator #{wiki} outside (str "(" wiki ")"))))
-      (is (= ["" wiki ")"] (text/link-in #{wiki} (str wiki ")"))))
-      (is (nil? (text/link-in #{"https://en.example.org/wiki/Fund_(arts"} (str wiki ")")))))))
+(deftest a-live-link-is-shown-between-angle-brackets
+  ;; Whatever reads the text follows what is between the brackets, and
+  ;; nothing a role wrote around it. Checked against Apple's
+  ;; NSDataDetector on 2026-11-14 for every mark below, before and after.
+  (doseq [[before after] [["(" ")."] ["[the fund](" ")"] ["\"" "\"!"] ["" ";"] ["**" "**"] ["_" "_"] ["" "?"]
+                          ["" ":"] ["" "'"] ["[" "]"] ["**[the fund](" ")**."] ["Row:" ","] ["x=" ""]]]
+    (is (= (str before <fund> after) (text/for-operator live outside (str before fund after)))
+        (str before "…" after)))
+  (testing "brackets a role already wrote are not doubled"
+    (is (= (str "See " <fund> ", please") (text/for-operator live outside (str "See " <fund> ", please")))))
+  (testing "a link that ends in a mark is found before a shorter one"
+    (is (= ["" "https://a.example/x?" ""] (text/link-in #{"https://a.example/x?" "https://a.example/x"} "https://a.example/x?")))
+    (is (= ["" "https://a.example/x" "?"] (text/link-in #{"https://a.example/x"} "https://a.example/x?")))))
 
 (deftest text-run-on-after-a-live-link-breaks-it
   (doseq [s [(str fund "&d=SECRET")
              (str fund ".SECRET")
              (str fund "/SECRET")
-             (str fund "....")
+             (str fund "SECRET")
+             (str fund ".......")
              (str fund ")" fund)
-             (str fund "​SECRET")
-             (str fund " SECRET")
+             (str fund "\u200bSECRET")
+             (str fund "\u00a0SECRET")
+             (str fund "@evil.example")
              (str "x" fund)
              (str "foo." fund)
              (str/replace fund "https" "HTTPS")
@@ -72,24 +72,42 @@
     (is (= (text/defang s) (text/for-operator live outside s)) s)))
 
 (deftest what-comes-before-a-live-link-in-its-word-is-still-broken
-  (is (= (str "evil[.]example/SECRET/" fund)
+  (is (= (str "evil[.]example/SECRET/" <fund>)
          (text/for-operator live outside (str "evil.example/SECRET/" fund))))
-  (is (= (str "u=" fund) (text/for-operator live outside (str "u=" fund))))
+  (is (= (str "u=" <fund>) (text/for-operator live outside (str "u=" fund))))
   (testing "a name that would pass for a file on its own is a host before a link"
     (doseq [[before broken] [["notes.md#" "notes[.]md#"] ["todo.sh?" "todo[.]sh?"] ["10.0.0.1/" "10[.]0[.]0[.]1/"]
                              ["www.evil.example/" "www[.]evil[.]example/"] ["evil。example/" "evil[.]example/"]]]
-      (is (= (str broken fund) (text/for-operator live outside (str before fund))) before))))
+      (is (= (str broken <fund>) (text/for-operator live outside (str before fund))) before))))
 
 (deftest a-live-link-has-one-plain-shape
-  (doseq [s [fund apply-page "https://a.example" "https://a.example:8443/x#top" "http://localhost/"]]
+  (doseq [s [fund apply-page "https://a.example" "https://a.example:8443/x#top" "http://localhost/"
+             "https://a.example/x[1]?q=a,b;c&d='e'*f~g"]]
     (is (text/link? s) s))
   (doseq [s ["ftp://a.example/x" "HTTPS://a.example/" "https://user@a.example/" "https://a.example\\x"
-             "https://a.exаmple/" "https://a.example/x y" "https://a.example/​" "https://" "a.example/x"
+             "https://a.ex\u0430mple/" "https://a.example/x y" "https://a.example/\u200b" "https://" "a.example/x"
              "javascript://a.example/%0aalert(1)" "https://a.example/\"x" "https://a.example/<x>"
+             "https://a.example/a|b" "https://a.example/a`b" "https://a.example/{a}"
              (str "https://a.example/" (apply str (repeat text/max-link "x"))) nil 3]]
     (is (not (text/link? s)) (pr-str s)))
+  (testing "no round bracket: Apple's link finder balances them across what follows the address"
+    (doseq [s ["https://en.example.org/wiki/Fund_(arts)" "https://a.example/a(b" "https://a.example/a)b" "https://a.example/a)"]]
+      (is (not (text/link? s)) s)
+      (is (= (text/defang (str "See " s)) (text/for-operator #{s} outside (str "See " s))) s)))
   (testing "a live set cannot make a misshapen address whole"
     (is (= "hxxps://user@a[.]example/" (text/for-operator #{"https://user@a.example/"} outside "https://user@a.example/")))))
+
+(deftest an-address-is-cut-once-where-a-link-finder-cuts-it
+  ;; address-in reads text that is not a role's: a page, or what the
+  ;; operator typed.
+  (doseq [[word address] [["https://a.example/x." "https://a.example/x"] ["(https://a.example/x)," "https://a.example/x"]
+                          ["https://a.example/x!!!" "https://a.example/x"] ["\"https://a.example/x\";" "https://a.example/x"]
+                          ["https://a.example/x?" "https://a.example/x?"] ["https://a.example/x:" "https://a.example/x:"]
+                          ["https://a.example/x_" "https://a.example/x_"] ["https://a.example/x**" "https://a.example/x**"]
+                          ["href=https://a.example/x" "https://a.example/x"]]]
+    (is (= address (second (text/address-in word))) word))
+  (doseq [word ["https://a.example/x|y" "xhttps://a.example/x" "https://a.example/x(y)" "a.example/x" "https://a.example/\u00e9"]]
+    (is (nil? (text/address-in word)) word)))
 
 (deftest a-broken-link-mends-to-its-address
   (is (= fund (text/mend (text/defang fund))))
@@ -113,7 +131,12 @@
                                 " Found on https://grants.example.org/ today."))))
   (testing "written twice, kept once"
     (is (= ["https://grants.example.org/"]
-           (shown/links page "https://grants.example.org/ and again https://grants.example.org/")))))
+           (shown/links page "https://grants.example.org/ and again https://grants.example.org/"))))
+  (testing "however the scout writes it: in Markdown, in a question, in a list"
+    (doseq [written ["**[the trust](https://harbour.example.net/apply)**." "Is it https://harbour.example.net/apply?"
+                     "_https://harbour.example.net/apply_" "trust:https://harbour.example.net/apply:"
+                     "<https://harbour.example.net/apply>"]]
+      (is (= ["https://harbour.example.net/apply"] (shown/links page written)) written))))
 
 (deftest a-link-the-scout-built-is-not-handed-on
   (doseq [l ["https://grants.example.org/?q=SECRET"
@@ -130,20 +153,26 @@
     (doseq [[seen written] [["https://safe.example/a\u00e9" "https://safe.example/a"]
                             ["https://safe.example/a\u3002b" "https://safe.example/a"]
                             ["https://safe.example/wiki/Fund_(arts)" "https://safe.example/wiki/Fund_(arts"]
+                            ["https://safe.example/wiki/Fund_(arts)" "https://safe.example/wiki/Fund_"]
                             ["https://safe.example/a?x=1" "https://safe.example/a"]
                             ["https://safe.example/a:8" "https://safe.example/a"]
                             ["https://safe.example/a'b" "https://safe.example/a"]
-                            ["xhttps://safe.example/a" "https://safe.example/a"]
-                            ["https://safe.example/a...." "https://safe.example/a"]]]
+                            ["https://safe.example/a|b" "https://safe.example/a"]
+                            ["https://safe.example/search?filters=art|music" "https://safe.example/search?filters=art"]
+                            ["https://safe.example/a`b" "https://safe.example/a"]
+                            ["https://safe.example/a\\b" "https://safe.example/a"]
+                            ["https://safe.example/a^b" "https://safe.example/a"]
+                            ["https://safe.example/a_" "https://safe.example/a"]
+                            ["https://safe.example/a?" "https://safe.example/a"]
+                            ["xhttps://safe.example/a" "https://safe.example/a"]]]
       (is (= [] (shown/links (str "Read " seen " today") (str "See " written))) seen)))
-  (testing "what HTML, JSON and Markdown put around an address ends it"
+  (testing "what HTML and JSON put around an address, and the marks that end a clause, end it"
     (doseq [seen ["<a href=\"https://safe.example/a\">Title</a>" "{\"url\": \"https://safe.example/a\"}"
-                  "[the page](https://safe.example/a)." "`https://safe.example/a`"
-                  "https://safe.example/a\u00a0next" "(https://safe.example/a)," "https://safe.example/a|b"]]
+                  "[the page](https://safe.example/a)." "https://safe.example/a\u00a0next" "(https://safe.example/a),"
+                  "https://safe.example/a\u200bnext" "https://safe.example/a...." "Read https://safe.example/a!"]]
       (is (= ["https://safe.example/a"] (shown/links seen "See https://safe.example/a.")) seen)))
-  (testing "an address with a bracket it opened is shown, and handed on, whole"
-    (is (= ["https://safe.example/wiki/Fund_(arts)"]
-           (shown/links "(https://safe.example/wiki/Fund_(arts))" "See https://safe.example/wiki/Fund_(arts)."))))
+  (testing "an address with a round bracket is never handed on"
+    (is (= [] (shown/links "https://safe.example/wiki/Fund_(arts)" "See https://safe.example/wiki/Fund_(arts)."))))
   (testing "nothing is shown at the start of a session"
     (is (= [] (shown/links "" "See https://grants.example.org/")))))
 
@@ -162,19 +191,19 @@
 ;; --- cutting shown text
 
 (deftest a-cut-never-leaves-the-start-of-a-live-link
-  (let [s (str "See " fund " now")]
+  (let [s (str "See " <fund> " now")]
     (testing "a cut inside the link breaks what is left of it"
-      (doseq [n (range 6 (+ 4 (count fund)))]
+      (doseq [n (range 6 (+ 6 (count fund)))]
         (let [out (text/clip-shown s n)]
           (is (<= (count out) n) n)
           (is (not (re-find #"https?://" out)) (str n ": " out)))))
     (testing "a cut after it leaves it whole"
-      (is (= (str "See " fund "…") (text/clip-shown s (+ 5 (count fund)))))
+      (is (= (str "See " <fund> "…") (text/clip-shown s (+ 5 (count <fund>)))))
       (is (= s (text/clip-shown s (count s)))))
     (testing "the same at the push edge, which cuts by its own rule"
-      (doseq [n (range 6 (+ 4 (count fund)))]
+      (doseq [n (range 6 (+ 5 (count fund)))]
         (is (not (re-find #"https?://" (push/clip s n))) n))
-      (is (str/includes? (push/clip s (+ 6 (count fund))) fund)))))
+      (is (str/includes? (push/clip s (+ 6 (count <fund>))) <fund>)))))
 
 (deftest a-push-cut-short-holds-no-part-of-a-live-link
   ;; Found in review: the body was cut after its links were judged, so a
@@ -184,19 +213,18 @@
                :sections [{:items [{:text (str (apply str (repeat pad "x")) " " fund)}]}]}
           body (:body (channels/push {} [msg]))]
       (is (<= (count body) channels/body-limit) pad)
-      (is (or (not (re-find #"https?://" body)) (str/includes? body fund)) (str pad ": " body))))
+      (is (or (not (re-find #"https?://" body)) (str/includes? body <fund>)) (str pad ": " body))))
   (testing "several messages at once: their subjects run together and are cut"
     (let [msg (fn [i] {:id i :subject (str (apply str (repeat 70 "y")) " " fund) :labels outside :live live
                        :sections [{:items [{:text "x"}]}]})
           body (:body (channels/push {} (map msg (range 1 6))))]
-      (is (every? #(or (str/starts-with? % fund) (not (str/starts-with? fund (str/replace % "…" ""))))
-                  (re-seq #"https?://\S*" body))
+      (is (= (count (re-seq #"https?://" body)) (count (re-seq (re-pattern (java.util.regex.Pattern/quote <fund>)) body)))
           body))))
 
 (deftest wrapping-never-cuts-a-link-that-can-be-followed
   ;; relay ready wraps at 60 columns and used to cut any longer word,
   ;; which left the start of a long live link on a line of its own.
-  (let [long-link (str "https://grants.example.org/" (apply str (repeat 70 "a")) "/apply")
+  (let [long-link (str "<https://grants.example.org/" (apply str (repeat 70 "a")) "/apply>")
         lines (render/wrap (str "Apply at " long-link " before June. " (apply str (repeat 90 "x"))) 60)]
     (is (some #{long-link} lines) "the link is whole, on a line of its own")
     (is (every? #(or (= long-link %) (<= (count %) 60)) lines))
@@ -224,29 +252,24 @@
     (str scheme "://" host "." tld (when (seq path) (str "/" (str/join "/" path))) query)))
 
 (def gen-piece
-  "A piece of text: a link, a word, a mark that closes a clause, a host
-  with no scheme, or something hidden."
+  "A piece of text: a link, a word, a mark, a host with no scheme, or
+  something hidden."
   (gen/one-of [gen-link gen-link gen-word
-               (gen/elements [")" "]" ">" "." "," ";" ":" "!" "?" "*" "_" "(" "[" "<" "\"" "'" "/" "&d=" "#"])
-               (gen/elements ["evil.example/x" "www.evil.example" "​" " " "\n" "\t"])]))
+               (gen/elements [")" "]" ">" "." "," ";" ":" "!" "?" "*" "_" "~" "(" "[" "<" "\"" "'" "/" "&d=" "#" "|"])
+               (gen/elements ["evil.example/x" "www.evil.example" "\u200b" " " "\n" "\t"])]))
 
 (def gen-text
   (gen/fmap (fn [parts] (apply str parts))
             (gen/vector (gen/one-of [(gen/return " ") gen-piece gen-piece gen-piece]) 0 14)))
 
-(defn- whole-links
-  "The http and https addresses a reader could follow in text as shown:
-  each run from a scheme to the next space."
-  [s]
-  (re-seq #"https?://\S*" s))
+(defn- only-live-links-are-whole?
+  "Whether every http or https address a reader could follow in `out` is
+  a live link between angle brackets: each scheme in it opens one."
+  [live out]
+  (= (count (re-seq #"(?i)https?://" out))
+     (count (filter live (map second (re-seq #"<(https?://[^\s<>]*)>" out))))))
 
-(defn- ends-live?
-  "Whether a run is a live link with at most three closing marks after."
-  [live run]
-  (some (fn [n]
-          (let [cut (- (count run) n)]
-            (and (pos? cut) (contains? live (subs run 0 cut)) (every? text/link-closers (subs run cut)))))
-        (range 0 4)))
+(defn- unbracket [s] (str/replace s #"[<>]" ""))
 
 (defspec text-with-no-live-links-is-broken-as-before 300
   (prop/for-all [s gen-text
@@ -263,16 +286,19 @@
           ;; Put the generated links into the text too, live ones and not.
           text (str s " " (str/join " " links) " " s)
           out (text/for-operator live outside text)]
-      (every? #(ends-live? live %) (whole-links out)))))
+      (and (only-live-links-are-whole? live out)
+           ;; and the ones written on their own are whole
+           (every? #(str/includes? out (str "<" % ">")) live)))))
 
 (defspec keeping-links-live-changes-nothing-else 500
   ;; Breaking the links in what relay shows gives what breaking them in
-  ;; the text itself gives: the live links are all that differs.
+  ;; the text itself gives, the angle brackets aside: the live links are
+  ;; all that differs.
   (prop/for-all [links (gen/vector gen-link 1 4)
                  s gen-text]
     (let [live (set (take 2 links))
           text (str s " " (str/join " " links) " " s (first links) s)]
-      (= (text/defang text) (text/defang (text/for-operator live outside text))))))
+      (= (unbracket (text/defang text)) (unbracket (text/defang (text/for-operator live outside text)))))))
 
 (defspec cutting-shown-text-leaves-no-link-outside-the-live-set 500
   (prop/for-all [links (gen/vector gen-link 1 4)
@@ -280,11 +306,9 @@
                  n (gen/choose 2 200)]
     (let [live (set (take 2 links))
           text (str s " " (str/join " " links) " " s)
-          out (text/clip-shown (text/for-operator live outside text) n)
-          ;; The ellipsis a cut adds is no part of an address.
-          runs (map #(str/replace % #"…$" "") (whole-links out))]
+          out (text/clip-shown (text/for-operator live outside text) n)]
       (and (<= (.codePointCount ^String out 0 (count out)) n)
-           (every? #(ends-live? live %) runs)))))
+           (only-live-links-are-whole? live out)))))
 
 (defspec a-broken-link-mends-to-the-link-it-was 300
   (prop/for-all [l gen-link]
@@ -402,7 +426,7 @@
           (link! :link/keep fund)
           (let [s1 (state)]
             (testing "kept: the card and the message that hold it are sent again, whole, and no other"
-              (is (= [(str "See " fund)] (card-texts (workspace/cards-changed s1 board))))
+              (is (= [(str "See " <fund>)] (card-texts (workspace/cards-changed s1 board))))
               (is (str/includes? (pr-str (workspace/messages-changed s1 msgs)) fund))
               (is (= 1 (count (get (workspace/messages-changed s1 msgs) "messages"))))
               (is (str/includes? (pr-str (workspace/ready-changed s1 held 60)) fund)))
@@ -418,4 +442,18 @@
                   (is (not (str/includes? (pr-str (workspace/messages-changed s2 msgs)) fund)))
                   (is (= 1 (count (get (workspace/messages-changed s2 msgs) "messages"))))
                   (is (not (str/includes? (pr-str (workspace/ready-changed s2 held 60)) fund)))
-                  (is (seq (get (workspace/ready-changed s2 held 60) "items"))))))))))))
+                  (is (seq (get (workspace/ready-changed s2 held 60) "items"))))))))
+        (testing "a link written as a ref reads differently too, though its text holds another spelling"
+          ;; Found in review: a scan of the raw text for the link missed
+          ;; [[web:...]], which relay shows unescaped.
+          (inbound/submit! sys {:type :memo/send :actor "hub" :labels ["contaminated"]
+                                :args {:to "operator" :subject "A page" :body "Source [[web:https://safe.example/a%2525b]]"}})
+          (link! :link/keep "https://safe.example/a%25b")
+          (let [s3 (state)
+                msgs (workspace/messages-sent s3)
+                shown? (fn [params] (str/includes? (pr-str params) "<https://safe.example/a%25b>"))]
+            (is (shown? (workspace/messages-answer s3 {})) "it is whole when sent")
+            (link! :link/drop "https://safe.example/a%25b")
+            (let [again (workspace/messages-changed (state) msgs)]
+              (is (= 1 (count (get again "messages"))) "the message is sent again")
+              (is (not (shown? again)) "and broken"))))))))

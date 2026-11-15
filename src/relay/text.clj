@@ -219,14 +219,18 @@
 (def ^:private link-shape
   ;; http or https in lower case, a host of ASCII letters, digits, dots
   ;; and hyphens, a port, then only what RFC 3986 allows in a path, a
-  ;; query or a fragment. No user name before the host, which could pass
-  ;; for the host, and no backslash or character outside ASCII, so
-  ;; `visible` leaves a live link exactly as it is.
-  #"https?://[A-Za-z0-9](?:[A-Za-z0-9.\-]*[A-Za-z0-9])?(?::\d{1,5})?(?:[/?#][A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]*)?")
+  ;; query or a fragment, less the round brackets. No user name before
+  ;; the host, which could pass for the host, and no backslash or
+  ;; character outside ASCII, so `visible` leaves a live link exactly as
+  ;; it is. No round bracket, because Apple's link finder, which mail
+  ;; and the phone use, balances them across whatever follows, and so
+  ;; follows a different address.
+  #"https?://[A-Za-z0-9](?:[A-Za-z0-9.\-]*[A-Za-z0-9])?(?::\d{1,5})?(?:[/?#][A-Za-z0-9\-._~:/?#\[\]@!$&'*+,;=%]*)?")
 
 (defn link?
   "Whether a string can be a live link: one http or https address in
-  plain ASCII (link-shape), at most max-link characters."
+  plain ASCII with no round bracket (link-shape), at most max-link
+  characters."
   [s]
   (boolean (and (string? s) (<= (count s) max-link) (re-matches link-shape s))))
 
@@ -242,65 +246,82 @@
       (str (if (= "hxxps" scheme) "https" "http") "://" (str/replace more "[.]" "."))
       s)))
 
-(def link-closers
-  "What may follow a link in a word without being part of it: a closing
-  round or angle bracket, a double quote, and the full stop, comma,
-  semicolon and exclamation mark that end a clause. These are the marks
-  Apple's link finder, which mail and the phone use, leaves off the end
-  of an address. It takes a colon, a question mark, a square bracket, a
-  single quote, an asterisk and an underscore as part of the address, so
-  a link with one of those after it is a different address."
+(def address-closers
+  "The marks that end a clause or close a bracket or a quote after an
+  address, which are no part of it: Apple's link finder leaves these off
+  the end of an address (checked against NSDataDetector)."
   #{\) \> \" \. \, \; \!})
 
-(def ^:private max-closers
-  "How many link-closers may follow a live link. A longer run could spell
-  something out to a reader that takes it for part of the address."
-  3)
+(def link-closers
+  "What a role may write straight after a link without it being part of
+  the link: address-closers, and the marks of a question, a list and
+  Markdown's links and emphasis."
+  (into address-closers #{\] \' \: \? \* \_ \~}))
 
-(defn- split-closers
-  "[address after] for a run from a scheme to the end of its word, where
-  `after` is the link-closers a reader's link finder leaves off the end.
-  A closing bracket is left off only when the run closes more of them
-  than it opens, so https://x.example/a_(b) keeps its bracket. The
-  address relay judges is then the one a click opens."
-  [^String run]
-  (loop [end (count run)]
-    (let [head (subs run 0 end)
-          c (when (pos? end) (.charAt run (dec end)))
-          more-closed? (fn [open close] (> (count (filter #{close} head)) (count (filter #{open} head))))]
-      (if (and c (link-closers c)
-               (or (not= \) c) (more-closed? \( \))))
-        (recur (dec end))
-        [head (subs run end)]))))
+(def ^:private max-closers
+  "How many link-closers may follow a link a role wrote, as in
+  **[a fund](https://x.example/a)**."
+  6)
+
+(defn- first-scheme
+  "Where a word's first scheme starts, or nil."
+  [word]
+  (let [m (re-matcher #"(?i)[a-z][a-z0-9+.\-]*://" word)]
+    (when (.find m) (.start m))))
+
+(defn address-in
+  "For one piece of text with no space in it, [before address after]
+  when it holds an address, or nil: from its first scheme to its end,
+  less the address-closers after it. This reads text that is not a
+  role's, a web page's or what the operator typed, where an address is
+  cut once, as a link finder cuts it."
+  [word]
+  (when-let [start (first-scheme word)]
+    (let [run (subs word start)
+          end (loop [end (count run)]
+                (if (and (pos? end) (address-closers (.charAt ^String run (dec end)))) (recur (dec end)) end))
+          address (subs run 0 end)]
+      (when (link? address)
+        [(subs word 0 start) address (subs run end)]))))
 
 (defn link-in
-  "For one word (no space in it), [before link after] when `ok?` takes
-  the address it holds, or nil. The address starts at the word's first
-  scheme and runs to the end of the word, less the link-closers after it
-  (split-closers), of which there may be at most three. Text that runs
-  on after an address is part of it, so it makes a different address,
-  never a taken one with more after it."
+  "For one word a role wrote (no space in it), [before link after] when
+  `ok?` takes a link it holds, or nil. The link starts at the word's
+  first scheme and runs to the end of the word, less at most max-closers
+  link-closers; the longest that `ok?` takes wins, so a link that ends
+  in such a mark is found before a shorter one. Text that runs on after
+  an address is part of it, so it makes a different address, never a
+  taken one with more after it."
   [ok? word]
-  (let [m (re-matcher #"(?i)[a-z][a-z0-9+.\-]*://" word)]
-    (when (.find m)
-      (let [start (.start m)
-            [link after] (split-closers (subs word start))]
-        (when (and (<= (count after) max-closers) (link? link) (ok? link))
-          [(subs word 0 start) link after])))))
+  (when-let [start (first-scheme word)]
+    (let [run (subs word start)]
+      (some (fn [n]
+              (let [cut (- (count run) n)]
+                (when (pos? cut)
+                  (let [link (subs run 0 cut)
+                        after (subs run cut)]
+                    (when (and (every? link-closers after) (link? link) (ok? link))
+                      [(subs word 0 start) link after])))))
+            (range 0 (inc max-closers))))))
 
 (defn defang-but
   "defang, except that a link in `live` (a set of addresses) is left
   whole where a word holds it and nothing runs on after it but
-  link-closers. What comes before it in the word has every dot broken,
-  as defang breaks a word that holds a link, so nothing before a live
-  link can pass for a host. With no live links this is defang."
+  link-closers. It is shown between angle brackets, <https://x.example/a>,
+  the marks RFC 3986 gives for an address in running text: whatever
+  reads the text then follows that address exactly, whatever stands
+  before or after it. What comes before it in the word has every dot
+  broken, as defang breaks a word that holds a link. With no live links
+  this is defang."
   [live s]
   (if (empty? live)
     (defang s)
     (str/replace (str s) #"\S+"
                  (fn [word]
                    (if-let [[before link after] (link-in #(contains? live %) word)]
-                     (str (break-every-dot before) link after)
+                     (if (and (str/ends-with? before "<") (str/starts-with? after ">"))
+                       (str (break-every-dot before) link after)
+                       (str (break-every-dot before) "<" link ">" after))
                      (defang word))))))
 
 (defn break-cut-word

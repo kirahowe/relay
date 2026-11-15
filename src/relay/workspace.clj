@@ -230,18 +230,16 @@
   [state]
   (dec (:next-seq state)))
 
-(defn- links-changed
-  "The links that are live in `now` and were not in `was`, and the ones
-  that no longer are, or nil. A card or message that shows one of them
-  reads differently now, whatever its rev."
-  [was now]
-  (let [was (or was #{}) now (or now #{})]
-    (seq (concat (remove now was) (remove was now)))))
-
-(defn- holds-any?
-  "Whether any of `texts` holds any of `links`."
-  [texts links]
-  (boolean (some (fn [t] (some #(str/includes? (str t) %) links)) texts)))
+(defn- reads-differently
+  "The things among `xs` that a client last sent them with the live
+  links `was` would be sent differently with the live links `now`:
+  `wire` gives a thing's wire form from the thing with its :live. Empty
+  when the live links are the same. A link that became live or was
+  dropped moves no rev, so this compares what the client would be sent,
+  which is exact whatever the text does to a link before showing it."
+  [was now wire xs]
+  (when (not= (or was #{}) (or now #{}))
+    (filter #(not= (wire (assoc % :live was)) (wire (assoc % :live now))) xs)))
 
 (defn subscribed
   "A subscriber's record ({:cards revs :links live}) once it has been
@@ -275,11 +273,8 @@
   client has not subscribed."
   [state conv]
   (when-let [sent (:cards conv)]
-    (let [links (links-changed (:links conv) (core/live-links state))
-          relinked (when links
-                     (for [[id c] (:cards state)
-                           :when (holds-any? (map :text (cards/text-elements c)) links)]
-                       id))]
+    (let [relinked (map :id (reads-differently (:links conv) (core/live-links state) card-wire
+                                               (vals (:cards state))))]
       (when-let [ids (seq (sort (distinct (concat (cards/changed-since sent (:cards state)) relinked))))]
         {"rev" (log-rev state) "cards" (mapv #(card-wire state (core/card state %)) ids)}))))
 
@@ -337,9 +332,11 @@
 
 (defn- note-wire
   "A message's wire form, a daily note's items marked done by whatever
-  note or command did them (core/note-acted)."
+  note or command did them (core/note-acted). The message is shown with
+  the live links it carries under :live, or with the state's."
   [state m]
-  (channels/wire (cond-> (core/with-live state m) (seq (:numbered m)) (assoc :acted (core/note-acted state m)))))
+  (channels/wire (cond-> (if (contains? m :live) m (core/with-live state m))
+                   (seq (:numbered m)) (assoc :acted (core/note-acted state m)))))
 
 (defn messages-answer
   "The _relay/messages answer: the newest messages as wire forms, newest
@@ -363,12 +360,9 @@
   oldest first. Nil when there is none."
   [state sent]
   (let [{:keys [rev links]} (if (map? sent) sent {:rev sent :links (core/live-links state)})
-        changed (links-changed links (core/live-links state))
-        texts (fn [m] (concat [(:subject m)]
-                              (for [sec (:sections m)] (:heading sec))
-                              (for [sec (:sections m) it (:items sec)] (:text it))))]
-    (when-let [ms (seq (filter #(or (> (:rev %) rev) (and changed (holds-any? (texts %) changed)))
-                               (sort-by :id (vals (:messages state)))))]
+        all (sort-by :id (vals (:messages state)))
+        relinked (set (map :id (reads-differently links (core/live-links state) #(note-wire state %) all)))]
+    (when-let [ms (seq (filter #(or (> (:rev %) rev) (relinked (:id %))) all))]
       {"rev" (log-rev state) "messages" (mapv #(note-wire state %) ms)})))
 
 ;; --- ready: what relay prepared and told the operator (relay.ready)

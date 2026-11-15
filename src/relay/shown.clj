@@ -122,11 +122,11 @@
 
 (def ^:private edge
   "What ends an address in a result's text: a space or any separator, a
-  control or format character, and the marks HTML, JSON and Markdown put
-  around an address, none of which an address holds. A letter outside
-  ASCII ends nothing: an address that runs into one is a longer address,
-  which is no live link's shape."
-  #"[\p{Z}\p{C}<>\"`{}|\\^]+")
+  control or format character, and the angle brackets, double quote and
+  braces that HTML and JSON put around one. These are where Apple's link
+  finder stops. Anything else, a letter outside ASCII or a pipe, runs
+  on: the address is the longer one, which is no live link's shape."
+  #"[\p{Z}\p{C}<>\"{}]+")
 
 (defn- public-host?
   "Whether a link's host is a name on the open web: dotted, with a last
@@ -139,23 +139,24 @@
 
 (defn- addresses-shown
   "Every address `shown` holds whole, as a set: each piece of it between
-  edges is read as a word of a memo is (relay.text/link-in), so an
-  address is cut in what the web showed exactly where it is cut in what
-  the scout wrote. A page that shows https://x.example/a/b, or
-  https://x.example/a_(b), has not shown https://x.example/a or
-  https://x.example/a_(b."
+  edges, cut once as a link finder cuts it (relay.text/address-in), on a
+  public host. A page that shows https://x.example/a/b, or
+  https://x.example/a|b, has not shown https://x.example/a."
   [shown]
   (into #{}
         (comp (filter #(str/includes? % "://"))
-              (keep #(second (text/link-in public-host? %))))
+              (keep #(second (text/address-in %)))
+              (filter public-host?))
         (str/split (str shown) edge)))
 
 (defn links
   "The addresses in `text`, a scout's memo, that `shown`, the text of its
   session's earlier :egress results, showed whole (addresses-shown): each
   a live link's shape (relay.text/link?), on a public host, in the order
-  written, at most max-links. Pure. Every one passes `refusal`, so it is
-  an address the scout could have fetched."
+  written, at most max-links. A word of the memo is read as a role's
+  (relay.text/link-in), so a link in Markdown or before a question mark
+  is found, and only an address the web showed is taken. Pure. Every one
+  passes `refusal`, so it is an address the scout could have fetched."
   [shown text]
   (let [seen (addresses-shown shown)]
     (->> (re-seq #"\S+" (str text))

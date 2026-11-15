@@ -169,7 +169,7 @@
             body (str "The Arts Fund (" fund ") takes applications at " form "."
                       " Also https://arts.example.org/fund?for=SECRET-NAME and https://exfil.example.com/SECRET.")
             right? (fn [s]
-                     (and (str/includes? s fund) (str/includes? s form)
+                     (and (str/includes? s (str "<" fund ">")) (str/includes? s (str "<" form ">"))
                           (str/includes? s "hxxps://arts[.]example[.]org/fund?for=SECRET-NAME")
                           (str/includes? s "hxxps://exfil[.]example[.]com/SECRET")
                           (not (str/includes? s "https://exfil"))
@@ -199,7 +199,8 @@
                 state (inbound/current-state sys)
                 c (core/card state (:seq (first e)))
                 w (workspace/card-wire state c)]
-            (is (= said (str/replace (get-in w ["note" "text"]) "hxxps://exfil[.]example[.]com" "https://exfil.example.com")))
+            (is (= (str "Found one: <" fund ">, and built one: hxxps://exfil[.]example[.]com/?d=SECRET")
+                   (get-in w ["note" "text"])))
             (is (str/includes? (get-in w ["note" "text"]) "hxxps://exfil[.]example[.]com/?d=SECRET"))
             (is (str/includes? (get-in w ["title" "text"]) fund))
             (is (str/includes? (get w "text") fund) "the text form too")

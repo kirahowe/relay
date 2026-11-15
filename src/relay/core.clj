@@ -2752,10 +2752,11 @@
   A refusal when it is not one http or https address in plain ASCII."
   [url]
   (let [s (if (string? url) (text/mend url) "")
-        [before link] (when-not (re-find #"\s" s) (text/link-in (constantly true) s))]
+        [before link] (when-not (re-find #"\s" s) (text/address-in s))]
     (when-not (and link (= "" before))
-      (reject! :invalid (str "A link is one http or https address in plain ASCII, with no spaces and no user"
-                             " name before its host. Write a host in other letters in its xn-- form.")))
+      (reject! :invalid (str "A link is one http or https address in plain ASCII, with no spaces, no round"
+                             " brackets and no user name before its host. Write a host in other letters in"
+                             " its xn-- form.")))
     link))
 
 (defmethod decide* :link/keep [{:keys [state] :as tx} {{:keys [url]} :args}]
