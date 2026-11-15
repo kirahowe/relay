@@ -1,0 +1,11 @@
+{:id 131
+ :title "Keys held while connecting are replayed onto a restored card and act on it"
+ :status :ready
+ :type :bug
+ :priority :p3
+ :created "2026-11-15"
+ :updated "2026-11-15"
+ :tags #{}
+ :blocked-by #{}
+ :related #{"relay#100"}
+ :details "131-keys-held-while-connecting-are-replayed-onto-a-restored.md"}

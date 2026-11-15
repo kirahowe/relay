@@ -58,6 +58,9 @@
 | [127](127-do-not-panic-on-markdown-quoted-deeper-than-half-the-width.md) | Do not panic on Markdown quoted deeper than half the width | bug | P3 |
 | [128](128-keep-the-board-fast-when-surface-cards-are-at-relay-s-limits.md) | Keep the board fast when surface cards are at relay's limits | chore | P3 |
 | [129](129-show-a-card-s-text-form-when-one-of-its-members-has-the.md) | Show a card's text form when one of its members has the wrong type | bug | P3 |
+| [131](131-keys-held-while-connecting-are-replayed-onto-a-restored.md) | Keys held while connecting are replayed onto a restored card and act on it | bug | P3 |
+| [132](132-the-saved-view-puts-a-checklist-s-cursor-back-by-line-number.md) | The saved view puts a checklist's cursor back by line number | bug | P3 |
+| [133](133-an-op-that-times-out-reads-as-refused-though-relay-may.md) | An op that times out reads as refused though relay may still apply it | bug | P3 |
 
 ### In progress
 

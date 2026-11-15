@@ -1,0 +1,11 @@
+{:id 132
+ :title "The saved view puts a checklist's cursor back by line number"
+ :status :ready
+ :type :bug
+ :priority :p3
+ :created "2026-11-15"
+ :updated "2026-11-15"
+ :tags #{}
+ :blocked-by #{}
+ :related #{"relay#100"}
+ :details "132-the-saved-view-puts-a-checklist-s-cursor-back-by-line-number.md"}
