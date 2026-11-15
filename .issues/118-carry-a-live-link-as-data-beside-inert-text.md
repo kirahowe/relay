@@ -87,3 +87,46 @@ What is new:
   make the call. The call, which is the relay#93 session's: links as
   actions, as the criteria above have it. The mail app she named for the
   other question is in relay#117.
+- 2026-11-14, the session building it. Judgment calls, all mine:
+  - One `links` list on each card, message and ready item, not one per
+    text element. The form the text shows travels with the address, so a
+    client finds it in whichever string holds it. The sessions on
+    relay#95, relay#96 and relay#97 agreed the contract before it was
+    built; it is in docs/client-protocol.md under Live links.
+  - A thing with more than 50 live links also says how many were left
+    out (`linksLeftOut`), so a missing link reads as a limit.
+  - Which occurrence of the shown form a client may anchor is the rule
+    relay itself uses to find the link in a role's word: at most six
+    marks after it, each one that follows a link in prose or Markdown.
+    "The next character cannot continue an address" was tried first and
+    is wrong, because a full stop can. `relay.text/anchored` is that
+    rule as one pure function, used by the command line.
+  - The marks a role may write after a link are the generous set again
+    (`>` included, up to six). relay#94 had narrowed them because they
+    could ride into an address a finder followed. Nothing reads an
+    address out of text now, so they only decide whether the role wrote
+    the link.
+  - The command line adds no link lines. On a terminal the printer makes
+    each broken link that is live a hyperlink in place. The live set
+    rides as metadata on a command's result, so what a command says is
+    the same value either way, and it is read from the log only when
+    some line holds a broken link.
+  - `relay ready` no longer cuts a word that holds a link, whole or
+    broken. A broken link has to stay one word to become a hyperlink,
+    and to be copied for `relay link`. So one line may run past 60
+    columns: a single word holding a link. The width property says so.
+  - In mail an item's links follow the item, as a link relay builds
+    itself already did. A subject's and a heading's follow the body.
+    Mail stays text/plain; what Proton Mail follows in those lines is
+    relay#117.
+  - A push's buttons are labelled "Open" and the host, numbered when a
+    host comes twice. More than three links: the body ends "(n more
+    links in relay)". Kira has not seen these yet.
+  - The link shape is unchanged and still decides what enters the set.
+    Mail is the one channel that shows an address as text.
+  - Text no outsider shaped is shown as written, as before. Whether that
+    changes is relay#119.
+  - A surface card (relay#97) will get its list from
+    `relay.surfaces/strings`, the strings relay resolved, once relay#97
+    has landed.
+
