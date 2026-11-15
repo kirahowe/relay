@@ -27,8 +27,8 @@ The session that built relay#96 builds this.
 Tightened on 2026-11-14 against the wire form relay#97 fixed
 (`docs/client-protocol.md`, "A surface card"), and again on 2026-11-15
 where the reviews and the contract moved a rule. The receipts name tests
-in relay-tui at plulklqq 3ba7dadd, the tip of ten commits on its
-`integration` (ottsqzmp 74b0d40e).
+in relay-tui at yxssltly a92508ec, the tip of thirteen commits on its
+`integration` (vywmmpxm 13c740c5).
 
 - [x] relay-tui reads a card of kind `surface` from `_relay/cards` and
   `_relay/cards/changed` as the contract gives it, and folds
@@ -78,6 +78,11 @@ in relay-tui at plulklqq 3ba7dadd, the tip of ten commits on its
     `TestNothingFromOutsideIsFollowedButALiveLink`;
     `TestSurfaceCardsHostileKeepsOneLink`;
     `TestSurfaceRowsKeepTwoColumnsBetweenChildren`.
+  - Receipt: `TestRelaysHostileSurfaceCardKeepsItsListedLink` in
+    `internal/wire` reads relay's hostile card as an answer to
+    `_relay/cards` and draws it on the board: one hyperlink, to the
+    address relay lists beside the card, and none when that address is
+    not one of the connection's live links.
 - [x] In an open card the keys move between the CheckBoxes whose value is
   bound to a path, and the key that ticks a checklist item sends `input`
   with that path, the new value and the card's rev as `seen`. The board
@@ -98,8 +103,12 @@ in relay-tui at plulklqq 3ba7dadd, the tip of ten commits on its
     `TestTheCursorLeavesABoxWhenARoleEditsTheTextAroundIt`,
     `TestALineThatStoppedExistingDoesNotComeBack`,
     `TestASavedViewDoesNotPutTheCursorOnABoxNobodyChose`,
-    `TestALateRefusalDoesNotPutALineOnAnotherCardsBox`,
-    `TestACardThatChangesKindKeepsNoLine`.
+    `TestALateRefusalDoesNotCarryALineToAnotherCard` (every pair of
+    kinds), `TestACardThatChangesKindKeepsNoLine`.
+  - Receipt: the selected line of an open card is on the screen, on the
+    bar, whichever line it is: `TestTheSelectedLineOfATallCardIsOnTheScreen`
+    (a surface and a checklist of forty lines) and the property
+    `TestThePaneKeepsTheSelectionClearOfItsMarks`.
   - Receipt: the property `TestSurfaceCursorAcrossEveryPath`, 100,000
     runs: every input sent is for a box the operator moved onto on the
     components held. With the binding switched off it fails.
@@ -112,6 +121,14 @@ in relay-tui at plulklqq 3ba7dadd, the tip of ten commits on its
   client rule, added on 2026-11-15.)
   - Receipt: `TestASurfaceCardsFrameNamesItsOwnerAndSaysWhenItIsFromOutside`,
     `TestAnOutsidersSurfaceIsMarked`.
+  - Receipt: the owner is in the corner while an op is on its way and
+    for an owner that draws as nothing
+    (`TestASurfaceCardsCornerAlwaysNamesItsOwner`,
+    `TestAnOwnerOfNoWidthLeavesTheKindInTheCorner`), and the selected
+    card's bottom border is on screen in the list
+    (`TestTheSelectedCardsFootIsOnTheScreenInTheList`).
+  - Not met for an open surface taller than the pane: its top and
+    bottom borders scroll out of view with the rest. That is relay#110.
 - [x] relay-tui's `relay_catalog.json` is relay's
   `resources/a2ui/relay_catalog.json`, byte for byte, and the spike's
   Tracker is gone from the surface renderer.
@@ -144,16 +161,18 @@ in relay-tui at plulklqq 3ba7dadd, the tip of ten commits on its
     uqwynqos, urpkvpun and plulklqq.
 - [ ] `make check` passes, and so does `bb verify` from a relay workspace
   that has relay#97.
-  - `make check` passes at plulklqq 3ba7dadd, after the rebase of
-    2026-11-15 that the Log records. The early joint run, relay
+  - `make check` passes at yxssltly a92508ec, after the rebases and
+    round four's fixes of 2026-11-15 that the Log records. The early
+    joint run, relay
     at relay#97's nlyokvuorvpu 2d0c8e8a against relay-tui urpkvpun
     7efde4e4: agentloop, relay-tui, catalog, webtool and eventkit pass,
     relay 1,212 of 1,213 and pentest 30 of 31, the two failures being
     relay#99's. The run that counts is on both rebased tips and is not
     made yet.
 - [ ] An adversarial review finds nothing in scope.
-  - Three rounds each found something in scope, so the loop stopped and
-    it is with Kira. The Log has the rounds.
+  - Four rounds each found something in scope. Round four could not
+    break the cursor binding it was aimed at; what it found is fixed or
+    filed, and the Log has it. It is with Kira again.
 
 ## Plan
 
@@ -275,3 +294,54 @@ The review, read-only, with the threat model:
   plulklqq 3ba7dadd, since Codex is still out of quota. It is aimed at
   the cursor binding, the frame and the weight clamp, with a fresh look
   at the rest because the base moved.
+- 2026-11-15, later: copied relay's sample cards again (mllyxnmy). They
+  carry `links` and `linksLeftOut` now, and the tests draw them from
+  that list. No golden changed. Rebased over three more of relay#95's
+  commits (hidden characters); no conflict.
+- Round 4, 2026-11-15, by a fresh reviewer agent with a scratch copy of
+  plulklqq, 110 tool calls, about 40 minutes. It could not break the
+  cursor binding: a model of relay and an operator with its own oracle,
+  150,000 runs each for one agent and for the hub, 31,000 input ops
+  checked, never sent an input for a box the operator had not selected.
+  It found nothing in the links, the check, the weights or the drawing
+  at relay's limits. It counted three findings in scope, all around the
+  fix and two of them older than this change.
+  - A late refusal still carried the line, onto a checklist or a
+    tracker: round three's fix covered only a reopened surface. Fixed
+    at the source in yxssltly: `reopen` sends the cursor to the title
+    whenever the refused card is not the one the operator is on.
+  - In the list the pane's "↓ N below" was drawn over the selected
+    card's bottom border, where "from outside" is, and in an open card
+    taller than the pane over the selected line itself, so x acted on a
+    line that was not drawn. Older than this change and the same for
+    every kind. Fixed in yrxoryto: the window keeps a row for each mark
+    outside the selection. No golden changed.
+  - The corner said "sending…" in place of the owner while an op was on
+    its way. Fixed in yxssltly: the owner first, the state after it.
+  - Not counted by the reviewer and left: an open surface taller than
+    the pane scrolls its top and bottom borders out of view (added to
+    relay#110, which I take next); keys held while "connecting…" shows
+    are replayed onto a restored card; the saved view puts a
+    checklist's cursor back by number; an op that times out reads as
+    refused. The last three are sent to relay-ed to file.
+  - Rejected: keys acting on a card the unloaded board does not draw
+    (two unlikely failures at once: a notification with no good first
+    answer, and keys pressed blind); a line masked on a surface coming
+    back when the card turns into a checklist (relay would have to send
+    one card as two kinds); wire and the check taking a path outside
+    the key grammar, two boxes on one path, or extra members of
+    createSurface (relay would have to send them, and nothing drawn or
+    sent differs from what relay sent). An owner of no width widening
+    the border is handled for a surface's corner; for an unknown kind's
+    name it needs relay to send such a kind.
+  - Left as it is: the hint shows "e retitle" with the cursor on a box,
+    where e does nothing. The hints are one line for a kind, as "x
+    tick" is on a checklist's title.
+  - The reviewer's own probes and model, run on the fixed tree in a
+    scratch copy: the late-refusal and corner probes pass, the tall-card
+    and list probes pass, and what still fails is the tall surface's
+    borders and the two rejected or filed cases above.
+- The tip is yxssltly a92508ec, thirteen commits on relay-tui's
+  `integration` vywmmpxm 13c740c5. `make check` passes there. Round four
+  found something in scope, so by the rule it goes back to Kira before
+  landing.

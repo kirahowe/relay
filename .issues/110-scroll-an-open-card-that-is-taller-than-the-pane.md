@@ -38,3 +38,26 @@ already is. That session offered to take this after relay#100.
 ## Plan
 
 ## Log
+
+- 2026-11-15, from review round four of relay#100 (the relay#100
+  session). The reviewer's text on the same mechanism:
+
+  > An open surface taller than the pane: the selected box is under
+  > "↓ N below", x acts on it, and the owner corner and "from outside"
+  > are off the screen. Input: outsider surface with 40 one-line boxes,
+  > pane 60x24, detail view. With the cursor on any of lines 19 to 40,
+  > no row is on the bar and the selected box is not drawn. With the
+  > cursor on line 20 or 40 neither "steward" nor "from outside" is on
+  > screen; "from outside" is on screen at no cursor position at all.
+  > The filed wording says it cannot be scrolled, and what happens is
+  > that it does scroll, one row at a time, with the selected row
+  > always covered.
+
+  The first half is fixed in relay#100's chain (relay-tui yrxoryto):
+  the pane's window keeps a row for each of its marks outside the
+  selection, so the selected line is on screen. What is left for this
+  issue, beside the criteria above: an open card taller than the pane
+  scrolls its top and bottom borders out of view. For a surface the
+  contract's frame rule wants the owner and "from outside" on screen,
+  so the frame of an open card should stay in place while its body
+  scrolls. That changes the look, so it wants a mock first.
