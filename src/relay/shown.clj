@@ -23,7 +23,8 @@
   the wake's run directory, one per result, read back across the wakes a
   session resumed."
   (:require [babashka.fs :as fs]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [relay.text :as text]))
 
 (defn- gap?
   "Whether a code point ends an address: any space Unicode knows, any
@@ -107,6 +108,56 @@
               (and (= :inline what) (not (re-matches plain-run a))) refused-inline
               (not (str/includes? shown a)) refused-made-up))
           (addresses input))))
+
+;; --- the links a scout may hand on
+;;
+;; A scout's memo reaches the operator through the steward, as text an
+;; outsider may have shaped, so its links would all be broken
+;; (relay.text/defang). The ones the web showed the scout stay live: the
+;; operator may open what the scout could have fetched. An address the
+;; scout built could carry what the steward told it, as a fetch could, so
+;; it stays broken.
+
+(def max-links "The most links one memo keeps live." 100)
+
+(def ^:private link-char "[A-Za-z0-9\\-._~:/?#\\[\\]@!$&'()*+,;=%]")
+
+(def ^:private closer
+  (str "[" (java.util.regex.Pattern/quote (apply str (sort text/link-closers))) "]"))
+
+(defn- public-host?
+  "Whether a link's host is a name on the open web: dotted, with a last
+  label that starts with a letter. A bare name or a number is a machine
+  on the operator's own network, and nothing on the web should lead
+  there."
+  [link]
+  (let [host (second (re-find #"^https?://([^/?#:]+)" link))]
+    (boolean (and host (re-matches #"(?:[A-Za-z0-9\-]+\.)+[A-Za-z][A-Za-z0-9\-]*" host)))))
+
+(defn- shown-whole?
+  "Whether `shown` holds `link` as a whole address: not as the tail of a
+  longer scheme, and with nothing after it that an address could go on
+  with, apart from at most three marks that close a clause. A page that
+  shows https://x.example/a/b has not shown https://x.example/a."
+  [shown link]
+  (boolean (re-find (re-pattern (str "(?<![A-Za-z0-9+.\\-])" (java.util.regex.Pattern/quote link)
+                                     closer "{0,3}(?!" link-char ")"))
+                    shown)))
+
+(defn links
+  "The addresses in `text`, a scout's memo, that `shown`, the text of its
+  session's earlier :egress results, showed whole: each a live link's
+  shape (relay.text/link?), on a public host, in the order written, at
+  most max-links. Pure. Every one passes `refusal`, so it is an address
+  the scout could have fetched."
+  [shown text]
+  (let [shown (str shown)]
+    (->> (re-seq #"\S+" (str text))
+         (keep (fn [word]
+                 (second (text/link-in #(and (public-host? %) (shown-whole? shown %)) word))))
+         distinct
+         (take max-links)
+         vec)))
 
 ;; --- the record, one file per result
 

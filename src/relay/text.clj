@@ -196,14 +196,109 @@
 ;; the "from" line of a ready item. Text itself carries no mark, so a
 ;; subject or a line reads as written.
 
+;; --- live links
+;;
+;; A link in text an outsider may have shaped is broken, with one
+;; exception: a link relay can say came from somewhere it takes links
+;; from. relay.core keeps those as the live links: what the web showed a
+;; scout, whole (relay.shown/links), and what the operator called safe.
+;; A live link is trusted for where it came from, never for the host it
+;; points at.
+
+(def max-link "The most characters in a live link." 2000)
+
+(def ^:private link-shape
+  ;; http or https in lower case, a host of ASCII letters, digits, dots
+  ;; and hyphens, a port, then only what RFC 3986 allows in a path, a
+  ;; query or a fragment. No user name before the host, which could pass
+  ;; for the host, and no backslash or character outside ASCII, so
+  ;; `visible` leaves a live link exactly as it is.
+  #"https?://[A-Za-z0-9](?:[A-Za-z0-9.\-]*[A-Za-z0-9])?(?::\d{1,5})?(?:[/?#][A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]*)?")
+
+(defn link?
+  "Whether a string can be a live link: one http or https address in
+  plain ASCII (link-shape), at most max-link characters."
+  [s]
+  (boolean (and (string? s) (<= (count s) max-link) (re-matches link-shape s))))
+
+(defn mend
+  "The address a broken link stood for, when `s` is one link as defang
+  shows it and nothing else: hxxp and hxxps are http and https again and
+  every [.] a dot. Any other text comes back trimmed and otherwise as it
+  is. The operator copies the broken form off a screen, so what keeps a
+  link takes either form."
+  [s]
+  (let [s (str/trim (str s))]
+    (if-let [[_ scheme more] (re-matches #"(hxxps?)://(\S*)" s)]
+      (str (if (= "hxxps" scheme) "https" "http") "://" (str/replace more "[.]" "."))
+      s)))
+
+(def link-closers
+  "What may follow a link in a word without being part of it: a closing
+  bracket or quote, the marks that end a clause, and Markdown's emphasis."
+  #{\) \] \> \" \' \. \, \; \: \! \? \* \_})
+
+(def ^:private max-closers
+  "How many link-closers may follow a live link. A longer run could spell
+  something out to a reader that takes it for part of the address."
+  3)
+
+(defn- split-closers
+  "[address after] for a run from a scheme to the end of its word, where
+  `after` is the link-closers a reader's link finder leaves off the end.
+  A closing bracket is left off only when the run closes more of them
+  than it opens, so https://x.example/a_(b) keeps its bracket. This is
+  the rule mail apps and terminals follow, so the address relay judges
+  is the one a click opens."
+  [^String run]
+  (loop [end (count run)]
+    (let [head (subs run 0 end)
+          c (when (pos? end) (.charAt run (dec end)))
+          more-closed? (fn [open close] (> (count (filter #{close} head)) (count (filter #{open} head))))]
+      (if (and c (link-closers c)
+               (case c \) (more-closed? \( \)) \] (more-closed? \[ \]) true))
+        (recur (dec end))
+        [head (subs run end)]))))
+
+(defn link-in
+  "For one word (no space in it), [before link after] when `ok?` takes
+  the address it holds, or nil. The address starts at the word's first
+  scheme and runs to the end of the word, less the link-closers after it
+  (split-closers), of which there may be at most three. Text that runs
+  on after an address is part of it, so it makes a different address,
+  never a taken one with more after it."
+  [ok? word]
+  (let [m (re-matcher #"(?i)[a-z][a-z0-9+.\-]*://" word)]
+    (when (.find m)
+      (let [start (.start m)
+            [link after] (split-closers (subs word start))]
+        (when (and (<= (count after) max-closers) (link? link) (ok? link))
+          [(subs word 0 start) link after])))))
+
+(defn defang-but
+  "defang, except that a link in `live` (a set of addresses) is left
+  whole where a word holds it and nothing runs on after it but
+  link-closers. What comes before it in the word is broken as defang
+  breaks it. With no live links this is defang."
+  [live s]
+  (if (empty? live)
+    (defang s)
+    (str/replace (str s) #"\S+"
+                 (fn [word]
+                   (if-let [[before link after] (link-in #(contains? live %) word)]
+                     (str (defang before) link after)
+                     (defang word))))))
+
 (defn for-operator
   "Text for the operator from a source with these labels: when an
   outsider may have written any of it (the labels carry contaminated),
-  its links broken (defang). It is not yet visible: the edge that shows
-  it (the command line, a push) applies visible, exactly once, since
-  visible is not idempotent (it doubles a backslash)."
-  [labels s]
-  (if (contaminated? labels) (defang s) (str s)))
+  its links broken (defang), all but the ones in `live`, relay's live
+  links (defang-but). A caller that gives no live links breaks every
+  one. It is not yet visible: the edge that shows it (the command line, a
+  push) applies visible, exactly once, since visible is not idempotent
+  (it doubles a backslash)."
+  ([labels s] (for-operator nil labels s))
+  ([live labels s] (if (contaminated? labels) (defang-but live s) (str s))))
 
 (def gutter
   "What every line of untrusted multi-line text is shown behind. Nothing
@@ -216,8 +311,9 @@
   the first included, behind `gutter`, its links broken when an outsider
   may have written it. Not yet visible: the edge applies visible-line to
   each line. The one helper for showing a role's or an outsider's text."
-  [labels s]
-  (vec (map #(str gutter %) (str/split (for-operator labels s) #"\n" -1))))
+  ([labels s] (block nil labels s))
+  ([live labels s]
+   (vec (map #(str gutter %) (str/split (for-operator live labels s) #"\n" -1)))))
 
 (def ^:private scripts
   "The scripts whose letters most often pass for one another's."
