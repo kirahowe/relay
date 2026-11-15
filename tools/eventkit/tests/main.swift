@@ -174,9 +174,19 @@ check(formatInstant(Date(timeIntervalSince1970: -1)) == "1969-12-31T23:59:59Z", 
 check(parseInstant("2026-10-28T14:00:60Z") == nil && parseInstant("2026-10-28T14:00Z") == nil
       && parseInstant("2026-10-28T14:00:00+00:00") == nil && parseInstant("2026-10-28T14:00:00") == nil, "instant shape")
 
+// The calendar has no 5 to 14 October 1582: the Gregorian reform skipped
+// them, so they are not days and do not parse.
+check(parseDay("1582-10-09") == nil && parseDay("1582-10-04") != nil && parseDay("1582-10-15") != nil, "the days the calendar skipped")
+
+// A day that exists: any year, and a day every month has, less the ten
+// the calendar skipped.
 func randomDay() -> Day {
-    let year = Int.random(in: 1...9999, using: &rng), month = Int.random(in: 1...12, using: &rng)
-    return Day(year: year, month: month, day: Int.random(in: 1...28, using: &rng))
+    while true {
+        let year = Int.random(in: 1...9999, using: &rng), month = Int.random(in: 1...12, using: &rng)
+        let day = Int.random(in: 1...28, using: &rng)
+        if year == 1582 && month == 10 && (5...14).contains(day) { continue }
+        return Day(year: year, month: month, day: day)
+    }
 }
 for _ in 0..<2000 {
     let day = randomDay()
