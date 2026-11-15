@@ -162,18 +162,17 @@ in relay-tui at mxpvltlm a2ce30c4, the tip of fifteen commits on its
 - [x] relay-tui's README says what the board draws.
   - Receipt: the paragraph on surface cards under "The board", in
     uqwynqos, urpkvpun and plulklqq.
-- [ ] `make check` passes, and so does `bb verify` from a relay workspace
+- [x] `make check` passes, and so does `bb verify` from a relay workspace
   that has relay#97.
-  - `make check` passes at mxpvltlm a2ce30c4, after the rebases and
-    round four's fixes of 2026-11-15 that the Log records. A second
-    early joint run on 2026-11-15, relay at relay#97's lzslyxyt db7458a3
-    against relay-tui kxrymkzt 6bb6d739, is in the Log: the same two
-    failures and nothing else. The first early joint run, relay
-    at relay#97's nlyokvuorvpu 2d0c8e8a against relay-tui urpkvpun
-    7efde4e4: agentloop, relay-tui, catalog, webtool and eventkit pass,
-    relay 1,212 of 1,213 and pentest 30 of 31, the two failures being
-    relay#99's. The run that counts is on both rebased tips and is not
-    made yet.
+  - Receipt: `make check` passes at relay-tui mxpvltlm a2ce30c4.
+  - Receipt: the joint `bb verify` of 2026-11-15, from a relay workspace
+    at relay#97's lzslyxyt bdfc1086 (on relay's `integration` opstrkzy
+    d44ca47f) against relay-tui mxpvltlm a2ce30c4 (on vywmmpxm
+    13c740c5): agentloop, relay-tui, catalog, webtool, eventkit and fuzz
+    pass (fuzz seed 1794759806, 300,000 cases, none followed); relay
+    1,224 of 1,225 (seed 759790736) and pentest 30 of 31. The two
+    failures are relay#99's, `relay.shell-live-test` and
+    `s18-shell-walls`, with Apple's container service not running.
 - [ ] An adversarial review finds nothing in scope.
   - Four rounds each found something in scope. Round four could not
     break the cursor binding it was aimed at; what it found is fixed or
@@ -370,3 +369,17 @@ The review, read-only, with the threat model:
   only the test double and two tests that wait for its words changed.
   `make check` passes at mxpvltlm. The verify that counts is a fresh
   run after the start line.
+- 2026-11-15: Kira's answer on round four, given to the coordinating
+  session (relay-32): "let's wrap that up". Taken as land with round
+  four's fixes and no fifth round. She then told this session to carry
+  on.
+- 2026-11-15: the joint verify that counts passed with only relay#99's
+  two failures (the receipt above). relay-tui's `integration` is set to
+  mxpvltlm a2ce30c4 and relay's to relay#97's lzslyxyt, with this
+  record on top.
+- Moved to review with the criterion "an adversarial review finds
+  nothing in scope" unchecked: four rounds each found something, all
+  fixed or filed (relay#109, #110, #128, #129, #131, #132, #133), and
+  Kira chose to land after round four rather than run a fifth. Codex
+  did not review rounds three and four (out of quota); both were fresh
+  reviewer agents.
