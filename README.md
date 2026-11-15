@@ -340,7 +340,8 @@ question only you can answer), an alert (something is wrong), a digest
 (the daily note) or a reply in a thread. A message has a subject, an
 urgency (low, normal or high), and sections of items, each with the refs
 it drew on and where it came from. Text from outside is marked
-`[from outside]` and its links broken, in every channel.
+`[from outside]` and its links broken, in every channel, all but the
+links relay can account for (see Live links).
 
 A role uses `tell_operator` to tell you something. It gives the content
 and the urgency, and nothing else: relay.edn alone decides where the
@@ -1445,6 +1446,46 @@ A list or account that other people share is not the operator's own.
 Put `:labels ["private" "contaminated"]` on the tool that reads it, since
 others write it too, and give no role a tool that changes it, since
 others would see the change.
+
+### Live links
+
+A link in text an outsider may have shaped is broken, so a tap cannot
+follow it: `https://x.example/a` reads `hxxps://x[.]example/a`. relay
+leaves a link whole when it can say where the link came from. It never
+trusts a link for the host it points at. Two things make a link live:
+
+- A scout was shown it. When a scout sends a memo, relay records each
+  http or https address in it that a search or a page showed the scout's
+  session, whole and character for character. The fetch rule uses the
+  same test, so you may open what the scout could have fetched. An
+  address the scout built stays broken, because it could carry what the
+  steward told the scout. An address on a bare host name or a number
+  stays broken too: that is a machine on your own network, and nothing
+  on the web should lead you there.
+- You called it safe. `relay link <address>` keeps a link. Give the
+  address in quotes, whole or as relay shows a broken one. `relay link
+  drop <address>` takes it back, and a dropped link stays broken even
+  when a scout is shown it again. `relay links` lists both kinds.
+
+A live link is plain ASCII with no user name before its host. Write a
+host in other letters in its `xn--` form. relay keeps one set of live
+links, so a link in it is whole wherever relay shows it to you: in a
+message, in mail, in a push, on a card, in `relay ready` and in your
+inbox. It is whole only as a word of its own. Text run on after it
+makes a different address, and relay breaks that one. A full stop, a
+comma, a semicolon, an exclamation mark, a closing round or angle
+bracket or a double quote may follow it, up to three of them: those are
+the marks Apple's link finder, which your mail and phone use, leaves off
+an address. Any other mark, such as a question mark, a colon or
+Markdown's `**`, is taken as part of the address, so relay breaks the
+link. Where relay cuts text short, as in a push, a link the cut falls
+inside is broken too.
+
+When you keep or drop a link, a client that already holds a card or a
+message with that link in it is sent it again.
+
+Every other view (`relay status`, `relay log`, a role's notes, a
+calendar entry) still breaks every link in outside text.
 
 ### The steward's shell
 

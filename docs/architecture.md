@@ -22,7 +22,9 @@ safe is the walls, and relay builds them in code:
 - Mail goes only to you, from the agent's own address. Mail to any host
   but this machine is encrypted.
 - Scouts, the public roles that search the web, are never shown anything
-  private, and they may fetch only an address the web showed them.
+  private, and they may fetch only an address the web showed them. A
+  link reaches you whole only when the web showed it to a scout, or you
+  called it safe yourself.
 
 This is everything that can leave the house, and how:
 
@@ -461,6 +463,35 @@ relay.edn refuses an `egress` tool that relay cannot check: it must be an
 envelope tool with known parameters, and it either fetches a `url` or
 searches with free text named in `:queries`, never both.
 
+### Live links
+
+The same record decides which links you can open. Everything a scout
+reports is outside text, and so is what the steward writes after reading
+it, so every link in it would reach you broken. When a scout sends a
+memo, relay's tool command works out which http and https addresses in
+it the session was shown whole (`relay.shown/links`), and the memo's
+event records them. The fold keeps them in one set, the live links,
+with any link you add yourself (`relay link`). `relay.text/for-operator`
+leaves a link from that set whole and breaks every other.
+
+```mermaid
+flowchart LR
+    web["A search or a page<br/>shows an address"] --> rec["relay.shown<br/>the session's record"]
+    rec -->|"whole, character for character"| memo["memo/sent<br/>:links"]
+    you["You: relay link"] --> kept["link/kept"]
+    memo --> live["Live links<br/>one set in the state"]
+    kept --> live
+    drop["You: relay link drop"] -->|"stays broken, whoever shows it"| live
+    live --> show["relay.text/for-operator<br/>a live link stays whole,<br/>every other is broken"]
+    show --> out["Messages, mail, push,<br/>cards, relay ready, the inbox"]
+```
+
+A link is trusted for where it came from, never for its host. The set
+is one for all of relay because the steward rewrites what the scout
+found: a role that writes a live link adds nothing to it, and one that
+changes it by a character has written a different address, which is
+broken. Whatever shows text without the set breaks every link.
+
 ## The steward's shell
 
 A house role granted `:shell` gets `sh`, which runs a command in a Linux
@@ -707,6 +738,7 @@ The invariants come from `docs/plans/house.md`. Tests are in
 | I7 | Nothing the steward does destroys | `relay.shell/run-argv` mounts read-only; `relay.files/plan` and `move!` never overwrite or delete; `relay.moves/undo!`; `relay.log` only appends | `files_test`: `undoing-every-call-restores-the-tree-byte-for-byte`, `a-move-never-overwrites-deletes-or-leaves-the-folders`; `shell_live_test`; `log_test` | `s24-files-never-destroyed`, `s18-shell-walls` |
 | I8 | Every old log still folds | `relay.core/removed-event-kinds` and `evolve`; an old `notification/created` folds as `:legacy` history | `removed_events_test`; `messages_test`: `every-old-notification-folds-into-a-message`; `calendar_test`: `an-old-log-has-no-calendar` | `s25-old-log-folds` |
 | I9 | The calendar is the agent's | `calendar-writer!` in `relay.core` refuses the operator, the dispatcher and public roles; `relay.core/calendar-feed` and `relay.ics/render`; `relay.websocket/decide-calendar` and `feed-token`; `relay.serve` binds the listener to 127.0.0.1 | `calendar_test`: `the-feed-has-only-what-roles-wrote`; `calendar_serve_test`; `ics_test` | `s26-calendar-feed` |
+| I10 | Only a link relay can account for is whole | `relay.shown/links`, which `shown-links` in `relay.tools` calls for a scout's `memo_send`; `decide* :memo/send`, `:link/keep` and `:link/drop` in `relay.core`, the last two the operator's alone; `relay.text/link-in` and `defang-but`, through `for-operator` | `links_test`: `no-link-outside-the-live-set-is-ever-whole`, `keeping-links-live-changes-nothing-else`, `cutting-shown-text-leaves-no-link-outside-the-live-set`, `a-scout-hands-on-only-what-it-could-have-fetched`, `only-the-operator-keeps-or-drops-a-link`, `a-link-kept-or-dropped-reaches-a-client-that-holds-it`; `scout_test`: `a-scout-s-memo-keeps-the-links-it-was-shown-live`, `the-operator-can-open-what-a-scout-was-shown` | none yet |
 
 ## Reading list
 
