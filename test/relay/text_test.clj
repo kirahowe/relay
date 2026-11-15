@@ -332,8 +332,24 @@
     (doseq [[s broken] [["docs.example.org:1secret-token.attacker.com/x" "docs[.]example[.]org:1secret-token[.]attacker[.]com/x"]
                         ["a.b:1secret.attacker.com" "a.b:1secret[.]attacker[.]com"]
                         ["example.org:8080attacker.com" "example[.]org:8080attacker[.]com"]
-                        ["a.https:0x7f.evil.pl/x" "a[.]https:0x7f[.]evil[.]pl/x"]]]
+                        ["a.https:0x7f.evil.pl/x" "a[.]https:0x7f[.]evil[.]pl/x"]
+                        ;; relay#124's three, found again in relay#97's review.
+                        ["a.bc:1evil.com/steal?d=1" "a[.]bc:1evil[.]com/steal?d=1"]
+                        ["x.yz:9www.evil.com" "x[.]yz:9www[.]evil[.]com"]
+                        ["me@a.bc:1evil.com/x" "me@a[.]bc:1evil[.]com/x"]]]
       (is (= broken (text/defang s)) s)))
+  (testing "a scheme a terminal follows with no slashes after it is broken"
+    ;; relay#126, from relay#95's review: Ghostty's link finder takes each
+    ;; of these, and Apple's makes ssh:user@host a link.
+    (doseq [[s broken] [["ssh:CANARY@evil.test" "ssh[:]CANARY@evil[.]test"]
+                        ["magnet:?xt=urn:btih:abc" "magnet[:]?xt=urn:btih:abc"]
+                        ["file:/etc/passwd" "file[:]/etc/passwd"]
+                        ["news:comp.lang.c" "news[:]comp[.]lang[.]c"]
+                        ["SSH:x@evil.test" "SSH[:]x@evil[.]test"]]]
+      (is (= broken (text/defang s)) s))
+    (testing "a word and a colon in a sentence are left alone, and so are the schemes relay#121 asks about"
+      (doseq [s ["Re: the news: nothing" "key:value" "at 10:30" "ssh: later" "mailto:a@b.test" "tel:+15551234"]]
+        (is (= s (text/defang s)) s))))
   (testing "www after an underscore or a hyphen is still www to a link finder"
     (doseq [[s broken] [["_www.a1.docx" "_www[.]a1[.]docx"] ["-WWW.123.txt" "-WWW[.]123[.]txt"]]]
       (is (= broken (text/defang s)) s)))
@@ -358,3 +374,48 @@
 (deftest hidden-characters-in-mail-are-taken-out-and-said
   (is (= "samwise (a hidden character removed)" (text/visible-plain "sam\u200bwise")))
   (is (= "plain\ttext\n" (text/visible-plain "plain\ttext\n"))))
+
+;; --- finding schemes takes time in the length of the text (relay#125)
+
+(defn- break-schemes-by-pattern
+  "What defang's first step was: one pattern, which tries every letter of
+  a long word as the start of a scheme."
+  [s]
+  (str/replace (str s) #"(?i)([a-z][a-z0-9+.\-]*)://"
+               (fn [[_ scheme]]
+                 (case (str/lower-case scheme)
+                   "http" "hxxp://" "https" "hxxps://" "ftp" "fxp://"
+                   ("hxxp" "hxxps" "fxp") (str scheme "://")
+                   (str scheme "[:]//")))))
+
+(def gen-schemy
+  (gen/fmap #(apply str %)
+            (gen/vector (gen/elements ["a" "B" "1" "+" "." "-" ":" "/" "://" " " "http" "https" "HTTPS" "ftp" "hxxp"
+                                       "x-app" "é" "\n" "//" ":/"])
+                        0 24)))
+
+(defspec the-one-pass-scheme-finder-breaks-what-the-pattern-broke 2000
+  (prop/for-all [s gen-schemy]
+    (= (break-schemes-by-pattern s) (#'text/break-schemes s))))
+
+(deftest a-very-long-word-does-not-slow-link-breaking
+  ;; relay#125: one word of 8,000 letters took half a second, and every
+  ;; piece of outside text goes through defang. It took 1 ms after the
+  ;; fix; the bound leaves room for a slow machine.
+  (let [ms (fn [f] (let [t0 (System/nanoTime)] (f) (/ (- (System/nanoTime) t0) 1e6)))
+        live #{"https://x.example/a"}]
+    (text/defang "warm up https://x.example/a")
+    (doseq [[what word] [["letters" (apply str (repeat 100000 "a"))]
+                         ;; This one overflowed the stack: the pattern that
+                         ;; reads dotted names takes stack for every label.
+                         ["dotted" (apply str (repeat 25000 "ab.c"))]
+                         ["schemes" (apply str (repeat 20000 "a://b"))]]]
+      (is (< (ms #(text/defang word)) 1500) what)
+      (is (< (ms #(text/links-in live word)) 1500) what)
+      (is (< (ms #(text/anchored live (text/for-operator ["contaminated"] word))) 1500) what))
+    (testing "relay#125's own case, one word of 8,000 letters: the best of five runs is under 50 ms"
+      (let [word (apply str (repeat 8000 "a"))]
+        (is (< (apply min (repeatedly 5 #(ms (fn [] (text/defang word))))) 50))))
+    (testing "a very long dotted word has every dot broken"
+      (is (not (re-find #"[a-z]\.[a-z]" (text/defang (apply str (repeat 25000 "ab.c")))))))))
+

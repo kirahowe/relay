@@ -34,13 +34,13 @@
 (def before
   ["" "" "" "see " "(" "\"" "'" "<" "[" "x" "a@" "." ".@" "+@" "-@" "__@" "_" "-" "*" "**" "`" "/" "//" ":" "%"
    "é" "1" "|" "{" "=" "&" "?" "#" "~" "+" "\u3000" "\u00a0" "\u200b" "\u00ad" "·" "a." "a_" "a-" "1." "x:" "@"
-   "a.b:1" "v1.2:3" "x.org:80"])
+   "a.b:1" "v1.2:3" "x.org:80" "a.bc:1" "x.yz:9" "me@a.bc:1"])
 
 (def scheme
   ["" "" "" "http://" "https://" "HTTPS://" "https:" "https:/" "http:\\\\" "https:\\" "ftp://" "www." "WWW." "_www."
    "ｈｔｔｐｓ://" "https：//" "https:／／" "hTtP://" "h\u200bttps://" "https\u200b://" "https:/\u200b/" "//"
    "https://user@" "https://a:b@" "feed:" "feed:https://" "view-source:https://" "itms-services://"
-   "x-web-search://" "https%3A%2F%2F" "https:%2F%2F"])
+   "x-web-search://" "https%3A%2F%2F" "https:%2F%2F" "ssh:" "ssh:x@" "file:" "file:/" "magnet:?xt=" "news:" "git:"])
 
 (def label
   ["evil" "secret" "x" "a1" "a-b" "a_b" "évil" "пример" "例" "xn--e1afmkfd" "1" "123" "0x7f" "com" "co" "www" "data"

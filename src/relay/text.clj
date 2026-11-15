@@ -160,6 +160,65 @@
                                  (not-any? tld-like? (butlast (rest labels))))
                             (and (file-extensions ending) (= 2 (count labels)))))))))))
 
+(defn- scheme-char? [c]
+  (let [c (int c)]
+    (or (<= (int \a) c (int \z)) (<= (int \A) c (int \Z)) (<= (int \0) c (int \9))
+        (= c (int \+)) (= c (int \.)) (= c (int \-)))))
+
+(defn- ascii-letter? [c]
+  (let [c (int c)]
+    (or (<= (int \a) c (int \z)) (<= (int \A) c (int \Z)))))
+
+(defn- scheme-start
+  "Where the scheme that ends at index `at` of `s` starts, `at` being
+  where a :// stands: the first letter in the run of scheme characters
+  (letters, digits, + . -) before it, looking back no further than
+  `from`. Nil when that run holds no letter. One walk back over the run,
+  so finding every scheme in a text takes time in its length, however
+  long a word is; a pattern that tries each letter as a start takes time
+  in its square."
+  [^String s from at]
+  (let [run (loop [i (long at)]
+              (if (and (> i (long from)) (scheme-char? (.charAt s (dec i)))) (recur (dec i)) i))]
+    (loop [i run]
+      (cond (>= i (long at)) nil
+            (ascii-letter? (.charAt s i)) i
+            :else (recur (inc i))))))
+
+(defn- break-schemes
+  "`s` with every scheme before a :// broken: http, https and ftp to
+  hxxp, hxxps and fxp, one of those left as it is, and any other
+  scheme's :// to [:]//."
+  [^String s]
+  (let [sb (StringBuilder.)]
+    (loop [from 0]
+      (let [at (.indexOf s "://" (int from))]
+        (if (neg? at)
+          (str (.append sb (subs s from)))
+          (if-let [start (scheme-start s from at)]
+            (let [scheme (subs s start at)]
+              (.append sb (subs s from start))
+              (.append sb (case (str/lower-case scheme)
+                            "http" "hxxp://" "https" "hxxps://" "ftp" "fxp://"
+                            ("hxxp" "hxxps" "fxp") (str scheme "://")
+                            (str scheme "[:]//")))
+              (recur (+ at 3)))
+            (do (.append sb (subs s from (+ at 3)))
+                (recur (+ at 3)))))))))
+
+(def ^:private slashless-scheme
+  ;; A scheme a link finder follows with nothing but a colon after it.
+  ;; mailto, tel and sms are not here: whether those are broken is
+  ;; relay#121's question.
+  #"(?i)(?<![a-z0-9+.\-])(ssh|sftp|file|magnet|news|git):(?=\S)(?!//)")
+
+(def ^:private longest-plain-word
+  "The longest word whose dots are looked at one name at a time. A
+  longer one has every dot broken: no file name or time is that long,
+  and the pattern that reads names takes stack for every label, so a
+  word of many thousand would overflow it."
+  500)
+
 (defn break-every-dot
   "A word that holds a link, with every dot in it broken: the ASCII dot
   and the fullwidth and ideographic full stops a browser reads as one.
@@ -188,22 +247,20 @@
   removes them must do so first, or a host split by one would come
   together again after this has looked at it."
   [s]
-  (-> (str s)
-      (str/replace #"(?i)([a-z][a-z0-9+.\-]*)://"
-                   (fn [[_ scheme]]
-                     (case (str/lower-case scheme)
-                       "http" "hxxp://" "https" "hxxps://" "ftp" "fxp://"
-                       ("hxxp" "hxxps" "fxp") (str scheme "://")
-                       (str scheme "[:]//"))))
+  (-> (break-schemes (str s))
       ;; A web scheme written short, https:/x.example, https:x.example or
       ;; https:\\x.example, which a link finder still follows.
       (str/replace #"(?i)(?<![a-z0-9+.\-])(https?|ftp):(?=[/\\A-Za-z0-9])(?!//)"
                    (fn [[_ scheme]]
                      (case (str/lower-case scheme) "http" "hxxp:" "https" "hxxps:" "fxp:")))
+      ;; The schemes a terminal's link finder follows with no slashes
+      ;; after them (Ghostty's takes each of these), relay#126.
+      (str/replace slashless-scheme (fn [[_ scheme]] (str scheme "[:]")))
       (str/replace #"\S+"
                    (fn [word]
                      (let [word (str/replace word #"(?<=\S)[。．｡](?=\S)" "[.]")]
-                       (if (or (str/includes? word "://") (str/includes? word "[:]//")
+                       (if (or (> (count word) longest-plain-word)
+                               (str/includes? word "://") (str/includes? word "[:]")
                                ;; www after anything but a letter or a
                                ;; digit: a link finder follows _www.x.txt.
                                (re-find #"(?i)(?<![\p{L}\p{N}])www\." word)
@@ -311,10 +368,14 @@
   6)
 
 (defn- first-scheme
-  "Where a word's first scheme starts, or nil."
-  [word]
-  (let [m (re-matcher #"(?i)[a-z][a-z0-9+.\-]*://" word)]
-    (when (.find m) (.start m))))
+  "Where a word's first scheme starts, or nil: the scheme before its
+  first :// that has one (scheme-start)."
+  [^String word]
+  (loop [from 0]
+    (let [at (.indexOf word "://" (int from))]
+      (when-not (neg? at)
+        (or (scheme-start word from at)
+            (recur (+ at 3)))))))
 
 (defn address-in
   "For one piece of text with no space in it, [before address after]
