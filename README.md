@@ -340,8 +340,8 @@ question only you can answer), an alert (something is wrong), a digest
 (the daily note) or a reply in a thread. A message has a subject, an
 urgency (low, normal or high), and sections of items, each with the refs
 it drew on and where it came from. Text from outside is marked
-`[from outside]` and its links broken, in every channel, all but the
-links relay can account for (see Live links).
+`[from outside]` and its links broken, in every channel. The links relay
+can account for travel beside the text (see Live links).
 
 A role uses `tell_operator` to tell you something. It gives the content
 and the urgency, and nothing else: relay.edn alone decides where the
@@ -1449,66 +1449,69 @@ others would see the change.
 
 ### Live links
 
-A link in text an outsider may have shaped is broken, so a tap cannot
-follow it: `https://x.example/a` reads `hxxps://x[.]example/a`. relay
-leaves a link whole when it can say where the link came from. It never
-trusts a link for the host it points at. Two things make a link live:
+A link in text an outsider may have shaped is broken, so nothing can
+follow it: `https://x.example/a` reads `hxxps://x[.]example/a`. That
+text is inert, always. relay never leaves a link whole in it for a mail
+app or a terminal to find, because each one decides for itself where an
+address ends, and they disagree.
+
+The links relay can account for travel beside the text. It never trusts
+a link for the host it points at, only for where the link came from.
+Two things make a link live:
 
 - A scout was shown it. When a scout sends a memo, relay records each
   http or https address in it that a search or a page showed the scout's
   session, whole and character for character. The fetch rule uses the
-  same test, so you may open what the scout could have fetched. An
-  address the scout built stays broken, because it could carry what the
-  steward told the scout. An address on a bare host name or a number
-  stays broken too: that is a machine on your own network, and nothing
-  on the web should lead you there.
+  same record, so you may open what the scout could have fetched. An
+  address the scout built stays out, because it could carry what the
+  steward told the scout. So does an address on a bare host name or a
+  number: that is a machine on your own network, and nothing on the web
+  should lead you there.
 - You called it safe. `relay link <address>` keeps a link. Give the
-  address in quotes, as you would type it or as relay shows it: a
-  broken one (`hxxps://x[.]example/a`), or a live one between its angle
-  brackets. `relay link drop <address>` takes it back, and a dropped
-  link stays broken even when a scout is shown it again. `relay links`
-  lists both kinds.
+  address in quotes, typed out or as relay shows it
+  (`hxxps://x[.]example/a`). `relay link drop <address>` takes it back,
+  and a dropped link stays out even when a scout is shown it again.
+  `relay links` lists both kinds.
 
-relay shows a live link between angle brackets, as in
-`Apply at <https://x.example/a>.` Those are the marks RFC 3986 gives
-for an address in running text, and whatever reads the text (your mail,
-your phone, a terminal) follows exactly what is between them, whatever a
-role wrote before or after. A role may write a link in Markdown, in
-brackets or before a question mark, and relay still finds it, as long
-as no more than three marks follow it and none is a closing angle
-bracket. Text run on after an address makes a different address, and
-relay breaks that one.
+Each channel then carries a live link in its own way, and none depends
+on reading text:
+
+- In the dashboard and on the command line, the broken text is itself a
+  hyperlink to the address, where the terminal supports them. Piped or
+  redirected, the output is plain text.
+- In mail, an item's live links follow it, one address to a line, with
+  nothing else on the line.
+- In a push, up to three are buttons, and the body says when there are
+  more.
+- A client is sent them as a list beside each card, message and ready
+  item (`docs/client-protocol.md`).
+
+relay keeps one set of live links, so a link in it can be opened
+wherever relay shows the text that holds it. A role may write it in
+Markdown, in brackets or before a question mark, and relay still finds
+it. Text run on after an address makes a different address, which is not
+live. When you keep or drop a link, a client that already holds a card
+or a message with it is sent it again. A client can also ask relay for
+the live links themselves (`_relay/links`) and keep or drop one for you
+(`_relay/links/keep`, `_relay/links/drop`), which is the same act as
+`relay link`: yours, and no role's. relay-tui uses the set as its own
+check. It draws a link in outside text so that a click follows it only
+when relay named that exact address.
 
 A live link is plain ASCII, with no user name before its host. After
 the host it holds only letters, digits and `- . _ ~ / ? # & = % : + @`,
 it holds no second address (no `://` after the first), and it ends in a
-letter or a digit, or a slash right after one. That is the shape every
-common link finder reads to its end. They disagree
-about the rest: Apple's, which your mail and phone use, balances
-brackets across whatever follows an address and drops a full stop or a
-comma from its end, even between angle brackets, and Ghostty's stops at
-an apostrophe. `scripts/link-finder-fuzz.swift` checks the rule against
+letter or a digit, or a slash right after one. Mail still shows an
+address as text, so the shape is the one every common link finder reads
+to its end: Apple's balances brackets across whatever follows an address
+and drops a full stop or a comma from its end, and Ghostty's stops at an
+apostrophe. `scripts/link-finder-fuzz.swift` checks the rule against
 Apple's finder itself: it followed all 188,377 addresses of this shape
-exactly, out of 600,000 random ones. An address of any other shape
-stays broken, and `relay link` refuses it: one with a comma, an
-apostrophe or a bracket in it, or one that ends in `=`. Write a host in
-other letters in its `xn--` form. relay keeps one set of live
-links, so a link in it is whole wherever relay shows it to you: in a
-message, in mail, in a push, on a card, in `relay ready` and in your
-inbox. Where relay cuts text short, as in a push, a link the cut falls
-inside is broken, and `relay ready` leaves a long link on a line of its
-own.
-
-When you keep or drop a link, a client that already holds a card or a
-message that reads differently for it is sent it again. A client can
-also ask relay for the live links themselves (`_relay/links`) and keep
-or drop one for you (`_relay/links/keep`, `_relay/links/drop`), which is
-the same act as `relay link`: yours, and no role's. relay-tui uses the
-set as its own check. It draws a link in outside text so that a click
-follows it only when relay named that exact address.
-
-Every other view (`relay status`, `relay log`, a role's notes, a
-calendar entry) still breaks every link in outside text.
+exactly, out of 600,000 random ones. What Proton Mail follows has not
+been checked (relay#117). An address of any other shape is never live,
+and `relay link` refuses it: one with a comma, an apostrophe or a
+bracket in it, or one that ends in `=`. Write a host in other letters in
+its `xn--` form.
 
 ### The steward's shell
 
@@ -2136,12 +2139,15 @@ house (`docs/plans/house.md`) are covered from the attacker's side:
 - I9, the calendar is the agent's: the feed needs the token, refuses a
   web page's origin, holds only what a role wrote, and is reachable only
   on 127.0.0.1 (s26-calendar-feed).
-- I10, only a link relay can account for is whole: a page shows the
-  scout one address on the open web. The scout sends it on with others
-  built around the steward's canary, and the steward tells you all of
-  it with more of its own. The address the web showed reaches you whole,
-  in the client, in mail and in what is ready, and no address that holds
-  the canary does. No tool lets a role keep a link (s27-live-links).
+- I10, you can follow only a link relay can account for: a page shows
+  the scout one address on the open web. The scout sends it on with
+  others built around the steward's canary, and the steward tells you
+  all of it with more of its own. The text you are sent is inert in
+  every channel. The address the web showed is the one link listed for
+  a client, the one address on a line of its own in mail, the one action
+  of a push and the one hyperlink on a terminal, and no address that
+  holds the canary is among them. No tool lets a role keep a link
+  (s27-live-links).
 
 It also checks that a crash does not lose a label or run a call twice
 (s7-*), that no view the operator reads passes a raw control or format

@@ -23,8 +23,9 @@ safe is the walls, and relay builds them in code:
   but this machine is encrypted.
 - Scouts, the public roles that search the web, are never shown anything
   private, and they may fetch only an address the web showed them. A
-  link reaches you whole only when the web showed it to a scout, or you
-  called it safe yourself.
+  link can be followed only when the web showed it to a scout, or you
+  called it safe yourself, and then by data relay attaches, never by
+  being left whole in text.
 
 This is everything that can leave the house, and how:
 
@@ -465,14 +466,18 @@ searches with free text named in `:queries`, never both.
 
 ### Live links
 
-The same record decides which links you can open. Everything a scout
-reports is outside text, and so is what the steward writes after reading
-it, so every link in it would reach you broken. When a scout sends a
-memo, relay's tool command works out which http and https addresses in
-it the session was shown whole (`relay.shown/links`), and the memo's
-event records them. The fold keeps them in one set, the live links,
-with any link you add yourself (`relay link`). `relay.text/for-operator`
-leaves a link from that set whole and breaks every other.
+The same record decides which links you can open. Text an outsider may
+have shaped is inert: every link in it is broken, in every channel,
+whatever is live. Everything a scout reports is such text, and so is
+what the steward writes after reading it. The links relay can account
+for travel beside the text.
+
+When a scout sends a memo, relay's tool command works out which http and
+https addresses in it the session was shown whole (`relay.shown/links`),
+and the memo's event records them. The fold keeps them in one set, the
+live links, with any link you add yourself (`relay link`).
+`relay.text/links-in` finds the live links a text holds, and each
+channel carries their addresses by a mechanism of its own.
 
 ```mermaid
 flowchart LR
@@ -481,31 +486,33 @@ flowchart LR
     you["You: relay link"] --> kept["link/kept"]
     memo --> live["Live links<br/>one set in the state"]
     kept --> live
-    drop["You: relay link drop"] -->|"stays broken, whoever shows it"| live
-    live --> show["relay.text/for-operator<br/>a live link stays whole,<br/>every other is broken"]
-    show --> out["Messages, mail, push,<br/>cards, relay ready, the inbox"]
+    drop["You: relay link drop"] -->|"stays out, whoever shows it"| live
+    text["Outside text"] -->|"every link broken, always"| inert["Inert text"]
+    live --> find["relay.text/links-in<br/>the live links a text holds"]
+    text --> find
+    find --> wire["A client: a links list<br/>address and shown form"]
+    find --> term["A terminal: the broken text<br/>is an OSC 8 hyperlink"]
+    find --> mail["Mail: one address to a line<br/>after the item"]
+    find --> push["A push: up to three<br/>action buttons"]
 ```
 
 A link is trusted for where it came from, never for its host. The set
 is one for all of relay because the steward rewrites what the scout
 found: a role that writes a live link adds nothing to it, and one that
-changes it by a character has written a different address, which is
-broken. Whatever shows text without the set breaks every link.
+changes it by a character has written a different address, which is not
+live.
 
-relay shows a live link between angle brackets, `<https://x.example/a>`.
-A link left bare in running text is followed wherever each reader
-decides it ends, and readers disagree: Apple's link finder takes a
-colon, `**` or a closing bracket after an address into it. Between the
-brackets RFC 3986 gives for this, every reader follows the same
-address, the one relay judged. Two rules follow from testing link
-finders. A live link holds only letters, digits and
-`- . _ ~ / ? # & = % : + @`, and ends in a letter or a digit, or a slash
-right after one: Apple's finder balances brackets and drops a full stop
-or a comma from an address's end even between angle brackets
-(`scripts/link-finder-fuzz.swift`), and Ghostty's stops at an
-apostrophe, so relay admits only what every common finder reads whole.
-And where relay cuts or wraps shown text, it never leaves part of a
-live link.
+relay#94 first left a live link whole in the text. A link shown as text
+is followed wherever the reader's link finder decides it ends, and
+finders disagree: Apple's takes a colon or `**` after an address into
+it, Ghostty's stops at an apostrophe, kitty's follows a second address
+inside one, WezTerm's reads between angle brackets to the last one in a
+word. Six review rounds found one such case after another. So the text
+carries no link at all, and no channel but mail asks a finder to read
+anything. Mail is text/plain, so there an address stands alone on its
+line, where nothing a role wrote touches it, and the link shape is the
+one every common finder reads to its end
+(`scripts/link-finder-fuzz.swift`).
 
 ## The steward's shell
 
@@ -753,7 +760,7 @@ The invariants come from `docs/plans/house.md`. Tests are in
 | I7 | Nothing the steward does destroys | `relay.shell/run-argv` mounts read-only; `relay.files/plan` and `move!` never overwrite or delete; `relay.moves/undo!`; `relay.log` only appends | `files_test`: `undoing-every-call-restores-the-tree-byte-for-byte`, `a-move-never-overwrites-deletes-or-leaves-the-folders`; `shell_live_test`; `log_test` | `s24-files-never-destroyed`, `s18-shell-walls` |
 | I8 | Every old log still folds | `relay.core/removed-event-kinds` and `evolve`; an old `notification/created` folds as `:legacy` history | `removed_events_test`; `messages_test`: `every-old-notification-folds-into-a-message`; `calendar_test`: `an-old-log-has-no-calendar` | `s25-old-log-folds` |
 | I9 | The calendar is the agent's | `calendar-writer!` in `relay.core` refuses the operator, the dispatcher and public roles; `relay.core/calendar-feed` and `relay.ics/render`; `relay.websocket/decide-calendar` and `feed-token`; `relay.serve` binds the listener to 127.0.0.1 | `calendar_test`: `the-feed-has-only-what-roles-wrote`; `calendar_serve_test`; `ics_test` | `s26-calendar-feed` |
-| I10 | Only a link relay can account for is whole | `relay.shown/links`, which `shown-links` in `relay.tools` calls for a scout's `memo_send`; `decide* :memo/send`, `:link/keep` and `:link/drop` in `relay.core`, the last two the operator's alone, from the command line or a client (`link-request` in `relay.hub`); `relay.text/link-in` and `defang-but`, through `for-operator` | `links_test`: `no-link-outside-the-live-set-is-ever-whole`, `keeping-links-live-changes-nothing-else`, `cutting-shown-text-leaves-no-link-outside-the-live-set`, `a-scout-hands-on-only-what-it-could-have-fetched`, `only-the-operator-keeps-or-drops-a-link`, `a-link-kept-or-dropped-reaches-a-client-that-holds-it`; `hub_test`: `the-live-links-are-sent-and-then-each-change`, `the-operator-keeps-and-drops-a-link-from-a-client`; `links_acp_test`; `scout_test`: `a-scout-s-memo-keeps-the-links-it-was-shown-live`, `the-operator-can-open-what-a-scout-was-shown` | `s27-live-links` |
+| I10 | Outside text is inert, and only a link relay can account for can be followed | `relay.text/for-operator` breaks every link in outside text; `relay.text/links-in`, `listed` and `anchored` carry the live ones as data; `relay.shown/links`, which `shown-links` in `relay.tools` calls for a scout's `memo_send`; `decide* :memo/send`, `:link/keep` and `:link/drop` in `relay.core`, the last two the operator's alone, from the command line or a client (`link-request` in `relay.hub`); `relay.text/link?` for what may enter the set | `links_test`: `outside-text-is-broken-whatever-is-live`, `a-listed-link-is-live-and-its-shown-form-is-in-the-text`, `a-terminal-follows-only-live-links-and-the-text-is-unchanged`, `cutting-shown-text-leaves-no-link-to-follow`, `a-scout-hands-on-only-what-it-could-have-fetched`, `only-the-operator-keeps-or-drops-a-link`, `a-link-kept-or-dropped-reaches-a-client-that-holds-it`; `hub_test`: `the-live-links-are-sent-and-then-each-change`, `the-operator-keeps-and-drops-a-link-from-a-client`; `links_acp_test`; `scout_test`: `a-scout-s-memo-keeps-the-links-it-was-shown-live`, `the-operator-can-open-what-a-scout-was-shown` | `s27-live-links` |
 
 ## Reading list
 
