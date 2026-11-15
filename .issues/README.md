@@ -36,7 +36,6 @@
 | --- | --- | --- | --- |
 | [90](90-find-what-dropped-four-regression-cases-since-b12b.md) | Find what dropped four regression cases since B12b | bug | P1 |
 | [104](104-make-conversation-text-safe-in-relay-s-proxy-for-every-acp.md) | Make conversation text safe in relay's proxy for every ACP client | bug | P1 |
-| [118](118-carry-a-live-link-as-data-beside-inert-text.md) | Carry a live link as data beside inert text | feature | P1 |
 | [120](120-break-the-links-in-a-role-s-title-an-outsider-may-have.md) | Break the links in a role's title an outsider may have shaped | bug | P1 |
 | [38](38-stop-the-hub-notifying-twice-for-one-stuck-memo.md) | Stop the hub notifying twice for one stuck memo | bug | P2 |
 | [57](57-make-hidden-characters-visible-in-card-text-that-roles-and.md) | Make hidden characters visible in card text that roles and resolve get | bug | P2 |
@@ -65,6 +64,7 @@
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
+| [118](118-carry-a-live-link-as-data-beside-inert-text.md) | Carry a live link as data beside inert text | feature | P1 |
 | [95](95-call-a-link-safe-from-the-dashboard.md) | Call a link safe from the dashboard | feature | P2 |
 | [100](100-draw-surface-cards-on-relay-tui-s-board.md) | Draw surface cards on relay-tui's board | feature | P2 |
 
