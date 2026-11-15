@@ -76,3 +76,7 @@ conversation text, and relay#84 is the phone trial both should land
 before.
 
 ## Log
+
+- 2026-11-15: the dashboard's half is relay-tui pzkztxvr (9ae8a086),
+  with kxsoqlxu (c1716fc8) on top, as the relay#95 session reports. Both
+  land with the first part of relay#95.

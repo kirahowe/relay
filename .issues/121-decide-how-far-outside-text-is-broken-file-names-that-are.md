@@ -51,3 +51,13 @@ decide.
 ## Plan
 
 ## Log
+
+- 2026-11-15, from the relay#93 session. relay#95's confirm round found
+  the second class wider than the three schemes named here: relay also
+  leaves `ssh:user@host` and `magnet:` whole, and Ghostty's link finder
+  takes `mailto:`, `file:`, `ssh:`, `tel:`, `magnet:` and `news:` with
+  no slashes. I filed those others as a bug, relay#126, since relay
+  shows none of them on purpose, and left `mailto:`, `tel:` and `sms:`
+  to this question. relay#126 has a table of what relay shows for each
+  and what Apple's finder follows. If Kira would rather decide the whole
+  class here, relay#126 narrows to the web schemes written short.
