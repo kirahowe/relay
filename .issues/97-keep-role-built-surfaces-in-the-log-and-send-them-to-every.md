@@ -340,3 +340,8 @@ turn.
   Kira's answer on it. It is not in the chain. The work was jj change
   omytuowt (commit 504dfeb0), abandoned, which `jj` keeps reachable by
   that commit id until its history is collected.
+- 2026-11-15: Kira closed it, with the review criterion still unmet as
+  written (four rounds, each with an in-scope defect, the last a low one).
+  The steps to try it by hand were run on integration's tip first: a
+  checklist surface added, a box ticked, a stale seen and a path with no
+  box both refused.

@@ -75,7 +75,6 @@
 | [94](94-keep-a-link-live-when-relay-can-say-where-it-came-from.md) | Keep a link live when relay can say where it came from | feature | P1 |
 | [118](118-carry-a-live-link-as-data-beside-inert-text.md) | Carry a live link as data beside inert text | feature | P1 |
 | [96](96-draw-a2ui-surfaces-in-relay-tui.md) | Draw A2UI surfaces in relay-tui | feature | P2 |
-| [97](97-keep-role-built-surfaces-in-the-log-and-send-them-to-every.md) | Keep role-built surfaces in the log and send them to every client | feature | P2 |
 | [100](100-draw-surface-cards-on-relay-tui-s-board.md) | Draw surface cards on relay-tui's board | feature | P2 |
 | [124](124-break-a-host-that-follows-another-host-s-port-with-nothing.md) | Break a host that follows another host's port with nothing between | bug | P2 |
 | [125](125-keep-link-breaking-quick-on-one-very-long-word.md) | Keep link breaking quick on one very long word | bug | P3 |
@@ -142,6 +141,7 @@
 | [74](74-reopen-the-dashboard-looking-as-it-was-left.md) | Reopen the dashboard looking as it was left | feature | P2 |
 | [75](75-open-the-dashboard-with-bare-relay-instead-of-relay-chat.md) | Open the dashboard with bare relay instead of relay chat | feature | P2 |
 | [77](77-move-around-the-dashboard-with-esc-to-move-and-type-to-talk.md) | Move around the dashboard with Esc to move and type to talk | feature | P2 |
+| [97](97-keep-role-built-surfaces-in-the-log-and-send-them-to-every.md) | Keep role-built surfaces in the log and send them to every client | feature | P2 |
 | [21](21-make-agentloop-cleanroom-s-reader.md) | Make agentloop cleanroom's reader | feature | P3 |
 | [22](22-show-spend-per-role-per-week-in-relay-status.md) | Show spend per role per week in relay status | feature | P3 |
 | [23](23-decide-who-syncs.md) | Decide who syncs ~/Sync/relay | chore | P3 |

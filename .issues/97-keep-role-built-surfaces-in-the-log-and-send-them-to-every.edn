@@ -1,6 +1,6 @@
 {:id 97
  :title "Keep role-built surfaces in the log and send them to every client"
- :status :review
+ :status :done
  :type :feature
  :priority :p2
  :created "2026-11-14"
