@@ -74,3 +74,60 @@ Needs relay#94, which is done. What it left for this:
   else in outside text relay sends is a link that can be followed.
 
 ## Log
+
+Judgment calls, all mine, 2026-11-14:
+
+- The dashboard's own check is membership, where the proposal had angle
+  brackets. relay-tui draws a link in outside text as a hyperlink only
+  when the address is exactly a member of the set relay sent the
+  connection (`_relay/links`). Brackets are easy for an outsider to
+  write, and trusting them would trust every text path that skipped
+  relay's defang, a role-built surface's strings for one. With the set,
+  such a link is still broken.
+- Conversation text, which the proposal left open: relay sends the
+  client its live links and relay-tui leaves those whole. relay does not
+  rewrite the ACP stream. Rewriting it would mean buffering a reply to
+  find a link split across chunks, and a plain ACP client would see
+  relay's marks. Only a reply keeps its live links. A call's name,
+  arguments and output, and the agent's thinking, are broken throughout.
+- A live link longer than its row is shown in the broken form, with the
+  whole address as the hyperlink's target. A link whose word fits a row
+  stays whole on that row. The start of an address is another address,
+  and a terminal that drops OSC 8 would follow it; tmux does unless
+  hyperlinks is in terminal-features. So where OSC 8 does not get
+  through there is nothing to click, and never a cut address. The mock
+  shows this beside the other choice, wrapping the address as it is.
+- A hyperlink gets its look (underline, link colour) in one last pass
+  over every frame (`gate` in relay-tui's internal/render/links.go).
+  The same pass drops any hyperlink whose target is not in the set, so
+  no code between can turn a link into one nobody judged.
+- A note card's marks (`#`, a list marker, `**`) are read before its
+  text is made safe, and its rows are checked again as drawn. Taking
+  `**` out could join an address from its pieces after the old check.
+- `_relay/links/keep` and `_relay/links/drop` answer `{"changed"}` and
+  `notes`. They do not repeat the link: the client sent it.
+- The workspace pane's items (a document a role showed) still break
+  every link. Nothing here asked for them.
+
+Found on the way:
+
+- relay-tui's `Defang` left a `www.` host whole when a scheme came
+  later in the same word (`www.evil.test/?u=http://x`), and left an
+  unknown scheme's dots whole (`www.x.io://y`). Conversation text has
+  no other defang. Fixed in relay-tui ytnytlom, with the cases.
+- `go test ./internal/a2ui -run TestSetReadsBack
+  -rapid.seed=15639078114469465116` fails in relay-tui ("null write left
+  [] at /0"). It is the relay#96 spike's package; the session that owns
+  it has the seed.
+
+Built so far:
+
+- relay-tui ytnytlom, oomzupqw: the rendering. Nothing sends the set
+  yet, so every link is still broken there.
+- relay: `_relay/links`, `_relay/links/changed`, `_relay/links/keep`
+  and `_relay/links/drop`, with the hub and `relay acp` tests.
+
+Waiting on Kira: the mock of the list and the question,
+https://claude.ai/code/artifact/c936a717-3ec8-4754-bfc0-93ef5793c9a9.
+Three choices in it are hers: how a long link looks, whether `d` drops a
+link from the list, and the key (`L`).

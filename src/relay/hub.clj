@@ -290,6 +290,43 @@
                 h))
             h (sort-by key (:conns h)))))
 
+;; --- live links
+
+(defn- links-changes
+  "Sends each connection subscribed to the live links what was kept or
+  dropped since it was last sent them. It goes before the cards, the
+  messages and the ready items that read differently for it, so a client
+  that checks a link against the set has the set first."
+  [h]
+  (let [state (:state h)]
+    (reduce (fn [h [cid c]]
+              (if-let [params (when (and state (:links c)) (workspace/links-changed state (:links c)))]
+                (-> h (assoc-in [:conns cid :links] (core/live-links state))
+                    (write cid (workspace/notification-line "_relay/links/changed" params)))
+                h))
+            h (sort-by key (:conns h)))))
+
+(defn- links-request [h rid msg]
+  (let [cid (:conn (record h rid))
+        state (:state h)
+        why (workspace/links-params-error (params-of msg))]
+    (cond
+      why (refuse h rid -32602 why)
+      (nil? state) (refuse h rid -32000 "relay has not read its links yet. Try again.")
+      :else (-> h (assoc-in [:conns cid :links] (core/live-links state))
+                (answer rid (workspace/links-answer state))))))
+
+(defn- link-request
+  "_relay/links/keep and _relay/links/drop: the operator keeps a link
+  live or drops it, as relay link does. The address is cleaned like
+  anything the operator pastes, and the answer says what changed."
+  [h rid msg]
+  (let [{:keys [command error]} (workspace/link-command (get msg "method") (params-of msg))]
+    (if error
+      (refuse h rid -32602 error)
+      (let [{:keys [value notes]} (text/sanitize-input (:args command))]
+        (submit h (assoc command :args value) {:kind :link :rid rid :notes notes} :with-state true)))))
+
 (defn- ready-request [h rid msg]
   (let [cid (:conn (record h rid))
         state (:state h)
@@ -830,6 +867,8 @@
       "_relay/reply" (reply-request h rid msg)
       "_relay/undo" (undo-request h rid msg)
       "_relay/messages/act" (messages-act h rid msg)
+      "_relay/links" (links-request h rid msg)
+      ("_relay/links/keep" "_relay/links/drop") (link-request h rid msg)
       (cond
         (workspace/methods method) (forward h rid msg)
         (str/starts-with? method "_relay/") (refuse h rid -32601 (str "relay has no method " method "."))
@@ -968,6 +1007,22 @@
 
 ;; --- what relay decided
 
+(defn- link-result
+  "Answers a _relay/links/keep or _relay/links/drop once relay has
+  decided it, and sends every subscriber what now reads differently: the
+  set first, then the cards, messages and ready items that hold the
+  link."
+  [h {:keys [rid notes]} {:keys [ok changed message] :as result}]
+  (if-not ok
+    (refuse h rid -32000 (or message "relay refused it."))
+    (as-> h h
+      (assoc h :state (or (:state result) (:state h)))
+      (links-changes h)
+      (board-changes h)
+      (messages-changes h)
+      (ready-changes h)
+      (answer h rid (cond-> {"changed" (boolean changed)} (seq notes) (assoc "notes" (vec notes)))))))
+
 (defn- submit-result [h {:keys [ok rejection message] :as result}]
   (let [{:keys [kind role rid] :as continuation} (peek (:awaiting h))
         h (update h :awaiting pop)
@@ -1010,6 +1065,7 @@
                         (:summary result) (assoc "summary" (:summary result))))
         (refuse h rid -32000 (or message "relay could not undo it.")))
       :card-op (card-op-result h continuation result)
+      :link (link-result h continuation result)
       :ignore h)))
 
 ;; --- step
@@ -1046,6 +1102,7 @@
             :log-changed
             (as-> h h
               (assoc h :roster (vec (:roster e)) :state (or (:state e) (:state h)))
+              (links-changes h)
               (board-changes h)
               (messages-changes h)
               (ready-changes h)

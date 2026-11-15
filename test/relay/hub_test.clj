@@ -638,6 +638,126 @@
           (is (= -32602 (get-in w ["error" "code"])) method)
           (is (str/includes? (str (get-in w ["error" "message"])) "no parameter sessionId") method))))))
 
+;; --- live links (relay#95): the set a client checks a link against, and
+;; the operator keeping or dropping one from a client.
+
+(def ^:private fund "https://grants.example.org/fund?year=2027")
+
+(defn- link-states
+  "Three core states: a note card that quotes a link from outside, the
+  same once the operator has kept the link, and once it is dropped again."
+  []
+  (let [cmd (fn [state actor labels type args]
+              (first (core/run-command state {:type type :actor actor :labels labels :args args} {:now t0 :config ct/cfg})))
+        s0 (-> core/empty-state
+               (cmd "operator" [] :role/add {:id "clerk" :instructions "x"})
+               (cmd "clerk" ["contaminated"] :card/add {:kind "note" :title "Grants" :text (str "See " fund)}))
+        s1 (cmd s0 "operator" [] :link/keep {:url fund})]
+    [s0 s1 (cmd s1 "operator" [] :link/drop {:url fund})]))
+
+(defn- methods-of [msgs] (mapv #(or (get % "method") (get % "id")) msgs))
+(defn- note-texts [msg] (mapv #(get-in % ["note" "text"]) (get-in msg ["params" "cards"])))
+
+(deftest the-live-links-are-sent-and-then-each-change
+  (let [[s0 s1 s2] (link-states)
+        rev #(dec (:next-seq %))
+        h (-> (fresh) (assoc :state s0) (opened 1) (opened 2))
+        [h fx] (say h 1 (req 1 "_relay/links" {}))]
+    (is (= {"rev" (rev s0) "live" []} (get (first (writes fx 1)) "result")) "none yet")
+    (testing "a client that asks later gets them all, in order"
+      (let [other "http://arts.example.net/apply"
+            s (first (core/run-command s1 {:type :link/keep :actor "operator" :labels [] :args {:url other}} {:now t0 :config ct/cfg}))
+            [_ fx] (say (assoc h :state s) 2 (req 1 "_relay/links" {}))]
+        (is (= [other fund] (get-in (first (writes fx 2)) ["result" "live"])))))
+    (let [[h] (say h 1 (req 2 "_relay/cards" {}))
+          [h fx] (run h {:event :log-changed :roster roster :state s1})
+          ws (writes fx 1)]
+      (testing "a link kept elsewhere reaches the subscriber before the card that reads differently for it"
+        (is (= ["_relay/links/changed" "_relay/cards/changed"] (methods-of ws)))
+        (is (= {"rev" (rev s1) "live" [fund] "gone" []} (get (first ws) "params")))
+        (is (= [(str "See <" fund ">")] (note-texts (second ws)))))
+      (testing "a connection that did not ask is sent nothing"
+        (is (empty? (writes fx 2))))
+      (testing "what was sent is not sent again"
+        (is (empty? (second (run h {:event :log-changed :roster roster :state s1})))))
+      (testing "dropped, it is gone, again before the card"
+        (let [[_ fx] (run h {:event :log-changed :roster roster :state s2})
+              ws (writes fx 1)]
+          (is (= ["_relay/links/changed" "_relay/cards/changed"] (methods-of ws)))
+          (is (= {"rev" (rev s2) "live" [] "gone" [fund]} (get (first ws) "params")))
+          (is (= ["See hxxps://grants[.]example[.]org/fund?year=2027"] (note-texts (second ws)))))))
+    (testing "it takes no parameter, and needs relay to have read its log"
+      (let [[_ fx] (say h 1 (req 9 "_relay/links" {:sessionId "s1"}))
+            [w] (writes fx 1)]
+        (is (= -32602 (get-in w ["error" "code"])))
+        (is (str/includes? (get-in w ["error" "message"]) "no parameter sessionId")))
+      (let [[_ fx] (say (opened (fresh) 1) 1 (req 9 "_relay/links" {}))]
+        (is (= -32000 (get-in (first (writes fx 1)) ["error" "code"])))))))
+
+(deftest the-operator-keeps-and-drops-a-link-from-a-client
+  (let [[s0 s1 s2] (link-states)
+        broken "hxxps://grants[.]example[.]org/fund?year=2027"
+        h (-> (fresh) (assoc :state s0) (opened 1) (opened 2))
+        [h] (say h 1 (req 1 "_relay/links" {}))
+        [h] (say h 2 (req 1 "_relay/links" {}))
+        [h] (say h 2 (req 2 "_relay/cards" {}))]
+    (testing "keeping is the operator's own command, with the address as the client showed it"
+      (let [[h fx] (say h 1 (req 3 "_relay/links/keep" {:address broken}))
+            [{:keys [command with-state]}] (submits fx)]
+        (is (= {:type :link/keep :actor "operator" :labels [] :public false :args {:url broken}} command))
+        (is (true? with-state))
+        (is (empty? (writes fx 1)) "nothing is answered before relay decides")
+        (testing "kept: the client is answered, and every subscriber gets the set and then what holds the link"
+          (let [[_ fx] (run h {:event :submit-result :ok true :changed true :state s1})]
+            (is (= ["_relay/links/changed" 3] (methods-of (writes fx 1))))
+            (is (= {"changed" true} (get (last (writes fx 1)) "result")))
+            (is (= ["_relay/links/changed" "_relay/cards/changed"] (methods-of (writes fx 2))))
+            (is (= [fund] (get-in (first (writes fx 2)) ["params" "live"])))
+            (is (= [(str "See <" fund ">")] (note-texts (second (writes fx 2)))))))
+        (testing "refused: relay's reason is the error, and nothing is sent"
+          (let [why "A link is one http or https address in plain ASCII."
+                [_ fx] (run h {:event :submit-result :rejection :invalid :message why})
+                [w] (writes fx 1)]
+            (is (= [-32000 why] [(get-in w ["error" "code"]) (get-in w ["error" "message"])]))
+            (is (empty? (writes fx 2)))))))
+    (testing "already live: it says so and sends nothing else"
+      (let [h (first (run h {:event :log-changed :roster roster :state s1}))
+            [h] (say h 1 (req 3 "_relay/links/keep" {:address fund}))
+            [_ fx] (run h {:event :submit-result :ok true :changed false :state s1})]
+        (is (= [{"changed" false}] (map #(get % "result") (writes fx 1))))
+        (is (empty? (writes fx 2)))))
+    (testing "dropping is the operator's too"
+      (let [h (first (run h {:event :log-changed :roster roster :state s1}))
+            [h fx] (say h 1 (req 4 "_relay/links/drop" {:address fund}))
+            [{:keys [command]}] (submits fx)
+            [_ fx] (run h {:event :submit-result :ok true :changed true :state s2})]
+        (is (= [:link/drop "operator" {:url fund}] [(:type command) (:actor command) (:args command)]))
+        (is (= {"changed" true} (get (last (writes fx 1)) "result")))
+        (is (= [fund] (get-in (first (writes fx 2)) ["params" "gone"])))
+        (is (= ["See hxxps://grants[.]example[.]org/fund?year=2027"] (note-texts (second (writes fx 2)))))))
+    (testing "an address is cleaned like anything the operator pastes, and the answer says so"
+      (let [[h fx] (say h 1 (req 5 "_relay/links/keep" {:address "https://grants.example.org/\u200bfund?year=2027"}))
+            [{:keys [command]}] (submits fx)
+            [_ fx] (run h {:event :submit-result :ok true :changed true :state s1})]
+        (is (= {:url fund} (:args command)))
+        (is (= ["Removed 1 invisible character from what you pasted."] (get-in (last (writes fx 1)) ["result" "notes"])))))
+    (testing "a parameter it does not know, or no address, is refused and nothing is submitted"
+      (doseq [method ["_relay/links/keep" "_relay/links/drop"]
+              [params say-so] [[{:address fund :sessionId "s1"} "no parameter sessionId"]
+                               [{:adress fund} "no parameter adress"]
+                               [{} "needs address"]
+                               [{:address 7} "needs address"]
+                               [{:address nil} "needs address"]
+                               [{:address [fund]} "needs address"]]]
+        (let [[_ fx] (say h 1 (req 9 method params))
+              [w] (writes fx 1)]
+          (is (empty? (submits fx)) (pr-str method params))
+          (is (= -32602 (get-in w ["error" "code"])) (pr-str method params))
+          (is (str/includes? (str (get-in w ["error" "message"])) say-so) (pr-str method params)))))
+    (testing "a notification asks for nothing"
+      (let [[_ fx] (say h 1 (note "_relay/links/keep" {:address fund}))]
+        (is (empty? fx))))))
+
 ;; --- Codex round 3
 
 (deftest an-id-stays-reserved-while-its-request-is-outstanding

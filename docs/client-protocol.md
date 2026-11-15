@@ -281,6 +281,54 @@ command line instead.
   numbered item of a daily note opened whole in the ready view. The item numbers are the note's
   own, and the ready item lists them as `acts` (see `_relay/ready`).
 
+### `_relay/links`
+
+- Scope: connection.
+- Params: none. Anything, `sessionId` included, is refused (-32602).
+- Answer: `{"rev": int, "live": [string]}`: every live link, in order,
+  each one http or https address in plain ASCII (`relay.text/link?`).
+  `rev` is the seq of the log's last event.
+- Errors: -32000 "relay has not read its links yet. Try again." just
+  after start.
+- After it: the first call subscribes the connection to
+  `_relay/links/changed`.
+- This is the set relay itself shows whole in a card, a message and a
+  ready item. It is here for a client's own check. A client that draws
+  outside text should let a terminal or a browser follow an address only
+  when it is in this set, character for character, and break every
+  other, whatever the text around it looks like. Text can reach a client
+  by a path relay did not make safe (a conversation's own text does, see
+  below), and angle brackets are easy for an outsider to write.
+- relay-tui: asked once the connection is up. A link in outside text is
+  drawn as a hyperlink only when it is a member. Its text is the broken
+  form either way, and the address goes to the terminal only as the
+  hyperlink's target. With no answer (-32601 from an older relay) no
+  link is a hyperlink.
+
+### `_relay/links/keep` and `_relay/links/drop`
+
+- Scope: connection.
+- Params: `{"address": string}`: the link as the client showed it, whole
+  or in the broken form relay sends (`hxxps://x[.]example/a`), so a
+  client sends back what is on its screen and works out no address for
+  itself. Anything else is refused (-32602).
+- Answer: `{"changed": bool}` once relay has recorded it. `changed` is
+  false when the link was already live (keep) or already dropped (drop),
+  and then nothing is recorded. `notes` (strings) is present when relay
+  cleaned hidden characters out of the address first.
+- Errors: -32602 for the params; -32000 with relay's reason when the
+  address is not one a live link can be. The message begins "A link is
+  one http or https address in plain ASCII" and says what else it must
+  not hold.
+- The act is the operator's, with no labels, the same command `relay
+  link` and `relay link drop` submit. No role has it. A kept link is
+  whole from then on wherever relay shows it, and a dropped one stays
+  broken even when a scout is shown it again.
+- After it: every subscribed connection, this one included, is sent
+  `_relay/links/changed`, and then the cards, messages and ready items
+  that read differently for it.
+- relay-tui: not used yet.
+
 ## Methods: a session
 
 ### `_relay/seen`
@@ -336,7 +384,14 @@ command line instead.
 | `_relay/cards/changed` | connection | `{"rev", "cards": [Card]}`, every card whose rev is not the one this connection was last sent, archived cards included so the client can drop them, and every card that reads differently because a link became live or was dropped since, at the same rev | updates the one board, open conversation or not; a changed card brings the board into view unless the operator is busy in the pane |
 | `_relay/messages/changed` | connection | `{"rev", "messages": [Message]}`, oldest first: every message made, or whose deliveries changed, since this connection was last sent messages, and every one that reads differently because a link became live or was dropped since | not used yet |
 | `_relay/ready/changed` | connection | `{"rev", "items": [Item], "gone": [id]}`: every item new or different from what this connection was last sent, and the ids of those that left (an event that ended, a card archived, an item that fell past the newest 60) | applies them to the view it holds, which is the same as asking again |
+| `_relay/links/changed` | connection | `{"rev", "live": [string], "gone": [string]}`: the links that became live since this connection was last sent the set, and the ones that no longer are. It is sent before any `_relay/cards/changed`, `_relay/messages/changed` or `_relay/ready/changed` that the same change leads to | adds and removes them in the set it holds |
 | `_relay/replayed` | session | `{"sessionId", "truncated": bool}`, after the replay that follows `session/load` or an attaching `session/new`; `truncated` says the oldest updates were dropped | marks the conversation loaded, says so at the top when truncated, and stops calls the replay left open once the roster says the turn is idle |
+
+A conversation's own text (`session/update`) is the agent's, passed on
+as it came: relay breaks no link in it. A client breaks them itself once
+the session's labels say an outsider may have shaped it
+(`agentloop/labels`), and can make a hyperlink of the ones `_relay/links`
+names.
 
 A prompt's text is cleaned before the agent sees it: the text of text
 blocks, embedded resources (`text` and `uri`) and resource links. Image and
@@ -348,7 +403,8 @@ change, when the turn starts. It is kept in the replay.
 relay sends `_relay/cards/changed` only to a connection that has called
 `_relay/cards`, `_relay/messages/changed` only to one that has called
 `_relay/messages`, `_relay/ready/changed` only to one that has called
-`_relay/ready`, and `_relay/roles/changed` only to one that has called
+`_relay/ready`, `_relay/links/changed` only to one that has called
+`_relay/links`, and `_relay/roles/changed` only to one that has called
 `_relay/roles`. A replay starts with the session's latest labels (a
 `session_info_update` carrying `agentloop/labels`) and usage, and keeps
 consecutive text chunks of one kind merged.
@@ -410,8 +466,13 @@ outsider may have written has its links broken, with `"outsider": true`
 beside it. A link among relay's live links is left whole in that text,
 between angle brackets (`<https://x.example/a>`), so a client or a
 terminal follows exactly that address: the web showed it to a scout, or
-the operator called it safe with `relay link`. A client does nothing
-about either kind, and must not cut a word that holds one. No text is stamped: a role's message that drew on outside
+the operator called it safe with `relay link`. A client that shows the
+text as it came does nothing about either kind. One that cuts or wraps
+it must not leave part of a live link as text that can be followed: the
+start of an address is another address. relay-tui puts no address on
+screen as text: it draws a live link in the broken form, as it does any
+other, and gives the terminal the address as the hyperlink's target
+(`_relay/links` has the set). No text is stamped: a role's message that drew on outside
 text carries `"drewOn"`, one line to show once, such as `"Drew on: the
 web page office-holidays.html"`. An item may carry `"link"`, a link relay
 built itself (a GitHub item's), to show as a live link. Nothing internal

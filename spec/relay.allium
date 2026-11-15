@@ -3290,8 +3290,10 @@ rule KeepALink {
             LiveLink.created(address: link_address, made_by: kept, status: live)
 
     @guidance
-        -- relay link <address>. The operator calls a link safe, and it is
-        -- whole from then on wherever relay shows it. No role can.
+        -- relay link <address>, or a client's _relay/links/keep with the
+        -- address as the client showed it. The operator calls a link
+        -- safe, and it is whole from then on wherever relay shows it. No
+        -- role can.
 }
 
 rule DropALink {
@@ -3308,9 +3310,9 @@ rule DropALink {
             LiveLink.created(address: link_address, made_by: kept, status: dropped)
 
     @guidance
-        -- relay link drop <address>. The link is broken again wherever
-        -- relay shows it, and stays so when a scout is shown it again,
-        -- until the operator keeps it.
+        -- relay link drop <address>, or a client's _relay/links/drop.
+        -- The link is broken again wherever relay shows it, and stays so
+        -- when a scout is shown it again, until the operator keeps it.
 }
 
 -- The daily note
@@ -4226,7 +4228,9 @@ invariant OnlyALinkRelayCanAccountForIsWhole {
     -- link. Whatever shows text without the live links breaks every
     -- link. A client that holds a card or a message that reads
     -- differently once a link becomes live or is dropped is sent it
-    -- again.
+    -- again. A client that asked for the live links (_relay/links) is
+    -- sent each change to them first, so it can hold every link it
+    -- draws to the set itself.
     for link in whole_links_shown_in_outside_text:   -- black box: each address a reader could follow in such text as shown
         exists live in LiveLinks where live.address = link and live.status = live
 }
@@ -4662,6 +4666,10 @@ surface ConversationService {
         -- last sent. An end of a turn relay could not record
         -- is tried again until it is; until then no other turn of the role
         -- starts, and the operator is told once.
+        -- The live links are the connection's in the same way:
+        -- _relay/links gives the set and then each change to it, and
+        -- _relay/links/keep and _relay/links/drop are the operator's own
+        -- LinkKeepRequested and LinkDropRequested.
         -- _relay/roles gives every role's status (relay.roster, plus a
         -- turn that waits shown as queued) and then the whole list again
         -- whenever any of it changes.

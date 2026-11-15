@@ -1500,7 +1500,12 @@ inside is broken, and `relay ready` leaves a long link on a line of its
 own.
 
 When you keep or drop a link, a client that already holds a card or a
-message that reads differently for it is sent it again.
+message that reads differently for it is sent it again. A client can
+also ask relay for the live links themselves (`_relay/links`) and keep
+or drop one for you (`_relay/links/keep`, `_relay/links/drop`), which is
+the same act as `relay link`: yours, and no role's. relay-tui uses the
+set as its own check. It draws a link in outside text so that a click
+follows it only when relay named that exact address.
 
 Every other view (`relay status`, `relay log`, a role's notes, a
 calendar entry) still breaks every link in outside text.

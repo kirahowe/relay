@@ -16,6 +16,11 @@
                      _relay/ready/changed notifications
     _relay/reply     answer a message, as the operator
     _relay/undo      undo a file move, as the operator (relay undo)
+    _relay/links     relay's live links; the first call subscribes the
+                     client to _relay/links/changed notifications
+    _relay/links/keep, _relay/links/drop
+                     keep a link live or drop it, as the operator
+                     (relay link)
 
   relay answers them itself, and agentloop never sees them: the board's in
   relay.hub, which knows what each client was sent, the rest in each
@@ -409,6 +414,59 @@
       (not (string? text)) {:error "_relay/reply needs text."}
       :else {:command {:type :message/reply :actor core/operator :labels [] :public false
                        :args {:in-reply-to inReplyTo :text text}}})))
+
+;; --- live links (relay.core, relay.text)
+;;
+;; relay shows a live link whole in the wire forms above. A client that
+;; draws outside text has its own check on that: it lets a terminal
+;; follow an address only when relay named it here, in the set itself,
+;; so text that reached the client some other way cannot carry a link of
+;; its own. A subscriber's record is the set it was last sent.
+
+(defn links-params-error
+  "Why relay refuses a _relay/links request's params, or nil. It takes
+  none."
+  [params]
+  (when-let [unknown (seq (sort (keys params)))]
+    (str "_relay/links has no parameter " (str/join ", " unknown) ". It takes none.")))
+
+(defn links-answer
+  "The _relay/links answer: every live link, in order, and the log's
+  rev."
+  [state]
+  {"rev" (log-rev state) "live" (vec (sort (core/live-links state)))})
+
+(defn links-changed
+  "The _relay/links/changed params for a subscriber last sent the set
+  `sent`: the links that became live since and the ones that no longer
+  are, or nil when the set is as it was sent."
+  [state sent]
+  (let [now (core/live-links state)
+        added (sort (remove sent now))
+        gone (sort (remove now sent))]
+    (when (or (seq added) (seq gone))
+      {"rev" (log-rev state) "live" (vec added) "gone" (vec gone)})))
+
+(def link-methods
+  "The methods that keep a link live or drop it, and the command each
+  submits."
+  {"_relay/links/keep" :link/keep "_relay/links/drop" :link/drop})
+
+(defn link-command
+  "What a _relay/links/keep or _relay/links/drop asks for, as the
+  :link/keep or :link/drop command relay submits, or {:error why}. It is
+  the operator's, with no labels. `address` is the link as the client
+  showed it: whole, or in the broken form relay sends (relay.text/mend),
+  so a client sends back what is on its screen and works out no address
+  for itself."
+  [method params]
+  (let [unknown (sort (remove #{"address"} (keys params)))
+        address (get params "address")]
+    (cond
+      (seq unknown) {:error (str method " has no parameter " (str/join ", " unknown) ". It takes address.")}
+      (not (string? address)) {:error (str method " needs address, the link as it is shown.")}
+      :else {:command {:type (link-methods method) :actor core/operator :labels [] :public false
+                       :args {:url address}}})))
 
 (defn undo-params-error
   "Why relay refuses a _relay/undo request's params, or nil. It takes
