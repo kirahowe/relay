@@ -617,10 +617,17 @@
 
 (defn shown-texts
   "The text a card shows, as [labels text] pairs in the order it is
-  drawn: its title, items, rows, columns and note. A surface's element
-  carries its labels and no text, so it is not one of them."
-  [card]
-  (for [el (text-elements card) :when (string? (:text el))] [(:labels el) (:text el)]))
+  drawn: its title, items, rows, columns and note, and for a surface
+  each string it shows, as relay resolved it (relay.surfaces/strings),
+  with the surface's labels. A surface's strings are read here and not
+  in what its role wrote, where a text that formatString joins does not
+  exist yet, and each is a text of its own, so nothing is found across
+  two of them."
+  [{:keys [surface] :as card}]
+  (concat (for [el (text-elements card) :when (string? (:text el))] [(:labels el) (:text el)])
+          (when surface
+            (let [held (surface-labels surface)]
+              (for [s (surfaces/strings surface)] [held s])))))
 
 (defn links
   "The live links a card's outside text holds, in order, each once, for

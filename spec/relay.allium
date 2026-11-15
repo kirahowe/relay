@@ -4244,7 +4244,9 @@ rule ReadCard {
         -- A surface is shown as relay resolved it. Each of its strings
         -- is made safe with the labels of the whole surface: while
         -- either part holds an outsider's, every link in it is broken,
-        -- one that formatString joined from pieces included. A client is sent it as one A2UI createSurface with
+        -- one that formatString joined from pieces included, and the
+        -- live links those strings hold travel beside the card like any
+        -- card's, read from each resolved string by itself. A client is sent it as one A2UI createSurface with
         -- final strings, the paths the operator's inputs write, and a
         -- data model holding only the values at those paths. A role that
         -- reads one surface is also shown its components and data as

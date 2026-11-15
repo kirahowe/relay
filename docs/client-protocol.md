@@ -548,6 +548,7 @@ fields every card has, no `progress`, and `surface`, which carries
  "rev": 1852, "owner": "steward", "addedAt": "2026-11-14T15:03:00Z",
  "title": {"text": "Pack for the lake weekend", "outsider": false, "rev": 1840},
  "labels": ["private"],
+ "links": [], "linksLeftOut": 0,
  "surface": {
    "outsider": false,
    "a2ui": [{"version": "1.0", "createSurface": {
@@ -577,6 +578,12 @@ fields every card has, no `progress`, and `surface`, which carries
 - Every string is made safe like any card text, with the labels of the
   whole surface: if an outsider may have written any of it,
   `surface.outsider` is true and every link in all of it is broken.
+- `links` and `linksLeftOut` are the live links the title and the
+  surface's strings hold, as for any card (see Live links). relay reads
+  them in the resolved strings, each one by itself, so a live link that
+  `formatString` joins from pieces is listed, and two strings side by
+  side never make one. Each `shown` is the form one of those strings
+  shows the address in.
 - Only an input keeps a binding. A CheckBox's `value` is either a
   literal, which the operator cannot change, or
   `{"@path": "/an/absolute/path"}`. `dataModel` holds the values at

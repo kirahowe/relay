@@ -126,9 +126,12 @@
       (is (= "Apply at hxxps://evil[.]example/apply?who=kira today" (get-in by-id ["joined" "text"]))))
     (testing "the same pieces side by side are two strings, each made safe"
       (is (= ["hxxps://ev" "il[.]example/apply?who=kira"] (map #(get-in by-id [% "text"]) ["left" "right"]))))
-    (testing "its text is inert, the live link broken with the rest"
+    (testing "its text is inert, the live link broken with the rest, and that link travels beside it"
       (is (= "The fund's page is hxxps://kept[.]example/fund and its mirror is hxxps://kept[.]example/fund/x"
-             (get-in by-id ["kept" "text"]))))
+             (get-in by-id ["kept" "text"])))
+      (is (= [[{"address" "https://kept.example/fund" "shown" "hxxps://kept[.]example/fund"}] 0]
+             [(get w "links") (get w "linksLeftOut")])
+          "the address that runs on from it is another address, which nobody kept"))
     (testing "an escape sequence, a zero-width character and an override are shown, not sent"
       (is (not (re-find #"[\u001b\u0007\u200b\u202e]" all)))
       (is (str/includes? (get-in by-id ["item__0" "label"]) "\\u{001b}]8;;hxxps://evil[.]example"))
@@ -550,6 +553,18 @@
            ;; safe with the surface's labels, in order.
            (= (display-strings msg)
               (map #(cards/safe-text (cards/surface-labels (:surface c)) %) (surfaces/strings (:surface c))))
+           ;; The live links travel beside the text: only ones relay
+           ;; keeps live, only for outside text, each in the form some
+           ;; string the client holds shows it in, and each of them when
+           ;; a string holds it as a word of its own.
+           (let [listed (get w "links")
+                 held (cons (get-in w ["title" "text"]) (display-strings msg))]
+             (and (every? #(contains? live (get % "address")) listed)
+                  (every? (fn [{:strs [shown]}] (some #(str/includes? % shown) held)) listed)
+                  (or dirty? (empty? listed))
+                  (or (not dirty?) (empty? live)
+                      (not (some #(some #{"https://kept.example/a"} (str/split % #"\s+")) (surfaces/strings (:surface c))))
+                      (= ["https://kept.example/a"] (map #(get % "address") listed)))))
            (resolved? msg)
            ;; The data model holds what the inputs read, true and false,
            ;; and none of the role's text.
@@ -571,7 +586,27 @@
                     :data {"a" "https://ev" "b" "il.example/x"}})]
       (is (= ["https://evil.example/x" "beside it"] (surfaces/strings (:surface (card w)))))))
   (testing "a surface that cannot be drawn has the one line that says so"
-    (is (= ["relay cannot draw this surface."] (surfaces/strings {:components 5 :data nil})))))
+    (is (= ["relay cannot draw this surface."] (surfaces/strings {:components 5 :data nil}))))
+  (testing "a live link that formatString joins from two halves is listed beside the text, in the form the text shows"
+    (let [kept "https://kept.example/fund"
+          w (world {:title "T"
+                    :components [{"id" "root" "component" "Column" "children" ["joined" "halves"]}
+                                 {"id" "joined" "component" "Text"
+                                  "text" {"@call" "formatString" "args" {"value" "Apply at ${/a}${/b} today"}}}
+                                 {"id" "halves" "component" "Row" "children" ["left" "right"]}
+                                 {"id" "left" "component" "Text" "text" {"@path" "/a"}}
+                                 {"id" "right" "component" "Text" "text" {"@path" "/b"}}]
+                    :data {"a" "https://kept.ex" "b" "ample/fund"}}
+                   ["contaminated"])
+          sent (wire (card w) #{kept})
+          texts (display-strings (surface-message sent))]
+      (is (= [{"address" kept "shown" "hxxps://kept[.]example/fund"}] (get sent "links")))
+      (is (= "Apply at hxxps://kept[.]example/fund today" (first texts)))
+      (testing "and the two halves side by side are no link: each string is read by itself"
+        (is (= ["hxxps://kept[.]ex" "ample/fund"] (rest texts))))
+      (testing "a clean surface lists none, since its text is shown as written"
+        (is (= [] (get (wire (card (world {:title "T" :components [{"id" "root" "component" "Text" "text" kept}]})) #{kept})
+                       "links")))))))
 
 (deftest the-text-form-is-the-header-and-then-the-surface-behind-the-gutter
   (let [c (card (world a-list))]

@@ -1207,7 +1207,9 @@ one child for each item of a list in the data. relay does that reading
 itself, before it shows the surface to anyone, so the check runs on the
 words you read: hidden characters are shown escaped, and in a surface an
 outsider may have shaped, every link is broken, even one that
-`formatString` joins from pieces. A client is sent the finished
+`formatString` joins from pieces. The links relay keeps live travel
+beside the surface as they do beside any card, read from the finished
+strings. A client is sent the finished
 strings and the paths your ticks write, and none of the role's data.
 
 The one thing you can change on a surface is a CheckBox bound to the

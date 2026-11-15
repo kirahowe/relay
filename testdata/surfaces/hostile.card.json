@@ -7,7 +7,12 @@
     "contaminated",
     "private"
   ],
-  "links": [],
+  "links": [
+    {
+      "address": "https://kept.example/fund",
+      "shown": "hxxps://kept[.]example/fund"
+    }
+  ],
   "linksLeftOut": 0,
   "owner": "steward",
   "rev": 1840,
