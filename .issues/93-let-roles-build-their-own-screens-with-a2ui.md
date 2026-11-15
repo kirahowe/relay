@@ -132,9 +132,10 @@ reaches a plain ACP client as the agent wrote it; relay#105, an answer
 to `_relay/cards` that grows with the archive; relay#108, a bound on the
 live links a client is sent; relay#109 and relay#110, two bugs in
 today's board; relay#115 and relay#116, on relay as a product;
-relay#117, what Proton Mail follows in relay's mail; and relay#119,
-whether a link in text no outsider shaped is left as written, which is
-Kira's to decide after relay#118.
+relay#117, what Proton Mail follows in relay's mail; relay#119, whether
+a link in text no outsider shaped is left as written, which is Kira's to
+decide after relay#118; and relay#120, a role's title that relay sends
+with its links whole.
 
 ## Acceptance criteria
 
