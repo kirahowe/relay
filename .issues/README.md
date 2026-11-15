@@ -52,6 +52,7 @@
 | [99](99-the-live-shell-test-fails-while-apple-s-container-service.md) | The live shell test fails while Apple's container service is stopped | bug | P3 |
 | [105](105-bound-what-relay-cards-answers-when-it-includes-archived.md) | Bound what _relay/cards answers when it includes archived cards | bug | P3 |
 | [108](108-bound-the-live-links-a-client-is-sent.md) | Bound the live links a client is sent | feature | P3 |
+| [122](122-fix-the-ready-view-property-that-fails-on-seed.md) | Fix the ready-view property that fails on seed 6561552371814650667 | bug | P3 |
 
 ### In progress
 

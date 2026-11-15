@@ -1,0 +1,11 @@
+{:id 122
+ :title "Fix the ready-view property that fails on seed 6561552371814650667"
+ :status :ready
+ :type :bug
+ :priority :p3
+ :created "2026-11-15"
+ :updated "2026-11-15"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "122-fix-the-ready-view-property-that-fails-on-seed.md"}
