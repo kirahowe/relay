@@ -27,7 +27,7 @@ The session that built relay#96 builds this.
 Tightened on 2026-11-14 against the wire form relay#97 fixed
 (`docs/client-protocol.md`, "A surface card"), and again on 2026-11-15
 where the reviews and the contract moved a rule. The receipts name tests
-in relay-tui at yxssltly a92508ec, the tip of thirteen commits on its
+in relay-tui at mxpvltlm a2ce30c4, the tip of fifteen commits on its
 `integration` (vywmmpxm 13c740c5).
 
 - [x] relay-tui reads a card of kind `surface` from `_relay/cards` and
@@ -138,7 +138,10 @@ in relay-tui at yxssltly a92508ec, the tip of thirteen commits on its
 - [x] fakehub serves surface cards and applies `input` by the contract's
   rules, refusals included.
   - Receipt: `TestAnInputSetsTheBoxAndBumpsTheRev`,
-    `TestAnInputIsRefusedAsRelayRefusesIt` in `internal/fakehub`.
+    `TestAnInputIsRefusedAsRelayRefusesIt` in `internal/fakehub`, with
+    relay's two messages for a rev that is older than the card's or
+    past it, as the contract's table words them since relay#97's round
+    four (mxpvltlm).
 - [x] Properties: no surface card draws past the pane's width, and no
   control character and no link relay did not keep live reaches a row,
   whatever the surface's strings hold. relay#96's saved failing case is
@@ -161,9 +164,11 @@ in relay-tui at yxssltly a92508ec, the tip of thirteen commits on its
     uqwynqos, urpkvpun and plulklqq.
 - [ ] `make check` passes, and so does `bb verify` from a relay workspace
   that has relay#97.
-  - `make check` passes at yxssltly a92508ec, after the rebases and
-    round four's fixes of 2026-11-15 that the Log records. The early
-    joint run, relay
+  - `make check` passes at mxpvltlm a2ce30c4, after the rebases and
+    round four's fixes of 2026-11-15 that the Log records. A second
+    early joint run on 2026-11-15, relay at relay#97's lzslyxyt db7458a3
+    against relay-tui kxrymkzt 6bb6d739, is in the Log: the same two
+    failures and nothing else. The first early joint run, relay
     at relay#97's nlyokvuorvpu 2d0c8e8a against relay-tui urpkvpun
     7efde4e4: agentloop, relay-tui, catalog, webtool and eventkit pass,
     relay 1,212 of 1,213 and pentest 30 of 31, the two failures being
@@ -346,3 +351,22 @@ The review, read-only, with the threat model:
   `integration` vywmmpxm 13c740c5. `make check` passes there. Round four
   found something in scope, so by the rule it goes back to Kira before
   landing.
+- 2026-11-15: relay's catalog copied a fourth time (kxrymkzt): one
+  sentence of its instructions changed in relay#97's round four.
+- 2026-11-15: a second early joint `bb verify`, as a rehearsal while
+  the landing waits on Kira. A fresh relay workspace on relay#97's
+  lzslyxyt db7458a3 (on relay's `integration` wytpzwyx 3e36e846),
+  against relay-tui kxrymkzt 6bb6d739 (on vywmmpxm 13c740c5) and my own
+  agentloop and webtool workspaces, under the lock. agentloop,
+  relay-tui, catalog, webtool, eventkit and fuzz pass; relay 1,224 of
+  1,225 (seed 1073697302) and pentest 30 of 31. The two failures are
+  relay#99's: `relay.shell-live-test` and `s18-shell-walls`, with
+  Apple's container service not running. The fuzz ran seed 1794757900,
+  300,000 cases, none followed.
+- That run does not count as the verify, because the tip moved after
+  it: the fake hub now refuses a rev older than the card's, or past it,
+  in the words relay's contract has since relay#97's round four
+  (mxpvltlm a2ce30c4). The dashboard shows relay's message as it is, so
+  only the test double and two tests that wait for its words changed.
+  `make check` passes at mxpvltlm. The verify that counts is a fresh
+  run after the start line.
