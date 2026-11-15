@@ -375,6 +375,13 @@
     (let [lines (render/wrap (str "Apply at " long-link " before June. " (apply str (repeat 90 "x"))) 60)]
       (is (some #{long-link} lines) "the link is one word, on a line of its own")
       (is (every? #(or (= long-link %) (<= (count %) 60)) lines))))
+  (testing "a long name with a host inside it is broken before it is wrapped"
+    ;; Found in review (relay#118): the name was left as a file, and the
+    ;; wrap cut it after the host, which a link finder then followed.
+    (let [name (str (apply str (repeat 38 "a")) ".secret.attacker.com.txt")
+          lines (render/wrap (text/for-operator outside name) 60)]
+      (is (not-any? #(re-find #"[a-z]\.[a-z]" %) lines) (pr-str lines))
+      (is (= (str/replace name "." "[.]") (apply str lines)))))
   (testing "the list of what is ready cuts an item short without leaving the start of a link"
     (let [long-link (str "https://grants.example.org/" (apply str (repeat 70 "a")) "/apply")
           item {"id" "message:1" "kind" "message" "at" "2026-11-14T12:00:00Z" "seq" 1 "title" "Grants"

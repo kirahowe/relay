@@ -110,9 +110,11 @@
 
 (def never-domains
   "The file-extensions that are no top-level domain, so a name ending in
-  one is a file whatever its dots (jquery.min.js, notes.2026.txt). Any
-  other, such as md, sh or zip, counts only in a name with one dot: a
-  host under it could carry data in its labels."
+  one may have more dots and still be a file (notes.2026.txt), as long
+  as no label between its first and last could end a host: a link finder
+  reads secret.attacker.com-report.txt as the host secret.attacker.com,
+  and a host can carry data in its labels. Any other ending, such as md,
+  sh or zip, counts only in a name with one dot."
   #{"markdown" "txt" "rtf" "pdf" "docx" "xlsx" "pptx" "csv" "tsv" "json" "jsonl" "edn" "yaml" "yml"
     "toml" "xml" "html" "htm" "css" "scss" "js" "mjs" "cjs" "tsx" "jsx" "clj" "cljs" "cljc" "png"
     "jpg" "jpeg" "gif" "webp" "heic" "svg" "mp3" "m4a" "wav" "flac" "mp4" "gz" "tgz" "bz2" "xz"
@@ -120,11 +122,13 @@
 
 (def ^:private host-candidate
   ;; A run of dotted labels, not inside a longer one, then what follows it
-  ;; that only a link has: a path, a query, a fragment or a port. The
-  ;; @ before it says it is a mail address's domain. A ? or # counts
-  ;; only with something after it, so a question ending in a file name
-  ;; keeps it.
-  #"(?:(@)|(?<![\p{L}\p{M}\p{N}_\-@])(?<![\p{L}\p{M}\p{N}_\-]\.))([\p{L}\p{M}\p{N}_\-]+(?:\.[\p{L}\p{M}\p{N}_\-]+)+)(/|[?#](?=\S)|:\d)?")
+  ;; that only a link has: a path, a query, a fragment or a port. An @
+  ;; before it, after a letter, a digit or one of _ + -, says it is a mail
+  ;; address's domain. An @ after anything else is no mail address
+  ;; (.@secret.attacker.com), and a link finder follows what comes after
+  ;; it as a host. A ? or # counts only with something after it, so a
+  ;; question ending in a file name keeps it.
+  #"(?:(?<=[\p{L}\p{N}_+\-])(@)|(?<![\p{L}\p{M}\p{N}_\-])(?<![\p{L}\p{M}\p{N}_\-]\.))([\p{L}\p{M}\p{N}_\-]+(?:\.[\p{L}\p{M}\p{N}_\-]+)+)(/|[?#](?=\S)|:\d)?")
 
 (defn- break-dots [s] (str/replace s "." "[.]"))
 
@@ -148,7 +152,10 @@
      (and (some tld-like? (rest labels))
           (or (some? after)
               (and (str/blank? at)
-                   (not (or (never-domains ending)
+                   (not (or (and (never-domains ending)
+                                 ;; A label inside it that could end a host
+                                 ;; makes it one, whatever it ends in.
+                                 (not-any? tld-like? (butlast (rest labels))))
                             (and (file-extensions ending) (= 2 (count labels)))))))))))
 
 (defn- break-every-dot

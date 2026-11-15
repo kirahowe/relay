@@ -303,8 +303,25 @@
   ;; and a log's 08:06:36.382648Z read 08:06:36[.]382648Z.
   (doseq [s ["todo.md" "interview.txt" "projects/choir.md" "hub/riverbend-interview-prep.md"
              "2026-10-26T08:06:39.118474Z" "dana@riverbend.test" "Did you read todo.md?"
-             "jquery.min.js" "setup.sh"]]
+             "notes.2026.txt" "setup.sh"]]
     (is (= s (text/defang s)) s))
+  (testing "but a name with a label inside it that could end a host is a host, whatever it ends in"
+    ;; Found in review (relay#118): a link finder reads the host and stops
+    ;; before the rest, and a host carries data in its labels.
+    (doseq [[s broken] [["secret.attacker.com-report.txt" "secret[.]attacker[.]com-report[.]txt"]
+                        ["secret.attacker.com_report.pdf" "secret[.]attacker[.]com_report[.]pdf"]
+                        ["a.b.com.txt" "a[.]b[.]com[.]txt"]
+                        ["jquery.min.js" "jquery[.]min[.]js"]
+                        ["archive.tar.gz" "archive[.]tar[.]gz"]]]
+      (is (= broken (text/defang s)) s)))
+  (testing "and an @ that no mail address has before it exempts nothing"
+    (doseq [[s broken] [[".@secret.attacker.com" ".@secret[.]attacker[.]com"]
+                        ["@secret.attacker.com" "@secret[.]attacker[.]com"]
+                        ["(@secret.attacker.com)" "(@secret[.]attacker[.]com)"]
+                        ["x.@secret.attacker.com" "x.@secret[.]attacker[.]com"]]]
+      (is (= broken (text/defang s)) s))
+    (is (= "dana@riverbend.test" (text/defang "dana@riverbend.test")))
+    (is (= "d_a+n-a@riverbend.test" (text/defang "d_a+n-a@riverbend.test"))))
   (is (= "github[.]com/kira/tidy" (text/defang "github.com/kira/tidy")))
   (is (= "www[.]riverbend[.]zz" (text/defang "www.riverbend.zz")))
   (testing "a host is broken whatever its ending, once a path, query or port follows it"
