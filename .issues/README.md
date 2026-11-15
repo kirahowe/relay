@@ -58,6 +58,8 @@
 | [123](123-compare-relay-macos-s-copies-of-relay-s-shared-test-data-in.md) | Compare relay-macos's copies of relay's shared test data in bb verify | chore | P3 |
 | [125](125-keep-link-breaking-quick-on-one-very-long-word.md) | Keep link breaking quick on one very long word | bug | P3 |
 | [127](127-do-not-panic-on-markdown-quoted-deeper-than-half-the-width.md) | Do not panic on Markdown quoted deeper than half the width | bug | P3 |
+| [128](128-keep-the-board-fast-when-surface-cards-are-at-relay-s-limits.md) | Keep the board fast when surface cards are at relay's limits | chore | P3 |
+| [129](129-show-a-card-s-text-form-when-one-of-its-members-has-the.md) | Show a card's text form when one of its members has the wrong type | bug | P3 |
 
 ### In progress
 

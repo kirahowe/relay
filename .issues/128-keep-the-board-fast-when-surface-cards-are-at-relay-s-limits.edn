@@ -1,0 +1,11 @@
+{:id 128
+ :title "Keep the board fast when surface cards are at relay's limits"
+ :status :ready
+ :type :chore
+ :priority :p3
+ :created "2026-11-15"
+ :updated "2026-11-15"
+ :tags #{}
+ :blocked-by #{}
+ :related #{"relay#100"}
+ :details "128-keep-the-board-fast-when-surface-cards-are-at-relay-s-limits.md"}

@@ -1,0 +1,11 @@
+{:id 129
+ :title "Show a card's text form when one of its members has the wrong type"
+ :status :ready
+ :type :bug
+ :priority :p3
+ :created "2026-11-15"
+ :updated "2026-11-15"
+ :tags #{}
+ :blocked-by #{}
+ :related #{"relay#100"}
+ :details "129-show-a-card-s-text-form-when-one-of-its-members-has-the.md"}
