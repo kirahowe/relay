@@ -250,4 +250,18 @@ Codex review, read-only, threat model given:
   written and I did not want to tick them. `bb verify` passes but for
   relay#99's two tests, which need Apple's container service. No Codex
   round came back clean, and Kira accepted the change without a fourth.
+- 2026-11-14, after the move to review: relay#95's third review round
+  found two more terminals that read a bracketed link differently. kitty
+  follows a second address inside a link, and WezTerm reads `<...>` to
+  the last `>` in a word. The second is the direction that matters: the
+  marks a role writes after a live link would ride in the address. Two
+  narrowings, agreed with relay-32: a live link holds no `://` after the
+  first, and at most three marks may follow one, never a `>` (a role's
+  own closing bracket around the link aside). The cost: a bold Markdown
+  link followed by a full stop, `**[a](https://x/a)**.`, has four marks
+  after it and stays broken.
+- Still with Kira, asked by relay-32 for relay#94 and relay#95 together:
+  whether a terminal shows a live link as text at all, or as the broken
+  form inside an OSC 8 hyperlink; and whether a push carries a link as an
+  ntfy action. Neither is built.
 
