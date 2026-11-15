@@ -332,7 +332,7 @@
     (doseq [[s broken] [["docs.example.org:1secret-token.attacker.com/x" "docs[.]example[.]org:1secret-token[.]attacker[.]com/x"]
                         ["a.b:1secret.attacker.com" "a.b:1secret[.]attacker[.]com"]
                         ["example.org:8080attacker.com" "example[.]org:8080attacker[.]com"]
-                        ["a.https:0x7f.evil.pl/x" "a[.]https:0x7f[.]evil[.]pl/x"]
+                        ["a.https:0x7f.evil.pl/x" "a[.]hxxps:0x7f[.]evil[.]pl/x"]
                         ;; relay#124's three, found again in relay#97's review.
                         ["a.bc:1evil.com/steal?d=1" "a[.]bc:1evil[.]com/steal?d=1"]
                         ["x.yz:9www.evil.com" "x[.]yz:9www[.]evil[.]com"]
@@ -520,3 +520,39 @@
     (let [out (text/defang word)]
       (and (not (followable? out))
            (= out (text/defang out))))))
+
+;; --- a scheme with no slashes, wherever a link finder takes it
+
+(deftest a-scheme-straight-after-a-dot-or-a-sign-is-broken
+  ;; From relay#130's review round and from the port of relay#126's rule
+  ;; to relay-tui. The rule counted only at the start of a word, and
+  ;; Ghostty's pattern takes ssh: wherever it stands, so
+  ;; x[.]ssh:u@evil.test was a link there. The same held for a web scheme
+  ;; written short, which relay then broke only on a second pass.
+  (doseq [[s broken] [["https:/x.ssh:u@evil.test" "hxxps:/x[.]ssh[:]u@evil[.]test"]
+                      ["x.ssh:u@evil.test" "x[.]ssh[:]u@evil[.]test"]
+                      ["a+ssh:u@evil.test" "a+ssh[:]u@evil[.]test"]
+                      ["a-file:/etc/passwd" "a-file[:]/etc/passwd"]
+                      ["a.news:comp.lang.c" "a[.]news[:]comp[.]lang[.]c"]
+                      ["a.https:/evil.com/x" "a[.]hxxps:/evil[.]com/x"]
+                      ["+https:/evil.com/x" "+hxxps:/evil[.]com/x"]
+                      ["1.https:/com.co.txt#f" "1[.]hxxps:/com[.]co[.]txt#f"]]]
+    (is (= broken (text/defang s)) s))
+  (testing "one run on from a letter or a digit is how ordinary text reads, and is left as written"
+    (doseq [s ["Makefile:12: error" "profile:dev" "logfile:/var/log/x" "digit:5" "Re: the news: nothing"]]
+      (is (= s (text/defang s)) s))))
+
+(def gen-addressy
+  "Text made of the pieces addresses are made of, in any order."
+  (gen/fmap #(apply str %)
+            (gen/vector (gen/elements ["a" "evil" "com" "co" "txt" "md" "1" "80" "." "." "/" ":" "@" "-" "+" "_" "?"
+                                       "#" " " "https:" "http:" "ftp:" "ssh:" "file:" "news:" "www." "//" "://"
+                                       "[.]" "[:]" "hxxps:" "́" "é" "(" ")" "。"])
+                        0 16)))
+
+(defspec breaking-links-twice-changes-nothing 3000
+  ;; Text is broken again where it is cut (break-cut-word), so a second
+  ;; pass must find nothing left to do.
+  (prop/for-all [s gen-addressy]
+    (let [once (text/defang s)]
+      (= once (text/defang once)))))

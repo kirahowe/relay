@@ -211,8 +211,14 @@
 (def ^:private slashless-scheme
   ;; A scheme a link finder follows with nothing but a colon after it.
   ;; mailto, tel and sms are not here: whether those are broken is
-  ;; relay#121's question.
-  #"(?i)(?<![a-z0-9+.\-])(ssh|sftp|file|magnet|news|git):(?=\S)(?!//)")
+  ;; relay#121's question. It counts after anything but a letter or a
+  ;; digit: Ghostty's pattern takes ssh: wherever it stands, so one
+  ;; written straight after a dot, a plus or a broken dot's bracket
+  ;; (x.ssh:u@h.example) is a link there. One run on from a letter or a
+  ;; digit (Makefile:12, profile:dev) is left as written: it is how
+  ;; ordinary text reads, and nobody writes an address that way unless
+  ;; they have read this.
+  #"(?i)(?<![a-z0-9])(ssh|sftp|file|magnet|news|git):(?=\S)(?!//)")
 
 (def ^:private longest-plain-word
   "The longest word whose dots are looked at one name at a time. A
@@ -237,8 +243,9 @@
   [word]
   (-> (break-schemes word)
       ;; A web scheme written short, https:/x.example, https:x.example or
-      ;; https:\\x.example, which a link finder still follows.
-      (str/replace #"(?i)(?<![a-z0-9+.\-])(https?|ftp):(?=[/\\A-Za-z0-9])(?!//)"
+      ;; https:\\x.example, which a link finder still follows. After
+      ;; anything but a letter or a digit, as for slashless-scheme.
+      (str/replace #"(?i)(?<![a-z0-9])(https?|ftp):(?=[/\\A-Za-z0-9])(?!//)"
                    (fn [[_ scheme]]
                      (case (str/lower-case scheme) "http" "hxxp:" "https" "hxxps:" "fxp:")))
       ;; The schemes a terminal's link finder follows with no slashes
@@ -265,7 +272,7 @@
             ;; www after anything but a letter or a
             ;; digit: a link finder follows _www.x.txt.
             (re-find #"(?i)(?<![\p{L}\p{N}])www\." word)
-            (re-find #"(?i)(?<![a-z0-9+.\-])(?:hxxps?|fxp):(?=\S)" word))
+            (re-find #"(?i)(?<![a-z0-9])(?:hxxps?|fxp):(?=\S)" word))
       (break-every-dot word)
       (-> word
           (str/replace #"(?<![\w.])\d{1,3}(?:\.\d{1,3}){3}(?![\w.])" break-dots)
