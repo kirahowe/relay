@@ -11,6 +11,7 @@
             [relay.cards :as cards]
             [relay.core :as core]
             [relay.core-test :refer [cfg t0]]
+            [relay.hub-test :as ht]
             [relay.inbound :as inbound]
             [relay.json :as strict]
             [relay.log :as log]
@@ -1205,6 +1206,48 @@
                         :args {:card id :op "input" :path "/site/paid" :value true :seen 9}}}
              (workspace/card-op-command {"card" id "op" "input" "path" "/site/paid" "value" true "seen" 9})))
       (is (= "surface" (get (workspace/card-wire state (core/card state id)) "kind"))))))
+
+(deftest a-clients-input-reaches-relay-and-then-every-client
+  (let [cmd (fn [state type args]
+              (first (core/run-command state {:type type :actor "operator" :labels [] :args args} {:now t0 :config cfg})))
+        s0 (-> core/empty-state
+               (cmd :role/add {:id "clerk" :instructions "x"})
+               (cmd :card/add (assoc a-list :kind "surface")))
+        id (first (keys (:cards s0)))
+        input {:card id :op "input" :path "/items/1/done" :value true :seen id}
+        s1 (cmd s0 :card/op input)
+        boxes (fn [card] (get-in card ["surface" "a2ui" 0 "createSurface" "dataModel" "items"]))
+        h (-> (ht/live) (assoc :state s0) (ht/opened 2))
+        [h fx1] (ht/say h 1 (ht/req 5 "_relay/cards" {}))
+        [h] (ht/say h 2 (ht/req 6 "_relay/cards" {}))]
+    (testing "the board holds the surface as A2UI"
+      (let [card (get-in (first (ht/writes fx1 1)) ["result" "cards" 0])]
+        (is (= ["surface" (str "card_" id)] [(get card "kind") (get-in card ["surface" "a2ui" 0 "createSurface" "surfaceId"])]))
+        (is (= [{"done" true} {"done" false}] (boxes card)))))
+    (testing "an input is the operator's, with no labels, and relay applies it"
+      (let [[h fx] (ht/say h 1 (ht/req 7 "_relay/cards/op" input))
+            [{:keys [tag command]}] (ht/submits fx)]
+        (is (empty? (ht/writes fx 1)) "the client is told nothing until relay has decided")
+        (is (= ["operator" [] input] [(:actor command) (:labels command) (:args command)]))
+        (let [[_ fx] (ht/run h {:event :submit-result :tag tag :ok true :changed true :state s1})
+              [answer] (ht/writes fx 1)
+              [told] (ht/writes fx 2)]
+          (testing "the client that sent it gets the card in its answer"
+            (is (= [7 true [{"done" true} {"done" true}]]
+                   [(get answer "id") (get-in answer ["result" "changed"]) (boxes (get-in answer ["result" "card"]))])))
+          (testing "and the other is sent it"
+            (is (= ["_relay/cards/changed" [{"done" true} {"done" true}]]
+                   [(get told "method") (boxes (get-in told ["params" "cards" 0]))]))))))
+    (testing "relay's refusal reaches the client in relay's words"
+      (let [[h fx] (ht/say h 1 (ht/req 8 "_relay/cards/op" (assoc input :seen 1)))
+            [{:keys [tag]}] (ht/submits fx)
+            why (str "Card " id " has changed since rev 1. Read the card again before you change it.")
+            [_ fx] (ht/run h {:event :submit-result :tag tag :ok false :rejection :conflict :message why})]
+        (is (= [-32000 why] ((juxt #(get % "code") #(get % "message")) (get (first (ht/writes fx 1)) "error"))))))
+    (testing "a parameter the op does not take is refused, not dropped"
+      (let [[_ fx] (ht/say h 1 (ht/req 9 "_relay/cards/op" {:card id :op "input" :pth "/items/1/done" :value true :seen id}))]
+        (is (empty? (ht/submits fx)))
+        (is (= -32602 (get-in (first (ht/writes fx 1)) ["error" "code"])))))))
 
 (defn- with-relay
   "Calls (f sys data) with a relay on artificial data and two roles, hub
