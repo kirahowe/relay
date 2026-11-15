@@ -130,6 +130,30 @@ The coordinating session's notes:
 - The cost falls on text in other scripts, so the rule is worth another
   look under the public-agent goal.
 
+### Replaced later the same day
+
+Kira replaced the rule above later on 2026-11-15. The choice above is
+kept as she made it. She said this to the relay#118 session on
+relay#130, and the coordinating session passed it on to the relay#93
+session:
+
+> we should never be trying to reverse engineer undocumented standards
+> or protocols, as a general rule
+
+The new rule is the relay#118 session's nyklpzmn (9f14d9ff), "Break
+every dot a host name could have, and recognise no names". As the
+coordinating session described it:
+
+- In outside text relay recognises no names: no file names and no mail
+  addresses.
+- Every dot with anything but a digit after it is broken, unless only
+  punctuation follows to the end of the word.
+- Dotted quads are broken too, and schemes are broken as before.
+
+So mail addresses and file names now read with `[.]`, as in
+`todo[.]md`, while `12.50`, `v1.2`, times and a sentence's full stop
+stay as they are.
+
 ## Acceptance criteria
 
 - [ ] Kira has answered both, and the answers are recorded here and in
@@ -163,3 +187,12 @@ The coordinating session's notes:
   the answers in relay#118 as well. The rule is being built in
   relay#130's chain, so I linked this Decision from relay#130 and did
   not copy it into relay#118, which is in review.
+- 2026-11-15, from the relay#93 session. Kira's later rule, under
+  Decision, supersedes my reading above: `todo.md` now reads
+  `todo[.]md`, so the first question is answered the other way, by her
+  rule and not by my reading. The second question is not answered in
+  those words either. Under the new rule the dots in a `mailto:`
+  address are broken, since no mail address is recognised; `tel:` and
+  `sms:` with no dot are not touched by it, as I read the rule. So the
+  question of breaking those schemes still waits on her, and the Proton
+  Mail run is still not done. The issue stays open.
