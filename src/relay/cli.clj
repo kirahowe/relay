@@ -165,13 +165,12 @@ Every command needs the data directory, from --data <dir> or from the file
                                       last 7 days unless dates (YYYY-MM-DD) say
   relay flag <wake> good|bad [note]   mark a wake or conversation (its id from relay
                                       status or relay week) to find it later
-  relay link <address>                call a link safe: relay leaves it whole wherever
-                                      it shows it. Give the address in quotes, typed
-                                      out or as relay shows it (hxxps://x[.]org, or
-                                      <https://x.org> for one that is live)
-  relay link drop <address>           take that back: the link stays broken, even
-                                      when a scout is shown it again
-  relay links                         the links relay leaves whole, and the dropped ones
+  relay link <address>                call a link safe: you can then open it wherever
+                                      relay shows it. Give the address in quotes, typed
+                                      out or as relay shows it (hxxps://x[.]org)
+  relay link drop <address>           take that back: nothing opens it, even when a
+                                      scout is shown it again
+  relay links                         the links you can open, and the dropped ones
   relay traces --out <dir> [--since <date>] [--until <date>] [--agentloop <bin>]
                                       write the wakes and conversations as OpenTelemetry
                                       traces to <dir>/traces.otlp.jsonl, offline; they
@@ -480,7 +479,7 @@ id public too.")
       :else
       (let [id (or (parse-long a) (fail! (str "A card's id is a number, not " a ".")))]
         (if (nil? b)
-          (if-let [c (let [st (inbound/current-state sys)] (core/with-live st (core/card st id)))]
+          (if-let [c (core/card (inbound/current-state sys) id)]
             {:exit 0 :out (render/card c)}
             (fail! (str "There is no card " id ".")))
           (let [op (cond-> {:op b}
@@ -883,8 +882,7 @@ id public too.")
       "journal" (let [[r] more]
                   (when-not r (fail! "usage: relay journal <role> [-n <count>]"))
                   (knowledge sys :journal {:owner r :limit (:tail opts)}))
-      "cards" (lines (let [st (state)]
-                       (render/board (map #(core/with-live st %) (core/board st (:archived opts))))))
+      "cards" (lines (render/board (core/board (state) (:archived opts))))
       "link" (let [[a b] more
                    drop? (= "drop" a)
                    url (if drop? b a)]
@@ -893,9 +891,9 @@ id public too.")
                (let [e (first (submit! sys (if drop? :link/drop :link/keep) {:url url}))
                      link (get-in e [:data :link])]
                  (result 0 (cond
-                             (and e drop?) (str "Dropped " (text/defang link) ". relay breaks it wherever it"
-                                                " shows it, whoever shows it again.")
-                             e (str "Kept " link ". relay leaves it whole wherever it shows it.")
+                             (and e drop?) (str "Dropped " (text/defang link) ". Nothing relay shows opens it now,"
+                                                " whoever shows it again.")
+                             e (str "Kept " (text/defang link) ". You can open it wherever relay shows it.")
                              drop? "That link is already dropped."
                              :else "That link is already live."))))
       "links" (lines (render/links (state)))
@@ -1145,7 +1143,16 @@ id public too.")
           result
           (cond-> result
             (:out result) (update :out #(mapv text/visible-line %))
-            (:err result) (update :err #(mapv text/visible-line %)))))))
+            (:err result) (update :err #(mapv text/visible-line %))
+            ;; For a terminal: the links relay can account for, which the
+            ;; printer makes hyperlinks where their broken form is shown
+            ;; (run). They ride as metadata, so what a command says is
+            ;; the same value with or without them. Read from the log
+            ;; only when a line holds a broken link, and never for init,
+            ;; which has no log yet.
+            (not= "init" cmd)
+            (vary-meta assoc :live (delay (try (core/live-links (core/replay (log/read-events dir)))
+                                               (catch Exception _ #{})))))))))
 
 (defn command-help
   "The lines of `relay help all` about one command: each entry whose
@@ -1248,10 +1255,24 @@ id public too.")
       :else
       (run-command cmd more opts))))
 
+(defn terminal-lines
+  "What a command says, for a terminal: each broken link that is live
+  becomes a hyperlink to its address (relay.text/anchored). The text
+  stays the broken form, so the terminal's own link finder reads
+  nothing, and follows only the address relay names. `live` is a delay,
+  read only when some line holds a broken link."
+  [out live]
+  (if (and live (some #(str/includes? (str %) "hxxp") out))
+    (let [live @live] (mapv #(text/anchored live %) out))
+    out))
+
 (defn run
-  "Runs one command line, prints what it says, and returns the exit code."
+  "Runs one command line, prints what it says, and returns the exit code.
+  On a terminal a live link is a hyperlink (terminal-lines); piped or
+  redirected, the output is the same text without one."
   [args]
-  (let [{:keys [exit out err]} (execute args)]
+  (let [{:keys [exit out err] :as result} (execute args)
+        out (if (System/console) (terminal-lines out (:live (meta result))) out)]
     (doseq [line out] (println line))
     (binding [*out* *err*] (doseq [line err] (println line)))
     exit))

@@ -180,25 +180,27 @@
    ;; text the session that wrote each one read directly in its wake
    ;; (relay.provenance), which is what the operator is shown.
    :sources {}
-   ;; The live links: the addresses relay leaves whole in text an
-   ;; outsider may have shaped, because it can say where each came from
-   ;; (the web showed it to a scout, whole, or the operator called it
-   ;; safe), and the ones the operator dropped, which stay broken
-   ;; whoever shows them again.
+   ;; The live links: the addresses relay can say came from somewhere
+   ;; it takes links from (the web showed one to a scout, whole, or the
+   ;; operator called it safe), and the ones the operator dropped, which
+   ;; no scout brings back. Text an outsider may have shaped is always
+   ;; shown with every link broken; a live link in it travels beside the
+   ;; text as data (relay.text/links-in).
    :links {:live #{} :dropped #{}}
    ;; When the log began, and its latest event.
    :next-seq 1 :first-at nil :last-at nil})
 
 (defn live-links
-  "The links relay leaves whole wherever it shows them (relay.text/for-operator)."
+  "The links relay can account for, which travel beside the text that
+  holds them and are the only ones any channel lets the operator follow."
   [state]
   (get-in state [:links :live]))
 
 (defn with-live
   "A message, a card or a ready item as it is handed to what shows it:
-  with relay's live links under :live, which its text may keep whole.
-  Whatever shows one without them breaks every link in outside text.
-  Nil stays nil."
+  with relay's live links under :live, so that what shows it can list
+  the ones its outside text holds. Whatever shows one without them
+  lists none. Nil stays nil."
   [state x]
   (when x (assoc x :live (live-links state))))
 

@@ -68,9 +68,24 @@
             safe (text/break-cut-word s head)]
         (str (if (= safe head) head (cut safe)) "…")))))
 
+(defn link-actions
+  "ntfy's view actions for a push's live links, at most three: each
+  opens exactly its address. The label names the host, which is plain
+  ASCII by the link's shape, and counts a host that comes again."
+  [links]
+  (let [host #(second (re-find #"^https?://([^/?#:]+)" %))]
+    (:out (reduce (fn [{:keys [seen out]} link]
+                    (let [h (host link)
+                          n (inc (get seen h 0))]
+                      {:seen (assoc seen h n)
+                       :out (conj out {:action "view" :url link
+                                       :label (str "Open " h (when (> n 1) (str " (" n ")")))})}))
+                  {:seen {} :out []}
+                  (take 3 links)))))
+
 (defn push!
   "Sends one push. Throws when it could not be sent."
-  [{:keys [via url topic command] :as settings} {:keys [title body click labels]}]
+  [{:keys [via url topic command] :as settings} {:keys [title body click labels links]}]
   (let [title (str title) body (str body)]
     (case via
       ;; Published as JSON so that a non-ASCII title is not sent in a header.
@@ -80,7 +95,11 @@
                                        :body (json/generate-string
                                               (cond-> {:topic topic :title title
                                                        :message (clip body ntfy-message-limit)}
-                                                click (assoc :click click)))
+                                                click (assoc :click click)
+                                                ;; The body is inert. Each live link
+                                                ;; it holds is a button that opens
+                                                ;; exactly that address.
+                                                (seq links) (assoc :actions (link-actions links))))
                                        :throw false
                                        :timeout 10000})]
               (when-not (<= 200 (:status resp) 299)

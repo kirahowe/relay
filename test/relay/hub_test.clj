@@ -639,9 +639,13 @@
           (is (str/includes? (str (get-in w ["error" "message"])) "no parameter sessionId") method))))))
 
 ;; --- live links (relay#95): the set a client checks a link against, and
-;; the operator keeping or dropping one from a client.
+;; the operator keeping or dropping one from a client. A card's text is
+;; as broken as ever whatever is live, and the card lists the live links
+;; it holds beside it (relay#118).
 
 (def ^:private fund "https://grants.example.org/fund?year=2027")
+(def ^:private fund-broken "hxxps://grants[.]example[.]org/fund?year=2027")
+(def ^:private fund-listed [{"address" fund "shown" fund-broken}])
 
 (defn- link-states
   "Three core states: a note card that quotes a link from outside, the
@@ -657,6 +661,7 @@
 
 (defn- methods-of [msgs] (mapv #(or (get % "method") (get % "id")) msgs))
 (defn- note-texts [msg] (mapv #(get-in % ["note" "text"]) (get-in msg ["params" "cards"])))
+(defn- card-links [msg] (mapv #(get % "links") (get-in msg ["params" "cards"])))
 
 (deftest the-live-links-are-sent-and-then-each-change
   (let [[s0 s1 s2] (link-states)
@@ -675,7 +680,8 @@
       (testing "a link kept elsewhere reaches the subscriber before the card that reads differently for it"
         (is (= ["_relay/links/changed" "_relay/cards/changed"] (methods-of ws)))
         (is (= {"rev" (rev s1) "live" [fund] "gone" []} (get (first ws) "params")))
-        (is (= [(str "See <" fund ">")] (note-texts (second ws)))))
+        (is (= [(str "See " fund-broken)] (note-texts (second ws))))
+        (is (= [fund-listed] (card-links (second ws)))))
       (testing "a connection that did not ask is sent nothing"
         (is (empty? (writes fx 2))))
       (testing "what was sent is not sent again"
@@ -685,7 +691,8 @@
               ws (writes fx 1)]
           (is (= ["_relay/links/changed" "_relay/cards/changed"] (methods-of ws)))
           (is (= {"rev" (rev s2) "live" [] "gone" [fund]} (get (first ws) "params")))
-          (is (= ["See hxxps://grants[.]example[.]org/fund?year=2027"] (note-texts (second ws)))))))
+          (is (= [(str "See " fund-broken)] (note-texts (second ws))))
+          (is (= [[]] (card-links (second ws)))))))
     (testing "it takes no parameter, and needs relay to have read its log"
       (let [[_ fx] (say h 1 (req 9 "_relay/links" {:sessionId "s1"}))
             [w] (writes fx 1)]
@@ -713,7 +720,8 @@
             (is (= {"changed" true} (get (last (writes fx 1)) "result")))
             (is (= ["_relay/links/changed" "_relay/cards/changed"] (methods-of (writes fx 2))))
             (is (= [fund] (get-in (first (writes fx 2)) ["params" "live"])))
-            (is (= [(str "See <" fund ">")] (note-texts (second (writes fx 2)))))))
+            (is (= [(str "See " fund-broken)] (note-texts (second (writes fx 2)))))
+            (is (= [fund-listed] (card-links (second (writes fx 2)))))))
         (testing "refused: relay's reason is the error, and nothing is sent"
           (let [why "A link is one http or https address in plain ASCII."
                 [_ fx] (run h {:event :submit-result :rejection :invalid :message why})
@@ -779,17 +787,18 @@
                   h [[1 "_relay/links"] [1 "_relay/cards"] [2 "_relay/links"] [2 "_relay/cards"]])
         [h fx] (say h 1 (req 7 "_relay/cards/op" {:card card :op "tick" :item 1}))
         [_ fx] (run h {:event :submit-result :ok true :changed true :state s1})
-        item-text #(get-in % ["items" 0 "text"])]
-    (testing "the one who asked: the set's change, then the answer with the link whole"
+        ;; The item's text, broken as ever, and the links the card lists.
+        shows #(vector (get-in % ["items" 0 "text"]) (get % "links"))]
+    (testing "the one who asked: the set's change, then the answer with the link listed"
       (let [[links answer] (writes fx 1)]
         (is (= ["_relay/links/changed" 7] (take 2 (methods-of (writes fx 1)))))
         (is (= [fund] (get-in links ["params" "live"])))
-        (is (= (str "Read <" fund ">") (item-text (get-in answer ["result" "card"]))))))
+        (is (= [(str "Read " fund-broken) fund-listed] (shows (get-in answer ["result" "card"]))))))
     (testing "everyone else: the set's change, then the card"
       (let [[links cards] (writes fx 2)]
         (is (= ["_relay/links/changed" "_relay/cards/changed"] (methods-of (writes fx 2))))
         (is (= [fund] (get-in links ["params" "live"])))
-        (is (= (str "Read <" fund ">") (item-text (get-in cards ["params" "cards" 0]))))))))
+        (is (= [(str "Read " fund-broken) fund-listed] (shows (get-in cards ["params" "cards" 0]))))))))
 
 ;; --- Codex round 3
 

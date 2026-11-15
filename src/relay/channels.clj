@@ -24,10 +24,13 @@
   plain for a mail app): links broken when it came from outside, refs as
   words, and in a listed section, behind a dash with its later lines
   indented. A link relay built itself follows on a line of its own,
-  unbroken."
+  unbroken, and so does each live link the item's text holds
+  (relay.messages/item-links): an address alone on its line, which
+  nothing a role wrote touches."
   [show msg {:keys [list]} it]
   (let [t (show (messages/item-labels msg it) (str/trim (:text it)))
-        t (cond-> t (:link it) (str "\n" (:link it)))]
+        t (cond-> t (:link it) (str "\n" (:link it)))
+        t (str/join "\n" (cons t (remove #{(:link it)} (messages/item-links msg it))))]
     (if list
       (str "- " (str/replace t "\n" "\n  "))
       t)))
@@ -39,21 +42,33 @@
               (str (when heading (str (show (:labels msg) (messages/squeeze-line heading)) "\n\n"))
                    (str/join (if list "\n" "\n\n") (map #(item-text show msg sec %) items))))))
 
+(defn- head-links-text
+  "The live links a message's subject and headings hold, one address to
+  a line, after a blank line, or nil. They follow the body, since a
+  subject and a heading are one line each."
+  [msg]
+  (when-let [links (seq (messages/head-links msg))]
+    (str "\n\n" (str/join "\n" links))))
+
 (defn body-text
   "A message's sections as plain text, with \\n line breaks: each
   section's heading, then its items, a blank line between paragraphs and
   none between the items of a list, then the line saying what outside
   text it drew on, if any (relay.messages/drew-on). For a mail app:
-  hidden characters are taken out and said so."
+  hidden characters are taken out and said so. Text an outsider may have
+  shaped has every link broken; the live links it holds follow each
+  item, and the subject's and headings' follow the body, one address to
+  a line."
   [msg]
-  (str (body-with (partial messages/plain (:live msg)) msg)
+  (str (body-with messages/plain msg)
+       (head-links-text msg)
        (when-let [d (messages/drew-on msg)] (str "\n\n" (messages/plain [] d)))))
 
 (defn subject-text
   "A message's subject as one line the operator is shown, as written:
   never marked, so the real subject shows in a list of mail."
   [msg]
-  (messages/plain-line (:live msg) (:labels msg) (:subject msg)))
+  (messages/plain-line (:labels msg) (:subject msg)))
 
 (defn- batch-subject [msgs]
   (let [s (subject-text (first msgs))]
@@ -210,40 +225,56 @@
   "The most characters of a push's one-line body."
   240)
 
+(def push-links
+  "The most live links one push carries as actions: ntfy takes three."
+  3)
+
 (defn push
-  "A push for a message or several: {:title :body :click}, a one-line
-  title and a one-line body, and the channel's :link with {id} filled
-  in, if it has one."
+  "A push for a message or several: {:title :body :click :links}, a
+  one-line title and a one-line body, and the channel's :link with {id}
+  filled in, if it has one. The text is inert. :links are the first
+  push-links live links the messages hold, for the edge to carry as
+  actions, and when there are more the body says how many."
   [{:keys [link]} msgs]
-  (let [msgs (vec msgs)]
+  (let [msgs (vec msgs)
+        links (vec (distinct (mapcat messages/links msgs)))
+        more (- (count links) push-links)
+        body (if (next msgs)
+               (let [s (str/join " · " (map subject-text (rest msgs)))]
+                 (text/clip-shown s body-limit))
+               (messages/one-line (first msgs) body-limit))]
     (cond-> {:title (batch-subject msgs)
-             :body (if (next msgs)
-                     (let [s (str/join " · " (map subject-text (rest msgs)))]
-                       (text/clip-shown s body-limit))
-                     (messages/one-line (first msgs) body-limit))
+             :body (cond-> body
+                     (pos? more) (str (when-not (str/blank? body) " ")
+                                      "(" more " more " (if (= 1 more) "link" "links") " in relay)"))
              :labels (vec (sort (distinct (mapcat :labels msgs))))}
+      (seq links) (assoc :links (vec (take push-links links)))
       link (assoc :click (str/replace link "{id}" (str (:id (first msgs))))))))
 
 ;; --- the client
 
-(defn- element
-  ([labels s] (element nil labels s))
-  ([live labels s] {"text" (messages/shown live labels s) "outsider" (text/contaminated? labels)}))
+(defn- element [labels s]
+  {"text" (messages/shown labels s) "outsider" (text/contaminated? labels)})
 
 (defn wire
   "A message as a client is sent it (_relay/messages): string keys, and
   every text already safe to show, with outsider beside it when an
   outsider may have written it, and drewOn, the one line saying what
   outside text a role's message drew on, when it did. Nothing internal:
-  no origin, no labels' names."
-  [{:keys [id kind urgency subject sections in-reply-to thread created-at rev deliveries labels replies acted live] :as msg}]
+  no origin, no labels' names. Its text is inert. The live links its
+  outside text holds travel beside it, under links (relay.text/listed),
+  for a message handed over with relay's live links
+  (relay.core/with-live)."
+  [{:keys [id kind urgency subject sections in-reply-to thread created-at rev deliveries labels replies acted] :as msg}]
   (cond->
+   (merge
+    (text/listed (messages/links msg))
    {"id" id "kind" kind "urgency" urgency "at" (str created-at) "rev" rev
     "thread" thread "inReplyTo" in-reply-to
-    "subject" (element live labels (messages/squeeze-line subject))
+    "subject" (element labels (messages/squeeze-line subject))
     "sections" (vec (for [{:keys [heading list items]} sections]
                       (cond-> {"items" (vec (for [{:keys [action link] :as it} items]
-                                              (cond-> (assoc (element live (messages/item-labels msg it) (:text it))
+                                              (cond-> (assoc (element (messages/item-labels msg it) (:text it))
                                                              "refs" (vec (:refs it)))
                                                 ;; A link relay built itself.
                                                 link (assoc "link" link)
@@ -252,12 +283,12 @@
                                                 ;; it was done.
                                                 action (assoc "action" {"op" (:op action) "n" (:n action)
                                                                         "done" (get acted (:n action))}))))}
-                        heading (assoc "heading" (element live labels heading))
+                        heading (assoc "heading" (element labels heading))
                         list (assoc "list" true))))
     "deliveries" (vec (for [[ch {:keys [status]}] deliveries]
                         {"channel" ch "status" (name status)}))
     ;; The operator's own replies, verified by the channel they came
     ;; through, so never from outside.
     "replies" (vec (for [{:keys [id at channel text]} replies]
-                     {"id" id "at" (str at) "channel" channel "text" (element [] text)}))}
+                     {"id" id "at" (str at) "channel" channel "text" (element [] text)}))})
     (messages/drew-on msg) (assoc "drewOn" (text/visible-line (messages/drew-on msg)))))

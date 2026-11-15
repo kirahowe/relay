@@ -461,33 +461,48 @@
 
 (defn safe-text
   "Text as a client is sent it: its links broken when its labels are
-  contaminated, all but relay's live links, `live`
-  (relay.text/for-operator), then with every hidden character made
-  visible. Without `live` every link is broken."
-  ([labels s] (safe-text nil labels s))
-  ([live labels s] (text/visible (text/for-operator live labels s))))
+  contaminated (relay.text/for-operator), then with every hidden
+  character made visible."
+  [labels s]
+  (text/visible (text/for-operator labels s)))
 
-(defn- wire-element [live {:keys [id text labels rev]}]
-  (cond-> {"text" (safe-text live labels text) "outsider" (contaminated? labels) "rev" rev}
+(defn- wire-element [{:keys [id text labels rev]}]
+  (cond-> {"text" (safe-text labels text) "outsider" (contaminated? labels) "rev" rev}
     id (assoc "id" id)))
+
+(defn shown-texts
+  "The text a card shows, as [labels text] pairs in the order it is
+  drawn: its title, items, rows, columns and note."
+  [card]
+  (for [el (text-elements card)] [(:labels el) (:text el)]))
+
+(defn links
+  "The live links a card's outside text holds, in order, each once, for
+  a card handed over with relay's live links under :live
+  (relay.core/with-live). Clean text has none: it is shown as written."
+  [card]
+  (vec (distinct (mapcat (fn [[labels s]]
+                           (when (contaminated? labels) (text/links-in (:live card) s)))
+                         (shown-texts card)))))
 
 (defn wire
   "A card as a client is sent it: string keys, JSON-ready, and every text
   field already safe to show (safe-text), with outsider beside it when it
   is contaminated. A client works nothing out for itself. `labels` is what
   reading the card adds (relay.core/card-labels). `text` is the text form,
-  for a client that does not know the kind. A card handed over with
-  relay's live links under :live (relay.core/with-live) keeps those
-  whole; any other has every link in outside text broken."
-  [{:keys [id kind status rev owner added-at title items rows columns cells note live] :as card} labels]
-  (let [p (progress card)
-        wire-element (partial wire-element live)]
-    (cond-> {"id" id "kind" kind "status" (name status) "complete" (complete? card)
+  for a client that does not know the kind. Its text is inert: every
+  link in outside text is broken. The live links that text holds travel
+  beside it, under links (relay.text/listed), for a card handed over
+  with relay's live links under :live (relay.core/with-live)."
+  [{:keys [id kind status rev owner added-at title items rows columns cells note] :as card} labels]
+  (let [p (progress card)]
+    (cond-> (merge (text/listed (links card))
+                   {"id" id "kind" kind "status" (name status) "complete" (complete? card)
              "rev" rev "owner" owner "addedAt" (str added-at)
              "title" (wire-element title)
              "labels" (vec labels)
-             "text" (text-form card {:mark (fn [ls s] (text/visible (text/for-operator live ls s)))
-                                     :block (fn [ls s] (map text/visible (text/block live ls s)))})}
+             "text" (text-form card {:mark (fn [ls s] (text/visible (text/for-operator ls s)))
+                                     :block (fn [ls s] (map text/visible (text/block ls s)))})})
       p (assoc "progress" {"done" (:done p) "total" (:total p)})
       (= "checklist" kind) (assoc "items" (mapv #(assoc (wire-element %) "done" (:done %)) items))
       (= "tracker" kind) (assoc "rows" (mapv wire-element rows)

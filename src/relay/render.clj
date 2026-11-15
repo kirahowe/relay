@@ -54,12 +54,11 @@
   from and when, and its text behind the gutter, links broken when an
   outsider may have written it."
   [state zone {:keys [id subject body sent-at labels] :as m}]
-  (let [live (core/live-links state)]
-    (concat
-     ["" (str "[" id "] " (text/for-operator live labels subject))
-      (str "    " (came-from state m) ", " (local sent-at zone))]
-     ;; Refs read as words, as in every message.
-     (text/block live labels (text/refs-as-words body)))))
+  (concat
+   ["" (str "[" id "] " (text/for-operator labels subject))
+    (str "    " (came-from state m) ", " (local sent-at zone))]
+   ;; Refs read as words, as in every message.
+   (text/block labels (text/refs-as-words body))))
 
 (defn inbox
   [state zone memos]
@@ -449,19 +448,20 @@
 (defn card
   "One card as relay card shows it: its text form, with each element's
   text marked and defanged when it came from outside, and a note's text
-  behind the gutter. A card handed over with relay's live links
-  (relay.core/with-live) keeps those whole."
+  behind the gutter."
   [c]
-  (cards/text-lines c {:mark (partial text/for-operator (:live c)) :block (partial text/block (:live c))}))
+  (cards/text-lines c {:mark text/for-operator :block text/block}))
 
 (defn links
-  "The links relay leaves whole wherever it shows them, and the ones the
-  operator dropped, as relay links shows them."
+  "The live links and the ones the operator dropped, as relay links
+  shows them: every one in its broken form, as all text relay prints is.
+  On a terminal the command line makes a live one a hyperlink to its
+  address (relay.text/anchored)."
   [state]
   (let [{:keys [live dropped]} (:links state)]
     (concat
      (if (seq live)
-       (cons "Live links, which relay leaves whole wherever it shows them:" (map #(str "  " %) (sort live)))
+       (cons "Live links, which you can open wherever relay shows them:" (map #(str "  " (text/defang %)) (sort live)))
        ["No live links."])
      ;; A dropped link is shown broken here too: the operator dropped it
      ;; so that nothing shows it whole.
@@ -484,11 +484,13 @@
 
 (defn wrap
   "`s` as lines of at most `width` characters, broken at spaces. A word
-  longer than the width is cut, unless it holds a link that can be
-  followed: a cut would leave the start of it, which is a different
-  address, so such a word runs past the width on a line of its own."
+  longer than the width is cut, unless it holds a link, whole or broken.
+  A cut would leave the start of a link that can be followed, which is a
+  different address; and a broken link has to stay one word for the
+  command line to make it a hyperlink (relay.text/anchored). Such a word
+  runs past the width on a line of its own."
   [s width]
-  (let [words (mapcat #(if (re-find #"(?i)https?://" %)
+  (let [words (mapcat #(if (re-find #"(?i)(?:https?|hxxps?)://" %)
                          [%]
                          (map (partial apply str) (partition-all width %)))
                       (remove str/blank? (str/split (str s) #"\s+")))]

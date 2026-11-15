@@ -1,8 +1,10 @@
 (ns relay.links-acp-test
-  "Live links over relay acp (relay#95): _relay/links and its changed
-  notification, and the operator keeping and dropping a link from a
-  client. The hub runs in relay acp's own process and no conversation is
-  opened: these methods are the connection's."
+  "Live links over relay acp (relay#95, relay#118): _relay/links and its
+  changed notification, and the operator keeping and dropping a link
+  from a client. A card's text stays broken whatever is live, and the
+  card lists the live links it holds beside it. The hub runs in relay
+  acp's own process and no conversation is opened: these methods are the
+  connection's."
   (:require [babashka.fs :as fs]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
@@ -15,6 +17,12 @@
 (def fund "https://grants.example.org/fund?year=2027")
 (def fund-broken "hxxps://grants[.]example[.]org/fund?year=2027")
 (def evil-broken "hxxps://evil[.]example/x?d=1")
+
+(def note
+  "The note's text as a client is sent it, whatever is live."
+  (str "See " fund-broken " and " evil-broken))
+
+(def fund-listed [{"address" fund "shown" fund-broken}])
 
 (defn- with-relay [f]
   (let [dir (str (fs/create-temp-dir {:prefix "relay-links-acp"}))
@@ -32,11 +40,11 @@
         (f dir sys))
       (finally (fs/delete-tree dir)))))
 
-(defn- note-text
-  "The note's text in the newest message that carries the board's cards:
-  the _relay/cards answer or a _relay/cards/changed."
+(defn- card
+  "The board's card in the newest message that carries the cards: the
+  _relay/cards answer or a _relay/cards/changed."
   [c]
-  (some #(or (get-in % ["params" "cards" 0 "note" "text"]) (get-in % ["result" "cards" 0 "note" "text"]))
+  (some #(or (get-in % ["params" "cards" 0]) (get-in % ["result" "cards" 0]))
         (reverse @(:messages c))))
 
 (defn- index-of
@@ -47,9 +55,13 @@
 (defn- links-changed? [k link]
   (fn [m] (and (= "_relay/links/changed" (get m "method")) (some #{link} (get-in m ["params" k])))))
 
-(defn- cards-with? [text]
+(defn- cards-with?
+  "A _relay/cards/changed whose card lists exactly these links, beside
+  text that is as broken as it ever was."
+  [links]
   (fn [m] (and (= "_relay/cards/changed" (get m "method"))
-               (= text (get-in m ["params" "cards" 0 "note" "text"])))))
+               (= links (get-in m ["params" "cards" 0 "links"]))
+               (= note (get-in m ["params" "cards" 0 "note" "text"])))))
 
 (deftest the-operator-keeps-and-drops-a-link-over-relay-acp
   (with-relay
@@ -61,17 +73,20 @@
           (is (contains? (get-in (client/request! c "initialize" {:protocolVersion 1 :clientCapabilities {}})
                                  ["result" "_meta"])
                          "relay/hub"))
-          (testing "at first no link is live, and the card's links are both broken"
+          (testing "at first no link is live: the card's links are both broken and it lists none"
             (is (= [] (get-in (client/request! c "_relay/links" {}) ["result" "live"])))
             (client/request! c "_relay/cards" {})
-            (is (= (str "See " fund-broken " and " evil-broken) (note-text c))))
-          (testing "kept, as the client showed it: relay answers, names the link, and sends the card again with it whole"
+            (is (= note (get-in (card c) ["note" "text"])))
+            (is (= [[] 0] [(get (card c) "links") (get (card c) "linksLeftOut")])))
+          (testing "kept, as the client showed it: relay answers, names the link, and sends the card again with it listed"
             (is (= {"changed" true} (get (client/request! c "_relay/links/keep" {:address fund-broken}) "result")))
             (is (client/await! c (links-changed? "live" fund) 10000))
-            (is (client/await! c (cards-with? (str "See <" fund "> and " evil-broken)) 10000))
+            (is (client/await! c (cards-with? fund-listed) 10000))
             (is (< (index-of c (links-changed? "live" fund))
-                   (index-of c (cards-with? (str "See <" fund "> and " evil-broken))))
+                   (index-of c (cards-with? fund-listed)))
                 "the set comes before the card that reads differently for it")
+            (is (not (str/includes? (pr-str (dissoc (card c) "links")) "https://"))
+                "and the address is nowhere in the card but its list")
             (is (= #{fund} (live)))
             (let [e (last (log/read-events data))]
               (is (= ["link/kept" "operator" fund] [(:type e) (:actor e) (get-in e [:data :link])]))))
@@ -86,10 +101,12 @@
           (testing "a link kept on the command line reaches the client too"
             (inbound/submit! sys {:type :link/keep :actor "operator" :args {:url "http://arts.example.net/apply"}})
             (is (client/await! c (links-changed? "live" "http://arts.example.net/apply") 10000)))
-          (testing "dropped: the link is named gone and the card comes broken again"
+          (testing "dropped: the link is named gone and the card comes again listing none"
             (is (= {"changed" true} (get (client/request! c "_relay/links/drop" {:address fund}) "result")))
             (is (client/await! c (links-changed? "gone" fund) 10000))
-            (is (= (str "See " fund-broken " and " evil-broken) (note-text c)))
+            (is (client/await! c (cards-with? []) 10000))
+            (is (< (index-of c (links-changed? "gone" fund)) (index-of c (cards-with? [])))
+                "the set comes first again")
             (is (= #{"http://arts.example.net/apply"} (live))))
           (testing "a parameter relay does not know is refused"
             (is (= -32602 (get-in (client/request! c "_relay/links/keep" {:address fund :sessionId "s"}) ["error" "code"])))

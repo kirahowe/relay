@@ -372,41 +372,76 @@
 (defn display
   "Text of a message as the operator reads it, before the edge makes it
   safe for its screen: refs as words, links broken when it came from
-  outside, all but relay's live links, `live` (relay.text/for-operator).
-  Without `live` every link is broken."
-  ([labels s] (display nil labels s))
-  ([live labels s] (text/for-operator live labels (text/refs-as-words s))))
+  outside (relay.text/for-operator)."
+  [labels s]
+  (text/for-operator labels (text/refs-as-words s)))
 
 (defn shown
   "display, with every hidden character made visible once, for a
   terminal or the client."
-  ([labels s] (shown nil labels s))
-  ([live labels s] (text/visible (display live labels s))))
+  [labels s]
+  (text/visible (display labels s)))
 
 (defn shown-line
   "shown, as one line."
-  ([labels s] (shown-line nil labels s))
-  ([live labels s] (text/visible-line (display live labels (squeeze-line s)))))
+  [labels s]
+  (text/visible-line (display labels (squeeze-line s))))
 
 (defn plain
   "display, for a mail app or a phone: hidden characters taken out and
   said so (relay.text/visible-plain). They are taken out first, before
   links are broken: one inside a host would hide it from defang, and
   taking it out after would put the live link together again."
-  ([labels s] (plain nil labels s))
-  ([live labels s]
-   (let [[t n] (text/strip-hidden s)]
-     (str (display live labels t) (text/hidden-note n)))))
+  [labels s]
+  (let [[t n] (text/strip-hidden s)]
+    (str (display labels t) (text/hidden-note n))))
 
 (defn plain-line
   "plain, as one line."
-  ([labels s] (plain-line nil labels s))
-  ([live labels s] (plain live labels (squeeze-line s))))
+  [labels s]
+  (plain labels (squeeze-line s)))
 
 (defn item-labels
   "The labels an item is shown with: its own and the message's."
   [msg it]
   (vec (sort (distinct (concat (:labels msg) (:labels it))))))
+
+;; --- the live links a message holds
+;;
+;; A message's text is inert: its links are broken when an outsider may
+;; have shaped it. The links relay can account for travel beside it. A
+;; message handed over with relay's live links under :live
+;; (relay.core/with-live) says which of them its outside text holds.
+
+(defn- text-links
+  "The live links text with these labels holds, as the operator reads it
+  (display): none unless an outsider may have shaped it, since clean
+  text is shown as written."
+  [msg labels s]
+  (if (text/contaminated? labels)
+    (text/links-in (:live msg) (text/refs-as-words (first (text/strip-hidden (str s)))))
+    []))
+
+(defn item-links
+  "The live links an item's text holds, in the order written."
+  [msg it]
+  (text-links msg (item-labels msg it) (:text it)))
+
+(defn head-links
+  "The live links a message's subject and headings hold, in order."
+  [msg]
+  (vec (distinct (concat (text-links msg (:labels msg) (:subject msg))
+                         (mapcat #(text-links msg (:labels msg) (:heading %)) (:sections msg))))))
+
+(defn links
+  "Every live link a message's outside text holds: its subject, then
+  each section's heading and items, in order, each once."
+  [msg]
+  (vec (distinct (concat (text-links msg (:labels msg) (:subject msg))
+                         (mapcat (fn [sec]
+                                   (concat (text-links msg (:labels msg) (:heading sec))
+                                           (mapcat #(item-links msg %) (:items sec))))
+                                 (:sections msg))))))
 
 (def role-origins
   "What relay records a role's own message as having told: these say
@@ -427,7 +462,7 @@
   [msg n]
   (let [it (first (mapcat :items (:sections msg)))]
     (if it
-      (let [l (text/clip-shown (plain-line (:live msg) (item-labels msg it) (:text it)) n)]
+      (let [l (text/clip-shown (plain-line (item-labels msg it) (:text it)) n)]
         (if (:link it) (str l " " (:link it)) l))
       "")))
 

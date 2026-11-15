@@ -401,7 +401,8 @@
         answer (workspace/messages-answer s1 {})
         [second first] (get answer "messages")]
     (is (= ["Second https://x.example" "First"] (map #(get-in % ["subject" "text"]) [second first])) "newest first")
-    (is (= #{"id" "kind" "urgency" "at" "rev" "thread" "inReplyTo" "subject" "sections" "deliveries" "replies"}
+    (is (= #{"id" "kind" "urgency" "at" "rev" "thread" "inReplyTo" "subject" "sections" "deliveries" "replies"
+             "links" "linksLeftOut"}
            (set (keys first)))
         "nothing internal: no origin, no role, no labels")
     (is (= [{"items" [{"text" "one" "outsider" false "refs" []}]}] (get first "sections")))

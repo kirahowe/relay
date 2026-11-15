@@ -158,9 +158,10 @@
           (is (= #{"https://arts.example.org/fund"} (live))))))))
 
 (deftest the-operator-can-open-what-a-scout-was-shown
-  ;; relay#94, from the scout's search to every place the operator reads:
-  ;; the links the web showed stay whole, and the ones the scout built
-  ;; are broken as before.
+  ;; relay#94 and relay#118, from the scout's search to every place the
+  ;; operator reads. The text is inert everywhere. The links the web
+  ;; showed travel beside it as data, and the ones the scout built do
+  ;; not.
   (with-scout
     (fn [{:keys [sys start call]}]
       (let [wake (start)
@@ -168,30 +169,42 @@
             form "https://apply.example.org/form"
             body (str "The Arts Fund (" fund ") takes applications at " form "."
                       " Also https://arts.example.org/fund?for=SECRET-NAME and https://exfil.example.com/SECRET.")
-            right? (fn [s]
-                     (and (str/includes? s (str "<" fund ">")) (str/includes? s (str "<" form ">"))
-                          (str/includes? s "hxxps://arts[.]example[.]org/fund?for=SECRET-NAME")
-                          (str/includes? s "hxxps://exfil[.]example[.]com/SECRET")
-                          (not (str/includes? s "https://exfil"))
-                          (not (str/includes? s "fund?for=SECRET-NAME and https"))))
-            broken? (fn [s] (not (re-find #"https?://" s)))]
+            inert? (fn [s] (not (re-find #"https?://" s)))
+            listed (fn [thing] (map #(get % "address") (get thing "links")))]
         (call wake "web_search" {:query "arts grants for choirs"})
         (call wake "web_fetch" {:url fund})
         (is (:ok (call wake "memo_send" {:to "operator" :subject "Arts grants" :body body})))
         (let [state (inbound/current-state sys)
               m (last (sort-by :id (vals (:messages state))))
               live-m (core/with-live state m)]
-          (testing "the client's wire form, mail and a push"
-            (is (right? (json/generate-string (channels/wire live-m))))
-            (is (right? (channels/body-text live-m)))
-            (is (str/includes? (:body (channels/push {} [live-m])) fund)))
-          (testing "what is ready, and the inbox on the command line"
-            (is (right? (json/generate-string (ready/answer state 0 {}))))
-            (is (right? (str/join "\n" (render/inbox state (java.time.ZoneId/of "UTC")
-                                                     (core/unread-memos state core/operator))))))
-          (testing "whatever shows it without relay's live links breaks every link"
-            (is (broken? (json/generate-string (channels/wire m))))
-            (is (broken? (channels/body-text m)))))
+          (testing "the client: the text is inert and the two shown links are listed, with the form the text shows"
+            (let [w (channels/wire live-m)
+                  text (get-in w ["sections" 0 "items" 0 "text"])]
+              (is (= [fund form] (listed w)))
+              (is (inert? (json/generate-string (dissoc w "links"))))
+              (is (every? #(str/includes? text (get % "shown")) (get w "links")))
+              (is (str/includes? text "hxxps://exfil[.]example[.]com/SECRET"))))
+          (testing "mail: the sentence is inert and the two addresses follow it, each alone on a line"
+            (let [lines (str/split-lines (channels/body-text live-m))]
+              (is (= [fund form] (filter #(re-find #"https?://" %) lines)))
+              (is (str/includes? (first lines) "hxxps://arts[.]example[.]org/fund?for=SECRET-NAME"))))
+          (testing "a push: inert, with the two addresses as its links"
+            (let [p (channels/push {} [live-m])]
+              (is (= [fund form] (:links p)))
+              (is (inert? (str (:title p) (:body p))))))
+          (testing "what is ready lists them too, and the inbox on the command line is inert"
+            (let [item (first (filter #(= "message" (get % "kind")) (get (ready/answer state 0 {}) "items")))]
+              (is (= [fund form] (listed item)))
+              (is (inert? (json/generate-string (dissoc item "links")))))
+            (let [lines (render/inbox state (java.time.ZoneId/of "UTC") (core/unread-memos state core/operator))]
+              (is (inert? (str/join "\n" lines)))
+              (testing "which a terminal turns into hyperlinks to exactly those two"
+                (is (= [fund form]
+                       (map second (re-seq #"\u001b\]8;;([^\u001b]+)\u001b\\"
+                                           (str/join "\n" (map #(relay.text/anchored (core/live-links state) %) lines)))))))))
+          (testing "whatever shows it without relay's live links lists none"
+            (is (= [] (listed (channels/wire m))))
+            (is (inert? (channels/body-text m)))))
         (testing "a house role that read the memo can pass the link on, in a message or on a card"
           (let [said (str "Found one: " fund ", and built one: https://exfil.example.com/?d=SECRET")
                 e (inbound/submit! sys {:type :card/add :actor "hub" :labels ["contaminated"]
@@ -199,17 +212,16 @@
                 state (inbound/current-state sys)
                 c (core/card state (:seq (first e)))
                 w (workspace/card-wire state c)]
-            (is (= (str "Found one: <" fund ">, and built one: hxxps://exfil[.]example[.]com/?d=SECRET")
+            (is (= "Found one: hxxps://arts[.]example[.]org/fund, and built one: hxxps://exfil[.]example[.]com/?d=SECRET"
                    (get-in w ["note" "text"])))
-            (is (str/includes? (get-in w ["note" "text"]) "hxxps://exfil[.]example[.]com/?d=SECRET"))
-            (is (str/includes? (get-in w ["title" "text"]) fund))
-            (is (str/includes? (get w "text") fund) "the text form too")
-            (is (str/includes? (str/join "\n" (render/card (core/with-live state c))) fund))
-            (is (broken? (json/generate-string (workspace/card-wire c))) "and broken without the live links")))
-        (testing "the operator drops a link, and it is broken again everywhere"
+            (is (= [fund] (listed w)) "the link the web showed, and not the one the role built")
+            (is (inert? (json/generate-string (dissoc w "links"))))
+            (is (inert? (str/join "\n" (render/card c))))
+            (is (= [] (listed (workspace/card-wire c))) "and none without the live links")))
+        (testing "the operator drops a link, and nothing lists it any more"
           (inbound/submit! sys {:type :link/drop :actor "operator" :args {:url fund}})
           (let [state (inbound/current-state sys)
-                m (last (sort-by :id (vals (:messages state))))
-                text (channels/body-text (core/with-live state m))]
-            (is (not (str/includes? text fund)))
-            (is (str/includes? text form))))))))
+                m (last (sort-by :id (vals (:messages state))))]
+            (is (= [form] (listed (channels/wire (core/with-live state m)))))
+            (is (= [form] (filter #(re-find #"https?://" %)
+                                  (str/split-lines (channels/body-text (core/with-live state m))))))))))))

@@ -225,8 +225,8 @@
 ;; role.
 
 (defn card-wire
-  "A card as a client is sent it (relay.cards/wire). With `state`, the
-  links relay keeps live are whole in it (relay.core/with-live)."
+  "A card as a client is sent it (relay.cards/wire). With `state`, it
+  lists the live links its outside text holds (relay.core/with-live)."
   ([c] (cards/wire c (core/card-labels c)))
   ([state c] (card-wire (core/with-live state c))))
 
@@ -417,11 +417,12 @@
 
 ;; --- live links (relay.core, relay.text)
 ;;
-;; relay shows a live link whole in the wire forms above. A client that
-;; draws outside text has its own check on that: it lets a terminal
-;; follow an address only when relay named it here, in the set itself,
-;; so text that reached the client some other way cannot carry a link of
-;; its own. A subscriber's record is the set it was last sent.
+;; relay lists a thing's live links beside its text in the wire forms
+;; above. A client that draws outside text has its own check on that: it
+;; lets a terminal follow an address only when relay named it here, in
+;; the set itself, so text that reached the client some other way cannot
+;; carry a link of its own. A subscriber's record is the set it was last
+;; sent.
 
 (defn links-params-error
   "Why relay refuses a _relay/links request's params, or nil. It takes

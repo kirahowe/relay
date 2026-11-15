@@ -221,25 +221,36 @@
   (\"(a hidden character removed)\"), as mail says it, so a screen that
   escapes what it prints never shows an escape twice. The \"from\" line
   says where it came from, so the text carries no mark of its own."
-  ([labels s] (safe nil labels s))
-  ([live labels s] (messages/plain live labels s)))
+  [labels s]
+  (messages/plain labels s))
 
-(defn- safe-line [live labels s]
-  (messages/plain-line live labels s))
+(defn- safe-line [labels s]
+  (messages/plain-line labels s))
 
-(defn- wire-item [{:keys [labels live] :as it}]
+(defn- item-links
+  "The live links an item's outside text holds, in order, each once: its
+  title, its lines and its sections' headings, as `safe` shows them. For
+  an item that carries relay's live links under :live
+  (relay.core/with-live). Clean text has none: it is shown as written."
+  [{:keys [labels live] :as it}]
+  (if (text/contaminated? labels)
+    (vec (distinct (mapcat #(text/links-in live (text/refs-as-words (first (text/strip-hidden (str %)))))
+                           (concat [(:title it)] (:lines it) (keep :heading (:sections it))))))
+    []))
+
+(defn- wire-item [{:keys [labels] :as it}]
   (let [sources (sources-of-item it)
-        from (provenance sources)
-        safe (fn [labels s] (safe live labels s))
-        safe-line (fn [labels s] (safe-line live labels s))]
-    (cond-> {"id" (:id it) "kind" (name (:kind it)) "at" (str (:at it)) "seq" (:seq it)
+        from (provenance sources)]
+    (cond-> (merge
+             (text/listed (item-links it))
+             {"id" (:id it) "kind" (name (:kind it)) "at" (str (:at it)) "seq" (:seq it)
              "title" (safe-line labels (:title it))
              "lines" (vec (map-indexed (fn [i l]
                                          (cond-> (safe labels l)
                                            (get (:links it) i) (str "\n" (text/visible-line (get (:links it) i)))))
                                        (:lines it)))
              "from" from
-             "outsider" (provenance/outside? sources)}
+             "outsider" (provenance/outside? sources)})
       (:message it) (assoc "message" (:message it) "messageKind" (:message-kind it)
                            "urgency" (:urgency it) "thread" (:thread it)
                            "replyTo" (:reply-to it)
@@ -261,8 +272,10 @@
       (:move it) (assoc "move" (:move it) "role" (:role it) "undo" (:undo it) "undone" (:undone it)))))
 
 (defn wire
-  "An item as a client is sent it: string keys, every text safe to show,
-  \"from\" in plain words, \"outsider\" true when it came from outside."
+  "An item as a client is sent it: string keys, every text safe to show
+  and inert, \"from\" in plain words, \"outsider\" true when it came from
+  outside, and \"links\", the live links its outside text holds
+  (relay.text/listed)."
   [it]
   (wire-item it))
 

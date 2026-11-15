@@ -357,13 +357,17 @@
 
 (defspec every-line-of-relay-ready-fits-a-phone 200
   ;; Regression (U1b review): the "Drew on:" footer and preview lines ran
-  ;; past 60 columns.
+  ;; past 60 columns. The one line that may: a single word that holds a
+  ;; link, whole or broken, which is never cut (render/wrap), so that it
+  ;; can be copied in one piece and made a hyperlink on a terminal.
   (prop/for-all [title gen-hostile line gen-hostile srcs gen-long-sources]
     (let [wires (mapv #(ready/wire (assoc % :sources srcs)) (hostile-items title line (vec (cons "contaminated" srcs))))
           now (Instant/parse "2026-10-27T12:00:00Z")
           lines (concat (render/ready wires (ZoneId/of "UTC") now)
                         (mapcat #(render/ready-one % (ZoneId/of "UTC") now) wires))]
-      (every? #(<= (count %) render/ready-width) lines))))
+      (every? #(or (<= (count %) render/ready-width)
+                   (re-matches #"\s*\S*(?:hxxps?|https?)://\S*" %))
+              lines))))
 
 (defspec her-own-text-is-only-made-visible 200
   (prop/for-all [title gen-hostile line gen-hostile]
@@ -768,7 +772,8 @@
         [h fx] (ht/say h 1 (ht/req 5 "_relay/ready" {}))
         answer (get (first (ht/writes fx 1)) "result")]
     (is (= ["message"] (map #(get % "kind") (get answer "items"))))
-    (is (= #{"id" "kind" "at" "seq" "title" "lines" "from" "outsider" "message" "messageKind" "urgency" "thread" "replyTo" "replies"}
+    (is (= #{"id" "kind" "at" "seq" "title" "lines" "from" "outsider" "message" "messageKind" "urgency" "thread" "replyTo" "replies"
+             "links" "linksLeftOut"}
            (set (keys (first (get answer "items")))))
         "a message's item carries what a client needs to answer it")
     (testing "a new item reaches the subscriber, and only it"
