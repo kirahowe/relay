@@ -1,0 +1,11 @@
+{:id 125
+ :title "Keep link breaking quick on one very long word"
+ :status :ready
+ :type :bug
+ :priority :p3
+ :created "2026-11-15"
+ :updated "2026-11-15"
+ :tags #{}
+ :blocked-by #{}
+ :related #{"relay#118" "relay#97"}
+ :details "125-keep-link-breaking-quick-on-one-very-long-word.md"}
