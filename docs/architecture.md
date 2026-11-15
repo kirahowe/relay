@@ -514,6 +514,14 @@ line, where nothing a role wrote touches it, and the link shape is the
 one every common finder reads to its end
 (`scripts/link-finder-fuzz.swift`).
 
+What decides whether broken text is inert is `relay.text/defang`, and
+its review kept finding one more shape a finder follows: a host inside
+a file name, a host after a port. So the check on it is the finder
+itself. The fuzz step of `bb verify` (`scripts/inert-text-fuzz.sh`)
+writes 100,000 new hostile strings each run, as mail, a client and
+`relay ready` show them, and fails if Apple's link finder can follow
+any.
+
 ## The steward's shell
 
 A house role granted `:shell` gets `sh`, which runs a command in a Linux
@@ -760,7 +768,7 @@ The invariants come from `docs/plans/house.md`. Tests are in
 | I7 | Nothing the steward does destroys | `relay.shell/run-argv` mounts read-only; `relay.files/plan` and `move!` never overwrite or delete; `relay.moves/undo!`; `relay.log` only appends | `files_test`: `undoing-every-call-restores-the-tree-byte-for-byte`, `a-move-never-overwrites-deletes-or-leaves-the-folders`; `shell_live_test`; `log_test` | `s24-files-never-destroyed`, `s18-shell-walls` |
 | I8 | Every old log still folds | `relay.core/removed-event-kinds` and `evolve`; an old `notification/created` folds as `:legacy` history | `removed_events_test`; `messages_test`: `every-old-notification-folds-into-a-message`; `calendar_test`: `an-old-log-has-no-calendar` | `s25-old-log-folds` |
 | I9 | The calendar is the agent's | `calendar-writer!` in `relay.core` refuses the operator, the dispatcher and public roles; `relay.core/calendar-feed` and `relay.ics/render`; `relay.websocket/decide-calendar` and `feed-token`; `relay.serve` binds the listener to 127.0.0.1 | `calendar_test`: `the-feed-has-only-what-roles-wrote`; `calendar_serve_test`; `ics_test` | `s26-calendar-feed` |
-| I10 | Outside text is inert, and only a link relay can account for can be followed | `relay.text/for-operator` breaks every link in outside text; `relay.text/links-in`, `listed` and `anchored` carry the live ones as data; `relay.shown/links`, which `shown-links` in `relay.tools` calls for a scout's `memo_send`; `decide* :memo/send`, `:link/keep` and `:link/drop` in `relay.core`, the last two the operator's alone, from the command line or a client (`link-request` in `relay.hub`); `relay.text/link?` for what may enter the set | `links_test`: `outside-text-is-broken-whatever-is-live`, `a-listed-link-is-live-and-its-shown-form-is-in-the-text`, `a-terminal-follows-only-live-links-and-the-text-is-unchanged`, `cutting-shown-text-leaves-no-link-to-follow`, `a-scout-hands-on-only-what-it-could-have-fetched`, `only-the-operator-keeps-or-drops-a-link`, `a-link-kept-or-dropped-reaches-a-client-that-holds-it`; `hub_test`: `the-live-links-are-sent-and-then-each-change`, `the-operator-keeps-and-drops-a-link-from-a-client`; `links_acp_test`; `scout_test`: `a-scout-s-memo-keeps-the-links-it-was-shown-live`, `the-operator-can-open-what-a-scout-was-shown` | `s27-live-links` |
+| I10 | Outside text is inert, and only a link relay can account for can be followed | `relay.text/for-operator` breaks every link in outside text; `relay.text/links-in`, `listed` and `anchored` carry the live ones as data; `relay.shown/links`, which `shown-links` in `relay.tools` calls for a scout's `memo_send`; `decide* :memo/send`, `:link/keep` and `:link/drop` in `relay.core`, the last two the operator's alone, from the command line or a client (`link-request` in `relay.hub`); `relay.text/link?` for what may enter the set | `links_test`: `outside-text-is-broken-whatever-is-live`, `a-listed-link-is-live-and-its-shown-form-is-in-the-text`, `a-terminal-follows-only-live-links-and-the-text-is-unchanged`, `cutting-shown-text-leaves-no-link-to-follow`, `a-scout-hands-on-only-what-it-could-have-fetched`, `only-the-operator-keeps-or-drops-a-link`, `a-link-kept-or-dropped-reaches-a-client-that-holds-it`; `hub_test`: `the-live-links-are-sent-and-then-each-change`, `the-operator-keeps-and-drops-a-link-from-a-client`; `links_acp_test`; `scout_test`: `a-scout-s-memo-keeps-the-links-it-was-shown-live`, `the-operator-can-open-what-a-scout-was-shown`; the fuzz step of `bb verify` | `s27-live-links` |
 
 ## Reading list
 

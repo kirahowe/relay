@@ -14,12 +14,13 @@
 ;;   wrap    relay ready's lines, cut at 60 columns (relay.render/wrap)
 ;;
 ;; One line per case: the string as written, U+0001, the shown form with
-;; line breaks as spaces. Run from the repo:
+;; line breaks as spaces. scripts/inert-text-fuzz.sh runs this with the
+;; checker, and bb verify runs that. By hand, from the repo:
 ;;
 ;;   swiftc -O scripts/inert-text-check.swift -o /tmp/inert-text-check
 ;;   bb scripts/inert-text-fuzz.clj 1 200000 | /tmp/inert-text-check
 ;;
-;; The first argument is the seed, the second how many cases.
+;; The first argument is the seed, the second how many strings.
 
 (require '[clojure.string :as str]
          '[relay.messages :as messages]

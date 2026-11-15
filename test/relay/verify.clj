@@ -13,8 +13,9 @@
   "usage: bb verify [options]
 
 Runs, in order: agentloop, relay-tui and webtool's own tests and builds,
-relay's tests (the mock scenarios among them) and the pentests. With --live it also
-runs the behaviour evals against the real model, which costs a little.
+relay's tests (the mock scenarios among them), the fuzz of link breaking
+and the pentests. With --live it also runs the behaviour evals against
+the real model, which costs a little.
 
   --agentloop-dir <dir>  agentloop checkout (default ../agentloop)
   --relay-tui-dir <dir>  relay-tui checkout (default ../relay-tui)
@@ -64,6 +65,8 @@ runs the behaviour evals against the real model, which costs a little.
                                      " && bb -cp src:resources:test -m relay.eventkit-contract tools/eventkit/eventkit")]}
                {:id "relay" :what "relay's tests and the mock scenarios against that agentloop" :dir root
                 :cmd ["bb" "test" "--agentloop" al-bin]}
+               {:id "fuzz" :what "hostile text as relay shows it, read by Apple's link finder" :dir root
+                :cmd ["scripts/inert-text-fuzz.sh"]}
                {:id "pentest" :what "the whole system attacked on artificial data" :dir root
                 :cmd ["bb" "pentest" "--jobs" "4"
                       "--agentloop" al-bin

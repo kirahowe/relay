@@ -1512,7 +1512,9 @@ holds nothing a finder can follow, is checked the same way:
 `scripts/inert-text-fuzz.clj` writes hostile strings as relay shows them
 in mail, to a client and in `relay ready`, and
 `scripts/inert-text-check.swift` asks the finder whether any can be
-followed. Run both when link breaking changes. What Proton Mail follows has not
+followed. `scripts/inert-text-fuzz.sh` runs the two together, and
+`bb verify` runs it on 100,000 new strings every time, as its fuzz step.
+Run `scripts/link-finder-fuzz.swift` when the link shape changes. What Proton Mail follows has not
 been checked (relay#117). An address of any other shape is never live,
 and `relay link` refuses it: one with a comma, an apostrophe or a
 bracket in it, or one that ends in `=`. Write a host in other letters in

@@ -99,8 +99,9 @@ What is new:
 - [x] `bb verify` passes but for relay#99's two tests.
   - Receipt: 2026-11-15, tip slposyyt, with relay-tui a17a265d; the
     numbers are in the Log.
-- [ ] An adversarial Codex review finds nothing in scope. (Three rounds,
-  none clean. It waits for Kira; see the Log.)
+- [ ] An adversarial Codex review finds nothing in scope. (Not met as
+  written: three rounds, none clean. Kira accepted it on 2026-11-15 with
+  the fuzz as the standing check; see the Log.)
 
 ## Plan
 
@@ -222,3 +223,23 @@ What is new:
     agentloop, relay-tui, webtool and eventkit pass; relay 1,196 of
     1,197 and the pentests 30 of 31, the rest being relay#99's two.
   - The fuzz after the rebase, seed 11: 1,350,000 cases, none followed.
+- 2026-11-15: Kira's answer on the review. Asked how to close it after
+  three rounds with none clean, with three choices (accept with the fuzz
+  as the standing check, a fourth round, or remove defang's exemptions
+  and break every dot in outside text), she chose to accept with the
+  fuzz. So no fourth round was run.
+  - To make the fuzz a standing check and not a script someone has to
+    remember, it is now a step of `bb verify`
+    (`scripts/inert-text-fuzz.sh`): 100,000 new strings each run, 300,000
+    cases, about 25 seconds, with the seed printed. A hit fails the run
+    and prints the string, which goes into `relay.text-test` before the
+    fix. The seed changes every run on purpose, so a run can fail on
+    text nobody changed; that is a real defect in link breaking each
+    time, and the reason the step exists.
+  - What a hit means for a change that is not about link breaking is
+    in VERIFY.md, and the rule is the coordinating session's:
+    the hit is filed with its seed and string, a change that touches
+    none of `relay.text`, `relay.messages` and `relay.render` is not
+    held back by it, and nothing reaches `main` on a run with one.
+  - This goes to review with the last criterion unticked, as relay#94
+    did.

@@ -25,6 +25,7 @@ not whatever is on PATH.
 | webtool | `make test && make build && make fixture` | Search, ask and fetch refuse anything not plainly on the public internet. The fixture build is the one the pentests use. |
 | eventkit | `tools/eventkit/test.sh && tools/eventkit/build.sh && bb … relay.eventkit-contract …` | The EventKit binary parses strictly, refuses a write outside its `--allow` lists and has no delete. relay's tests use a fake binary, so the last part runs the real one on the arguments relay builds for a read (never a write) and fails if it cannot parse them. |
 | relay | `bb test --agentloop …` | relay's own rules, the model-based property over random command sequences, the agentloop integration against a mock model, and every end-to-end scenario played through on staging data against the mock model. |
+| fuzz | `scripts/inert-text-fuzz.sh` | Text relay shows from outside holds no link that Apple's link finder, the one Mail and the phone use, can follow: 100,000 random hostile strings, each as mail, a client and `relay ready` show it. The seed is the clock's and is printed. A hit prints what was written and what was shown; add that as a test in `relay.text-test` before fixing it. |
 | pentest | `bb pentest --jobs 4 …` | The built system holds up when attacked from outside, on artificial data, assuming the model obeys the attacker perfectly. |
 | eval | `bb eval --live …` | Roles do their jobs well on the real model: they cite, keep skills, speak plainly, and keep quiet when nothing needs the operator. |
 
@@ -37,6 +38,14 @@ shell's live test and `s18-shell-walls`. Both need Apple's container
 service, which `container system start` starts. While it is stopped each
 of the two fails in one line that says so, and the run fails. `bb verify`
 says it before the first step and again under the table.
+
+The fuzz step makes new strings every run, so it can fail on a change
+that never went near link breaking. A hit is a link that mail or the
+phone would follow, in code that is already on trunk. File it with the
+seed and the string the run prints, and do not rerun until it passes. A
+change that touches none of `relay.text`, `relay.messages` and
+`relay.render` is not held back by a hit that has been filed. Nothing
+reaches `main` on a run with one.
 
 ## Before handing work back
 
