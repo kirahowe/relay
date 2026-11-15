@@ -53,6 +53,7 @@
 | [105](105-bound-what-relay-cards-answers-when-it-includes-archived.md) | Bound what _relay/cards answers when it includes archived cards | bug | P3 |
 | [108](108-bound-the-live-links-a-client-is-sent.md) | Bound the live links a client is sent | feature | P3 |
 | [122](122-fix-the-ready-view-property-that-fails-on-seed.md) | Fix the ready-view property that fails on seed 6561552371814650667 | bug | P3 |
+| [123](123-compare-relay-macos-s-copies-of-relay-s-shared-test-data-in.md) | Compare relay-macos's copies of relay's shared test data in bb verify | chore | P3 |
 
 ### In progress
 
