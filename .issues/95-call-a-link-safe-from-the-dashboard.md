@@ -127,7 +127,80 @@ Built so far:
 - relay: `_relay/links`, `_relay/links/changed`, `_relay/links/keep`
   and `_relay/links/drop`, with the hub and `relay acp` tests.
 
-Waiting on Kira: the mock of the list and the question,
-https://claude.ai/code/artifact/c936a717-3ec8-4754-bfc0-93ef5793c9a9.
-Three choices in it are hers: how a long link looks, whether `d` drops a
-link from the list, and the key (`L`).
+Review, verify and a change of design, 2026-11-14:
+
+- Landing was split in two at the coordinating session's request, since
+  two other chains sit on relay-tui's commits. Part one is the set on the
+  wire and the dashboard drawing live links. Part two is the list on `L`
+  and its questions. Neither has landed.
+- Kira saw the mock and answered: build the list and the question as
+  mocked, a long link stays in the broken form, and `d` drops a live link
+  after one question.
+- Codex, read-only, threat model given, on part one:
+  1. Round 1, one finding, in scope, fixed in relay kvxoxuwn. A
+     `_relay/cards/op` result took relay's state and answered before
+     `_relay/links/changed`. `take-state` in relay.hub is now the one
+     place the hub takes a state, and it sends the set's change first.
+  2. Round 2, two findings, fixed in relay-tui ukrtspwq. A live link
+     with a character a terminal's link finder stops at (an apostrophe,
+     in Ghostty's) was drawn as it is, so without OSC 8 part of it could
+     be followed. An outsider's tracker column name was put in capitals.
+  3. Round 3, three findings. A live link with a second address inside
+     it (kitty follows the inner one). Text touching the link's bracket
+     (`<https://x.example/a>>`, which WezTerm reads past). And a reply in
+     a contaminated session still goes through Markdown, which takes
+     marks out: that one is my claim worded too widely, since replies
+     are dressed by design, their links broken and their rows checked.
+- Rounds 2 and 3 found one class three times, and relay#94's rounds
+  found it too: a link shown as text is read by whatever link finder the
+  reader has, and finders disagree. By relay's rule I stopped after three
+  rounds and asked Kira. She asked what the root was. My answer: a link
+  travels as text, so whether it can be followed is decided by the
+  reader's heuristics and not by relay. Shaping the text until every
+  finder agrees is the parser differential of relay#58 over an open set
+  of readers. Breaking a link only needs no finder to match; showing one
+  whole needs every finder to match exactly.
+- Kira's decision, in her words: "I think you have the right analysis,
+  we should stop trying to fix the symptom and get to the root of the
+  issue. Links as data is a better direction. I like it, you can execute
+  in whatever order is most efficient."
+- The design that follows, agreed with the coordinating session and the
+  relay#94 session: text on a screen is always inert, the broken form or
+  a label. A link is data relay attaches to a card, a message or a ready
+  item: a `links` list, each `{"address", "shown"}` with its broken
+  form, widening the `link` a message item already carries. The address
+  travels only by a channel's explicit link mechanism: OSC 8 on a
+  terminal, a push's click action, and in a plain-text mail a block
+  after the item with each link alone on its line. A client parses no
+  address out of text.
+
+Order from here:
+
+1. relay-tui, on top of ukrtspwq: a live link's text is always the
+   broken form, and the address lives only in the OSC 8 target. This
+   takes out `readsWhole`, the hyphen stand-in and the whole-on-one-row
+   logic. Then one more review round, and part one lands.
+2. The relay#94 session reworks how relay shows links (inert text, the
+   `links` field). relay-tui then reads the list on `L` from that field
+   and retires its port of link-in.
+3. Part two lands on that.
+
+State when this was written:
+
+- relay.links95, on integration as of vrrnnrur (it has moved since, and
+  relay.text changed, so rebase first): ttlkztor, wwmznmqz, rpvmrytu
+  (eventkit's date round trip drew a day the calendar skipped; not from
+  this work), kvxoxuwn, ooorlxwl (docs for part two).
+- relay-tui.links95, on integration wsxozuyu: ytnytlom, oomzupqw,
+  xmvurrzo, pzwvpyps, ukrtspwq (part one), xyksywky (part two, the list).
+  relay#100's chain sits on pzwvpyps.
+- `bb verify` on part one, with my own agentloop and webtool workspaces
+  and relay-tui exported at ukrtspwq: agentloop, relay-tui, webtool and
+  eventkit pass; relay 1189 of 1190 and pentest 30 of 31, the two misses
+  being relay.shell-live-test and s18-shell-walls (relay#99, Apple's
+  container service is stopped). s27 passes with the real relay-tui on a
+  pseudo-terminal.
+- Under a private tmux 3.8: with `hyperlinks` in terminal-features the
+  outer terminal is sent the live addresses and no other; without it,
+  no hyperlink at all.
+- relay#108 was filed for the growing `_relay/links` answer.
