@@ -38,6 +38,17 @@ Kira, 2026-11-14, on buttons (relay#98 has her answers in full):
 - A role-built form for adding an agent ends at the steward, which adds
   the role as it can today. relay draws no confirmation screen for it.
 
+Kira, 2026-11-14, on a component of relay's own. relay#96's spike had
+put `Tracker`, a grid, in relay's catalog. Her words: "can we not build
+that from primitives available from a2ui? if not then yes we should keep
+it anyway."
+
+- It can be built from primitives (relay#102's Log has the test), so
+  `Tracker` leaves relay's catalog, and the catalog is a subset of A2UI's
+  basic catalog with nothing added. This reading of her answer is mine.
+- Nothing is lost by it. The tracker card kind stays as it is, and the
+  board goes on drawing it.
+
 Mine, and Kira may overrule them:
 
 - relay plays A2UI's "agent" toward clients. A role authors a surface
@@ -73,14 +84,6 @@ The coordinating session's, 2026-11-14, and Kira may overrule them:
   holds the catalog file, and relay-tui's copy is checked against it.
 - One function in relay-tui decides what is drawn as a followable link.
   relay#95 owns it and surfaces use it.
-
-## Open
-
-Whether relay's catalog holds a component of its own. relay#96's spike
-added `Tracker`, a grid, which the basic catalog lacks. Kira, asked on
-2026-11-14: "can we not build that from primitives available from a2ui?
-if not then yes we should keep it anyway." That is being tested. Nothing
-in relay#97 or relay#100 waits on it.
 
 ## The parts
 
@@ -137,3 +140,8 @@ reaches a plain ACP client as the agent wrote it.
   Each session works in its own jj workspace, and each workspace would
   have given its next issue the same number, so one session files them
   all.
+- 2026-11-14: asked Kira about `Tracker` and tested her question. A grid
+  of Rows with weights lines up in relay#96's renderer at 60 columns and
+  wider. The coordinating session pointed out that the catalog needs no
+  grid at all while the tracker card kind exists, which is what the
+  Decisions now say. The test and its limits are in relay#102.
