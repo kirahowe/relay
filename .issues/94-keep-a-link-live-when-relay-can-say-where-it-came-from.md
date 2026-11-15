@@ -246,4 +246,8 @@ Codex review, read-only, threat model given:
   188,381 of 600,000 exactly. Only Apple's finder was run. Ghostty's was
   checked by relay-34's reviewer from its matcher expression, and the
   other terminals by reading their rules, not by running them.
+- Moved to review with `--force`, because two criteria are not met as
+  written and I did not want to tick them. `bb verify` passes but for
+  relay#99's two tests, which need Apple's container service. No Codex
+  round came back clean, and Kira accepted the change without a fourth.
 

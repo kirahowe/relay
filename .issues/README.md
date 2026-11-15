@@ -53,13 +53,13 @@
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
-| [94](94-keep-a-link-live-when-relay-can-say-where-it-came-from.md) | Keep a link live when relay can say where it came from | feature | P1 |
 | [100](100-draw-surface-cards-on-relay-tui-s-board.md) | Draw surface cards on relay-tui's board | feature | P2 |
 
 ### Review
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
+| [94](94-keep-a-link-live-when-relay-can-say-where-it-came-from.md) | Keep a link live when relay can say where it came from | feature | P1 |
 | [96](96-draw-a2ui-surfaces-in-relay-tui.md) | Draw A2UI surfaces in relay-tui | feature | P2 |
 
 ### Blocked
