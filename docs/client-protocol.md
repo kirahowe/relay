@@ -409,10 +409,13 @@ labels its session started with, or any agentloop sent since, say so, or
 relay was told none (relay#104). `initialize`'s `_meta` says
 `"relay/inertText": 1` when relay does this.
 
-- Every link is broken as in a card's outside text (Live links): in
-  message and thought chunks, a tool call's title, its content's text
-  and diffs, its raw input and output, a plan's entries and a session's
-  title. A call's locations, which are paths, are left.
+- Every link is broken as in a card's outside text (Live links), in
+  every string of every update, map keys included, whatever the field
+  or the kind of update. Only these pass as they came:
+  `sessionUpdate`, `toolCallId`, `messageId`, `kind`, `status`,
+  `currentModeId` and `locations` (a call's paths), and in its
+  content a block's `type`, a terminal's `terminalId` and a diff's
+  `path`. In `_meta`, `agentloop/labels` passes too.
 - Hidden characters are shown as `\u{XXXX}` and every backslash as two,
   as on a card, except the joiner or selector that holds an emoji
   together, which is sent as it is.

@@ -1004,17 +1004,24 @@
         (sequential? x) (mapv inert-strings x)
         :else x))
 
+(defn- keeping
+  "A map with every entry made inert (inert-strings, keys included)
+  except those under the keys in `kept`, which pass as they are."
+  [kept m]
+  (into {} (map (fn [[k v]] (if (contains? kept k) [k v] [(inert-strings k) (inert-strings v)]))) m))
+
 (defn- inert-block
   "A content block made inert: a text block's text broken, and any other
   block (an image, audio, a resource or a link to one) made a text block
   that names it, broken too, since a client may fetch an image's address
-  with no click."
+  with no click. Every other string in a text block is broken as well;
+  only its type is kept."
   [b]
   (if-not (map? b)
-    b
+    (inert-strings b)
     (let [t (get b "type")]
       (if (= "text" t)
-        (update b "text" #(text/conversation-text (str %)))
+        (assoc (keeping #{"type"} b) "text" (text/conversation-text (str (get b "text"))))
         (let [r (get b "resource")
               ;; The block's type as a plain word: brackets here could
               ;; join the text either side into a Markdown link.
@@ -1024,41 +1031,55 @@
           {"type" "text" "text" (text/conversation-text (str/join " " said))})))))
 
 (defn- inert-tool-content
-  "A call's content made inert. A display's block is left: the proxy made
-  its text inert from the display already (relay.acp/with-inert-displays),
-  and doing it again would escape its escapes."
+  "A call's content made inert, every string in it broken but its type,
+  a terminal's id and a diff's path. A display's block is left: the
+  proxy made its text inert from the display already
+  (relay.acp/with-inert-displays), and doing it again would escape its
+  escapes."
   [c]
   (if-not (map? c)
-    c
+    (inert-strings c)
     (case (get c "type")
       "content" (if (and (contains? (get-in c ["content" "_meta"]) "relay/display")
                          (= "text" (get-in c ["content" "type"])))
                   c
-                  (update c "content" inert-block))
-      "diff" (cond-> c
-               (string? (get c "oldText")) (update "oldText" text/conversation-text)
-               (string? (get c "newText")) (update "newText" text/conversation-text))
-      "terminal" c
+                  (assoc (keeping #{"type"} (dissoc c "content")) "content" (inert-block (get c "content"))))
+      ;; A diff's path is a path, as a call's locations are (relay#135).
+      "diff" (keeping #{"type" "path"} c)
+      "terminal" (keeping #{"type" "terminalId"} c)
       ;; Anything else is taken for a content block, a bare one included.
       (inert-block c))))
 
+(def ^:private kept-update-keys
+  "The keys of an agent's update whose values relay sends as they are
+  (relay#134): the kind of update, the ids a client matches on, a call's
+  kind and status, the mode's id, and a call's locations, which are paths
+  (relay#135). Every other string in the update is broken, whatever its
+  key, so a field relay does not know arrives inert too."
+  #{"sessionUpdate" "toolCallId" "messageId" "kind" "status" "currentModeId" "locations"})
+
+(def ^:private kept-meta-keys
+  "The keys of an update's _meta relay sends as they are: the session's
+  labels, which are data and no client shows (relay#140)."
+  #{"agentloop/labels"})
+
 (defn- inert-update
-  "An update that is not a streamed text chunk, made inert: a call's
-  title, content and raw input and output, a plan's entries, a session's
-  title. Its locations, which are paths, are left."
+  "An update made inert: every string in it broken, map keys included,
+  but under kept-update-keys and kept-meta-keys. Content goes by
+  inert-tool-content or inert-block."
   [u]
-  (cond-> u
-    (string? (get u "title")) (update "title" text/conversation-text)
-    ;; The tool name the model emitted, as agentloop passes it on.
-    (string? (get u "name")) (update "name" text/conversation-text)
-    (sequential? (get u "content")) (update "content" #(mapv inert-tool-content %))
-    (map? (get u "content")) (update "content" inert-block)
-    (contains? u "rawInput") (update "rawInput" inert-strings)
-    (contains? u "rawOutput") (update "rawOutput" inert-strings)
-    (sequential? (get u "entries")) (update "entries" (fn [es] (mapv #(if (and (map? %) (string? (get % "content")))
-                                                                          (update % "content" text/conversation-text)
-                                                                          %)
-                                                                       es)))))
+  (into {} (map (fn [[k v]]
+                  (cond (contains? kept-update-keys k) [k v]
+                        (= "_meta" k) [k (if (map? v) (keeping kept-meta-keys v) (inert-strings v))]
+                        (= "content" k) [k (if (sequential? v) (mapv inert-tool-content v) (inert-block v))]
+                        :else [(inert-strings k) (inert-strings v)])))
+        u))
+
+(defn- with-update
+  "An agent's session/update with `u` as its update. The rest of its
+  params are made inert but the session's id."
+  [msg u]
+  (assoc msg "params" (assoc (keeping #{"sessionId" "update"} (get msg "params")) "update" u)))
 
 (def ^:private text-free-kinds
   "Updates that carry no text a client draws inline in the conversation,
@@ -1069,7 +1090,8 @@
 
 (defn- text-free?
   "Whether an update may pass while a word is held: one of
-  text-free-kinds holding none of the fields inert-update breaks."
+  text-free-kinds holding none of the fields a client draws among the
+  words. Its strings are still made inert (inert-update)."
   [u]
   (and (text-free-kinds (get u "sessionUpdate"))
        (not-any? #(contains? u %) ["title" "name" "content" "rawInput" "rawOutput" "entries"])))
@@ -1122,14 +1144,15 @@
             [st out] (inert/feed (get-in h [:convs role :streams kind] inert/empty-stream) (get content "text"))
             h (assoc-in h [:convs role :streams kind] st)]
         [h (cond-> before
-             (not= "" out) (conj (strict/generate (assoc-in msg ["params" "update" "content" "text"] out))))])
+             (not= "" out) (conj (strict/generate (with-update msg (assoc (inert-update (dissoc u "content"))
+                                                                         "content" (assoc (keeping #{"type"} content) "text" out))))))])
       (if (text-free? u)
         ;; Nothing in it is drawn among the words, so the held word stays
         ;; held and is judged whole when it ends.
-        [h [(strict/generate msg)]]
+        [h [(strict/generate (with-update msg (inert-update u)))]]
         (let [[h before] (flush-streams h role inert/cut)
-              u (if (and (streamed-kinds kind) (map? content)) (update u "content" inert-block) (inert-update u))]
-          [h (conj before (strict/generate (assoc-in msg ["params" "update"] u)))])))))
+              u (inert-update u)]
+          [h (conj before (strict/generate (with-update msg u)))])))))
 
 (defn- with-links
   "A line as written to a client: a message chunk's text with the live

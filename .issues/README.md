@@ -61,7 +61,6 @@
 | [131](131-keys-held-while-connecting-are-replayed-onto-a-restored.md) | Keys held while connecting are replayed onto a restored card and act on it | bug | P3 |
 | [132](132-the-saved-view-puts-a-checklist-s-cursor-back-by-line-number.md) | The saved view puts a checklist's cursor back by line number | bug | P3 |
 | [133](133-an-op-that-times-out-reads-as-refused-though-relay-may.md) | An op that times out reads as refused though relay may still apply it | bug | P3 |
-| [134](134-break-every-string-in-an-agent-s-update-unless-its-key-is.md) | Break every string in an agent's update unless its key is known safe | bug | P3 |
 | [135](135-check-what-acp-clients-do-with-a-tool-call-location-that-is.md) | Check what ACP clients do with a tool call location that is an address | chore | P3 |
 | [138](138-anchor-a-reply-s-links-only-in-markdown-text-not-in-code-or.md) | Anchor a reply's links only in Markdown text, not in code or tables | bug | P3 |
 | [139](139-make-relay-s-docs-and-relay-tui-agree-on-markdown-backslash.md) | Make relay's docs and relay-tui agree on Markdown backslash escapes | bug | P3 |
@@ -72,6 +71,7 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [130](130-break-an-address-that-a-character-with-no-width-is-hiding-in.md) | Break an address that a character with no width is hiding in | bug | P2 |
+| [134](134-break-every-string-in-an-agent-s-update-unless-its-key-is.md) | Break every string in an agent's update unless its key is known safe | bug | P3 |
 
 ### Review
 

@@ -5,6 +5,9 @@
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [clojure.test :refer [deftest is testing]]
+            [clojure.test.check.clojure-test :refer [defspec]]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]
             [relay.core :as core]
             [relay.core-test :as ct]
             [relay.hub-test :as ht]
@@ -220,3 +223,75 @@
                      (text-chunk "agent_message_chunk" "30 sharp"))
         all (concat ws (ended h))]
     (is (= "Meet at 10[:\\]30 sharp" (texts "agent_message_chunk" all)))))
+
+;; --- relay#134
+
+(deftest a-field-relay-does-not-know-arrives-broken
+  (let [[h ws] (feed (live ["contaminated"])
+                     (update-line {:sessionUpdate "tool_call" :toolCallId "c.1" :kind "fetch" :status "pending"
+                                   :title "t" :newField "see https://evil.test/x?d=S"
+                                   :nested {"deep" ["https://evil.test/y"]}
+                                   :_meta {"agentloop/labels" ["contaminated" "web:https://evil.test/z"]
+                                           "agentloop/future" "https://evil.test/m"}
+                                   :content [{:type "terminal" :terminalId "t.1" :note "https://evil.test/t"}
+                                             {:type "diff" :path "src/a.clj" :oldText "a" :newText "https://evil.test/d"}
+                                             {:type "content" :content {:type "text" :text "x" :annotations {"note" "https://evil.test/a"}}}]})
+                     (update-line {:sessionUpdate "available_commands_update"
+                                   :availableCommands [{:name "web" :description "fetch https://evil.test/c"
+                                                        :input {:hint "like www.evil.test"}}]})
+                     (update-line {:sessionUpdate "brand_new_update" :words "https://evil.test/n"}))
+        [call cmds fresh] ws]
+    (is (= "hxxps://evil[.]test/x?d=S" (str/replace (get call "newField") "see " "")))
+    (is (= {"deep" ["hxxps://evil[.]test/y"]} (get call "nested")))
+    (is (= "hxxps://evil[.]test/m" (get-in call ["_meta" "agentloop/future"])))
+    (testing "what clients match on passes as it came"
+      (is (= ["c.1" "fetch" "pending"] (map #(get call %) ["toolCallId" "kind" "status"])))
+      (is (= ["contaminated" "web:https://evil.test/z"] (get-in call ["_meta" "agentloop/labels"])) "labels are relay#140's")
+      (is (= "t.1" (get-in call ["content" 0 "terminalId"])))
+      (is (= "src/a.clj" (get-in call ["content" 1 "path"])) "a path, as locations are (relay#135)"))
+    (is (= "hxxps://evil[.]test/t" (get-in call ["content" 0 "note"])))
+    (is (= "hxxps://evil[.]test/d" (get-in call ["content" 1 "newText"])))
+    (is (= "hxxps://evil[.]test/a" (get-in call ["content" 2 "content" "annotations" "note"])))
+    (is (= {"name" "web" "description" "fetch hxxps://evil[.]test/c" "input" {"hint" "like www[.]evil[.]test"}}
+           (get-in cmds ["availableCommands" 0])))
+    (is (= "hxxps://evil[.]test/n" (get fresh "words")))
+    (is (empty? (concat (ended h))))))
+
+(deftest a-text-chunk-s-other-fields-arrive-broken
+  (let [[h ws] (feed (live ["contaminated"])
+                     (update-line {:sessionUpdate "agent_message_chunk" :messageId "a.1" :extra "https://evil.test/e"
+                                   :content {:type "text" :text "hi there " :annotations {"n" "https://evil.test/f"}}}))
+        [u] ws]
+    (is (= "a.1" (get u "messageId")))
+    (is (= "hxxps://evil[.]test/e" (get u "extra")))
+    (is (= "hxxps://evil[.]test/f" (get-in u ["content" "annotations" "n"])))
+    (is (= "hi there " (get-in u ["content" "text"])))))
+
+(def ^:private kept-keys #{"sessionUpdate" "toolCallId" "messageId" "kind" "status" "currentModeId" "locations"})
+
+(defn- strings-outside-kept
+  "Every string in an update as sent, keys included, but the values under
+  the keys relay keeps and under _meta's agentloop/labels, judged without
+  relay's code."
+  [u]
+  (letfn [(walk [x] (cond (string? x) [x]
+                          (map? x) (mapcat (fn [[k v]] (cons k (walk v))) x)
+                          (sequential? x) (mapcat walk x)
+                          :else []))]
+    (mapcat (fn [[k v]]
+              (cond (kept-keys k) [k]
+                    (= "_meta" k) (cons k (if (map? v) (walk (dissoc v "agentloop/labels")) (walk v)))
+                    :else (cons k (walk v))))
+            u)))
+
+(defspec no-link-in-an-update-reaches-a-client-whole 200
+  (let [link (gen/elements ["https://evil.test/x" "www.evil.test" "evil.test/p?d=S"])
+        k (gen/elements ["title" "name" "rawInput" "rawOutput" "entries" "unknown" "words" "toolCallId" "status" "_meta" "nested"])
+        leaf (gen/one-of [link (gen/elements ["a" "b c"]) gen/small-integer])
+        v (gen/recursive-gen #(gen/one-of [(gen/vector % 0 3) (gen/map (gen/one-of [link (gen/elements ["k" "type" "text"])]) % {:max-elements 3})]) leaf)
+        kind (gen/elements ["tool_call" "tool_call_update" "plan" "session_info_update" "usage_update" "available_commands_update" "something_new"])]
+    (prop/for-all [kind kind fields (gen/map k v {:max-elements 5})]
+      (let [u (assoc fields "sessionUpdate" kind)
+            [h ws] (feed (live ["contaminated"]) (update-line u))
+            sent (concat ws (ended h))]
+        (every? #(not (str/includes? % "evil.test")) (mapcat strings-outside-kept sent))))))

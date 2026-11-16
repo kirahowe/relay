@@ -44,3 +44,31 @@ Related: relay#104, relay#135.
 
 ## Log
 
+- 2026-11-16, relay-ec. relay.hub/inert-update breaks every string in
+  an update now, map keys included, whatever its key or kind. Two sets
+  in relay.hub list what passes as it came. kept-update-keys:
+  - `sessionUpdate`: the kind of update.
+  - `toolCallId`, `messageId`: ids a client matches on.
+  - `kind`, `status`: a call's enums.
+  - `currentModeId`: the mode's id.
+  - `locations`: paths, which relay#135 asks about.
+  kept-meta-keys holds only `agentloop/labels`, since what labels show
+  is relay#140's. Inside a call's content, a block's `type`, a terminal's
+  `terminalId` and a diff's `path` are kept. The path is kept because it
+  is a path, like locations, so relay#135 covers both. A params field
+  next to the update is broken too, except `sessionId`.
+- 2026-11-16, relay-ec. available_commands_update's names, descriptions
+  and hints are now broken like everything else, since they are not on
+  the kept list. agentloop's command names hold no dot, so breaking them
+  changes nothing a client would send back.
+- 2026-11-16, relay-ec. The text chunk's other fields go the same way,
+  and so does an update that passes a held word (relay#136). Breaking
+  their strings changes nothing, since they hold labels, numbers, ISO
+  times and ids. A dot before a digit stays, so `12:00:00.5Z` is sent
+  as it came.
+- 2026-11-16, relay-ec. The property
+  `no-link-in-an-update-reaches-a-client-whole` builds random updates
+  of known and unknown kinds and fields, with links in keys and values.
+  Its oracle does not use relay's code: no string outside the kept keys
+  may contain `evil.test`. On the old code it found a title sent as a
+  list, which went out whole because only a string title was broken.
