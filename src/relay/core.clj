@@ -4506,15 +4506,23 @@
   operator to the card's owner, in relay's words (relay#98). It names the
   button, the card and the event, and quotes the label as the role's
   writing, never as the operator's. It carries the card's labels and
-  keeps its sources (Kira, 2026-11-17): what a role does after a press
+  keeps its sources (Kira, 2026-11-16): what a role does after a press
   on a card built from outside text is shown with that source, where an
   offer she accepted in the daily note is hers."
-  [{:keys [state] :as tx} card {:keys [component label event]}]
+  [{:keys [state config] :as tx} card {:keys [component label event item rev wired-by]}]
   (let [id (:id card)
         owner (:owner card)
         title (get-in card [:title :text])
-        press {:card id :component component}]
-    (when-not (and (not= operator owner) (active-role? state owner))
+        press {:card id :component component}
+        ;; Any role that keeps cards may replace a surface's components,
+        ;; so the memo says who wired the button, never that its reader did.
+        wirer (cond (= owner wired-by) "you"
+                    (= operator wired-by) "the operator"
+                    wired-by (str "the role " wired-by)
+                    :else "a role")]
+    ;; A public role is never sent a private memo, and one it could not
+    ;; be given would hold the button's next press back for good.
+    (when-not (and (not= operator owner) (active-role? state owner) (not (public-role? config owner)))
       (reject! :not-found (str "Nobody keeps card " id " now, so a press would tell no one.")))
     ;; A key held down, or pressed again while the role is still at it,
     ;; would queue a wake for each press.
@@ -4522,14 +4530,20 @@
       (reject! :conflict (str owner " has not yet taken up your last press of that button.")))
     (with-public (dissoc tx :sources) false
       #(send-memo % {:from operator :to owner :press press
-                     :subject (messages/clip-subject (str "Pressed: " (messages/squeeze-line label)))
-                     :body (str "The operator pressed a button on card " id " [[card:" id "]], titled:\n\n"
+                     ;; relay's words only: the label is quoted in the body.
+                     :subject (str "Pressed a button on card " id)
+                     :body (str "The operator pressed a button on card " id " [[card:" id "]] at rev " rev
+                                (when item (str ", in the item at " item))
+                                ". The card is titled:\n\n"
                                 (quote-block title) "\n\n"
-                                "The button is " component ", and you wired it to the event " event "."
-                                " Its label, which you wrote and not the operator, reads:\n\n"
+                                "The button is " component ", and " wirer " wired it to an event named:\n\n"
+                                (quote-block event) "\n\n"
+                                "Its label, which a role wrote and not the operator, reads:\n\n"
                                 (quote-block label) "\n\n"
-                                "Read the card to see what the press is for. Do what the button is for, and close"
-                                " this memo with what you did.")}
+                                "Read the card to see what the press is for."
+                                (when item (str " If the card has changed since rev " rev ", check that the item at "
+                                                item " is still the one the label names, and ask the operator if not."))
+                                " Do what the button is for, and close this memo with what you did.")}
                   (card-labels card) (or (seq (:sources card)) (card-labels card))))))
 
 (defmethod decide* :card/op [{:keys [state actor] :as tx} {{id :card :as args} :args}]

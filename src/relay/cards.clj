@@ -449,7 +449,8 @@
                           {:keys [event call path value]} (:action b)]
                       (cond
                         (nil? b) (refuse! :not-found (str "Nothing on card " id " is a button with that id."))
-                        event {:press {:component component :label (get-in b [:child :text]) :event event}}
+                        event {:press {:component component :label (get-in b [:child :text]) :event event
+                                       :item (:item b) :rev seen :wired-by (:wired-by surface)}}
                         (= surfaces/set-input call)
                         (if (= value (true? (surfaces/at (:data surface) (:parts (surfaces/path path)))))
                           (unchanged (str "That box is already " (if value "ticked" "unticked") "."))
@@ -482,6 +483,9 @@
              (= "tracker" card-kind) (assoc :rows (mapv el rows) :columns (mapv el columns) :cells {})
              (= "note" card-kind) (assoc :note (written event {:text text}))
              (= "surface" card-kind) (assoc :surface {:components (surfaces/plain components)
+                                                      ;; Who wrote the components a press names
+                                                      ;; to the role it tells (relay#106).
+                                                      :wired-by actor
                                                       :data (surfaces/plain (:data data))
                                                       :labels {:components (union (:labels event))
                                                                :data (union (:labels event))}})))))
@@ -529,6 +533,7 @@
       ;; a write to one path of the data adds the writer's to them.
       "components" (-> card
                        (assoc-in [:surface :components] (surfaces/plain components))
+                       (assoc-in [:surface :wired-by] (:actor event))
                        (assoc-in [:surface :labels :components] (union (:labels event))))
       ;; The data's labels are replaced only when all of it was: a
       ;; write at / of an object. Any other write, one that could not

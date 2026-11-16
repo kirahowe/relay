@@ -68,11 +68,13 @@
        (fmt-notes notes)
        (fmt-skills skills)))
 
-(defn- fmt-memo [zone {:keys [id from subject body sent-at attempts routine request?]}]
+(defn- fmt-memo [zone {:keys [id from subject body sent-at attempts routine request? press]}]
   (str "\n## Memo " id ": " subject "\n\n"
        (if routine
          (str "Your routine `" routine "` coming due.")
          (str "From " from ", sent " (local sent-at zone) "."))
+       (when press
+         " relay wrote it when the operator pressed a button on a card: what the button and its label say are a role's writing, not the operator's words.")
        (when request?
          (str " This is the operator's own request. The outcome you give `memo_close` reaches them as"
               " the reply to it, and your final words in this wake do not, so put your whole answer in"

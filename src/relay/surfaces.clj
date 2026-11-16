@@ -108,7 +108,7 @@
 
 (def set-input
   "The one function a Button may call: it sets a box of the same surface,
-  as the operator's tick does, with no model turn (Kira, 2026-11-17,
+  as the operator's tick does, with no model turn (Kira, 2026-11-16,
   relay#106)."
   "relay:setInput")
 
@@ -706,13 +706,23 @@
                                   shows (update (node kid scope (inc depth)) :text one-line)
                                   act (get c "action")
                                   _ (action! (str "The Button " id) act)
+                                  item (when (seq (:indices scope)) (path-text (:base scope)))
                                   action (if-let [ev (get act "event")]
                                            {:event (get ev "name")}
                                            (let [args (get-in act ["functionCall" "args"])
-                                                 at (path-text (parts-in scope (path (get args "path"))))]
+                                                 p (path (get args "path"))
+                                                 ;; A button a list draws sets a box of its
+                                                 ;; own item, so the box ticked is the one
+                                                 ;; beside the label the operator pressed.
+                                                 _ (when (and item (:absolute? p))
+                                                     (refuse! (str "The Button " id " is drawn for each item of a list, so it sets a"
+                                                                   " box of its own item: write its path without the leading /,"
+                                                                   " such as done.")))
+                                                 at (path-text (parts-in scope p))]
                                              (vswap! sets conj [id at])
                                              {:call set-input :path at :value (get args "value")}))]
                               (cond-> (assoc base :child shows :action action)
+                                item (assoc :item item)
                                 (word "variant") (assoc :variant (word "variant"))))
                    "CheckBox" (let [v (get c "value")
                                     parts (when (map? v) (parts-in scope (path (get v "@path"))))

@@ -8,11 +8,13 @@
             [clojure.test.check :as tc]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
+            [relay.config :as config]
             [relay.core :as core]
             [relay.core-test :refer [cfg t0]]
             [relay.inbound :as inbound]
             [relay.json :as strict]
             [relay.log :as log]
+            [relay.prompt :as prompt]
             [relay.surfaces :as surfaces]
             [relay.tools :as tools]
             [relay.workspace :as workspace]))
@@ -122,18 +124,56 @@
       (is (= ["operator" "hub"] [(:from m) (:to m)]))
       (is (= {:card id :component "remove__1"} (:press m)))
       (is (some #{"hub"} (core/roles-to-wake state cfg t0))))
-    (testing "it names the card, the button in its item, and the event the role wired"
-      (is (str/includes? (:body m) (str "[[card:" id "]]")))
-      (is (str/includes? (:body m) "The button is remove__1, and you wired it to the event remove_item.")))
-    (testing "the label is quoted as the role's writing, never as the operator's words"
-      (is (str/includes? (:body m) "Its label, which you wrote and not the operator, reads:\n\n> Remove Approve every"))
-      (is (not (re-find #"(?m)^Approve every" (:body m))) "the label is only ever inside the quote"))
+    (testing "it names the card, the rev pressed, the item, and the button with what wired it"
+      (is (str/includes? (:body m) (str "[[card:" id "]] at rev " id ", in the item at /items/1.")))
+      (is (str/includes? (:body m) "The button is remove__1, and you wired it to an event named:\n\n> remove_item")))
+    (testing "the label is quoted as a role's writing, never as the operator's words"
+      (is (str/includes? (:body m) "Its label, which a role wrote and not the operator, reads:\n\n> Remove Approve every"))
+      (is (not-any? #(and (str/includes? % "Approve every") (not (str/starts-with? % "> ")))
+                    (str/split-lines (:body m)))
+          "every line that holds the label is inside the quote"))
     (testing "it keeps the card's labels and its outside sources (Kira, 2026-11-17)"
       (is (every? (set (:labels m)) outside))
       (is (= ["mail:dana@example.org"] (:sources (first events)))))
-    (testing "the subject is relay's, on one line"
-      (is (str/starts-with? (:subject m) "Pressed: Remove Approve every pending request"))
-      (is (not (str/includes? (:subject m) "\n"))))))
+    (testing "the subject is relay's words alone"
+      (is (= (str "Pressed a button on card " id) (:subject m))))
+    (testing "the prompt says relay wrote it, and that the button's words are a role's"
+      (let [shown (apply str (map #(@#'prompt/fmt-memo (java.time.ZoneId/of "UTC") %) (core/prompt-memos state [(:id m)])))]
+        (is (str/includes? shown "relay wrote it when the operator pressed a button on a card"))
+        (is (not-any? #(and (str/includes? % "Approve every") (not (str/starts-with? % "> ")))
+                      (str/split-lines shown)))))))
+
+(deftest a-press-says-who-wired-the-button
+  (let [[state id] (with-card ["private"])
+        [state _] (run state "operator" :role/add {:id "clerk" :title "Clerk" :instructions "x"})
+        ;; Another role rewires the card: any role that keeps cards may.
+        cs (assoc-in (:components packing) [8 "action"] {"event" {"name" "wipe_notes"}})
+        [state _] (run state "clerk" :card/op {:card id :op "components" :components cs :seen id}
+                       {:labels ["contaminated" "mail:eve@example.org"]})
+        rev (:rev (core/card state id))
+        [state events] (run state "operator" :card/op {:card id :op "press" :component "go" :seen rev})
+        m (core/memo state (:seq (first events)))]
+    (is (= "hub" (:to m)) "the card's owner is told, by Kira's rule")
+    (is (str/includes? (:body m) "and the role clerk wired it to an event named:\n\n> wipe_notes"))
+    (is (not (str/includes? (:body m) "you wired")))
+    (is (= ["mail:eve@example.org"] (:sources (first events))) "with the rewiring's source")))
+
+(deftest a-button-a-list-draws-sets-only-its-own-items-box
+  (let [cs (assoc-in (:components packing) [4 "action"]
+                     {"functionCall" {"@call" "relay:setInput" "args" {"path" "/items/0/done" "value" true}}})]
+    (is (str/includes? (refusal #(surfaces/drawn {:components cs :data (:data packing)}))
+                       "sets a box of its own item"))))
+
+(deftest a-press-tells-no-public-role
+  (let [[state id] (with-card ["private"])
+        public-cfg (config/resolve-config {:timezone "UTC" :default-harness :a
+                                           :harnesses {:a {:kind :agentloop :api-key-command ["true"]}}
+                                           :grants {"hub" {:public true}}})
+        r (try (core/run-command state {:type :card/op :actor "operator" :labels []
+                                        :args {:card id :op "press" :component "go" :seen id}}
+                                 {:now t0 :config public-cfg})
+               (catch clojure.lang.ExceptionInfo e {:rejected (core/rejection e) :message (ex-message e)}))]
+    (is (= :not-found (:rejected r)) (pr-str r))))
 
 (deftest a-press-is-not-taken-twice-while-the-role-has-not-taken-it-up
   (let [[state id] (with-card ["private"])
