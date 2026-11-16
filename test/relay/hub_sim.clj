@@ -156,7 +156,7 @@
                                                       [{:event :connection-line :conn observer
                                                         :line (jl {:jsonrpc "2.0" :id (str "o" wake) :method "session/new"
                                                                    :params {:_meta {"relay/role" role}}})}])
-                                                    [{:event :conversation-started :role role :wake wake}]))
+                                                    [{:event :conversation-started :role role :wake wake :labels []}]))
                                        %)))
     :stop (update w :pending #(into [{:event :conversation-gone :role (:role f)}] %))))
 

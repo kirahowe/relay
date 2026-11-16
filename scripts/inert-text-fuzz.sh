@@ -2,8 +2,7 @@
 # The standing check that text relay shows from outside is inert.
 #
 # inert-text-fuzz.clj writes random hostile strings as mail, a client and
-# `relay ready` show them, and as text is sent once its hidden characters
-# are out but for emoji glue. inert-text-check.swift asks Apple's link
+# `relay ready` show them, and as relay's proxy sends conversation text. inert-text-check.swift asks Apple's link
 # finder whether any of it can be followed. This runs the two together
 # and fails when the finder follows anything. A hit prints what was
 # written and what relay showed, which is the test case to add before

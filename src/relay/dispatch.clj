@@ -787,16 +787,17 @@
   screen stays the proxy's: displays, the pane's methods, oversized lines
   and answers the agent does not owe. The board is relay.hub's.
 
-  (on-started wake-id) is called once the wake has started and before
-  the agent runs. Throws, having started nothing, when the conversation
+  (on-started wake-id labels) is called once the wake has started and
+  before the agent runs, with the labels its session starts with: what
+  relay.hub needs to know before the agent says any. Throws, having started nothing, when the conversation
   cannot open (the role has one open already, say). Returns {:exit}."
-  [sys role-id {:keys [in out stop trace on-started] :or {on-started (fn [_])}}]
+  [sys role-id {:keys [in out stop trace on-started] :or {on-started (fn [& _])}}]
   (with-conversation! sys role-id
     (fn [request]
       (let [{:keys [problem] :as command} (harness/acp-command request)
             conv (atom workspace/conversation)]
         (when problem (throw (ex-info problem {})))
-        (on-started (:wake-id request))
+        (on-started (:wake-id request) (vec (get-in request [:policy :labels])))
         (let [{:keys [exit observed]}
               (proxy! command {:in in :out out :trace trace :stop stop
                                :on-oversized (oversize-recorder sys (:wake-id request))

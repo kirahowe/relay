@@ -177,3 +177,34 @@ relay#91 and relay#95.
   rule for what a link is, in relay, and `gate` still stops anything
   followable. relay-tui builds this after relay#104 lands, as its half
   of relay#130.
+- 2026-11-15: Kira's answer on hidden characters in conversation text,
+  in the coordinating session's dialog: "Show them, keep emoji whole".
+  So relay sends them as a card shows them, as `\\u{XXXX}` with every
+  backslash doubled, except the joiner or selector that holds an emoji
+  together. It replaces her earlier "drop zero-width chars" for
+  conversation text; that answer was for relay-tui's own breaker.
+- 2026-11-15, the relay#118 session: the design, agreed with the
+  coordinating session and checked against relay-macos.
+  - Where: relay.hub/agent-line breaks an agent's session/update before
+    keep-state, remember and write. Lines relay writes itself (the
+    prompt's mirror, notices) are left alone. relay.text/conversation-text
+    is the one function text goes through.
+  - When: a session counts as outside once the labels it started with
+    (dispatch hands them to the hub with :conversation-started) or any
+    agentloop has sent since say so. A session relay was told no labels
+    of counts as outside. agentloop can send a reply before any labels,
+    so its stream alone could not decide this.
+  - Half-written words: relay.inert holds the text after the last space,
+    per conversation and kind. It goes out whole at a space or at the end
+    of the turn or conversation. It goes out cut, with every dot and colon
+    broken, when another update goes first or the word passes 4,096
+    characters.
+  - Also broken: thoughts, a call's title, content (text, diff), raw input
+    and output, plan entries, and a session's title. A block that is not
+    text becomes text that names it. Locations stay.
+  - Links: a message chunk lists the live links its text shows, under
+    `_meta` `relay/links` and `relay/linksLeftOut`. They are found in the
+    text as sent (relay.text/shown-links), so a replay finds them again,
+    with the live set at the time of writing. Thoughts, calls and plans
+    list none.
+  - `initialize` says `relay/inertText`.

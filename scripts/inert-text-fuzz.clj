@@ -14,12 +14,11 @@
 ;;   plain   a mail or a push (relay.messages/plain)
 ;;   shown   a client or a terminal (relay.messages/shown)
 ;;   wrap    relay ready's lines, cut at 60 columns (relay.render/wrap)
-;;   kept    hidden characters taken out but for the joiner or selector
-;;           that holds an emoji together, then links broken. No channel
-;;           shows this today: mail takes every hidden character out and
-;;           a screen shows each as an escape. It is how conversation
-;;           text is to be sent (relay#104), and the only way a kept
-;;           joiner reaches a link finder raw.
+;;   conv    conversation text as relay's proxy sends it to any client
+;;           (relay.text/conversation-text, relay#104): links broken,
+;;           hidden characters shown as escapes but for the joiner or
+;;           selector that holds an emoji together, which is the only
+;;           way such a character reaches a link finder raw.
 ;;
 ;; One line per case: the string as written, U+0001, the shown form with
 ;; line breaks as spaces. scripts/inert-text-fuzz.sh runs this with the
@@ -143,7 +142,7 @@
     (doseq [[channel out] [["plain" (messages/plain outside s)]
                            ["shown" shown]
                            ["wrap" (str/join "\n" (render/wrap shown 60))]
-                           ["kept" (text/for-operator outside (first (#'text/strip s)))]]]
+                           ["conv" (text/conversation-text s)]]]
       ;; wrap keeps its line breaks: a link finder reads each line.
       (println (str channel " " (pr-str s) "\u0001"
                     (if (= "wrap" channel) (str/replace out "\n" "\u0002") (one-line out)))))))

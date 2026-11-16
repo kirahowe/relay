@@ -66,7 +66,7 @@
       (let [c (ws-connect! port)]
         (try
           (let [init (client/request! c "initialize" {:protocolVersion 1 :clientCapabilities {}} 5000)]
-            (is (= {"relay/hub" 1 "relay/keeps" true} (get-in init ["result" "_meta"]))))
+            (is (= {"relay/hub" 1 "relay/keeps" true "relay/inertText" 1} (get-in init ["result" "_meta"]))))
           (is (= ["clerk" "hub"] (map #(get % "id") (get-in (client/request! c "_relay/roles" {} 5000) ["result" "roles"]))))
           (is (= "s1" (get-in (client/request! c "session/new" {:cwd *dir* :mcpServers [] :_meta {"relay/role" "clerk"}} 10000)
                               ["result" "sessionId"])))

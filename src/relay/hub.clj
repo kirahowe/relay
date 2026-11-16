@@ -46,7 +46,9 @@
                                             without one goes to
     :connection-line    {:conn :line}       a line the client sent
     :connection-closed  {:conn}
-    :conversation-started {:role :wake}     the role's chat wake runs
+    :conversation-started {:role :wake :labels}
+                                            the role's chat wake runs, its
+                                            session starting with :labels
     :conversation-failed  {:role :message}  it could not start
     :agent-line         {:role :line}       a line from the proxy
     :conversation-gone  {:role}             the wake has ended
@@ -84,6 +86,7 @@
   (:require [clojure.string :as str]
             [relay.acp :as acp]
             [relay.core :as core]
+            [relay.inert :as inert]
             [relay.json :as strict]
             [relay.ready :as ready]
             [relay.roster :as roster]
@@ -413,6 +416,8 @@
                         (seq notes) (assoc "notes" (vec notes))))
         (board-changes h)))))
 
+(declare with-links finish-turn)
+
 ;; --- the replay buffer
 
 (def ^:private chunk-kinds #{"agent_message_chunk" "agent_thought_chunk" "user_message_chunk"})
@@ -504,7 +509,7 @@
   (let [{:keys [session replay labels usage]} (get-in h [:convs role])
         h (if labels (write h cid (labels-line session labels)) h)
         h (if usage (write h cid usage) h)
-        h (reduce #(write %1 cid %2) h (:entries replay))]
+        h (reduce #(write %1 cid (with-links %1 %2)) h (:entries replay))]
     (write h cid (workspace/notification-line "_relay/replayed" {"sessionId" session
                                                                  "truncated" (boolean (:dropped replay))}))))
 
@@ -662,6 +667,7 @@
     (if-not c
       h
       (as-> h h
+        (finish-turn h role)
         (reduce (fn [h [rid {:keys [kind state]}]]
                   (cond
                     (= :ending state) (answer h rid {})
@@ -851,7 +857,7 @@
    "agentInfo" {"name" "relay" "title" "relay" "version" "1"}
    "authMethods" []
    ;; relay/keeps: whether a conversation outlives this client.
-   "_meta" {"relay/hub" 1 "relay/keeps" (= :service (:mode h))}})
+   "_meta" {"relay/hub" 1 "relay/keeps" (= :service (:mode h)) "relay/inertText" 1}})
 
 (defn- dispatch-request [h rid msg first?]
   (let [cid (:conn (record h rid))
@@ -965,6 +971,159 @@
       (reduce stop h (sort (keys (:convs h))))
       h)))
 
+;; --- conversation text made inert (relay#104)
+;;
+;; Once a session may hold outside text, relay breaks every link in what
+;; its agent sends before any client sees it, so every client, not only
+;; relay-tui, is sent inert text. Text chunks stream through relay.inert,
+;; one stream per kind, so a word is judged whole. A tool call's text, a
+;; plan and any block that is not text are made inert where they stand.
+;; The live links a message holds go beside it as data, under _meta, and
+;; are added each time a line is written, from the live set as it is
+;; then, so the replay names a link kept since. Lines relay writes itself
+;; (the prompt's mirror, a notice) are not the agent's, and are not
+;; touched.
+
+(def ^:private streamed-kinds #{"agent_message_chunk" "agent_thought_chunk" "user_message_chunk"})
+
+(defn- outside?
+  "Whether a conversation's text may hold outside text: the labels its
+  session started with or any it has had since say so. A session whose
+  labels relay was never told counts as one."
+  [h role]
+  (let [{:keys [start-labels labels]} (get-in h [:convs role])]
+    (or (and (nil? start-labels) (nil? labels))
+        (text/contaminated? (concat start-labels labels)))))
+
+(defn- inert-strings
+  "x with every string value in it made inert, keys left as they are."
+  [x]
+  (cond (string? x) (text/conversation-text x)
+        (map? x) (into {} (map (fn [[k v]] [k (inert-strings v)])) x)
+        (sequential? x) (mapv inert-strings x)
+        :else x))
+
+(defn- inert-block
+  "A content block made inert: a text block's text broken, and any other
+  block (an image, audio, a resource or a link to one) made a text block
+  that names it, broken too, since a client may fetch an image's address
+  with no click."
+  [b]
+  (if-not (map? b)
+    b
+    (let [t (get b "type")]
+      (if (= "text" t)
+        (update b "text" #(text/conversation-text (str %)))
+        (let [r (get b "resource")
+              said (->> [(str "[" (if (string? t) t "block") "]") (get b "name") (get b "title") (get b "uri")
+                         (when (map? r) (get r "uri")) (when (map? r) (get r "text"))]
+                        (filter #(and (string? %) (not (str/blank? %)))))]
+          {"type" "text" "text" (text/conversation-text (str/join " " said))})))))
+
+(defn- inert-tool-content [c]
+  (if-not (map? c)
+    c
+    (case (get c "type")
+      "content" (update c "content" inert-block)
+      "diff" (cond-> c
+               (string? (get c "oldText")) (update "oldText" text/conversation-text)
+               (string? (get c "newText")) (update "newText" text/conversation-text))
+      c)))
+
+(defn- inert-update
+  "An update that is not a streamed text chunk, made inert: a call's
+  title, content and raw input and output, a plan's entries, a session's
+  title. Its locations, which are paths, are left."
+  [u]
+  (cond-> u
+    (string? (get u "title")) (update "title" text/conversation-text)
+    (sequential? (get u "content")) (update "content" #(mapv inert-tool-content %))
+    (map? (get u "content")) (update "content" inert-block)
+    (contains? u "rawInput") (update "rawInput" inert-strings)
+    (contains? u "rawOutput") (update "rawOutput" inert-strings)
+    (sequential? (get u "entries")) (update "entries" (fn [es] (mapv #(if (and (map? %) (string? (get % "content")))
+                                                                          (update % "content" text/conversation-text)
+                                                                          %)
+                                                                       es)))))
+
+(defn- chunk-line
+  "A text chunk of `kind` holding `t`, in session `session`."
+  [session kind t]
+  (workspace/notification-line "session/update"
+                               {"sessionId" session
+                                "update" {"sessionUpdate" kind "content" {"type" "text" "text" t}}}))
+
+(defn- flush-streams
+  "The conversation with every stream's held text sent: `how` is
+  relay.inert/cut when another update goes first, relay.inert/finish at
+  the end of a turn. Returns [h lines]."
+  [h role how]
+  (let [session (get-in h [:convs role :session])]
+    (reduce (fn [[h lines] kind]
+              (let [[st out] (how (get-in h [:convs role :streams kind] inert/empty-stream))
+                    h (assoc-in h [:convs role :streams kind] st)]
+                [h (cond-> lines (not= "" out) (conj (chunk-line session kind out)))]))
+            [h []]
+            (sort (keys (get-in h [:convs role :streams]))))))
+
+(defn- inert-lines
+  "The lines to send for an agent's session/update, from a session that
+  may hold outside text: [h lines]."
+  [h role msg]
+  (let [u (get-in msg ["params" "update"])
+        kind (get u "sessionUpdate")
+        content (get u "content")]
+    (if (and (streamed-kinds kind) (map? content) (= "text" (get content "type")) (string? (get content "text")))
+      ;; Text of one kind ends the words the other kinds were holding.
+      (let [others (remove #{kind} (keys (get-in h [:convs role :streams])))
+            [h before] (reduce (fn [[h lines] k]
+                                 (let [[st out] (inert/cut (get-in h [:convs role :streams k]))]
+                                   [(assoc-in h [:convs role :streams k] st)
+                                    (cond-> lines (not= "" out)
+                                            (conj (chunk-line (get-in h [:convs role :session]) k out)))]))
+                               [h []] (sort others))
+            [st out] (inert/feed (get-in h [:convs role :streams kind] inert/empty-stream) (get content "text"))
+            h (assoc-in h [:convs role :streams kind] st)]
+        [h (cond-> before
+             (not= "" out) (conj (strict/generate (assoc-in msg ["params" "update" "content" "text"] out))))])
+      (let [[h before] (flush-streams h role inert/cut)
+            u (if (and (streamed-kinds kind) (map? content)) (update u "content" inert-block) (inert-update u))]
+        [h (conj before (strict/generate (assoc-in msg ["params" "update"] u)))]))))
+
+(defn- with-links
+  "A line as written to a client: a message chunk's text with the live
+  links it shows listed under _meta, relay/links and
+  relay/linksLeftOut (relay.text/listed). Every other line as it is."
+  [h line]
+  (let [msg (acp/message line)
+        u (get-in msg ["params" "update"])
+        t (get-in u ["content" "text"])]
+    (if (and (= "agent_message_chunk" (get u "sessionUpdate")) (string? t) (str/includes? t "hxxp"))
+      (let [{:strs [links linksLeftOut]} (text/listed (text/shown-links (core/live-links (:state h)) t))]
+        (if (empty? links)
+          line
+          (strict/generate (update-in msg ["params" "update" "_meta"]
+                                      #(assoc (if (map? %) % {}) "relay/links" links "relay/linksLeftOut" linksLeftOut)))))
+      line)))
+
+(defn- emit-lines
+  "Keeps each line for the replay and writes it, with its links, to every
+  connection attached to the conversation."
+  [h role lines]
+  (reduce (fn [h line]
+            (let [sent (with-links h line)]
+              (reduce #(write %1 %2 sent) (remember h role line) (attached h role))))
+          h lines))
+
+(defn- finish-turn
+  "Sends whatever the conversation's streams still hold, at the end of a
+  turn or of the conversation: the words are whole."
+  [h role]
+  (if (get-in h [:convs role :streams])
+    (let [[h lines] (flush-streams h role inert/finish)]
+      (emit-lines h role lines))
+    h))
+
 ;; --- what an agent says
 
 (defn- agent-response [h role line msg]
@@ -989,6 +1148,8 @@
                    (pump h role)))
                (-> h (reply rid (with-id msg id)) (create-session role))))
       :prompt (as-> h h
+                ;; The words held back are whole once the turn is over.
+                (finish-turn h role)
                 ;; Recorded before the client reads the answer, so its next
                 ;; prompt finds the turn over.
                 (end-turn h role (workspace/stop-reason line))
@@ -1010,7 +1171,10 @@
       (= :request kind)
       (send-conv h role (workspace/error-line (get msg "id") -32601 (str "relay's clients do not take " method ".")))
       (= "session/update" method)
-      (reduce #(write %1 %2 line) (-> h (keep-state role msg line) (remember role line)) (attached h role))
+      (let [h (keep-state h role msg line)]
+        (if (outside? h role)
+          (let [[h lines] (inert-lines h role msg)] (emit-lines h role lines))
+          (emit-lines h role [line])))
       ;; The board is the hub's: a proxy has nothing to say about it.
       (str/starts-with? method "_relay/") h
       :else
@@ -1101,7 +1265,8 @@
                     h
                     ;; One opened before the hub asked (relay acp <role>).
                     (assoc-in h [:convs role] {:role role :init :none :next-id 0}))
-                  (update-in [:convs role] assoc :status :running :wake (:wake e))
+                  (update-in [:convs role] assoc :status :running :wake (:wake e)
+                             :start-labels (some-> (:labels e) vec))
                   (create-session role)))
             :conversation-failed
             (-> h (fail-waiters (:role e) -32000 (or (:message e) "relay could not open the conversation."))

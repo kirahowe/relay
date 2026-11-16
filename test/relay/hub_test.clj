@@ -51,7 +51,7 @@
   (let [h (-> (fresh mode) (opened 1))
         [h] (say h 1 (req 1 "initialize" {:protocolVersion 1 :clientCapabilities {}}))
         [h] (say h 1 (req 2 "session/new" {:cwd "/w" :mcpServers [] :_meta {"relay/role" "clerk"}}))
-        [h] (run h {:event :conversation-started :role "clerk" :wake 7})
+        [h] (run h {:event :conversation-started :role "clerk" :wake 7 :labels []})
         [h] (agent h "clerk" (res 1 {:protocolVersion 1}))
         [h] (agent h "clerk" (res 2 {:sessionId "s1"}))]
     h))
@@ -64,8 +64,8 @@
   (let [[_ fx] (say (opened (fresh) 1) 1 (req 0 "initialize" {:protocolVersion 1}))
         [a] (writes fx 1)]
     (is (= 0 (get a "id")))
-    (is (= {"relay/hub" 1 "relay/keeps" true} (get-in a ["result" "_meta"])) "a service keeps conversations")
-    (is (= {"relay/hub" 1 "relay/keeps" false}
+    (is (= {"relay/hub" 1 "relay/keeps" true "relay/inertText" 1} (get-in a ["result" "_meta"])) "a service keeps conversations")
+    (is (= {"relay/hub" 1 "relay/keeps" false "relay/inertText" 1}
            (get-in (first (writes (second (say (opened (fresh :embedded) 1 :origin :stdio) 1 (req 0 "initialize" {}))) 1))
                    ["result" "_meta"]))
         "relay acp on its own does not")
@@ -98,7 +98,7 @@
         [h] (say h 1 (req 1 "initialize" {:protocolVersion 1 :clientCapabilities {:fs {}}}))
         [h fx] (say h 1 (req 2 "session/new" {:cwd "/w" :mcpServers [] :_meta {"relay/role" "clerk"}}))
         _ (is (= [{:effect :start :role "clerk"}] fx))
-        [h fx] (run h {:event :conversation-started :role "clerk" :wake 7})
+        [h fx] (run h {:event :conversation-started :role "clerk" :wake 7 :labels []})
         [init] (map parse (sends fx "clerk"))
         _ (is (= ["initialize" {"protocolVersion" 1 "clientCapabilities" {"fs" {}}}] [(get init "method") (get init "params")])
               "the agent is initialized as the first client asked")
@@ -436,7 +436,7 @@
   (testing "the creator leaves while another waits: the other is answered and attached"
     (let [h (-> (fresh) (opened 1) (opened 2))
           [h] (say h 1 (req 1 "session/new" {:cwd "/a" :_meta {"relay/role" "clerk"}}))
-          [h] (run h {:event :conversation-started :role "clerk" :wake 7})
+          [h] (run h {:event :conversation-started :role "clerk" :wake 7 :labels []})
           [h fx] (agent h "clerk" (res 1 {:protocolVersion 1}))
           [new] (map parse (sends fx "clerk"))
           _ (is (= "session/new" (get new "method")) "the agent is asked for the session")
@@ -448,7 +448,7 @@
   (testing "the agent exits while creating: the creator is answered once"
     (let [h (opened (fresh) 1)
           [h] (say h 1 (req 1 "session/new" {:_meta {"relay/role" "clerk"}}))
-          [h] (run h {:event :conversation-started :role "clerk" :wake 7})
+          [h] (run h {:event :conversation-started :role "clerk" :wake 7 :labels []})
           [h] (agent h "clerk" (res 1 {:protocolVersion 1}))
           [_ fx] (run h {:event :conversation-gone :role "clerk"})]
       (is (= [1] (keep #(get % "id") (writes fx 1)))))))

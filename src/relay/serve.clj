@@ -304,9 +304,10 @@
             (fn []
               (let [r (try (dispatch/run-conversation!
                             sys role {:in (queue-input-stream q taken!) :out out :stop stop
-                                      :on-started (fn [wake]
+                                      :on-started (fn [wake labels]
                                                     (reset! ran true)
-                                                    (enqueue! eng {:event :conversation-started :role role :wake wake})
+                                                    (enqueue! eng {:event :conversation-started :role role :wake wake
+                                                                   :labels labels})
                                                     (some-> started (deliver {:wake wake})))})
                            (catch Throwable t {:error (or (ex-message t) (str (class t)))}))]
                 (.put q ::eof)

@@ -455,6 +455,35 @@
   [address shown]
   (str "\u001b]8;;" address "\u001b\\" shown "\u001b]8;;\u001b\\"))
 
+(defn- anchor-in
+  "The live link a word of shown text holds in its broken form, as
+  [before address shown after], or nil: the word's run from its first
+  hxxp, less at most max-closers link-closers, mends to a live address of
+  the link shape whose broken form is that run."
+  [live ^String word]
+  (when-let [start (str/index-of word "hxxp")]
+    (let [run (subs word start)]
+      (some (fn [n]
+              (let [cut (- (count run) n)]
+                (when (pos? cut)
+                  (let [shown (subs run 0 cut)
+                        after (subs run cut)
+                        address (mend shown)]
+                    (when (and (every? link-closers after) (contains? live address)
+                               (link? address) (= shown (defang address)))
+                      [(subs word 0 start) address shown after])))))
+            (range 0 (inc max-closers))))))
+
+(defn shown-links
+  "The live links text already made safe to show holds in their broken
+  form, in order, each once: what anchored would make hyperlinks of. A
+  reply's links are found this way, in the text as sent, so a replay
+  finds them again (relay#104)."
+  [live text]
+  (if (or (empty? live) (not (str/includes? (str text) "hxxp")))
+    []
+    (vec (distinct (keep #(second (anchor-in live %)) (re-seq #"\S+" (str text)))))))
+
 (defn anchored
   "A line already made safe to show, with each live link in it turned
   into a terminal hyperlink: where a word holds the broken form of a
@@ -469,21 +498,8 @@
     (str line)
     (str/replace (str line) #"\S+"
                  (fn [word]
-                   (if-let [start (str/index-of word "hxxp")]
-                     (let [run (subs word start)
-                           hit (some (fn [n]
-                                       (let [cut (- (count run) n)]
-                                         (when (pos? cut)
-                                           (let [shown (subs run 0 cut)
-                                                 after (subs run cut)
-                                                 address (mend shown)]
-                                             (when (and (every? link-closers after) (contains? live address)
-                                                        (link? address) (= shown (defang address)))
-                                               [address shown after])))))
-                                     (range 0 (inc max-closers)))]
-                       (if-let [[address shown after] hit]
-                         (str (subs word 0 start) (osc8 address shown) after)
-                         word))
+                   (if-let [[before address shown after] (anchor-in live word)]
+                     (str before (osc8 address shown) after)
                      word)))))
 
 (defn break-cut-word
@@ -657,24 +673,26 @@
             (do (vswap! counts update kind (fnil inc 0)) (recur (inc i) prev))))))
     [(str sb) @counts]))
 
-(def ^:private emoji-glue #{0x200D 0xFE0E 0xFE0F})
-
 (defn conversation-text
   "Outside text of a conversation as relay sends it to a client
-  (relay#104): hidden characters taken out, but for the joiner or
-  selector that holds an emoji together (as sanitize keeps them), then
-  every link broken (defang). What strip keeps that is still hidden,
-  the unassigned code points of the emoji blocks, is taken out too: no
-  client may get a hidden character raw, and escaping it would double
-  every backslash in the reply. Taking hidden characters out first means
-  one inside a host cannot hide it from defang. `s` must hold whole
-  words only: a word cut in two is judged in two halves."
+  (relay#104): every link broken (defang), then every hidden character
+  shown as \\u{XXXX} and every backslash as two, as a card shows them,
+  except the joiner or selector that holds an emoji together, which is
+  kept as it is (Kira, 2026-11-15: \"Show them, keep emoji whole\").
+  `s` must hold whole words only: a word cut in two is judged in two
+  halves."
   [s]
-  (let [t (defang (first (strip (str s))))
+  (let [cps (vec (iterator-seq (.iterator (.codePoints ^String (defang (str s))))))
         sb (StringBuilder.)]
-    (doseq [cp (iterator-seq (.iterator (.codePoints ^String t)))]
-      (when-not (and (hidden? cp) (not (emoji-glue cp)) (not (#{9 10} cp)))
-        (.appendCodePoint sb (int cp))))
+    (loop [i 0 prev nil]
+      (when (< i (count cps))
+        (let [cp (cps i)]
+          (cond
+            (and (hidden? cp) (not (emoji-glue? cp prev (get cps (inc i)))))
+            (.append sb (format "\\u{%04x}" cp))
+            (= 92 cp) (.append sb "\\\\")
+            :else (.appendCodePoint sb (int cp)))
+          (recur (inc i) cp))))
     (str sb)))
 
 (def ^:private cjk #{"Han" "Hiragana" "Katakana" "Hangul"})
