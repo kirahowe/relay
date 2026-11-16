@@ -72,14 +72,6 @@
 | --- | --- | --- | --- |
 | [130](130-break-an-address-that-a-character-with-no-width-is-hiding-in.md) | Break an address that a character with no width is hiding in | bug | P2 |
 
-### Review
-
-| ID | Title | Type | Priority |
-| --- | --- | --- | --- |
-| [120](120-break-the-links-in-a-role-s-title-an-outsider-may-have.md) | Break the links in a role's title an outsider may have shaped | bug | P1 |
-| [136](136-let-a-text-free-update-pass-without-cutting-a-held-word.md) | Let a text-free update pass without cutting a held word | bug | P2 |
-| [134](134-break-every-string-in-an-agent-s-update-unless-its-key-is.md) | Break every string in an agent's update unless its key is known safe | bug | P3 |
-
 ### Blocked
 
 | ID | Title | Type | Priority |
@@ -121,6 +113,7 @@
 | [98](98-decide-what-a-button-on-a-role-built-screen-may-do.md) | Decide what a button on a role-built screen may do | feature | P1 |
 | [104](104-make-conversation-text-safe-in-relay-s-proxy-for-every-acp.md) | Make conversation text safe in relay's proxy for every ACP client | bug | P1 |
 | [118](118-carry-a-live-link-as-data-beside-inert-text.md) | Carry a live link as data beside inert text | feature | P1 |
+| [120](120-break-the-links-in-a-role-s-title-an-outsider-may-have.md) | Break the links in a role's title an outsider may have shaped | bug | P1 |
 | [3](3-run-agentloop-s-live-smoke-tests-from-a-flag-not-an-env-var.md) | Run agentloop's live smoke tests from a flag, not an env var | chore | P2 |
 | [5](5-support-reminder-sections-in-rem.md) | Support reminder sections in rem | feature | P2 |
 | [7](7-add-bb-deploy-and-bb-rollback-for-kira-to-run.md) | Add bb deploy and bb rollback for Kira to run | feature | P2 |
@@ -147,6 +140,7 @@
 | [97](97-keep-role-built-surfaces-in-the-log-and-send-them-to-every.md) | Keep role-built surfaces in the log and send them to every client | feature | P2 |
 | [100](100-draw-surface-cards-on-relay-tui-s-board.md) | Draw surface cards on relay-tui's board | feature | P2 |
 | [124](124-break-a-host-that-follows-another-host-s-port-with-nothing.md) | Break a host that follows another host's port with nothing between | bug | P2 |
+| [136](136-let-a-text-free-update-pass-without-cutting-a-held-word.md) | Let a text-free update pass without cutting a held word | bug | P2 |
 | [21](21-make-agentloop-cleanroom-s-reader.md) | Make agentloop cleanroom's reader | feature | P3 |
 | [22](22-show-spend-per-role-per-week-in-relay-status.md) | Show spend per role per week in relay status | feature | P3 |
 | [23](23-decide-who-syncs.md) | Decide who syncs ~/Sync/relay | chore | P3 |
@@ -163,6 +157,7 @@
 | [66](66-reach-the-relay-service-from-the-phone-over-the-tailnet.md) | Reach the relay service from the phone over the tailnet | feature | P3 |
 | [99](99-the-live-shell-test-fails-while-apple-s-container-service.md) | The live shell test fails while Apple's container service is stopped | bug | P3 |
 | [125](125-keep-link-breaking-quick-on-one-very-long-word.md) | Keep link breaking quick on one very long word | bug | P3 |
+| [134](134-break-every-string-in-an-agent-s-update-unless-its-key-is.md) | Break every string in an agent's update unless its key is known safe | bug | P3 |
 
 ## Dropped
 

@@ -70,3 +70,4 @@ relay's message boundary should be the same.
   still sends the held word first. That path goes through finish-turn
   before the session counts as clean, and its test
   (a-session-that-turns-clean-sends-what-it-held-first) is unchanged.
+- 2026-11-16 approved: 2026-11-16: Kira accepted it in the coordinating session's question dialog; every criterion has its receipt.

@@ -151,3 +151,4 @@ before.
   `web:https://evil.test/?d=...` holds a whole address. Labels are data
   that no client is meant to show, and relay-tui does not show them. It
   went to the coordinating session to file.
+- 2026-11-16 approved: 2026-11-16: Kira accepted it in the coordinating session's question dialog; every criterion has its receipt.

@@ -1,6 +1,6 @@
 {:id 134
  :title "Break every string in an agent's update unless its key is known safe"
- :status :review
+ :status :done
  :type :bug
  :priority :p3
  :created "2026-11-15"

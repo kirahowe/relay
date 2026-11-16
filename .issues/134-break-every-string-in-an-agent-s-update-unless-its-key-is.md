@@ -112,3 +112,4 @@ Related: relay#104, relay#135.
   as they are because only agentloop, which is trusted, could cause
   them: a field outside params, and an agent notification other than
   session/update, which agentloop does not send.
+- 2026-11-16 approved: 2026-11-16: Kira accepted it in the coordinating session's question dialog; every criterion has its receipt.
