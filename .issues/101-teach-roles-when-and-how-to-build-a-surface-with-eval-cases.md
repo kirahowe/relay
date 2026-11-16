@@ -77,3 +77,30 @@ Needs relay#97.
   of a designer role (relay#97 session).
 - 2026-11-15, from the relay#93 session: relay#97, the only blocker,
   is done, so this is ready.
+- 2026-11-16 (relay-ae): two cases, `packing-by-bag` (capability) and
+  `plain-list-stays-a-checklist` (regression), each with an oracle and
+  foils that pass `bb test`. The graders read cards through a new
+  `:card` kind in `relay.scenario`. A checklist's items count as its
+  boxes, so a checklist whose headings are items of their own fails the
+  heading grader, as relay-32 asked: a bag there is a box to tick.
+  `relay.eval-test/the-operator-asks-for-surfaces-in-their-own-words`
+  checks that no memo in a `:surfaces` case names a surface, the
+  catalog or a kind of card.
+- 2026-11-16, Haiku round 1, `20261116T035909Z-0386` (prompt digest
+  `0a511b158ba0`): packing 0/3, plain list 3/3. Every packing trial
+  weighed a surface and chose "the simpler checklist", with items like
+  "Blue duffel: sleeping bag", and one made the ferry line an item. The
+  board section said only to use a fixed kind when it fits, and never
+  what a checklist cannot show. All three also read my "reminder up top"
+  as one for the operator's reminder lists and made a calendar event,
+  which was the case's fault. No surface was refused, since none was
+  tried.
+- Changed after round 1: the case's words are now "a line at the top"
+  (version 2). The board section of `resources/AGENTS.md` now says a
+  checklist is one flat list, that items in groups the operator named or
+  a line that is not a step need a surface, and that a group's name
+  written into every item is the sign. Its examples (rooms, days, an
+  address, a deadline) are not the case's, so the case does not test its
+  own wording. `card_add`'s description says the same in a clause.
+- Round 2 waits: the live run was refused by this session's permission
+  check, as spending money, so it needs Kira's approval.

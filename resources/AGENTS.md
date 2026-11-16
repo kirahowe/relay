@@ -438,13 +438,19 @@ rev when you last read it (its header shows it), with an edit, so you
 never overwrite a newer change. The operator changes cards too, so read
 a card again before you rely on it.
 
-When a checklist, a tracker or a note does not fit what the operator
-needs to see, lay the card out yourself as a surface: text, rows and
-columns, lists drawn from data, and boxes the operator ticks. Read
-`cards` with `catalog` first. It says what a surface may hold and how
-its parts read the data. relay refuses anything else and says what to
-change. Use one of the three fixed kinds when it fits, since it is less
-to keep right.
+A checklist is one flat list of steps. When what the operator needs to
+see has more shape than that, lay the card out yourself as a surface:
+text, rows and columns, lists drawn from data, and boxes the operator
+ticks. A checklist does not fit when its items fall into groups the
+operator has named, such as rooms or days, or when the card needs a line
+that is not a step, such as an address or a deadline. If you catch
+yourself writing a group's name into every item, or making such a line
+an item to tick, make a surface instead: a heading for each group with
+its boxes under it, and the line as text. Read `cards` with `catalog`
+first. It says what a surface may hold and how its parts read the data.
+relay refuses anything else and says what to change. When the steps
+are one flat list, a tracker's grid or a note, use that kind, since it
+is less to keep right.
 
 A surface's text is plain text, so leave out Markdown links, tables and
 code. The card already has a frame with its title on it, so do not

@@ -1,16 +1,18 @@
 ;; Eval case: the operator asks the steward to help keep their packing
 ;; straight for a weekend away, bag by bag, with things to tick off as
-;; they go in and a reminder about the last ferry at the top. No fixed
+;; they go in and a line about the last ferry at the top. No fixed
 ;; kind of card fits that: a checklist has no headings and no text above
 ;; its items, and a note has no boxes. So the steward should lay out one
-;; surface: the reminder, then each bag as a heading with its own items
+;; surface: the ferry line, then each bag as a heading with its own items
 ;; as boxes under it. The operator's words name no surface, catalog or
 ;; kind of card (relay#101). All of it is made up: Pell Lake and its
-;; ferry do not exist. See relay.eval.
-{:doc "Packing by bag, with a reminder on top, becomes one surface that relay accepts."
+;; ferry do not exist. Version 1 asked for a "reminder" at the top, which
+;; every live trial read as one for the operator's reminder lists. See
+;; relay.eval.
+{:doc "Packing by bag, with the ferry time on top, becomes one surface that relay accepts."
  :live? true
 
- :eval {:id "packing-by-bag" :version 1 :tier :capability
+ :eval {:id "packing-by-bag" :version 2 :tier :capability
         :tags [:house :cards :surfaces] :trials 3}
 
  :clock "2026-11-16T09:00"
@@ -200,7 +202,7 @@
 
  :steps
  [{:run ["memo" "steward" "-s" "Packing for the lake"
-         "-m" "We're off to the cabin at Pell Lake on Friday and I always forget something. Can you help me keep my packing straight this week? I pack by bag. The blue duffel gets the sleeping bag, rain jacket and boots. The backpack gets the headlamp, first-aid kit and water filter. The food bin gets the camp stove, coffee and pancake mix. I'd like to tick things off as they go in and see it bag by bag. And put a reminder up top that the last ferry leaves at 6:40pm, so I'm packed by 5."]}
+         "-m" "We're off to the cabin at Pell Lake on Friday and I always forget something. Can you help me keep my packing straight this week? I pack by bag. The blue duffel gets the sleeping bag, rain jacket and boots. The backpack gets the headlamp, first-aid kit and water filter. The food bin gets the camp stove, coffee and pancake mix. I'd like to tick things off as they go in and see it bag by bag. And at the top, a line saying the last ferry leaves at 6:40pm, so I'm packed by 5."]}
   {:tick 1}]
 
  :assert

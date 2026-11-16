@@ -781,7 +781,8 @@
     :grant :private
     :description (str "Put a card on the operator's board, for work they come back to over days or a status"
                       " worth a glance: a checklist (`items`), a tracker of rows by columns, such as accounts"
-                      " by month (`rows`, `columns`), or a note (`text`). When none of those fits, lay the"
+                      " by month (`rows`, `columns`), or a note (`text`). When none of those fits, such as items"
+                      " in groups under headings or text beside the boxes, lay the"
                       " card out yourself as a surface (`components`, `data`): read `cards` with `catalog`"
                       " first, which says what a surface may hold. Keep a card current with card_op and"
                       " archive it when it is finished.")
