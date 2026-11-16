@@ -1,0 +1,11 @@
+{:id 136
+ :title "Let a text-free update pass without cutting a held word"
+ :status :ready
+ :type :bug
+ :priority :p2
+ :created "2026-11-15"
+ :updated "2026-11-15"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "136-let-a-text-free-update-pass-without-cutting-a-held-word.md"}

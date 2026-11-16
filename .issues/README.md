@@ -47,6 +47,7 @@
 | [112](112-let-kira-put-a-surface-back-as-it-was.md) | Let Kira put a surface back as it was | feature | P2 |
 | [117](117-carry-a-live-link-in-a-push-as-an-action-and-check-the.md) | Check what Proton Mail on the phone follows in relay's mail | feature | P2 |
 | [126](126-break-a-link-whose-scheme-has-no-double-slash.md) | Break a link whose scheme has no double slash | bug | P2 |
+| [136](136-let-a-text-free-update-pass-without-cutting-a-held-word.md) | Let a text-free update pass without cutting a held word | bug | P2 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
 | [83](83-speed-up-the-slowest-remaining-test-namespaces.md) | Speed up the slowest remaining test namespaces | chore | P3 |
 | [86](86-fix-agentloop-s-flaky-testgroupleaderisasentinel.md) | Fix agentloop's flaky TestGroupLeaderIsASentinel | bug | P3 |
