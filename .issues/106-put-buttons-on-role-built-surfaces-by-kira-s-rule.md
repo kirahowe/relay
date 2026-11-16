@@ -126,6 +126,7 @@ Mine:
 Needs relay#97. relay-tui's side builds on relay#100.
 
 ## Log
+
 - 2026-11-15, from the relay#93 session: relay#97, the only blocker,
   is done, so this is ready.
 - 2026-11-16: relay's side built: Button in the catalog, the `press`
@@ -212,3 +213,4 @@ Needs relay#97. relay-tui's side builds on relay#100.
   question of its own after its three rounds: "Land once round 3's
   fixes pass", meaning `make check` and a clean joint `bb verify`, with
   no fourth round.
+- 2026-11-17 approved: 2026-11-17: Kira, in the coordinating session: wrap up the phase and close what is in review. The review criterion is not met as written; she chose to land after three rounds on each side (see the Log).

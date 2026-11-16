@@ -1,11 +1,11 @@
 {:id 107
  :title "Let Kira fill in a form a role built"
- :status :blocked
+ :status :ready
  :type :feature
  :priority :p2
  :created "2026-11-14"
- :updated "2026-11-14"
+ :updated "2026-11-17"
  :tags #{}
- :blocked-by #{106}
+ :blocked-by #{}
  :related #{}
  :details "107-let-kira-fill-in-a-form-a-role-built.md"}

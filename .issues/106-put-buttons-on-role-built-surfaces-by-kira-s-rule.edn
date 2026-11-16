@@ -1,6 +1,6 @@
 {:id 106
  :title "Put buttons on role-built surfaces by Kira's rule"
- :status :review
+ :status :done
  :type :feature
  :priority :p2
  :created "2026-11-14"

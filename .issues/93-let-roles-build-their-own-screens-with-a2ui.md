@@ -244,3 +244,11 @@ epic only with the architect's reason in the Log below.
   shows a new surface (relay#111, relay#113), the form needs no data of
   relay's own (relay#114), and putting a surface back (relay#112) can wait
   until Kira has used it.
+- 2026-11-17, the coordinating session: closed on Kira's word, ending this
+  phase ("no more scope creep, no more rounds. anything outstanding gets
+  flagged to investigate later"). Done in it: #94, #95, #96, #97, #98,
+  #100, #101, #104, #106, #118, #130, and the side fixes filed along the
+  way. Carried over as ordinary issues, outside any epic: #107 (forms,
+  now ready), and the questions for Kira #102, #111, #113 and #114, plus
+  #112 (ready). The process this phase ran on is relay#150.
+- 2026-11-17 approved: 2026-11-17: closed by Kira's word to end the phase; what carried over is in the Log.
