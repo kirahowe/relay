@@ -124,20 +124,20 @@ Needs relay#97.
   own wording. `card_add`'s description says the same in a clause.
 - Round 2 waits: the live run was refused by this session's permission
   check, as spending money, so it needs Kira's approval.
-- 2026-11-17, Haiku round 2, `20261117T012540Z-2ef8` (prompt digest
+- 2026-11-16, Haiku round 2, `20261117T012540Z-2ef8` (prompt digest
   `b24e1f84042c`): packing 3/3, plain list 3/3, $0.0125. Each packing
   trial read the catalog, laid out the ferry line, then each bag's name
   as a text with its boxes under it, and relay took the first
   `card_add`. Left as is: no trial dressed a bag's name as a heading,
   and one showed "Blue duffel" twice. The graders do not ask for either,
   and I did not tune for them.
-- 2026-11-17, Opus once, `20261117T012639Z-fddf`: both 1/1, $0.33. On
+- 2026-11-16, Opus once, `20261117T012639Z-fddf`: both 1/1, $0.33. On
   packing it built the surface from a list template, and also added a
   calendar entry for 5pm Friday, two facts and a packing skill. That is
   the steward's ordinary care, not something this case grades.
 - Round 3 was not needed. Kira allowed live runs up to a couple of
   dollars on 2026-11-16, and the rounds came to $0.35 in all.
-- 2026-11-17: `bb verify` passed every step on the chain rebased onto
+- 2026-11-16: `bb verify` passed every step on the chain rebased onto
   `integration` b1f6e8ad (relay at kysqppyu, relay-tui, agentloop and
   webtool from my `ae` workspaces): agentloop, relay-tui, catalog,
   webtool, eventkit, relay, fuzz and pentest. relay-32 read the three

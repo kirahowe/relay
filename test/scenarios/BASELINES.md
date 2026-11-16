@@ -404,7 +404,7 @@ Every wake ran, so the model's API takes the new tool schemas, in which
 `card_op`'s `value` has no type and `components` is a list of objects.
 No case asks a role to build a surface yet. That is relay#101.
 
-## When a role lays out a surface (relay#101, 2026-11-17)
+## When a role lays out a surface (relay#101, 2026-11-16)
 
 Two cases ask the steward to keep something on the board in the
 operator's own words: `packing-by-bag` (capability), which only a
