@@ -109,22 +109,36 @@ Swift around `NSDataDetector(types: .link)`, the one used for relay#124.
 
 A first draft, mine, for whoever builds this to tighten.
 
-- [ ] relay-tui: none of the inputs in the table, and none of the
+- [x] relay-tui: none of the inputs in the table, and none of the
   reviewer's, reaches the screen from a contaminated session with an
   address that a finder skipping zero-width characters would follow. A
   test covers each one and judges with its own rule for what is skipped,
   not with `Defang`'s.
-- [ ] relay-tui: the Markdown case, `https:*`+U+FE0F+U+20E3+
+  - Receipt: relay-tui osmrrqys 74add994: `TestNoCharacterOfNoWidthHidesAnAddressFromTheBreaker`
+    and `TestNoCharacterOfNoWidthHidesAnAddressInRelaysText` in
+    internal/render/nowidth_test.go, every table and reviewer input in a
+    reply, a thought, a call, the status line and a notice, judged by
+    `followable(skipped(row))`. `skipped` is the tests' own, built from
+    Go's Unicode tables and a written-out list.
+  - Receipt: `TestASpacingMarkOrAPrefixHidesNoAddress`, the spacing
+    marks and prefixes the review found (U+0BBE, U+302E, U+0D4E, U+A8FA
+    among them), on both paths; it fails 70 times without the fix.
+- [x] relay-tui: the Markdown case, `https:*`+U+FE0F+U+20E3+
   `//evil.test*`, is drawn by the reply path with no such address.
+  - Receipt: `TestMarkdownCannotMoveKeycapGlueIntoAnAddress`, through
+    the reply path with and without `relay/inertText`.
 - [x] relay: the same inputs go through `relay.text/for-operator` in a
   test. The three things relay leaves as written are broken, or the Log
   says why each may stay.
   - Receipt: `relay.text-test/a-mark-in-an-address-does-not-hide-it-from-the-breaker`,
     the table's rows and the reviewer's, and the three things under
     "the three things relay used to leave as written".
-- [ ] `hidden?` takes U+1107F and U+1BC9D in relay and in relay-tui, or
+- [x] `hidden?` takes U+1107F and U+1BC9D in relay and in relay-tui, or
   the Log says why not. (relay's half done:
   `relay.text-test/the-two-marks-that-draw-as-nothing-are-hidden`.)
+  - Receipt: relay-tui's `blankGlyph` (internal/core/escape.go) takes
+    both, as relay's `renders-blank` does; `TestDropHidden` and
+    `TestInvisibleCodePointsAreEscaped` cover them.
 - [x] Ordinary text in scripts that use marks comes out unchanged. A
   test covers combining marks on Latin letters, a script with vowel
   signs and conjoining jamo.
@@ -144,8 +158,16 @@ A first draft, mine, for whoever builds this to tighten.
   relay#104 as the root fix with no stopgap in relay-tui.
   - Receipt: Kira confirmed it on 2026-11-17 in the coordinating
     session's question dialog (Log).
-- [ ] `bb verify` passes, and an adversarial Codex review finds nothing
+- [x] `bb verify` passes, and an adversarial Codex review finds nothing
   in scope.
+  - Receipt: `bb verify` on 2026-11-17 with relay at puznxukn and
+    relay-tui exported at osmrrqys 74add994: every step passes, relay
+    1268/1268, pentest 33/33, s27 and fuzz passing.
+  - Receipt: Kira, 2026-11-16: "don't worry about another codex round,
+    we can substitute agent reviewers here". Fresh read-only agent
+    reviews of osmrrqys: round 1 found the spacing marks and prefixes
+    missing (fixed); round 2, on the fix, found nothing in scope, after
+    comparing every code point with unicode-width 0.2.3's table.
 
 ## Plan
 
@@ -282,3 +304,13 @@ breaker is the only one.
 
 - 2026-11-17, the coordinating session: Kira confirmed the triage in its
   question dialog ("Confirm it").
+- 2026-11-17, the relay#95 session (relay-34): the three relay-tui
+  criteria are met in osmrrqys 74add994, on relay-tui `integration`
+  zwuyswrm. relay-tui's own breaker (used against an older relay) and
+  its check on rows as drawn read a word with every character of no
+  cell skipped, as Alacritty's width table counts them, and break the
+  skipped form where it holds a link the word does not. relay's inert
+  text is drawn as before: of relay's 200,000 conversation strings,
+  197,875 exactly as sent before and after the change, no row
+  followable. A Codex round was replaced by agent reviews at Kira's word.
+

@@ -71,7 +71,7 @@
 | [147](147-teach-relay-macos-the-button-of-relay-106.md) | Teach relay-macos the Button of relay#106 | feature | P3 |
 | [148](148-keep-a-button-label-holding-from-reading-as-two-buttons.md) | Keep a button label holding ] [ from reading as two buttons | bug | P3 |
 
-### In progress
+### Review
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
