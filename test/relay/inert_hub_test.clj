@@ -117,7 +117,7 @@
                      (update-line {:sessionUpdate "agent_message_chunk"
                                    :content {:type "resource_link" :name "report" :uri "https://exfil.example/r?d=1"}}))]
     (is (= ["text" "text"] (map #(get-in % ["content" "type"]) ws)))
-    (is (= ["[image] hxxps://exfil[.]example/p[.]png?d=SECRET" "[resource_link] report hxxps://exfil[.]example/r?d=1"]
+    (is (= ["image hxxps://exfil[.]example/p[.]png?d=SECRET" "resource_link report hxxps://exfil[.]example/r?d=1"]
            (map #(get-in % ["content" "text"]) ws)))))
 
 (deftest hidden-characters-are-shown-and-emoji-kept-whole

@@ -25,13 +25,22 @@
 
 (defn- break-cut
   "A piece of a cut word: made safe, then every dot and colon broken, so
-  no scheme or host survives in it or across the cut, and a closing
-  bracket escaped, so no Markdown link forms across it either."
+  no scheme or host survives in it or across the cut. Then, last, the
+  Markdown a link needs is escaped once more, since breaking a colon
+  before a ( makes a ]( of its own: every ]( and ]:, and every closing bracket
+  but those of relay's own [.] and [:], so no link forms in the piece or
+  across the cut."
   [piece]
   (-> (text/conversation-text piece)
       (str/replace #"(?<!\[)\.(?!\])" "[.]")
       (str/replace #"(?<!\[):(?!\])" "[:]")
-      (str/replace #"(?<!\[[.:])\](?!\()" "\\]")))
+      (str/replace "](" "]\\(")
+      (str/replace "]:" "]\\:")
+      (str/replace #"(?<!\[[.:]|\\)\](?!\\\()" (str/re-quote-replacement "\\]"))
+      ;; Its ends meet the pieces either side: no ] may end it and no (
+      ;; begin it unescaped, relay's own [.] and [:] included.
+      (str/replace #"(?<!\\)\]$" (str/re-quote-replacement "\\]"))
+      (str/replace #"^\(" (str/re-quote-replacement "\\("))))
 
 (defn- last-space
   "The index just after the last space in s, or nil."

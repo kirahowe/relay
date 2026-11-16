@@ -1016,7 +1016,9 @@
       (if (= "text" t)
         (update b "text" #(text/conversation-text (str %)))
         (let [r (get b "resource")
-              said (->> [(str "[" (if (string? t) t "block") "]") (get b "name") (get b "title") (get b "uri")
+              ;; The block's type as a plain word: brackets here could
+              ;; join the text either side into a Markdown link.
+              said (->> [(if (string? t) t "block") (get b "name") (get b "title") (get b "uri")
                          (when (map? r) (get r "uri")) (when (map? r) (get r "text"))]
                         (filter #(and (string? %) (not (str/blank? %)))))]
           {"type" "text" "text" (text/conversation-text (str/join " " said))})))))

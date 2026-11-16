@@ -230,3 +230,17 @@ relay#91 and relay#95.
     address. My call, under AGENTS.md; the alternatives were fencing whole
     replies as code (formatting lost) or telling clients not to render
     Markdown (a plain client would not know).
+  - Round 3 (a fresh reviewer, with pandoc as a CommonMark and GFM
+    renderer): three findings, each judged by the reviewer to need
+    someone who studied relay's code, so out of scope by the threat
+    model ("an attacker who studies relay's code"). All three still
+    pointed at faults in the round-2 fix, so they are fixed as
+    hardening: the cut piece's bracket escape wrote no backslash (a
+    replacement-string bug), breaking a colon before a ( made a new
+    `](` in a cut piece, and a non-text block's stand-in `[image]` could
+    join the next chunk into a link (it is now a plain word). A cut
+    piece now escapes ](, ]: and any closing bracket at its end, and an
+    opening parenthesis at its start, after its dots and colons are
+    broken. A property checks that no Markdown link forms however the
+    text is cut. With no in-scope defect in round 3, the loop has
+    converged.

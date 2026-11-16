@@ -71,3 +71,23 @@
   (is (= ["" "hello "] (map second [(inert/feed inert/empty-stream "hel")
                                     (inert/feed (first (inert/feed inert/empty-stream "hel")) "lo world")])))
   (is (= "see hxxps://evil[.]com/x" (run ["see htt" "ps://evil.com/x"]))))
+
+;; --- relay#104's third review round: Markdown across a cut
+
+(def gen-markdown
+  (gen/fmap #(apply str %)
+            (gen/vector (gen/elements ["!" "[" "]" "(" ")" "x" ":" "." "//134744072/p" "<img src=//1/p>" " " "a" "]:"
+                                       "[x]" "(//1/p?d=S)" "![x]" "[1]: //e/x"])
+                        0 14)))
+
+(defn- live-markdown?
+  "Whether text holds an unescaped piece of CommonMark that makes a link,
+  an image or HTML: ]( or ]: after a bracket no backslash escapes, or <."
+  [s]
+  (boolean (re-find #"(?<!\\)\]\(|(?<!\\)\]:|(?<!\\)<" s)))
+
+(defspec no-markdown-link-forms-however-the-text-is-cut 2000
+  (prop/for-all [s gen-markdown points (gen/vector gen/nat 0 6) cuts (gen/vector gen/boolean 0 7)]
+    (let [cs (chunks s points)
+          steps (mapcat (fn [c cut?] (if cut? [c :cut] [c])) cs (concat cuts (repeat false)))]
+      (not (live-markdown? (run steps))))))
