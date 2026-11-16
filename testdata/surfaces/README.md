@@ -15,6 +15,10 @@ its renderer tests.
 surfaces. `hostile` was written by a session that read outside text: it
 holds an address joined from two pieces, an escape sequence, a
 zero-width character, a right-to-left override and one live link.
+`buttons` (relay#106) has a button of each kind in every item of a
+list, one that sets the item's box and one that tells the role, and one
+more below the list. It was written after reading outside text, so the
+label an item gives its button has its link broken.
 
 This copy, in relay, is the source. To change a card, change the surface,
 run `bb surfaces`, which writes every card again, and copy the directory

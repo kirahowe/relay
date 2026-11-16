@@ -2,13 +2,17 @@
   "Buttons on a role-built surface (relay#106), by Kira's rule in
   relay#98: a press tells the role that owns the card, in a memo relay
   writes, or sets a box on the same card with no model turn. Nothing else."
-  (:require [clojure.string :as str]
+  (:require [babashka.fs :as fs]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [clojure.test.check :as tc]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
             [relay.core :as core]
             [relay.core-test :refer [cfg t0]]
+            [relay.inbound :as inbound]
+            [relay.json :as strict]
+            [relay.log :as log]
             [relay.surfaces :as surfaces]
             [relay.tools :as tools]
             [relay.workspace :as workspace]))
@@ -257,3 +261,40 @@
                                ;; the card and the memos can change.
                                (= (dissoc state :cards :next-seq :last-at) (dissoc after :cards :next-seq :last-at))))))))))]
     (is (:pass? result) (pr-str (select-keys result [:seed :shrunk :fail])))))
+
+;; --- through a relay on artificial data
+
+(defn- with-relay [f]
+  (let [dir (str (fs/create-temp-dir {:prefix "relay-buttons"}))
+        data (str dir "/data")]
+    (log/init! data)
+    (spit (str data "/relay.edn")
+          (pr-str {:timezone "UTC" :default-harness :a
+                   :harnesses {:a {:kind :agentloop :api-key-command ["true"] :bin "/nonexistent"}}}))
+    (try
+      (let [sys (inbound/system data)]
+        (inbound/submit! sys {:type :role/add :actor "operator" :args {:id "hub" :title "hub" :instructions "x"}})
+        (f sys data))
+      (finally (fs/delete-tree dir)))))
+
+(deftest the-operator-presses-from-the-command-line-and-a-role-cannot
+  (with-relay
+    (fn [sys data]
+      (let [relay (fn [& args]
+                    (update ((requiring-resolve 'relay.cli/execute) (into ["--data" data] args))
+                            :out #(if (string? %) % (str/join "\n" %))))
+            added (tools/call! sys "hub" "card_add" (strict/parse (strict/generate packing) {:keywords? true}) ["private"])
+            id (parse-long (second (re-find #"Added card (\d+)" (str (:ok added)))))
+            state #(inbound/current-state sys)]
+        (testing "the card's text form shows each button and what it does"
+          (is (str/includes? (:out (relay "card" (str id))) "[press] Plan the route  go tells you: plan_route")))
+        (testing "a press that tells the role says so"
+          (is (= "Told hub you pressed it."
+                 (str/trim (:out (relay "card" (str id) "press" "--component" "go" "--seen" (str id))))))
+          (is (some #(= {:card id :component "go"} (:press %)) (vals (:memos (state))))))
+        (testing "a press that sets a box is its input"
+          (relay "card" (str id) "press" "--component" "done__1" "--seen" (str (:rev (core/card (state) id))))
+          (is (true? (get-in (core/card (state) id) [:surface :data "items" 1 "done"]))))
+        (testing "a role's call of press does not fit card_op"
+          (is (some? (tools/input-problem (:parameters (get (tools/offered (:config sys) "hub") "card_op"))
+                                          {:card id :op "press" :component "go" :seen id}))))))))

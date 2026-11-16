@@ -93,7 +93,7 @@
 
 ;; --- the fixtures relay-tui draws
 
-(def fixtures ["checklist" "note" "hostile"])
+(def fixtures ["checklist" "note" "hostile" "buttons"])
 
 (defn- fixture-card
   "The card a fixture's surface makes, as a client is sent it."

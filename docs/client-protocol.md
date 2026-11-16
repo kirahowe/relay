@@ -97,13 +97,13 @@ command line instead.
 - Scope: connection.
 - Params: `{"card": int, "op": string}` and the op's fields: `item`,
   `row`, `column` (ints), `state` (`"open"`, `"done"` or `"skip"`),
-  `text`, `components` (a list), `path` (a string), `value` (any JSON)
-  and `seen` (the rev the client last saw). The ops are
+  `text`, `components` (a list), `path` (a string), `value` (any JSON),
+  `component` (a string) and `seen` (the rev the client last saw). The ops are
   `retitle`, `archive`, `restore`, `add`, `tick`, `untick`, `edit`,
   `remove` (checklists), `set`, `add_row`, `add_column`, `rename_row`,
   `rename_column`, `remove_row`, `remove_column` (trackers), `write`
-  (notes) and `input`, `data`, `components` (surfaces, described under
-  a surface card below); `relay.cards/ops` has the fields each needs.
+  (notes) and `input`, `data`, `components`, `press` (surfaces, described
+  under a surface card below); `relay.cards/ops` has the fields each needs.
   Any other parameter, `sessionId` included, is refused and named, so a
   typo such as `iten` or `sen` fails instead of passing as success.
 - Answer: `{"card": Card, "changed": bool}`. `changed` is false when the
@@ -652,8 +652,16 @@ fields every card has, no `progress`, and `surface`, which carries
 - The components are Text (`text`, `variant` of `"body"` or
   `"caption"`), Row, Column and List (`children`; a List may have
   `direction` of `"vertical"` or `"horizontal"`), Card (`child`), Divider
-  (`axis` of `"horizontal"` or `"vertical"`) and CheckBox (`label`,
-  `value`).
+  (`axis` of `"horizontal"` or `"vertical"`), CheckBox (`label`,
+  `value`) and Button (`child`, `action`, and `variant` of `"primary"`).
+- A Button's `child` is always a Text of one line, the label the
+  operator presses. Its `action` is one of two, resolved:
+  `{"event": {"name": "plan_route"}}`, which tells the role that owns
+  the card, or `{"functionCall": {"@call": "relay:setInput", "args":
+  {"path": "/items/1/done", "value": true}}}`, which sets the box bound
+  to that path. A client does not run either itself: it sends `press`
+  (below) and draws what relay answers. A client may show which of the
+  two a button does, from `action`.
 - A Text's `text` and a CheckBox's `label` are plain text, not Markdown.
   When `surface.outsider` is false, a client may dress a Text as it
   dresses a note card: `**bold**`, a `#` heading line and `-` list
@@ -728,6 +736,46 @@ relay's refusals (-32000), which a client shows as they are:
 | `Nothing on card 1840 takes input at that path.` | no CheckBox is bound to `path` |
 | `A checkbox takes true or false.` | the value is not a boolean |
 | `input is not an op on a checklist. ...` | the card is of another kind |
+| `Card 1840 is archived. Restore it first.` | the card is archived |
+
+The operator presses a button with another op:
+
+```json
+{"card": 1840, "op": "press", "component": "remove__1", "seen": 1852}
+```
+
+- `component` is the Button's `id` as relay sent it. In a list it names
+  the item (`remove__1`), and relay tells the role which item it was.
+- `seen` is required, as for `input`. relay finds the button in the
+  surface as it was drawn at that rev, so the press is of what the
+  operator saw.
+- A button whose action is `relay:setInput` is that box's `input` op:
+  it carries no text, adds no labels and wakes no role, and the answer
+  and the other connections' notifications are those of an input. If
+  the box already holds the value, the answer has `changed` false.
+- A button whose action is an `event` changes nothing on the card. relay
+  sends the card's owner a memo from the operator, in words of its own,
+  that names the button, the card and the event and quotes the label as
+  the role's writing. It carries the card's labels and its sources, and
+  it wakes the role. The answer is the card as it is, with `changed`
+  true.
+- Only the operator presses. No press changes relay's settings, and none
+  answers a review or consent screen, which are other methods.
+- A press wakes a role and costs a model turn, so a client takes one
+  only from a key the operator pressed live, after the card has been on
+  screen a moment, never from keys replayed after a reconnect. relay
+  refuses a second press of the same button while the role has not read
+  the memo of the first.
+
+relay's refusals of a press (-32000), shown as they are:
+
+| message | when |
+|---|---|
+| `press needs seen: the card's rev when you read it.` | no `seen` |
+| `Card 1840 has changed since rev 1852. Read the card again before you change it.` | `seen` is older than the card's rev |
+| `Nothing on card 1840 is a button with that id.` | no Button has that id at this rev |
+| `steward has not yet taken up your last press of that button.` | the memo of the last press of it is unread |
+| `Nobody keeps card 1840 now, so a press would tell no one.` | the card's owner is the operator or a role that was removed |
 | `Card 1840 is archived. Restore it first.` | the card is archived |
 
 A role changes its surface with `data` (`path`, `value`, `seen`), which
