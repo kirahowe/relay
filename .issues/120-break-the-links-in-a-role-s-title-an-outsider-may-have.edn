@@ -1,10 +1,10 @@
 {:id 120
  :title "Break the links in a role's title an outsider may have shaped"
- :status :ready
+ :status :in-progress
  :type :bug
  :priority :p1
  :created "2026-11-15"
- :updated "2026-11-15"
+ :updated "2026-11-16"
  :tags #{"security"}
  :blocked-by #{}
  :related #{"relay#104" "relay#118" "relay#84" "relay#95"}

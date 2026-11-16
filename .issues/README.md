@@ -35,7 +35,6 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [90](90-find-what-dropped-four-regression-cases-since-b12b.md) | Find what dropped four regression cases since B12b | bug | P1 |
-| [120](120-break-the-links-in-a-role-s-title-an-outsider-may-have.md) | Break the links in a role's title an outsider may have shaped | bug | P1 |
 | [38](38-stop-the-hub-notifying-twice-for-one-stuck-memo.md) | Stop the hub notifying twice for one stuck memo | bug | P2 |
 | [57](57-make-hidden-characters-visible-in-card-text-that-roles-and.md) | Make hidden characters visible in card text that roles and resolve get | bug | P2 |
 | [61](61-fork-acp-go-sdk-and-decode-with-encoding-json-v2.md) | Fork acp-go-sdk and decode with encoding/json/v2 | feature | P2 |
@@ -72,6 +71,7 @@
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
+| [120](120-break-the-links-in-a-role-s-title-an-outsider-may-have.md) | Break the links in a role's title an outsider may have shaped | bug | P1 |
 | [130](130-break-an-address-that-a-character-with-no-width-is-hiding-in.md) | Break an address that a character with no width is hiding in | bug | P2 |
 
 ### Review

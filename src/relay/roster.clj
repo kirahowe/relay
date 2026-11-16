@@ -18,7 +18,8 @@
             one the operator saw.
     wire    the roster as JSON-ready data, every role in the form
             `_relay/roles` sends."
-  (:require [relay.core :as core]))
+  (:require [relay.core :as core]
+            [relay.text :as text]))
 
 (defn conversation
   "A role's open conversation as the roster shows it, or nil."
@@ -54,10 +55,12 @@
 
 (defn wire-role
   "A roster entry as JSON-ready data with string keys. Times are ISO-8601
-  instants; the wake id stays relay's own."
+  instants; the wake id stays relay's own. The title is ready to show, as
+  a card's text is (relay.text/safe-line): a role an outsider steered
+  may have written it (relay#120)."
   [{:keys [id title labels working? conversation]}]
   {"id" id
-   "title" title
+   "title" (text/safe-line labels title)
    "labels" (vec labels)
    "working" (boolean working?)
    "conversation" (when-let [{:keys [session opened-at last-activity turn turns unread?]} conversation]

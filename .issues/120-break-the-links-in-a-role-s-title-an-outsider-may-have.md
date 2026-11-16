@@ -80,3 +80,45 @@ before.
 - 2026-11-15: the dashboard's half is relay-tui pzkztxvr (9ae8a086),
   with kxsoqlxu (c1716fc8) on top, as the relay#95 session reports. Both
   land with the first part of relay#95.
+- 2026-11-16, relay-ec. Where relay sends a role's title, and what each
+  path does with it:
+  - `_relay/roles` and `_relay/roles/changed` (relay.roster/wire-role,
+    through relay.hub/roles-wire) and `session/list`
+    (relay.hub/list-sessions) now send `relay.text/safe-line`: links
+    broken when the title's labels (its id's and its own) are
+    contaminated, then every hidden character and newline shown as an
+    escape. That is a card's text, as one line. safe-text moved from
+    relay.cards to relay.text so that relay.roster can use it.
+  - `relay roles` (render/roles) and `relay status` (render/role-status)
+    already went through for-operator with the same labels.
+  - The `roles` read tool (relay.tools) shows the title to a model, not a
+    person.
+  - Pushes, mail, ready items, messages, digests and notices name a role
+    by its id, never its title. A sweep of src for (core/role ...) and
+    :title found no other path.
+  - relay.prompt puts the title in the role's own system prompt, for the
+    model.
+- 2026-11-16, relay-ec. A title stays a plain string and carries no
+  `links`: the criterion asks for its links to be broken, and no client
+  draws a title's links. Listing them would mean a new wire shape for
+  every client.
+- 2026-11-16, relay-ec. Every name in a "Drew on" line is defanged now
+  (relay.provenance/phrase). The names do not come only from relay.edn.
+  A tool call's envelope (relay.tools, about line 1775) and an external
+  tool's output (parse-result) accept any `kind:what` label that
+  known-label? passes, so `github:evil.test/x` or `files:evil.com` can
+  come from outside. Defanging all of them is simpler than proving each
+  name's origin, and a name with no host in it reads the same.
+- 2026-11-16, relay-ec. relay-tui's roleName escaped a title itself
+  (EscapeLabel), which would have doubled the backslashes relay now
+  sends. It now does what cardText does: EscapeNonPrinting, newlines
+  shown as \n, and Defang always. relay-34 was told, since it was working
+  in the same package for relay#130. The two commits have to reach main
+  together.
+- 2026-11-16, relay-ec. The provenance property's oracle is its own. It
+  counts a dot before a letter, a dotted quad, or a whole http, https,
+  ftp or file scheme as followable. Its first draft also counted a dot
+  before a digit and three numbers joined by dots. defang leaves both
+  alone on purpose (12.50, v1.2; its docstring, from relay#130), and
+  without a scheme only an undocumented link finder would follow them.
+  So the oracle follows defang's documented rule and does not reopen it.

@@ -756,12 +756,12 @@
   [h rid msg]
   (let [cwd (get (params-of msg) "cwd")]
     (answer h rid
-            {"sessions" (vec (for [{:keys [id title conversation]} (:roster h)
+            {"sessions" (vec (for [{:keys [id title labels conversation]} (:roster h)
                                    :let [c (get-in h [:convs id])
                                          dir (or (:cwd c) "/")]
                                    :when (and (:session c) (not= :ending (:status c))
                                               (or (not (string? cwd)) (under? cwd dir)))]
-                               (cond-> {"sessionId" (:session c) "cwd" dir "title" title
+                               (cond-> {"sessionId" (:session c) "cwd" dir "title" (text/safe-line labels title)
                                         "_meta" {"relay/role" id}}
                                  (:last-activity conversation) (assoc "updatedAt" (str (:last-activity conversation))))))})))
 

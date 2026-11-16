@@ -97,23 +97,26 @@
 
 (defn phrase
   "One source in plain words, or nil for `contaminated`, which says no
-  more than that something came from outside. Anything an outsider chose
-  (a sender's address, a page) is defanged, so it is never a link."
+  more than that something came from outside. Every name in it is
+  defanged, so it is never a link: a sender's address and a page are an
+  outsider's, and any source label can also come from a tool's envelope
+  or an external tool's output, not only from relay.edn (relay#120)."
   [l]
   (when (and (source? l) (not= contaminated l))
-    (let [[kind what] (str/split l #":" 2)]
+    (let [[kind what] (str/split l #":" 2)
+          named #(text/defang (text/without-hidden %))]
       (case kind
         "mail" (cond (= "unverified-operator" what) "a mail that says it is from you, not verified"
                      (= "unknown" what) "a mail from an unknown sender"
-                     :else (str "a mail from " (text/defang (text/without-hidden what))))
-        "github" (str "GitHub (" what ")")
+                     :else (str "a mail from " (named what)))
+        "github" (str "GitHub (" (named what) ")")
         "calendar" (cond (calendar-words what) "your calendar"
-                    (str/includes? what "cal") (str "the calendar feed " what)
-                    :else (str "the " what " calendar"))
+                    (str/includes? what "cal") (str "the calendar feed " (named what))
+                    :else (str "the " (named what) " calendar"))
         "web" (str "the web page " (text/defang (cut (text/without-hidden what) 80)))
         "search" "a web search"
-        "files" (str "your files in " (text/without-hidden what))
-        "tool" (str "the " (text/without-hidden what) " tool")
+        "files" (str "your files in " (named what))
+        "tool" (str "the " (named what) " tool")
         "something from outside"))))
 
 (defn subject-prefix

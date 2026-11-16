@@ -210,7 +210,6 @@
 
 ;; --- adding a card
 
-(declare safe-text)
 
 (defn- sendable!
   "Refuses a surface that keeps too much, cannot be drawn
@@ -234,7 +233,7 @@
             (refuse! (str "The surface's components and data would be " written " characters as JSON, and the most is "
                           surfaces/max-written ". Keep less in its data.")))
         drawn (surfaces/drawn longest)
-        safe #(safe-text ["contaminated"] %)
+        safe #(text/safe-text ["contaminated"] %)
         bytes (fn [^String s] (alength (.getBytes s "UTF-8")))
         ;; Both as the JSON they are sent in, since a quote or a
         ;; backslash is two bytes there.
@@ -604,15 +603,8 @@
 
 ;; --- the wire form
 
-(defn safe-text
-  "Text as a client is sent it: its links broken when its labels are
-  contaminated (relay.text/for-operator), then with every hidden
-  character made visible."
-  [labels s]
-  (text/visible (text/for-operator labels s)))
-
 (defn- wire-element [{:keys [id text labels rev]}]
-  (cond-> {"text" (safe-text labels text) "outsider" (contaminated? labels) "rev" rev}
+  (cond-> {"text" (text/safe-text labels text) "outsider" (contaminated? labels) "rev" rev}
     id (assoc "id" id)))
 
 (defn shown-texts
@@ -640,7 +632,7 @@
 
 (defn wire
   "A card as a client is sent it: string keys, JSON-ready, and every text
-  field already safe to show (safe-text), with outsider beside it when it
+  field already safe to show (text/safe-text), with outsider beside it when it
   is contaminated. A surface's strings all go by the surface's labels,
   and its outsider is said once, for all of it. A client works nothing
   out for itself. `labels` is what
@@ -672,7 +664,7 @@
                                 (let [held (surface-labels surface)]
                                   {"outsider" (contaminated? held)
                                    "a2ui" [(surfaces/message (str "card_" id) (surfaces/shown surface)
-                                                             #(safe-text held %))]})))))
+                                                             #(text/safe-text held %))]})))))
 
 ;; --- what an op did, in words
 

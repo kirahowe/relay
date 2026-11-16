@@ -548,6 +548,19 @@
   [labels s]
   (if (contaminated? labels) (defang s) (str s)))
 
+(defn safe-text
+  "Text as a client is sent it, ready to show: its links broken when its
+  labels are contaminated (for-operator), then every hidden character
+  made visible. A card's text goes this way."
+  [labels s]
+  (visible (for-operator labels s)))
+
+(defn safe-line
+  "safe-text for one line, such as a role's title: a newline is shown as
+  an escape too (visible-line), so the line cannot start another."
+  [labels s]
+  (visible-line (for-operator labels s)))
+
 (def gutter
   "What every line of untrusted multi-line text is shown behind. Nothing
   else on a screen starts with it, so a role's text cannot pass for a

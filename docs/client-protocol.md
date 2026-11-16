@@ -63,7 +63,12 @@ command line instead.
   `{"sessionId", "openedAt", "lastActivity", "turn", "turns", "unread":
   bool}`. Times are ISO-8601 instants. `turn` is `"idle"`, `"running"` or
   `"queued"` (a prompt waits for the role's scheduled work). `sessionId`
-  can be null before the first turn.
+  can be null before the first turn. `title` is ready to show, as a
+  card's text is: a role that may hold outside text can set a title, so
+  when the title's labels are contaminated its links are broken, and
+  hidden characters and newlines are shown as `\u{XXXX}`. A client shows
+  it as it is, without escaping it again. The `title` of a `session/list`
+  entry is the same text.
 - After it: `_relay/roles/changed` whenever any of it changes.
 - relay-tui: the sidebar and list of roles, the marks beside each role,
   which conversation to attach to, and when to close what a replay left

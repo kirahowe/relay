@@ -57,6 +57,33 @@
              (not (re-find #"contaminated|private|calendar:|github:|mail:|web:|search:|files:" line)))
         (nil? line)))))
 
+(def gen-label-name
+  "A source label's name as agentloop's label charset allows it, from a
+  tool's envelope or an external tool's output as well as relay.edn:
+  hosts, schemes and addresses among them."
+  (gen/fmap str/join
+            (gen/vector (gen/one-of [(gen/elements ["evil" "x" "0" "com" "test" "https" "http" "www"])
+                                     (gen/elements ["." "." ":" "://" "/" "@" "+" "-"])])
+                        1 12)))
+
+(defn- followable?
+  "Whether a phrase still holds a host or a scheme, judged apart from
+  relay.text: a dot before a letter, where a host's last name could
+  start; a dotted quad, an IPv4 address; or a scheme a browser follows,
+  still whole."
+  [s]
+  (boolean (or (re-find #"[\p{L}\p{N}]\.\p{L}" s)
+               (re-find #"\d\.\d+\.\d+\.\d" s)
+               (re-find #"(?i)(?<![\p{L}\p{N}])(https?|ftp|file)://" s))))
+
+(defspec no-name-in-a-drew-on-line-can-be-followed 500
+  ;; relay#120: a github, calendar, files or tool name went in as
+  ;; written, though any label can come from outside relay.edn.
+  (prop/for-all [kind (gen/elements ["github" "calendar" "files" "tool" "mail" "web"])
+                 what gen-label-name]
+    (let [p (provenance/phrase (str kind ":" what))]
+      (or (nil? p) (not (followable? p))))))
+
 (deftest sources-in-words
   (is (= "Drew on: a mail from dana@riverbend[.]test; the web page office-holidays[.]html"
          (provenance/drew-on ["web:office-holidays.html" "mail:dana@riverbend.test" "private"])))
@@ -65,6 +92,9 @@
     (is (= ["the holidays calendar"] (provenance/phrases ["calendar:holidays"]))))
   (is (= ["something from outside"] (provenance/phrases ["contaminated"])))
   (is (= ["GitHub (kira/tidy)"] (provenance/phrases ["github:kira/tidy"])))
+  (testing "a name from a tool's envelope is never a link either"
+    (is (= ["GitHub (evil[.]test/x)"] (provenance/phrases ["github:evil.test/x"])))
+    (is (= ["your files in evil[.]com"] (provenance/phrases ["files:evil.com"]))))
   (testing "an address an outsider chose is never a link"
     (is (= ["the web page hxxps://evil[.]example/x"] (provenance/phrases ["web:https://evil.example/x"]))))
   (is (= "the work calendar, GitHub (a/b), a mail from x@y[.]test and 1 more"

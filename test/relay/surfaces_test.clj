@@ -552,7 +552,7 @@
            ;; What a client draws is each of the surface's strings, made
            ;; safe with the surface's labels, in order.
            (= (display-strings msg)
-              (map #(cards/safe-text (cards/surface-labels (:surface c)) %) (surfaces/strings (:surface c))))
+              (map #(text/safe-text (cards/surface-labels (:surface c)) %) (surfaces/strings (:surface c))))
            ;; The live links travel beside the text: only ones relay
            ;; keeps live, only for outside text, each in the form some
            ;; string the client holds shows it in, and each of them when
