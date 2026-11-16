@@ -42,7 +42,6 @@
 | [103](103-keep-the-seed-when-core-test-s-any-sequence-property-fails.md) | Keep the seed when core-test's any-sequence property fails in bb verify | bug | P2 |
 | [106](106-put-buttons-on-role-built-surfaces-by-kira-s-rule.md) | Put buttons on role-built surfaces by Kira's rule | feature | P2 |
 | [109](109-tell-the-operator-a-card-s-line-has-gone-even-while-a.md) | Tell the operator a card's line has gone even while a refusal is showing | bug | P2 |
-| [110](110-scroll-an-open-card-that-is-taller-than-the-pane.md) | Scroll an open card that is taller than the pane | bug | P2 |
 | [112](112-let-kira-put-a-surface-back-as-it-was.md) | Let Kira put a surface back as it was | feature | P2 |
 | [117](117-carry-a-live-link-in-a-push-as-an-action-and-check-the.md) | Check what Proton Mail on the phone follows in relay's mail | feature | P2 |
 | [126](126-break-a-link-whose-scheme-has-no-double-slash.md) | Break a link whose scheme has no double slash | bug | P2 |
@@ -75,6 +74,7 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [101](101-teach-roles-when-and-how-to-build-a-surface-with-eval-cases.md) | Teach roles when and how to build a surface, with eval cases | feature | P2 |
+| [110](110-scroll-an-open-card-that-is-taller-than-the-pane.md) | Scroll an open card that is taller than the pane | bug | P2 |
 | [127](127-do-not-panic-on-markdown-quoted-deeper-than-half-the-width.md) | Do not panic on Markdown quoted deeper than half the width | bug | P3 |
 
 ### Blocked
