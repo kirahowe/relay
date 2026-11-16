@@ -139,9 +139,11 @@ A first draft, mine, for whoever builds this to tighten.
 - [x] The Log says which terminal's link finder was run against these,
   or that none was.
   - Receipt: none was run. Ghostty's pattern was read; see the Log.
-- [ ] Kira has confirmed or changed the triage in the Log: in scope as
+- [x] Kira has confirmed or changed the triage in the Log: in scope as
   hidden text, relay's half P2, relay-tui's half ahead of it, and
   relay#104 as the root fix with no stopgap in relay-tui.
+  - Receipt: Kira confirmed it on 2026-11-17 in the coordinating
+    session's question dialog (Log).
 - [ ] `bb verify` passes, and an adversarial Codex review finds nothing
   in scope.
 
@@ -278,3 +280,5 @@ breaker is the only one.
   yet take U+1107F and U+1BC9D. Kira's confirmation of the triage, and
   a Codex round (its quota is out until 2026-11-19), are still open.
 
+- 2026-11-17, the coordinating session: Kira confirmed the triage in its
+  question dialog ("Confirm it").
