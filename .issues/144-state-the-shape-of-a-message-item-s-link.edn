@@ -1,0 +1,11 @@
+{:id 144
+ :title "State the shape of a message item's link"
+ :status :ready
+ :type :chore
+ :priority :p3
+ :created "2026-11-16"
+ :updated "2026-11-16"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "144-state-the-shape-of-a-message-item-s-link.md"}

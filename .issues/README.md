@@ -63,6 +63,10 @@
 | [138](138-anchor-a-reply-s-links-only-in-markdown-text-not-in-code-or.md) | Anchor a reply's links only in Markdown text, not in code or tables | bug | P3 |
 | [139](139-make-relay-s-docs-and-relay-tui-agree-on-markdown-backslash.md) | Make relay's docs and relay-tui agree on Markdown backslash escapes | bug | P3 |
 | [140](140-decide-whether-relay-roles-sends-a-role-s-source-labels.md) | Decide whether _relay/roles sends a role's source labels whole | bug | P3 |
+| [142](142-say-in-a-message-s-numbered-item-whether-it-is-an-offer.md) | Say in a message's numbered item whether it is an offer | feature | P3 |
+| [143](143-say-in-a-message-s-wire-form-whether-it-can-be-answered.md) | Say in a message's wire form whether it can be answered | feature | P3 |
+| [144](144-state-the-shape-of-a-message-item-s-link.md) | State the shape of a message item's link | chore | P3 |
+| [145](145-let-fakehub-play-relay-messages-and-every-card-op.md) | Let fakehub play _relay/messages and every card op | chore | P3 |
 
 ### In progress
 
