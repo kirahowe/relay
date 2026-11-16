@@ -144,3 +144,13 @@ Needs relay#97. relay-tui's side builds on relay#100.
   has. Three rounds each found something in scope, all low after round
   1 and none a third effect, so by AGENTS.md the loop stops and the
   question goes to Kira.
+- 2026-11-16, Kira, in the coordinating session's dialog, asked after
+  three rounds on relay's side that each found something in scope
+  (round 1: five defects of the memo's wording and attribution and a
+  button that could tick another item's box; round 2: a press framed as
+  her own request; round 3: a dead letter carrying "you wired it" and
+  the role instructions calling the label the role's own words; all
+  fixed, none a third effect, a press by a role or a path to config or
+  approvals): "Land after three rounds", together with relay-tui's side.
+  relay-32 dated it 2026-11-17; it was 23:59 on 2026-11-16 here when it
+  arrived.
