@@ -71,13 +71,13 @@
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
-| [120](120-break-the-links-in-a-role-s-title-an-outsider-may-have.md) | Break the links in a role's title an outsider may have shaped | bug | P1 |
 | [130](130-break-an-address-that-a-character-with-no-width-is-hiding-in.md) | Break an address that a character with no width is hiding in | bug | P2 |
 
 ### Review
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
+| [120](120-break-the-links-in-a-role-s-title-an-outsider-may-have.md) | Break the links in a role's title an outsider may have shaped | bug | P1 |
 | [136](136-let-a-text-free-update-pass-without-cutting-a-held-word.md) | Let a text-free update pass without cutting a held word | bug | P2 |
 
 ### Blocked

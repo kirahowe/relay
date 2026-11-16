@@ -1,6 +1,6 @@
 {:id 120
  :title "Break the links in a role's title an outsider may have shaped"
- :status :in-progress
+ :status :review
  :type :bug
  :priority :p1
  :created "2026-11-15"

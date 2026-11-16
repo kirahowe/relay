@@ -53,21 +53,37 @@ As far as I read it those come from relay.edn; I did not trace each one.
 
 ## Acceptance criteria
 
-- [ ] A title whose labels are contaminated reaches no client with a
+- [x] A title whose labels are contaminated reaches no client with a
   link that can be followed: not in `_relay/roles`, not in
   `_relay/roles/changed`, and not in a `session/list` answer.
-- [ ] Every other place relay shows a role's title is listed here, and
+  - Receipt: relay.roster/wire-role and relay.hub/list-sessions send
+    `relay.text/safe-line`; `relay.role-title-test` checks all three.
+- [x] Every other place relay shows a role's title is listed here, and
   each breaks its links or is shown not to need to.
-- [ ] The names in a "Drew on" line that are not broken are shown to
+  - Receipt: the Log entry of 2026-11-16 that lists each path.
+- [x] The names in a "Drew on" line that are not broken are shown to
   come only from Kira's settings, or they are broken too.
-- [ ] A test adds a role as the reviewer did, from a contaminated
+  - Receipt: relay.provenance/phrase defangs every name;
+    `relay.provenance-test/no-name-in-a-drew-on-line-can-be-followed`
+    (its own oracle) fails on the old phrase.
+- [x] A test adds a role as the reviewer did, from a contaminated
   session with an address as the title, and finds no whole address in
   any of those answers. It fails on today's code.
-- [ ] A pentest case does the same through a plain ACP client.
-- [ ] docs/client-protocol.md says a role's title is ready to show, as a
+  - Receipt: `relay.role-title-test/a-title-an-outsider-shaped-reaches-no-client-as-a-link`;
+    with roster.clj and hub.clj put back as they were, it fails on all
+    three paths.
+- [x] A pentest case does the same through a plain ACP client.
+  - Receipt: pentest `s5-acp-role-title`, which fails on the old code
+    (session/list and _relay/roles both show the whole address).
+- [x] docs/client-protocol.md says a role's title is ready to show, as a
   card's text is.
-- [ ] `bb verify` passes, and an adversarial Codex review finds nothing
+  - Receipt: docs/client-protocol.md, `_relay/roles`.
+- [x] `bb verify` passes, and an adversarial Codex review finds nothing
   in scope.
+  - Receipt: bb verify passes across relay.ec, relay-tui.ec,
+    agentloop.ec and webtool.ec, fuzz and pentest included. Codex was
+    out of quota, so a fresh read-only reviewer agent was given the
+    threat model. Round 1 found nothing in scope (see the Log).
 
 ## Plan
 
@@ -122,3 +138,16 @@ before.
   alone on purpose (12.50, v1.2; its docstring, from relay#130), and
   without a scheme only an undocumented link finder would follow them.
   So the oracle follows defang's documented rule and does not reopen it.
+- 2026-11-16, relay-ec. Review round 1, by a fresh read-only reviewer
+  agent given the threat model, since Codex was out of quota until
+  2026-11-19: nothing in scope. It probed fullwidth and ideographic
+  dots, zero-width characters and soft hyphens around a dot, newlines,
+  combining marks, dotted quads, `https:3405803777`, and every
+  punctuation mark that defang's tail rule lets a final dot keep (no
+  top-level domain starts with one). It checked the Drew-on names and
+  relay-tui's roleName, including that Defang leaves relay's broken
+  text alone. Its one remark falls outside this issue: `_relay/roles`
+  sends a role's labels as raw strings, and a source label like
+  `web:https://evil.test/?d=...` holds a whole address. Labels are data
+  that no client is meant to show, and relay-tui does not show them. It
+  went to the coordinating session to file.
