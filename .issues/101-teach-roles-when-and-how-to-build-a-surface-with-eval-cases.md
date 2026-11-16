@@ -39,28 +39,48 @@ is later work, outside this issue.
 
 ## Acceptance criteria
 
-- [ ] No case's prompt names a surface, the catalog or a kind of card.
+- [x] No case's prompt names a surface, the catalog or a kind of card.
   The user says what they want in their own words.
-- [ ] A case in `test/scenarios` asks the steward for something none of
+  - Receipt: `relay.eval-test/the-operator-asks-for-surfaces-in-their-own-words`,
+    over every case tagged `:surfaces`.
+- [x] A case in `test/scenarios` asks the steward for something none of
   the three fixed kinds fits, such as a packing list grouped by bag with
   a note above it. Its oracle adds a surface relay accepts.
-- [ ] A foil fails that case's grader: one that adds a checklist
+  - Receipt: `test/scenarios/packing-by-bag.edn` (version 2): its oracle
+    adds a surface relay accepts, and `bb test`'s oracle shards pass.
+- [x] A foil fails that case's grader: one that adds a checklist
   instead, or a surface relay refuses.
-- [ ] A second case asks for something a checklist, a tracker, a note or
+  - Receipt: the foils of `packing-by-bag`, among them
+    `checklist-with-heading-items`, `checklist-with-bag-names` and
+    `refused-and-left`, each failing exactly the graders it names.
+- [x] A second case asks for something a checklist, a tracker, a note or
   a plain message fits. Its oracle makes no surface, and a foil that
   makes one fails the grader.
-- [ ] Both cases ran live on Haiku (`--trials 3`) and once on Opus, the
+  - Receipt: `test/scenarios/plain-list-stays-a-checklist.edn`, with
+    the foils `surface-for-a-list` and `checklist-and-a-surface`.
+- [x] Both cases ran live on Haiku (`--trials 3`) and once on Opus, the
   transcripts were read, and the run ids are here and in
   `test/scenarios/BASELINES.md`.
-- [ ] If the model's first surface is often refused, the catalog text or
+  - Receipt: Haiku `20261117T012540Z-2ef8`, 3/3 and 3/3; Opus
+    `20261117T012639Z-fddf`, 1/1 and 1/1. Haiku round 1,
+    `20261116T035909Z-0386`, is in the Log. All in BASELINES.md.
+- [x] If the model's first surface is often refused, the catalog text or
   the refusals were changed until it is not, and the Log says what
   changed.
-- [ ] `resources/AGENTS.md` says when a surface is the right thing to
+  - Receipt: no trial had a surface refused. Round 1 tried none; in
+    round 2 and on Opus each first `card_add` was accepted. Nothing in
+    the catalog text or the refusals needed changing.
+- [x] `resources/AGENTS.md` says when a surface is the right thing to
   make and when one of the fixed kinds or a message is. If relay#97's
   section already does, the receipt points at it.
-- [ ] The cases ran with the steward designing alone, and with a
+  - Receipt: "The operator's board" in `resources/AGENTS.md`, rewritten
+    after round 1 (change uwnqvulp).
+- [x] The cases ran with the steward designing alone, and with a
   designer role if one is built here. The Log records which did better
   and what was chosen.
+  - Receipt: the steward alone passed every trial after round 1, so no
+    designer role was built. relay-32 and I agreed that one would need
+    Kira's word first.
 
 ## Plan
 
@@ -104,3 +124,21 @@ Needs relay#97.
   own wording. `card_add`'s description says the same in a clause.
 - Round 2 waits: the live run was refused by this session's permission
   check, as spending money, so it needs Kira's approval.
+- 2026-11-17, Haiku round 2, `20261117T012540Z-2ef8` (prompt digest
+  `b24e1f84042c`): packing 3/3, plain list 3/3, $0.0125. Each packing
+  trial read the catalog, laid out the ferry line, then each bag's name
+  as a text with its boxes under it, and relay took the first
+  `card_add`. Left as is: no trial dressed a bag's name as a heading,
+  and one showed "Blue duffel" twice. The graders do not ask for either,
+  and I did not tune for them.
+- 2026-11-17, Opus once, `20261117T012639Z-fddf`: both 1/1, $0.33. On
+  packing it built the surface from a list template, and also added a
+  calendar entry for 5pm Friday, two facts and a packing skill. That is
+  the steward's ordinary care, not something this case grades.
+- Round 3 was not needed. Kira allowed live runs up to a couple of
+  dollars on 2026-11-16, and the rounds came to $0.35 in all.
+- 2026-11-17: `bb verify` passed every step on the chain rebased onto
+  `integration` b1f6e8ad (relay at kysqppyu, relay-tui, agentloop and
+  webtool from my `ae` workspaces): agentloop, relay-tui, catalog,
+  webtool, eventkit, relay, fuzz and pentest. relay-32 read the three
+  commits and approved landing. Not pushed.

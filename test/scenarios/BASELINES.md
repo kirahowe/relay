@@ -403,3 +403,25 @@ the two cases that involve the board were run, on Haiku at effort low.
 Every wake ran, so the model's API takes the new tool schemas, in which
 `card_op`'s `value` has no type and `components` is a list of objects.
 No case asks a role to build a surface yet. That is relay#101.
+
+## When a role lays out a surface (relay#101, 2026-11-17)
+
+Two cases ask the steward to keep something on the board in the
+operator's own words: `packing-by-bag` (capability), which only a
+surface fits, and `plain-list-stays-a-checklist` (regression), where a
+checklist fits and a surface would be more to keep right. Prompt digest
+`b24e1f84042c`, relay `kysqppyu` (`f8a659fe8a0e`), agentloop `yxmzxvtq`
+(`78c7a2fc15d9`).
+
+| case | tier | Haiku 5.5, 3 trials | Opus 5.5, 1 trial |
+|---|---|---|---|
+| packing-by-bag (v2) | cap | 3/3 | 1/1 |
+| plain-list-stays-a-checklist | reg | 3/3 | 1/1 |
+
+Haiku: `20261117T012540Z-2ef8`, $0.0125. Opus: `20261117T012639Z-fddf`,
+$0.33.
+
+Before the board section said what a checklist cannot show, Haiku made
+a checklist with the bag in every item, 0/3 (`20261116T035909Z-0386`,
+digest `0a511b158ba0`, packing-by-bag version 1).
+

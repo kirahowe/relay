@@ -69,8 +69,13 @@
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
-| [101](101-teach-roles-when-and-how-to-build-a-surface-with-eval-cases.md) | Teach roles when and how to build a surface, with eval cases | feature | P2 |
 | [130](130-break-an-address-that-a-character-with-no-width-is-hiding-in.md) | Break an address that a character with no width is hiding in | bug | P2 |
+
+### Review
+
+| ID | Title | Type | Priority |
+| --- | --- | --- | --- |
+| [101](101-teach-roles-when-and-how-to-build-a-surface-with-eval-cases.md) | Teach roles when and how to build a surface, with eval cases | feature | P2 |
 
 ### Blocked
 
