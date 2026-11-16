@@ -1029,13 +1029,16 @@
   (if-not (map? c)
     c
     (case (get c "type")
-      "content" (if (contains? (get-in c ["content" "_meta"]) "relay/display")
+      "content" (if (and (contains? (get-in c ["content" "_meta"]) "relay/display")
+                         (= "text" (get-in c ["content" "type"])))
                   c
                   (update c "content" inert-block))
       "diff" (cond-> c
                (string? (get c "oldText")) (update "oldText" text/conversation-text)
                (string? (get c "newText")) (update "newText" text/conversation-text))
-      c)))
+      "terminal" c
+      ;; Anything else is taken for a content block, a bare one included.
+      (inert-block c))))
 
 (defn- inert-update
   "An update that is not a streamed text chunk, made inert: a call's
@@ -1044,6 +1047,8 @@
   [u]
   (cond-> u
     (string? (get u "title")) (update "title" text/conversation-text)
+    ;; The tool name the model emitted, as agentloop passes it on.
+    (string? (get u "name")) (update "name" text/conversation-text)
     (sequential? (get u "content")) (update "content" #(mapv inert-tool-content %))
     (map? (get u "content")) (update "content" inert-block)
     (contains? u "rawInput") (update "rawInput" inert-strings)

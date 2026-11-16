@@ -25,11 +25,13 @@
 
 (defn- break-cut
   "A piece of a cut word: made safe, then every dot and colon broken, so
-  no scheme or host survives in it or across the cut."
+  no scheme or host survives in it or across the cut, and a closing
+  bracket escaped, so no Markdown link forms across it either."
   [piece]
   (-> (text/conversation-text piece)
       (str/replace #"(?<!\[)\.(?!\])" "[.]")
-      (str/replace #"(?<!\[):(?!\])" "[:]")))
+      (str/replace #"(?<!\[):(?!\])" "[:]")
+      (str/replace #"(?<!\[[.:])\](?!\()" "\\]")))
 
 (defn- last-space
   "The index just after the last space in s, or nil."

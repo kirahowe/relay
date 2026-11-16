@@ -685,8 +685,13 @@
   shown as \\u{XXXX} and every backslash as two, as a card shows them,
   except the joiner or selector that holds an emoji together, which is
   kept as it is (Kira, 2026-11-15: \"Show them, keep emoji whole\").
-  `s` must hold whole words only: a word cut in two is judged in two
-  halves."
+  Last, the three pieces of CommonMark that make a link, an image or
+  HTML are escaped as CommonMark escapes them: `](` (an inline link or
+  image), `]:` (a reference definition) and `<` (an autolink or a tag).
+  A client that renders Markdown then shows them as written and fetches
+  nothing, whatever form an address takes in them (//8.8.2056, data:),
+  and nothing else of the reply's formatting changes. `s` must hold
+  whole words only: a word cut in two is judged in two halves."
   [s]
   (let [cps (vec (iterator-seq (.iterator (.codePoints ^String (defang (str s))))))
         sb (StringBuilder.)]
@@ -699,7 +704,10 @@
             (= 92 cp) (.append sb "\\\\")
             :else (.appendCodePoint sb (int cp)))
           (recur (inc i) cp))))
-    (str sb)))
+    (-> (str sb)
+        (str/replace "](" "]\\(")
+        (str/replace "]:" "]\\:")
+        (str/replace "<" "\\<"))))
 
 (def ^:private cjk #{"Han" "Hiragana" "Katakana" "Hangul"})
 
