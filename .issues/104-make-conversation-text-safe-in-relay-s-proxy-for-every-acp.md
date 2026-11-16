@@ -159,3 +159,21 @@ relay#91 and relay#95.
   an address with no hidden character in or beside it." relay-macos has
   no tracker of its own, so it is noted here, beside the addition about
   a client that draws text itself.
+- 2026-11-15, from the relay#95 session (relay-34). relay-fb's `conv`
+  channel (scripts/inert-text-fuzz.clj at wzlskyzs bb0ba686, seed 1,
+  200,000 cases) through relay-tui's reply path: nothing drawn is
+  followable (20,000 rendered whole, Markdown included), but relay-tui's
+  own breaker changes 8,974 of them (4.5%). Each time it breaks a `://`
+  that relay leaves after a character that is not an ASCII scheme
+  letter, with the host's dots already broken (`ｈｔｔｐｓ://_x[.]…`,
+  `https\u{200b}://co[.]…`), into `[:]//`. Safe, but not as relay sent
+  it.
+- The coordinating session (relay-32) decided, without Kira since it
+  changes neither labels nor holds: with `relay/inertText` in
+  `initialize`, relay-tui draws a contaminated reply as relay sent it
+  and keeps `gate` as the last check on drawn rows, as it already does
+  for cards. Without the flag (an older relay) relay-tui's breaker and
+  `core.DropHidden` stay as they are. The reason is the 4.5% above: one
+  rule for what a link is, in relay, and `gate` still stops anything
+  followable. relay-tui builds this after relay#104 lands, as its half
+  of relay#130.
