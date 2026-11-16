@@ -1,10 +1,10 @@
 {:id 96
  :title "Draw A2UI surfaces in relay-tui"
- :status :review
+ :status :done
  :type :feature
  :priority :p2
  :created "2026-11-14"
- :updated "2026-11-14"
+ :updated "2026-11-15"
  :tags #{}
  :blocked-by #{}
  :related #{}

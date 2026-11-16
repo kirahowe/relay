@@ -257,3 +257,4 @@ What is new:
     are relay#99's.
   - Not in this change: a surface card's `links`. relay#97 lands after
     this and adds them, read through `relay.surfaces/strings`.
+- 2026-11-15 approved: 2026-11-15: Kira accepted it through the coordinating session's question dialog. The review criterion stays unticked: she chose to accept with the fuzz.

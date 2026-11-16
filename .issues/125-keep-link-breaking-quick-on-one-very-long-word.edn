@@ -1,6 +1,6 @@
 {:id 125
  :title "Keep link breaking quick on one very long word"
- :status :review
+ :status :done
  :type :bug
  :priority :p3
  :created "2026-11-15"

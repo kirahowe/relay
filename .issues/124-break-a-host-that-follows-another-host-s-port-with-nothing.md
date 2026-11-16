@@ -72,3 +72,4 @@ generate this case.
   side (`scripts/inert-text-check.swift`). `scripts/inert-text-fuzz.clj`
   generates the shape (`a.bc:1`, `x.yz:9` and `me@a.bc:1` before a
   host). No terminal was run on the strings, before the fix or after.
+- 2026-11-15 approved: 2026-11-15: Kira accepted it through the coordinating session's question dialog; every criterion is met. The fix's code was replaced by relay#130's rule, which breaks these dots anyway; the three cases are still tests in relay.text-test and pass.

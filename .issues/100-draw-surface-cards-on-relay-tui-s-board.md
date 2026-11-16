@@ -383,3 +383,4 @@ The review, read-only, with the threat model:
   Kira chose to land after round four rather than run a fifth. Codex
   did not review rounds three and four (out of quota); both were fresh
   reviewer agents.
+- 2026-11-15 approved: 2026-11-15: Kira accepted it through the coordinating session's question dialog. The review criterion stays unticked: she chose to land after round four.

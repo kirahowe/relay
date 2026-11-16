@@ -46,6 +46,7 @@
 | [106](106-put-buttons-on-role-built-surfaces-by-kira-s-rule.md) | Put buttons on role-built surfaces by Kira's rule | feature | P2 |
 | [109](109-tell-the-operator-a-card-s-line-has-gone-even-while-a.md) | Tell the operator a card's line has gone even while a refusal is showing | bug | P2 |
 | [110](110-scroll-an-open-card-that-is-taller-than-the-pane.md) | Scroll an open card that is taller than the pane | bug | P2 |
+| [117](117-carry-a-live-link-in-a-push-as-an-action-and-check-the.md) | Check what Proton Mail on the phone follows in relay's mail | feature | P2 |
 | [126](126-break-a-link-whose-scheme-has-no-double-slash.md) | Break a link whose scheme has no double slash | bug | P2 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
 | [83](83-speed-up-the-slowest-remaining-test-namespaces.md) | Speed up the slowest remaining test namespaces | chore | P3 |
@@ -70,24 +71,12 @@
 | [95](95-call-a-link-safe-from-the-dashboard.md) | Call a link safe from the dashboard | feature | P2 |
 | [130](130-break-an-address-that-a-character-with-no-width-is-hiding-in.md) | Break an address that a character with no width is hiding in | bug | P2 |
 
-### Review
-
-| ID | Title | Type | Priority |
-| --- | --- | --- | --- |
-| [94](94-keep-a-link-live-when-relay-can-say-where-it-came-from.md) | Keep a link live when relay can say where it came from | feature | P1 |
-| [118](118-carry-a-live-link-as-data-beside-inert-text.md) | Carry a live link as data beside inert text | feature | P1 |
-| [96](96-draw-a2ui-surfaces-in-relay-tui.md) | Draw A2UI surfaces in relay-tui | feature | P2 |
-| [100](100-draw-surface-cards-on-relay-tui-s-board.md) | Draw surface cards on relay-tui's board | feature | P2 |
-| [124](124-break-a-host-that-follows-another-host-s-port-with-nothing.md) | Break a host that follows another host's port with nothing between | bug | P2 |
-| [125](125-keep-link-breaking-quick-on-one-very-long-word.md) | Keep link breaking quick on one very long word | bug | P3 |
-
 ### Blocked
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [93](93-let-roles-build-their-own-screens-with-a2ui.md) | Let roles build their own screens with A2UI | feature | P1 |
 | [107](107-let-kira-fill-in-a-form-a-role-built.md) | Let Kira fill in a form a role built | feature | P2 |
-| [117](117-carry-a-live-link-in-a-push-as-an-action-and-check-the.md) | Check what Proton Mail on the phone follows in relay's mail | feature | P2 |
 
 ## Done
 
@@ -119,7 +108,9 @@
 | [79](79-review-what-the-operator-consents-to-on-a-screen-of-its-own.md) | Review what the operator consents to on a screen of its own, with text relay made | feature | P1 |
 | [88](88-install-relay-through-homebrew-and-remove-bb-deploy.md) | Install relay through Homebrew and remove bb deploy | feature | P1 |
 | [89](89-read-the-mac-calendar-and-manage-reminders-through.md) | Read the Mac calendar and manage reminders through ingestors and an actuator | feature | P1 |
+| [94](94-keep-a-link-live-when-relay-can-say-where-it-came-from.md) | Keep a link live when relay can say where it came from | feature | P1 |
 | [98](98-decide-what-a-button-on-a-role-built-screen-may-do.md) | Decide what a button on a role-built screen may do | feature | P1 |
+| [118](118-carry-a-live-link-as-data-beside-inert-text.md) | Carry a live link as data beside inert text | feature | P1 |
 | [3](3-run-agentloop-s-live-smoke-tests-from-a-flag-not-an-env-var.md) | Run agentloop's live smoke tests from a flag, not an env var | chore | P2 |
 | [5](5-support-reminder-sections-in-rem.md) | Support reminder sections in rem | feature | P2 |
 | [7](7-add-bb-deploy-and-bb-rollback-for-kira-to-run.md) | Add bb deploy and bb rollback for Kira to run | feature | P2 |
@@ -141,7 +132,10 @@
 | [74](74-reopen-the-dashboard-looking-as-it-was-left.md) | Reopen the dashboard looking as it was left | feature | P2 |
 | [75](75-open-the-dashboard-with-bare-relay-instead-of-relay-chat.md) | Open the dashboard with bare relay instead of relay chat | feature | P2 |
 | [77](77-move-around-the-dashboard-with-esc-to-move-and-type-to-talk.md) | Move around the dashboard with Esc to move and type to talk | feature | P2 |
+| [96](96-draw-a2ui-surfaces-in-relay-tui.md) | Draw A2UI surfaces in relay-tui | feature | P2 |
 | [97](97-keep-role-built-surfaces-in-the-log-and-send-them-to-every.md) | Keep role-built surfaces in the log and send them to every client | feature | P2 |
+| [100](100-draw-surface-cards-on-relay-tui-s-board.md) | Draw surface cards on relay-tui's board | feature | P2 |
+| [124](124-break-a-host-that-follows-another-host-s-port-with-nothing.md) | Break a host that follows another host's port with nothing between | bug | P2 |
 | [21](21-make-agentloop-cleanroom-s-reader.md) | Make agentloop cleanroom's reader | feature | P3 |
 | [22](22-show-spend-per-role-per-week-in-relay-status.md) | Show spend per role per week in relay status | feature | P3 |
 | [23](23-decide-who-syncs.md) | Decide who syncs ~/Sync/relay | chore | P3 |
@@ -156,6 +150,7 @@
 | [33](33-tidy-the-deploy-cleanup-message-and-tool-start-failures.md) | Tidy the deploy cleanup message and tool start failures | chore | P3 |
 | [50](50-mark-placeholders-left-in-a-draft-that-a-send-preview-shows.md) | Mark placeholders left in a draft that a send preview shows | feature | P3 |
 | [66](66-reach-the-relay-service-from-the-phone-over-the-tailnet.md) | Reach the relay service from the phone over the tailnet | feature | P3 |
+| [125](125-keep-link-breaking-quick-on-one-very-long-word.md) | Keep link breaking quick on one very long word | bug | P3 |
 
 ## Dropped
 

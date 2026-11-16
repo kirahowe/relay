@@ -1,11 +1,11 @@
 {:id 117
  :title "Check what Proton Mail on the phone follows in relay's mail"
- :status :blocked
+ :status :ready
  :type :feature
  :priority :p2
  :created "2026-11-14"
- :updated "2026-11-14"
+ :updated "2026-11-15"
  :tags #{}
- :blocked-by #{118}
+ :blocked-by #{}
  :related #{"relay#118" "relay#94" "relay#95"}
  :details "117-carry-a-live-link-in-a-push-as-an-action-and-check-the.md"}

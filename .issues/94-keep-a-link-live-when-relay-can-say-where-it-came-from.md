@@ -264,4 +264,4 @@ Codex review, read-only, threat model given:
   whether a terminal shows a live link as text at all, or as the broken
   form inside an OSC 8 hyperlink; and whether a push carries a link as an
   ntfy action. Neither is built.
-
+- 2026-11-15 approved: 2026-11-15: Kira accepted it through the coordinating session's question dialog. relay#118 replaced how a live link is shown and settled the two questions left here; bb verify has passed in the joint verifies since (only relay#99's two failures).

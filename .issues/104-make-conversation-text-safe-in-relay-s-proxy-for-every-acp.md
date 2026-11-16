@@ -151,3 +151,5 @@ relay#91 and relay#95.
   points in the emoji blocks (`emoji-block-unassigned?`). So that path
   must still escape them (relay.text/visible or the like) after links
   are broken, or they reach a client raw.
+- 2026-11-15: Kira, through the coordinating session's question
+  dialog: relay-fb (the relay#118 and relay#130 session) takes this now.

@@ -54,3 +54,4 @@ took 505 ms.
     letters, so it fails both.
   - `relay.links-test` (27 tests, its properties included) and
     `relay.text-test` pass.
+- 2026-11-15 approved: 2026-11-15: Kira accepted it through the coordinating session's question dialog; every criterion is met. relay#130 removed the 500-character cap, since its breaker is linear; a-very-long-word-does-not-slow-link-breaking still holds and passes.

@@ -1,10 +1,10 @@
 {:id 94
  :title "Keep a link live when relay can say where it came from"
- :status :review
+ :status :done
  :type :feature
  :priority :p1
  :created "2026-11-14"
- :updated "2026-11-14"
+ :updated "2026-11-15"
  :tags #{}
  :blocked-by #{}
  :related #{}

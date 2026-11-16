@@ -62,3 +62,5 @@ the links before anything is run.
 - 2026-11-14: the relay#93 session put both of the first version's
   questions to Kira. She answered the one about mail, above. On a push
   she left the call to the session; that is recorded in relay#118.
+- 2026-11-15: unblocked; relay#118 is done (Kira accepted it). The
+  Proton Mail run needs Kira's phone.

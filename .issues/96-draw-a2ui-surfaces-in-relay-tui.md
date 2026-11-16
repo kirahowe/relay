@@ -153,3 +153,4 @@ result is a mock to show Kira and a count of what the renderer took.
   relay#100, which will send every row of a surface through the board's
   last check on drawn rows, with the saved rapid case as its test. It is
   not patched here because relay#95 rewrote that path.
+- 2026-11-15 approved: 2026-11-15: Kira accepted it through the coordinating session's question dialog; every criterion is met.

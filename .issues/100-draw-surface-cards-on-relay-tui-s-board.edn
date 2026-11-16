@@ -1,6 +1,6 @@
 {:id 100
  :title "Draw surface cards on relay-tui's board"
- :status :review
+ :status :done
  :type :feature
  :priority :p2
  :created "2026-11-14"
