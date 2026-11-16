@@ -30,6 +30,7 @@
 | [115](115-replace-relay-s-long-lived-secrets-with-short-lived-grants.md) | Replace relay's long-lived secrets with short-lived grants | feature | P3 |
 | [116](116-write-the-threat-model-for-relay-as-something-other-people.md) | Write the threat model for relay as something other people install | feature | P3 |
 | [137](137-make-relay-a-package-other-people-can-install-and-run.md) | Make relay a package other people can install and run | feature | P3 |
+| [146](146-review-relay-tui-s-80-by-24-least-size-and-sticky-tracker.md) | Review relay-tui's 80 by 24 least size and sticky tracker header | chore | P3 |
 
 ### Ready
 
