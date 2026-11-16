@@ -1,6 +1,6 @@
 {:id 95
  :title "Call a link safe from the dashboard"
- :status :review
+ :status :done
  :type :feature
  :priority :p2
  :created "2026-11-14"

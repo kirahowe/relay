@@ -471,3 +471,4 @@ relay#121), and relay#127.
   eventkit and the new fuzz step pass (seed 1794749875), relay passes
   1196 of 1197 tests and the pentest 30 of 31, the two misses being
   relay#99's as before. s27 passes.
+- 2026-11-15 approved: 2026-11-15: Kira, in the coordinating session: close the issues whose criteria are all met. Every criterion here has its receipt.
