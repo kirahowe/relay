@@ -439,6 +439,10 @@ letter is literal there, so `\u{202e}` reads as written, and a doubled
 backslash in prose reads as one, as the agent wrote it. Inside code,
 backslashes show doubled.
 
+A client draws such text as relay sent it: it is already inert, and a
+client breaker of its own adds nothing. Its last check is the one it
+makes for a card, that a hyperlink target is in `_relay/links`.
+
 A client that draws conversation text itself, and not through a
 terminal, turns its own link detection off for it and makes links only
 from relay's data. One that shows a plain ACP agent, or a relay without

@@ -123,8 +123,11 @@
 
 (defn- break-schemes
   "`s` with every scheme before a :// broken: http, https and ftp to
-  hxxp, hxxps and fxp, one of those left as it is, and any other
-  scheme's :// to [:]//."
+  hxxp, hxxps and fxp, one of those left as it is, and any other :// to
+  [:]//, whatever stands before it: a scheme written in other letters
+  (ｈｔｔｐｓ://) or split by a hidden character (https\\u{200b}://) is
+  no ASCII scheme, but nothing is gained by guessing what a reader makes
+  of it."
   [^String s]
   (let [sb (StringBuilder.)]
     (loop [from 0]
@@ -139,7 +142,8 @@
                             ("hxxp" "hxxps" "fxp") (str scheme "://")
                             (str scheme "[:]//")))
               (recur (+ at 3)))
-            (do (.append sb (subs s from (+ at 3)))
+            (do (.append sb (subs s from at))
+                (.append sb "[:]//")
                 (recur (+ at 3)))))))))
 
 (def ^:private slashless-scheme

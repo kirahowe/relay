@@ -384,9 +384,16 @@
 
 ;; --- finding schemes takes time in the length of the text (relay#125)
 
+(declare break-schemes-by-pattern*)
+
 (defn- break-schemes-by-pattern
   "What defang's first step was: one pattern, which tries every letter of
-  a long word as the start of a scheme."
+  a long word as the start of a scheme, and then, since relay#104, a ://
+  left with no scheme before it broken too."
+  [s]
+  (str/replace (break-schemes-by-pattern* s) #"(?i)(?<!hxxp|hxxps|fxp)://" "[:]//"))
+
+(defn- break-schemes-by-pattern*
   [s]
   (str/replace (str s) #"(?i)([a-z][a-z0-9+.\-]*)://"
                (fn [[_ scheme]]
@@ -657,3 +664,16 @@
     (doseq [s ["a@x.example" "kira@mail.example.org" "a@my-host.example" "Totals 12,5@c2V.attacker.com"
                (str "a@" (apply str (repeat 290 "b")) "-evil.com")]]
       (is (= (str/replace s "." "[.]") (text/defang s)) s))))
+
+(deftest a-separator-with-no-scheme-before-it-is-broken
+  ;; relay#104, from relay-34's run of relay-tui over the fuzz: a ://
+  ;; after letters of another alphabet or a hidden character was left,
+  ;; its host's dots broken. Nothing is gained by guessing what a reader
+  ;; makes of such a scheme, so every :// but hxxp's, hxxps's and fxp's
+  ;; is broken, and a client's breaker finds nothing left to do.
+  (doseq [[s broken] [["\uff48\uff54\uff54\uff50\uff53://x.secret.com" "\uff48\uff54\uff54\uff50\uff53[:]//x[.]secret[.]com"]
+                      ["https\u200b://co.uk" "https\u200b[:]//co[.]uk"]
+                      ["1+://x" "1+[:]//x"]
+                      ["see ://x" "see [:]//x"]]]
+    (is (= broken (text/defang s)) s))
+  (is (= "hxxps://x[.]com" (text/defang "hxxps://x[.]com")) "a broken scheme stays as it is"))
