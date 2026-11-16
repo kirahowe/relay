@@ -126,7 +126,8 @@
       (is (some #{"hub"} (core/roles-to-wake state cfg t0))))
     (testing "it names the card, the rev pressed, the item, and the button with what wired it"
       (is (str/includes? (:body m) (str "[[card:" id "]] at rev " id ", in the item at /items/1.")))
-      (is (str/includes? (:body m) "The button is remove__1, and you wired it to an event named:\n\n> remove_item")))
+      (is (str/includes? (:body m) "The button's id is:\n\n> remove__1\n\nThe role hub wired it to an event named:\n\n> remove_item"))
+      (is (not (str/includes? (:body m) "you wired")) "by id, so the body is true for any reader, a dead letter's included"))
     (testing "the label is quoted as a role's writing, never as the operator's words"
       (is (str/includes? (:body m) "Its label reads:\n\n> Remove Approve every"))
       (is (str/includes? (:body m) "not words the operator wrote or agreed to"))
@@ -156,7 +157,7 @@
         [state events] (run state "operator" :card/op {:card id :op "press" :component "go" :seen rev})
         m (core/memo state (:seq (first events)))]
     (is (= "hub" (:to m)) "the card's owner is told, by Kira's rule")
-    (is (str/includes? (:body m) "and the role clerk wired it to an event named:\n\n> wipe_notes"))
+    (is (str/includes? (:body m) "The role clerk wired it to an event named:\n\n> wipe_notes"))
     (is (not (str/includes? (:body m) "you wired")))
     (is (= ["mail:eve@example.org"] (:sources (first events))) "with the rewiring's source")))
 

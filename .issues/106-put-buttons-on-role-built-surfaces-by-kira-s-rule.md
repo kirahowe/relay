@@ -132,3 +132,15 @@ Needs relay#97. relay-tui's side builds on relay#100.
   "you wired it", since relay keeps no role's incarnation and only Kira
   re-adds a role. Filed from round 1, by relay-32: relay#147 (relay-macos
   learns Button) and relay#148 (a label holding `] [`).
+- 2026-11-16, review round 3 on relay's side, a fresh reviewer: no route
+  to a third effect and no structural break. Two low findings in scope,
+  both about wording and both fixed: a dead letter of a press memo
+  handed its "you wired it" on to the handler, which had not (the body
+  now names the wirer by id, for any reader), and resources/AGENTS.md
+  told roles the memo quotes the label back as their own words, which is
+  false when another role or outside text wrote it. Also fixed from its
+  nits: the button's id is quoted like the event name, and the press
+  line in the prompt keeps the reply mechanics an operator's request
+  has. Three rounds each found something in scope, all low after round
+  1 and none a third effect, so by AGENTS.md the loop stops and the
+  question goes to Kira.

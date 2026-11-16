@@ -76,7 +76,9 @@
        (when press
          (str " relay wrote it when the operator pressed a button on a card. They pressed it, and did not write"
               " or agree to what the button says or does: that is a role's writing, not the operator's words."
-              " The outcome you give `memo_close` reaches them as the reply."))
+              " The outcome you give `memo_close` reaches them as the reply to it, and your final words in"
+              " this wake do not. If you tell them about it with `tell_operator` instead, pass `memo` " id
+              " there, and relay will not send the outcome as well."))
        (when (and request? (not press))
          (str " This is the operator's own request. The outcome you give `memo_close` reaches them as"
               " the reply to it, and your final words in this wake do not, so put your whole answer in"

@@ -4516,9 +4516,10 @@
         press {:card id :component component}
         ;; Any role that keeps cards may replace a surface's components,
         ;; so the memo says who wired the button, never that its reader did.
-        wirer (cond (= owner wired-by) "you"
-                    (= operator wired-by) "the operator"
-                    wired-by (str "the role " wired-by)
+        ;; By id, never "you": a dead letter hands this body on to another
+        ;; role, which must not read that it wired the button.
+        wirer (cond (= operator wired-by) "the operator"
+                    (string? wired-by) (str "the role " wired-by)
                     :else "a role")]
     ;; A public role is never sent a private memo, and one it could not
     ;; be given would hold the button's next press back for good.
@@ -4536,7 +4537,8 @@
                                 (when item (str ", in the item at " item))
                                 ". The card is titled:\n\n"
                                 (quote-block title) "\n\n"
-                                "The button is " component ", and " wirer " wired it to an event named:\n\n"
+                                "The button's id is:\n\n" (quote-block component) "\n\n"
+                                (str/capitalize (subs wirer 0 1)) (subs wirer 1) " wired it to an event named:\n\n"
                                 (quote-block event) "\n\n"
                                 "Its label reads:\n\n"
                                 (quote-block label) "\n\n"
