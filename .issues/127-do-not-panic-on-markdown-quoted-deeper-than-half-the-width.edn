@@ -1,6 +1,6 @@
 {:id 127
  :title "Do not panic on Markdown quoted deeper than half the width"
- :status :review
+ :status :done
  :type :bug
  :priority :p3
  :created "2026-11-15"

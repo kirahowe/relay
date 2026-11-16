@@ -142,3 +142,4 @@ Needs relay#97.
   webtool from my `ae` workspaces): agentloop, relay-tui, catalog,
   webtool, eventkit, relay, fuzz and pentest. relay-32 read the three
   commits and approved landing. Not pushed.
+- 2026-11-16 approved: 2026-11-17: Kira, in the coordinating session: close every issue in review; every criterion here has its receipt.

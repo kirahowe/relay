@@ -40,3 +40,4 @@ the dashboard down until it is started again.
   ppqnkvxw. Each quote level and list item takes columns from the
   width, and the thematic break's `strings.Repeat` got a negative count.
   A block's width is now never less than one column.
+- 2026-11-16 approved: 2026-11-17: Kira, in the coordinating session: close every issue in review; every criterion here has its receipt.

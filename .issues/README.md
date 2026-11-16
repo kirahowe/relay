@@ -70,13 +70,6 @@
 | --- | --- | --- | --- |
 | [130](130-break-an-address-that-a-character-with-no-width-is-hiding-in.md) | Break an address that a character with no width is hiding in | bug | P2 |
 
-### Review
-
-| ID | Title | Type | Priority |
-| --- | --- | --- | --- |
-| [101](101-teach-roles-when-and-how-to-build-a-surface-with-eval-cases.md) | Teach roles when and how to build a surface, with eval cases | feature | P2 |
-| [127](127-do-not-panic-on-markdown-quoted-deeper-than-half-the-width.md) | Do not panic on Markdown quoted deeper than half the width | bug | P3 |
-
 ### Blocked
 
 | ID | Title | Type | Priority |
@@ -144,6 +137,7 @@
 | [96](96-draw-a2ui-surfaces-in-relay-tui.md) | Draw A2UI surfaces in relay-tui | feature | P2 |
 | [97](97-keep-role-built-surfaces-in-the-log-and-send-them-to-every.md) | Keep role-built surfaces in the log and send them to every client | feature | P2 |
 | [100](100-draw-surface-cards-on-relay-tui-s-board.md) | Draw surface cards on relay-tui's board | feature | P2 |
+| [101](101-teach-roles-when-and-how-to-build-a-surface-with-eval-cases.md) | Teach roles when and how to build a surface, with eval cases | feature | P2 |
 | [110](110-scroll-an-open-card-that-is-taller-than-the-pane.md) | Scroll an open card that is taller than the pane | bug | P2 |
 | [124](124-break-a-host-that-follows-another-host-s-port-with-nothing.md) | Break a host that follows another host's port with nothing between | bug | P2 |
 | [136](136-let-a-text-free-update-pass-without-cutting-a-held-word.md) | Let a text-free update pass without cutting a held word | bug | P2 |
@@ -163,6 +157,7 @@
 | [66](66-reach-the-relay-service-from-the-phone-over-the-tailnet.md) | Reach the relay service from the phone over the tailnet | feature | P3 |
 | [99](99-the-live-shell-test-fails-while-apple-s-container-service.md) | The live shell test fails while Apple's container service is stopped | bug | P3 |
 | [125](125-keep-link-breaking-quick-on-one-very-long-word.md) | Keep link breaking quick on one very long word | bug | P3 |
+| [127](127-do-not-panic-on-markdown-quoted-deeper-than-half-the-width.md) | Do not panic on Markdown quoted deeper than half the width | bug | P3 |
 | [134](134-break-every-string-in-an-agent-s-update-unless-its-key-is.md) | Break every string in an agent's update unless its key is known safe | bug | P3 |
 
 ## Dropped
