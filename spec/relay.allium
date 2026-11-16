@@ -4350,7 +4350,14 @@ invariant OutsideTextIsInert {
     -- holds a card, a message or a ready item is sent it again when its
     -- list of links changes. A client that asked for the live links
     -- (_relay/links) is sent each change to them first, so it can hold
-    -- every link it draws to the set itself.
+    -- every link it draws to the set itself. A conversation's own text
+    -- is held to the same (relay#104): once the session may hold outside
+    -- text (the labels it started with or any since say so, or relay was
+    -- told none), every update its agent sends is made inert in relay's
+    -- proxy before any client gets it, a word at a time, so no way of
+    -- cutting the agent's text into chunks leaves a piece of a link
+    -- whole. A message's live links go beside it as data; the replay
+    -- holds the same text.
     for link in links_shown_whole_in_outside_text:   -- black box: each http or https address left whole in such text as shown
         false
     for address in addresses_a_channel_lets_the_operator_follow:   -- black box: a client's links list, a terminal's hyperlinks, a mail's address lines, a push's actions

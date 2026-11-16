@@ -33,7 +33,8 @@
             [relay.channels :as channels]
             [relay.core :as core]
             [relay.json :as strict]
-            [relay.ready :as ready]))
+            [relay.ready :as ready]
+            [relay.text :as text]))
 
 ;; --- what a conversation has learned
 
@@ -431,11 +432,20 @@
   (when-let [unknown (seq (sort (keys params)))]
     (str "_relay/links has no parameter " (str/join ", " unknown) ". It takes none.")))
 
+(defn- pairs
+  "Live links as a client is sent them beside text: each address with
+  the broken form text shows it in (relay#104), so a client can anchor a
+  link kept after the text that holds it was sent, and needs no breaker
+  of its own."
+  [addresses]
+  (mapv (fn [a] {"address" a "shown" (text/defang a)}) addresses))
+
 (defn links-answer
-  "The _relay/links answer: every live link, in order, and the log's
-  rev."
+  "The _relay/links answer: every live link, in order, under live and
+  under links with its shown form, and the log's rev."
   [state]
-  {"rev" (log-rev state) "live" (vec (sort (core/live-links state)))})
+  (let [live (vec (sort (core/live-links state)))]
+    {"rev" (log-rev state) "live" live "links" (pairs live)}))
 
 (defn links-changed
   "The _relay/links/changed params for a subscriber last sent the set
@@ -446,7 +456,7 @@
         added (sort (remove sent now))
         gone (sort (remove now sent))]
     (when (or (seq added) (seq gone))
-      {"rev" (log-rev state) "live" (vec added) "gone" (vec gone)})))
+      {"rev" (log-rev state) "live" (vec added) "links" (pairs added) "gone" (vec gone)})))
 
 (def link-methods
   "The methods that keep a link live or drop it, and the command each

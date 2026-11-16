@@ -288,9 +288,12 @@ command line instead.
 
 - Scope: connection.
 - Params: none. Anything, `sessionId` included, is refused (-32602).
-- Answer: `{"rev": int, "live": [string]}`: every live link, in order,
-  each one http or https address in plain ASCII (`relay.text/link?`).
-  `rev` is the seq of the log's last event.
+- Answer: `{"rev": int, "live": [string], "links": [{"address",
+  "shown"}]}`: every live link, in order, each one http or https
+  address in plain ASCII (`relay.text/link?`). `links` holds the same
+  addresses, each with the broken form text shows it in, so a client can
+  anchor a link in conversation text sent before the link was kept with
+  no breaker of its own. `rev` is the seq of the log's last event.
 - Errors: -32000 "relay has not read its links yet. Try again." just
   after start.
 - After it: the first call subscribes the connection to
@@ -392,29 +395,51 @@ command line instead.
 | `_relay/cards/changed` | connection | `{"rev", "cards": [Card]}`, every card whose rev is not the one this connection was last sent, archived cards included so the client can drop them, and every card whose `links` changed because a link became live or was dropped since, at the same rev | updates the one board, open conversation or not; a changed card brings the board into view unless the operator is busy in the pane |
 | `_relay/messages/changed` | connection | `{"rev", "messages": [Message]}`, oldest first: every message made, or whose deliveries changed, since this connection was last sent messages, and every one whose `links` changed because a link became live or was dropped since | not used yet |
 | `_relay/ready/changed` | connection | `{"rev", "items": [Item], "gone": [id]}`: every item new or different from what this connection was last sent, and the ids of those that left (an event that ended, a card archived, an item that fell past the newest 60) | applies them to the view it holds, which is the same as asking again |
-| `_relay/links/changed` | connection | `{"rev", "live": [string], "gone": [string]}`: the links that became live since this connection was last sent the set, and the ones that no longer are. It is sent before anything else made from the same state: any `_relay/cards/changed`, `_relay/messages/changed` or `_relay/ready/changed`, and the answer to a `_relay/cards/op` or a keep or drop | adds and removes them in the set it holds |
+| `_relay/links/changed` | connection | `{"rev", "live": [string], "links": [{"address", "shown"}], "gone": [string]}`: the links that became live, under `live` and with their shown forms under `links`, since this connection was last sent the set, and the ones that no longer are. It is sent before anything else made from the same state: any `_relay/cards/changed`, `_relay/messages/changed` or `_relay/ready/changed`, and the answer to a `_relay/cards/op` or a keep or drop | adds and removes them in the set it holds |
 | `_relay/replayed` | session | `{"sessionId", "truncated": bool}`, after the replay that follows `session/load` or an attaching `session/new`; `truncated` says the oldest updates were dropped | marks the conversation loaded, says so at the top when truncated, and stops calls the replay left open once the roster says the turn is idle |
 
-A conversation's own text (`session/update`) is the agent's, passed on
-as it came: relay breaks no link in it. A client breaks them itself once
-the session's labels say an outsider may have shaped it
-(`agentloop/labels`), and can make a hyperlink of the ones `_relay/links`
-names.
+A conversation's own text (`session/update`) is made inert by relay
+before any client sees it, once the session may hold outside text: the
+labels its session started with, or any agentloop sent since, say so, or
+relay was told none (relay#104). `initialize`'s `_meta` says
+`"relay/inertText": 1` when relay does this.
 
-Before it breaks them, the client takes every hidden character out of
-that text, and it does so first. A link breaker goes by letters, so a
-zero-width joiner inside `://` or `www.` hides the link from it, and a
-terminal's link finder may read straight past the same character. Taken
-out first, the pieces come together and the breaker is given the word a
-terminal would read. What is hidden is what `relay.text/hidden?` names:
-controls, format characters, private use and unassigned code points,
-the line and paragraph separators, and anything that draws as nothing
-or as an empty space. Two things are kept, as `relay.text/sanitize`
-keeps them: the joiner or variation selector that holds an emoji
-together (`emoji-glue?`), and a line or paragraph separator, which
-becomes a line break. This is every client's to do until relay makes
-conversation text safe itself (relay#104). relay-tui: `core.DropHidden`,
-with relay's own cases for the emoji rule in its tests.
+- Every link is broken as in a card's outside text (Live links): in
+  message and thought chunks, a tool call's title, its content's text
+  and diffs, its raw input and output, a plan's entries and a session's
+  title. A call's locations, which are paths, are left.
+- Hidden characters are shown as `\u{XXXX}` and every backslash as two,
+  as on a card, except the joiner or selector that holds an emoji
+  together, which is sent as it is.
+- A content block that is not text (an image, audio, a resource or a
+  link to one) arrives as a text block that names it, broken: a client
+  that renders Markdown would otherwise fetch an image's address with
+  no click.
+- relay sends whole words only. It holds back the end of a chunk until a
+  space, the end of the turn or the end of the conversation. When
+  another update of the conversation must go first, or a word runs past
+  4,096 characters, the held piece goes out with every dot and colon
+  broken.
+- A message is consecutive `agent_message_chunk` updates until any
+  update of another kind. A message chunk whose text shows a live link
+  carries `_meta` `"relay/links": [{"address", "shown"}]` and
+  `"relay/linksLeftOut": n`, the same entries and limits as a card's,
+  and the keys are absent when it shows none. Each `shown` occurs in
+  that chunk's text, and is anchored by the rule in Live links. A
+  client keeps the union for the message it is building, and may also
+  anchor a `shown` from `_relay/links` that the text holds. Thought
+  chunks, calls and plans never carry `relay/links`.
+- The replay holds the same text the live stream did, and lists links
+  by the set as it is when the replay is sent.
+- Text from a session whose labels are clean, and relay's own mirror of
+  the operator's prompt, are sent as written.
+
+A client that draws conversation text itself, and not through a
+terminal, turns its own link detection off for it and makes links only
+from relay's data. One that shows a plain ACP agent, or a relay without
+`relay/inertText`, still breaks links itself, taking hidden characters
+out first. relay-tui: for such a session, `core.DropHidden` and its own
+breaker.
 
 A prompt's text is cleaned before the agent sees it: the text of text
 blocks, embedded resources (`text` and `uri`) and resource links. Image and

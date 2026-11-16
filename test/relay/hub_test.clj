@@ -668,7 +668,7 @@
         rev #(dec (:next-seq %))
         h (-> (fresh) (assoc :state s0) (opened 1) (opened 2))
         [h fx] (say h 1 (req 1 "_relay/links" {}))]
-    (is (= {"rev" (rev s0) "live" []} (get (first (writes fx 1)) "result")) "none yet")
+    (is (= {"rev" (rev s0) "live" [] "links" []} (get (first (writes fx 1)) "result")) "none yet")
     (testing "a client that asks later gets them all, in order"
       (let [other "http://arts.example.net/apply"
             s (first (core/run-command s1 {:type :link/keep :actor "operator" :labels [] :args {:url other}} {:now t0 :config ct/cfg}))
@@ -679,7 +679,7 @@
           ws (writes fx 1)]
       (testing "a link kept elsewhere reaches the subscriber before the card that reads differently for it"
         (is (= ["_relay/links/changed" "_relay/cards/changed"] (methods-of ws)))
-        (is (= {"rev" (rev s1) "live" [fund] "gone" []} (get (first ws) "params")))
+        (is (= {"rev" (rev s1) "live" [fund] "links" fund-listed "gone" []} (get (first ws) "params")))
         (is (= [(str "See " fund-broken)] (note-texts (second ws))))
         (is (= [fund-listed] (card-links (second ws)))))
       (testing "a connection that did not ask is sent nothing"
@@ -690,7 +690,7 @@
         (let [[_ fx] (run h {:event :log-changed :roster roster :state s2})
               ws (writes fx 1)]
           (is (= ["_relay/links/changed" "_relay/cards/changed"] (methods-of ws)))
-          (is (= {"rev" (rev s2) "live" [] "gone" [fund]} (get (first ws) "params")))
+          (is (= {"rev" (rev s2) "live" [] "links" [] "gone" [fund]} (get (first ws) "params")))
           (is (= [(str "See " fund-broken)] (note-texts (second ws))))
           (is (= [[]] (card-links (second ws)))))))
     (testing "it takes no parameter, and needs relay to have read its log"

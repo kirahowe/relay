@@ -1933,6 +1933,19 @@ JSON object per line, with `from` set to `client` or `agent`. The file
 holds everything said, so relay makes it readable by you only and refuses
 a directory others can write to, such as `/tmp`.
 
+Once a conversation may hold outside text, relay breaks every link in
+what the role says before any client sees it, whichever client you use:
+its replies, its thinking and its tool calls, exactly as it breaks them
+on a card. A link relay can account for travels beside the text, as on
+a card, for a client to make clickable. Characters that draw as nothing
+show as `\u{XXXX}`, while emoji stay whole, and an image the role sends
+arrives as a line that names it rather than as a picture a client
+would fetch. relay sends whole words only, so however the role's
+replies are cut into pieces, no piece of a link reaches a client
+unbroken. A conversation that never read outside text, and your own
+prompts, come through as written. `initialize` says relay does this
+with `"relay/inertText": 1`.
+
 relay never asks a client to approve anything, and a role's calls run
 at once. agentloop sends no `session/request_permission`; if an agent
 sends one anyway, relay answers it as cancelled and the client never
