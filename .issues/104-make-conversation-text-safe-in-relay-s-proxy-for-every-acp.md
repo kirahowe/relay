@@ -266,3 +266,4 @@ relay#91 and relay#95.
     (2cd0e44d), tip urrlvnxw: everything passes but relay#99's two
     (Apple's container service stopped again). relay 1,254 of 1,255,
     pentests 31 of 32, fuzz 400,000 cases, none followed.
+- 2026-11-15 approved: Service is started (Kira, in issues tui, while the chain was being built; in the coordinating session's dialog she confirmed she meant to close it). Landed on integration at rusxpqur bd962f81.

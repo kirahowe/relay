@@ -87,3 +87,4 @@ open and is Kira's.
 - 2026-11-15: Kira started the service, and the live shell test passes
   with it running (receipt above). The path where the service runs is
   now exercised.
+- 2026-11-15 approved: Service is started (Kira, in issues tui; restated in the coordinating session's dialog)

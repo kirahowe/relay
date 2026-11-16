@@ -1,6 +1,6 @@
 {:id 104
  :title "Make conversation text safe in relay's proxy for every ACP client"
- :status :in-progress
+ :status :done
  :type :bug
  :priority :p1
  :created "2026-11-14"

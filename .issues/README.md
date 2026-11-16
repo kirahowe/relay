@@ -68,7 +68,6 @@
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
-| [104](104-make-conversation-text-safe-in-relay-s-proxy-for-every-acp.md) | Make conversation text safe in relay's proxy for every ACP client | bug | P1 |
 | [130](130-break-an-address-that-a-character-with-no-width-is-hiding-in.md) | Break an address that a character with no width is hiding in | bug | P2 |
 
 ### Review
@@ -76,7 +75,6 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [95](95-call-a-link-safe-from-the-dashboard.md) | Call a link safe from the dashboard | feature | P2 |
-| [99](99-the-live-shell-test-fails-while-apple-s-container-service.md) | The live shell test fails while Apple's container service is stopped | bug | P3 |
 
 ### Blocked
 
@@ -117,6 +115,7 @@
 | [89](89-read-the-mac-calendar-and-manage-reminders-through.md) | Read the Mac calendar and manage reminders through ingestors and an actuator | feature | P1 |
 | [94](94-keep-a-link-live-when-relay-can-say-where-it-came-from.md) | Keep a link live when relay can say where it came from | feature | P1 |
 | [98](98-decide-what-a-button-on-a-role-built-screen-may-do.md) | Decide what a button on a role-built screen may do | feature | P1 |
+| [104](104-make-conversation-text-safe-in-relay-s-proxy-for-every-acp.md) | Make conversation text safe in relay's proxy for every ACP client | bug | P1 |
 | [118](118-carry-a-live-link-as-data-beside-inert-text.md) | Carry a live link as data beside inert text | feature | P1 |
 | [3](3-run-agentloop-s-live-smoke-tests-from-a-flag-not-an-env-var.md) | Run agentloop's live smoke tests from a flag, not an env var | chore | P2 |
 | [5](5-support-reminder-sections-in-rem.md) | Support reminder sections in rem | feature | P2 |
@@ -157,6 +156,7 @@
 | [33](33-tidy-the-deploy-cleanup-message-and-tool-start-failures.md) | Tidy the deploy cleanup message and tool start failures | chore | P3 |
 | [50](50-mark-placeholders-left-in-a-draft-that-a-send-preview-shows.md) | Mark placeholders left in a draft that a send preview shows | feature | P3 |
 | [66](66-reach-the-relay-service-from-the-phone-over-the-tailnet.md) | Reach the relay service from the phone over the tailnet | feature | P3 |
+| [99](99-the-live-shell-test-fails-while-apple-s-container-service.md) | The live shell test fails while Apple's container service is stopped | bug | P3 |
 | [125](125-keep-link-breaking-quick-on-one-very-long-word.md) | Keep link breaking quick on one very long word | bug | P3 |
 
 ## Dropped

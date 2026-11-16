@@ -1,6 +1,6 @@
 {:id 99
  :title "The live shell test fails while Apple's container service is stopped"
- :status :review
+ :status :done
  :type :bug
  :priority :p3
  :created "2026-11-14"
