@@ -18,10 +18,25 @@ the dashboard down until it is started again.
 
 ## Acceptance criteria
 
-- [ ] A test draws 45 nested `> ` followed by `---` at every width from
+- [x] A test draws 45 nested `> ` followed by `---` at every width from
   1 to 80 and nothing panics. It fails on today's code.
-- [ ] `make check` passes.
+  - Receipt: relay-tui ppqnkvxw dbebb09f, on relay-tui's `integration`:
+    `TestMarkdownNestedDeeperThanTheWidthDraws` in
+    internal/render/markdown_deep_test.go draws that and deep lists,
+    code, headings and tables at widths 1 to 80, every row within the
+    width. With the fix taken out it panics with "strings: negative
+    Repeat count".
+- [x] `make check` passes.
+  - Receipt: `make check` on ppqnkvxw passed; full `bb verify` with relay
+    at nvtvtrup passed every step (relay 1266/1266, pentest 33/33). A
+    read-only review ran 666,600 renders (nesting 0 to 100, widths 1 to
+    120): no panic, no row over the width.
 
 ## Plan
 
 ## Log
+
+- 2026-11-16, the relay#95 session (relay-34): fixed in relay-tui
+  ppqnkvxw. Each quote level and list item takes columns from the
+  width, and the thematic break's `strings.Repeat` got a negative count.
+  A block's width is now never less than one column.

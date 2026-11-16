@@ -260,3 +260,21 @@ breaker is the only one.
     being relay#99's.
   - Still open here: relay-tui's half (held by the coordinating session
     until Kira answers on relay#104), and Kira's word on the triage.
+- 2026-11-16, the relay#95 session (relay-34): relay-tui's half as the
+  coordinating session recorded it in relay#104's Log is on relay-tui's
+  `integration`, qxlyolmz cb8f80d7. With `relay/inertText` relay-tui
+  draws a contaminated session's text as relay sent it (no breaker of
+  its own, no DropHidden), takes a reply's links only from relay's
+  `relay/links`, and keeps `gate` last; without the flag it is as
+  before. relay's conversation fuzz at relay-fb's last commit (200,000
+  cases) through it: 0 rows followable, 0 frames gate changed. Full
+  `bb verify` passed every step; a read-only review found nothing in
+  scope.
+- What this does not yet meet, for whoever picks up the rest: the first
+  two criteria ask for a test whose judge skips zero-width characters,
+  combining marks included; relay-tui's tests read past format
+  characters and variation selectors but not marks. relay-tui's
+  `core.DropHidden` (now used only against an older relay) does not
+  yet take U+1107F and U+1BC9D. Kira's confirmation of the triage, and
+  a Codex round (its quota is out until 2026-11-19), are still open.
+

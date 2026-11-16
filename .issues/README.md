@@ -54,7 +54,6 @@
 | [108](108-bound-the-live-links-a-client-is-sent.md) | Bound the live links a client is sent | feature | P3 |
 | [122](122-fix-the-ready-view-property-that-fails-on-seed.md) | Fix the ready-view property that fails on seed 6561552371814650667 | bug | P3 |
 | [123](123-compare-relay-macos-s-copies-of-relay-s-shared-test-data-in.md) | Compare relay-macos's copies of relay's shared test data in bb verify | chore | P3 |
-| [127](127-do-not-panic-on-markdown-quoted-deeper-than-half-the-width.md) | Do not panic on Markdown quoted deeper than half the width | bug | P3 |
 | [128](128-keep-the-board-fast-when-surface-cards-are-at-relay-s-limits.md) | Keep the board fast when surface cards are at relay's limits | chore | P3 |
 | [129](129-show-a-card-s-text-form-when-one-of-its-members-has-the.md) | Show a card's text form when one of its members has the wrong type | bug | P3 |
 | [131](131-keys-held-while-connecting-are-replayed-onto-a-restored.md) | Keys held while connecting are replayed onto a restored card and act on it | bug | P3 |
@@ -76,6 +75,7 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [101](101-teach-roles-when-and-how-to-build-a-surface-with-eval-cases.md) | Teach roles when and how to build a surface, with eval cases | feature | P2 |
+| [127](127-do-not-panic-on-markdown-quoted-deeper-than-half-the-width.md) | Do not panic on Markdown quoted deeper than half the width | bug | P3 |
 
 ### Blocked
 
