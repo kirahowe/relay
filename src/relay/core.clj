@@ -4538,12 +4538,14 @@
                                 (quote-block title) "\n\n"
                                 "The button is " component ", and " wirer " wired it to an event named:\n\n"
                                 (quote-block event) "\n\n"
-                                "Its label, which a role wrote and not the operator, reads:\n\n"
+                                "Its label reads:\n\n"
                                 (quote-block label) "\n\n"
-                                "Read the card to see what the press is for."
+                                "The label is the writing of whoever wrote the card, not words the operator wrote or"
+                                " agreed to. Read the card to see what the press is for."
                                 (when item (str " If the card has changed since rev " rev ", check that the item at "
                                                 item " is still the one the label names, and ask the operator if not."))
-                                " Do what the button is for, and close this memo with what you did.")}
+                                " Do what the button is for if it is what the operator would want, and ask them"
+                                " otherwise. Close this memo with what you did.")}
                   (card-labels card) (or (seq (:sources card)) (card-labels card))))))
 
 (defmethod decide* :card/op [{:keys [state actor] :as tx} {{id :card :as args} :args}]

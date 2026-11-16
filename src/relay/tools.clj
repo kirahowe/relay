@@ -60,11 +60,12 @@
 (defn- labelled [content & label-colls]
   {:content content :labels (apply core/union label-colls)})
 
-(defn- fmt-memo [{:keys [id from subject body sent-at attempts routine]}]
+(defn- fmt-memo [{:keys [id from subject body sent-at attempts routine press]}]
   (str "Memo " id ": " subject " " (refs/ref :memo id) "\n"
        (if routine
          (str "  Your routine `" routine "` coming due, " sent-at ".")
          (str "  From " from ", sent " sent-at "."))
+       (when press " relay wrote it for a button the operator pressed; what the button says is a role's writing.")
        (when (pos? attempts) (str " Left open by " attempts " earlier wake(s)."))
        "\n\n" (str/replace body #"(?m)^" "  ") "\n"))
 

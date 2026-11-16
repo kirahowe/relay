@@ -4258,7 +4258,7 @@ rule PressButton {
 
     @guidance
         -- A press that tells the role carries the card's labels and keeps
-        -- its sources (Kira, 2026-11-17), so what the role does after it
+        -- its sources (Kira, 2026-11-16), so what the role does after it
         -- shows where the card's text came from. Its owner must be an
         -- active role, and a second press of the same button is refused
         -- while the memo of the last one is unread. A role's card_op is

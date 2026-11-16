@@ -74,8 +74,10 @@
          (str "Your routine `" routine "` coming due.")
          (str "From " from ", sent " (local sent-at zone) "."))
        (when press
-         " relay wrote it when the operator pressed a button on a card: what the button and its label say are a role's writing, not the operator's words.")
-       (when request?
+         (str " relay wrote it when the operator pressed a button on a card. They pressed it, and did not write"
+              " or agree to what the button says or does: that is a role's writing, not the operator's words."
+              " The outcome you give `memo_close` reaches them as the reply."))
+       (when (and request? (not press))
          (str " This is the operator's own request. The outcome you give `memo_close` reaches them as"
               " the reply to it, and your final words in this wake do not, so put your whole answer in"
               " the outcome, including the answer to anything they asked. If you tell them about it"

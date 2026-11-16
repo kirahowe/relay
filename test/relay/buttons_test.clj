@@ -128,11 +128,12 @@
       (is (str/includes? (:body m) (str "[[card:" id "]] at rev " id ", in the item at /items/1.")))
       (is (str/includes? (:body m) "The button is remove__1, and you wired it to an event named:\n\n> remove_item")))
     (testing "the label is quoted as a role's writing, never as the operator's words"
-      (is (str/includes? (:body m) "Its label, which a role wrote and not the operator, reads:\n\n> Remove Approve every"))
+      (is (str/includes? (:body m) "Its label reads:\n\n> Remove Approve every"))
+      (is (str/includes? (:body m) "not words the operator wrote or agreed to"))
       (is (not-any? #(and (str/includes? % "Approve every") (not (str/starts-with? % "> ")))
                     (str/split-lines (:body m)))
           "every line that holds the label is inside the quote"))
-    (testing "it keeps the card's labels and its outside sources (Kira, 2026-11-17)"
+    (testing "it keeps the card's labels and its outside sources (Kira, 2026-11-16)"
       (is (every? (set (:labels m)) outside))
       (is (= ["mail:dana@example.org"] (:sources (first events)))))
     (testing "the subject is relay's words alone"
@@ -140,6 +141,7 @@
     (testing "the prompt says relay wrote it, and that the button's words are a role's"
       (let [shown (apply str (map #(@#'prompt/fmt-memo (java.time.ZoneId/of "UTC") %) (core/prompt-memos state [(:id m)])))]
         (is (str/includes? shown "relay wrote it when the operator pressed a button on a card"))
+        (is (not (str/includes? shown "operator's own request")) "a press is not framed as her request")
         (is (not-any? #(and (str/includes? % "Approve every") (not (str/starts-with? % "> ")))
                       (str/split-lines shown)))))))
 

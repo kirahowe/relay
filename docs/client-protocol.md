@@ -764,8 +764,8 @@ The operator presses a button with another op:
 - A press wakes a role and costs a model turn, so a client takes one
   only from a key the operator pressed live, after the card has been on
   screen a moment, never from keys replayed after a reconnect. relay
-  refuses a second press of the same button while the role has not read
-  the memo of the first.
+  refuses a second press of the same button while the role has not
+  closed the memo of the first.
 
 relay's refusals of a press (-32000), shown as they are:
 
@@ -774,8 +774,8 @@ relay's refusals of a press (-32000), shown as they are:
 | `press needs seen: the card's rev when you read it.` | no `seen` |
 | `Card 1840 has changed since rev 1852. Read the card again before you change it.` | `seen` is older than the card's rev |
 | `Nothing on card 1840 is a button with that id.` | no Button has that id at this rev |
-| `steward has not yet taken up your last press of that button.` | the memo of the last press of it is unread |
-| `Nobody keeps card 1840 now, so a press would tell no one.` | the card's owner is the operator or a role that was removed |
+| `steward has not yet taken up your last press of that button.` | the memo of the last press of it is not yet closed |
+| `Nobody keeps card 1840 now, so a press would tell no one.` | the card's owner is the operator, a role that was removed, or a role that is now public |
 | `Card 1840 is archived. Restore it first.` | the card is archived |
 
 A role changes its surface with `data` (`path`, `value`, `seen`), which

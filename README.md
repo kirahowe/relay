@@ -1231,7 +1231,7 @@ came from. A press is an op, `press`, with the button's id and `seen`.
 Only you press, a button cannot call anything else (`openUrl`
 included), and a press never changes your settings or stands for your
 yes to anything. You cannot press the same button again until the role
-has read the last press.
+has closed the memo of the last press.
 
 `input`, `data`, `components` and `press` each need `seen` and are refused
 unless it is the card's rev now. A path into a list is a position, and

@@ -116,3 +116,19 @@ Needs relay#97. relay-tui's side builds on relay#100.
     surface's label shows an address as the role wrote it, as every
     clean card does (relay#119, Kira's to decide); a label holding
     `] [` reads as two buttons, sent to relay-32 to file.
+- 2026-11-16, review round 2 on relay's side, a fresh reviewer: no route
+  to a third effect and no structural break. One low finding in scope,
+  fixed with a test: the prompt still framed a press memo as "the
+  operator's own request", beside "Do what the button is for", which
+  gave a label's instruction her authority in the model's eyes. A press
+  memo now has its own line instead (she pressed it, and did not write
+  or agree to what it says), the inbox tool says the same, and the body
+  says to do what the button is for only if she would want it and to
+  ask otherwise. Also fixed from its nits: the memo said both "the
+  operator wired it" and "a role wrote" its label when she had written
+  the components herself; the refusal table and the README said "read"
+  where the block lasts until the memo is closed; two stray 11-17
+  dates. Left: a role removed and added again under the same id is told
+  "you wired it", since relay keeps no role's incarnation and only Kira
+  re-adds a role. Filed from round 1, by relay-32: relay#147 (relay-macos
+  learns Button) and relay#148 (a label holding `] [`).
