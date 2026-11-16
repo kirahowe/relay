@@ -15,8 +15,9 @@ Take work from the issues tracker: `issues --dir <workspace> next`. Start an iss
 Dispatch and triage work as `~/code/projects/factory/docs/process.md` says. In relay that means:
 
 - An epic names its first slice: the shortest path to something Kira can use in relay-tui, through every layer. Build the slice before hardening anything it doesn't need.
-- A new issue goes to the inbox and blocks nothing. File what you notice and stay on your own issue. Only Kira or the architect adds a part to an epic or a blocked-by edge, with the reason in the epic's log.
-- The architect is a fresh agent that triages the inbox before each dispatch and after each review round: now, later, drop or symptom. When two or three issues share a cause, it holds their fixes and files the structural change as one issue.
+- A new issue goes to the inbox and blocks nothing. File what you notice and stay on your own issue. Only Kira or triage adds a part to an epic or a blocked-by edge, with the reason in the epic's log.
+- Triage (factory's `skill/workflows/triage.js`) runs at the end of every phase and before each dispatch. Its architect looks for a shared technical cause: when two or three issues have one, it holds their fixes and files the structural change as one issue. Its product step places the rest by value to Kira: now, later, drop, or a question for her.
+- After a user-facing phase, product's experience walk (`skill/workflows/experience.js`) uses relay as a newcomer would, without reading the code, and judges the whole journey against the plan's experience goals.
 
 ## Threat model
 
