@@ -40,3 +40,9 @@ Related: relay#104, relay#134, relay#84.
 
 ## Log
 
+- 2026-11-16, relay-ec. relay#134 made relay.hub/inert-update break
+  every string in an update except a kept list. `locations` is on
+  kept-update-keys, and a diff's `path` is kept inside a call's content
+  (inert-tool-content), both because they are paths. If this issue
+  decides paths are not safe to send whole, take both off those lists,
+  and update docs/client-protocol.md, which names them.
