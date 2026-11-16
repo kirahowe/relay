@@ -12,6 +12,12 @@ Never read or write `~/Sync/relay` or `~/.config/relay`. Test with artificial da
 
 Take work from the issues tracker: `issues --dir <workspace> next`. Start an issue with `issues start <id>`. Record judgment calls in the issue's details file as you make them, with the reason. When the work is verified, update the details and move the issue to review. Kira closes it.
 
+Dispatch and triage work as `~/code/projects/factory/docs/process.md` says. In relay that means:
+
+- An epic names its first slice: the shortest path to something Kira can use in relay-tui, through every layer. Build the slice before hardening anything it doesn't need.
+- A new issue goes to the inbox and blocks nothing. File what you notice and stay on your own issue. Only Kira or the architect adds a part to an epic or a blocked-by edge, with the reason in the epic's log.
+- The architect is a fresh agent that triages the inbox before each dispatch and after each review round: now, later, drop or symptom. When two or three issues share a cause, it holds their fixes and files the structural change as one issue.
+
 ## Threat model
 
 relay is a personal tool. It runs on Kira's always-on Mac, and the only
@@ -52,7 +58,7 @@ Security-relevant changes get an adversarial review loop with Codex until it con
 
     CODEX_HOME=~/.codex-kira codex exec --sandbox read-only "<review prompt>"
 
-Give the reviewer the threat model above. Triage each finding against it. A finding is in scope when a plausible mistake or an untargeted attack could trigger it. Fix an in-scope defect that breaks a guarantee. File other in-scope findings as issues with the reviewer's text. Reject out-of-scope findings with a one-line reason that names the part of the threat model. Stop when a round has no in-scope defect. After three rounds that still find one, stop and ask Kira, since the design may be wrong. The goal is a sound implementation for relay's use, not a reviewer with nothing left to say.
+Give the reviewer the threat model above. Triage each finding against it. A finding is in scope when a plausible mistake or an untargeted attack could trigger it. Fix an in-scope defect that breaks a guarantee. File other in-scope findings as issues with the reviewer's text. They go to the inbox for the architect and do not join or block the issue under review. Reject out-of-scope findings with a one-line reason that names the part of the threat model. Stop when a round has no in-scope defect. When a second round finds the same kind of defect as the first, stop: that is a design question for the architect, and for Kira when it changes a decision of hers. After three rounds that still find a defect, stop and ask Kira, since the design may be wrong. The goal is a sound implementation for relay's use, not a reviewer with nothing left to say.
 
 ## From real use to an eval case
 
