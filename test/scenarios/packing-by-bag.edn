@@ -1,0 +1,251 @@
+;; Eval case: the operator asks the steward to help keep their packing
+;; straight for a weekend away, bag by bag, with things to tick off as
+;; they go in and a reminder about the last ferry at the top. No fixed
+;; kind of card fits that: a checklist has no headings and no text above
+;; its items, and a note has no boxes. So the steward should lay out one
+;; surface: the reminder, then each bag as a heading with its own items
+;; as boxes under it. The operator's words name no surface, catalog or
+;; kind of card (relay#101). All of it is made up: Pell Lake and its
+;; ferry do not exist. See relay.eval.
+{:doc "Packing by bag, with a reminder on top, becomes one surface that relay accepts."
+ :live? true
+
+ :eval {:id "packing-by-bag" :version 1 :tier :capability
+        :tags [:house :cards :surfaces] :trials 3}
+
+ :clock "2026-11-16T09:00"
+
+ :model
+ {"steward" [{:tool-uses [{:name "cards" :input {:catalog true}}]}
+             {:tool-uses [{:name "card_add"
+                           :input {:kind "surface"
+                                   :title "Packing for Pell Lake"
+                                   :components [{"id" "root" "component" "Column" "children" ["ferry" "rule" "bags"]}
+                                                {"id" "ferry" "component" "Text"
+                                                 "text" "The last ferry leaves at 6:40pm Friday, so be packed by 5."}
+                                                {"id" "rule" "component" "Divider"}
+                                                {"id" "bags" "component" "Column"
+                                                 "children" {"componentId" "bag" "path" "/bags"}}
+                                                {"id" "bag" "component" "Column" "children" ["bagName" "bagItems"]}
+                                                {"id" "bagName" "component" "Text" "text" {"@path" "name"}}
+                                                {"id" "bagItems" "component" "Column"
+                                                 "children" {"componentId" "item" "path" "items"}}
+                                                {"id" "item" "component" "CheckBox"
+                                                 "label" {"@path" "text"} "value" {"@path" "done"}}]
+                                   :data {"bags" [{"name" "# Blue duffel"
+                                                   "items" [{"text" "Sleeping bag" "done" false}
+                                                            {"text" "Rain jacket" "done" false}
+                                                            {"text" "Boots" "done" false}]}
+                                                  {"name" "# Backpack"
+                                                   "items" [{"text" "Headlamp" "done" false}
+                                                            {"text" "First-aid kit" "done" false}
+                                                            {"text" "Water filter" "done" false}]}
+                                                  {"name" "# Food bin"
+                                                   "items" [{"text" "Camp stove" "done" false}
+                                                            {"text" "Coffee" "done" false}
+                                                            {"text" "Pancake mix" "done" false}]}]}}}]}
+             {:tool-uses [{:name "memo_close"
+                           :input {:memo {:memo-id {:subject "Packing for the lake"}}
+                                   :outcome "I've put your packing on your board, bag by bag, with the ferry time at the top. Tick things off as they go in."}}]}
+             {:tool-uses [{:name "journal_write"
+                           :input {:text "Put the operator's Pell Lake packing on the board, grouped by bag, with the 6:40 ferry reminder on top."}}]}
+             {:text "Done."}]}
+
+ :foils
+ {;; A checklist with every item named by its bag: the fixed kind, which
+  ;; cannot set the bags apart or hold the reminder.
+  "checklist-with-bag-names"
+  {:fails #{:adds-a-surface :bags-are-headings :reminder-on-top}
+   :model {"steward" [{:tool-uses [{:name "card_add"
+                                    :input {:kind "checklist" :title "Packing for Pell Lake (last ferry 6:40pm)"
+                                            :items ["Duffel: sleeping bag" "Duffel: rain jacket" "Duffel: boots"
+                                                    "Backpack: headlamp" "Backpack: first-aid kit" "Backpack: water filter"
+                                                    "Food bin: camp stove" "Food bin: coffee" "Food bin: pancake mix"]}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:subject "Packing for the lake"}} :outcome "Put a checklist on your board."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Made a packing checklist."}}]}
+                      {:text "Done."}]}}
+
+  ;; A checklist whose headings are items of their own, so each bag's name
+  ;; is a box to tick. The case's point is that this shape needs more
+  ;; than a checklist, so the graders must not take it.
+  "checklist-with-heading-items"
+  {:fails #{:adds-a-surface :bags-are-headings :reminder-on-top}
+   :model {"steward" [{:tool-uses [{:name "card_add"
+                                    :input {:kind "checklist" :title "Packing for Pell Lake"
+                                            :items ["Last ferry 6:40pm, be packed by 5"
+                                                    "BLUE DUFFEL" "Sleeping bag" "Rain jacket" "Boots"
+                                                    "BACKPACK" "Headlamp" "First-aid kit" "Water filter"
+                                                    "FOOD BIN" "Camp stove" "Coffee" "Pancake mix"]}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:subject "Packing for the lake"}} :outcome "Put a checklist on your board."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Made a packing checklist."}}]}
+                      {:text "Done."}]}}
+
+  ;; A note for the ferry and a checklist for the things: two cards where
+  ;; one was asked for, and still no bags.
+  "note-and-checklist"
+  {:fails #{:adds-a-surface :one-card :bags-are-headings :grouped-by-bag}
+   :model {"steward" [{:tool-uses [{:name "card_add"
+                                    :input {:kind "note" :title "Ferry" :text "The last ferry leaves at 6:40pm Friday."}}
+                                   {:name "card_add"
+                                    :input {:kind "checklist" :title "Packing for Pell Lake"
+                                            :items ["Sleeping bag" "Rain jacket" "Boots" "Headlamp" "First-aid kit"
+                                                    "Water filter" "Camp stove" "Coffee" "Pancake mix"]}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:subject "Packing for the lake"}} :outcome "Put two cards on your board."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Made a packing checklist and a ferry note."}}]}
+                      {:text "Done."}]}}
+
+  ;; A surface, but one flat list: the bags only in the labels.
+  "flat-surface"
+  {:fails #{:bags-are-headings}
+   :model {"steward" [{:tool-uses [{:name "card_add"
+                                    :input {:kind "surface" :title "Packing for Pell Lake"
+                                            :components [{"id" "root" "component" "Column" "children" ["ferry" "items"]}
+                                                         {"id" "ferry" "component" "Text" "text" "Last ferry 6:40pm Friday."}
+                                                         {"id" "items" "component" "Column"
+                                                          "children" {"componentId" "item" "path" "/items"}}
+                                                         {"id" "item" "component" "CheckBox"
+                                                          "label" {"@path" "text"} "value" {"@path" "done"}}]
+                                            :data {"items" [{"text" "Duffel: sleeping bag" "done" false}
+                                                            {"text" "Duffel: rain jacket" "done" false}
+                                                            {"text" "Duffel: boots" "done" false}
+                                                            {"text" "Backpack: headlamp" "done" false}
+                                                            {"text" "Backpack: first-aid kit" "done" false}
+                                                            {"text" "Backpack: water filter" "done" false}
+                                                            {"text" "Food bin: camp stove" "done" false}
+                                                            {"text" "Food bin: coffee" "done" false}
+                                                            {"text" "Food bin: pancake mix" "done" false}]}}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:subject "Packing for the lake"}} :outcome "Put your packing on your board."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Made a packing surface."}}]}
+                      {:text "Done."}]}}
+
+  ;; Headings, but in the wrong places: the boots and the coffee sit
+  ;; under the backpack.
+  "items-under-the-wrong-bag"
+  {:fails #{:grouped-by-bag}
+   :model {"steward" [{:tool-uses [{:name "card_add"
+                                    :input {:kind "surface" :title "Packing for Pell Lake"
+                                            :components [{"id" "root" "component" "Column"
+                                                          "children" ["ferry" "duffel" "b1" "b2"
+                                                                      "backpack" "b3" "b4" "b5" "b6" "b7"
+                                                                      "food" "b8" "b9"]}
+                                                         {"id" "ferry" "component" "Text" "text" "Last ferry 6:40pm Friday."}
+                                                         {"id" "duffel" "component" "Text" "text" "Blue duffel"}
+                                                         {"id" "b1" "component" "CheckBox" "label" "Sleeping bag" "value" {"@path" "/d/0"}}
+                                                         {"id" "b2" "component" "CheckBox" "label" "Rain jacket" "value" {"@path" "/d/1"}}
+                                                         {"id" "backpack" "component" "Text" "text" "Backpack"}
+                                                         {"id" "b3" "component" "CheckBox" "label" "Boots" "value" {"@path" "/d/2"}}
+                                                         {"id" "b4" "component" "CheckBox" "label" "Headlamp" "value" {"@path" "/d/3"}}
+                                                         {"id" "b5" "component" "CheckBox" "label" "First-aid kit" "value" {"@path" "/d/4"}}
+                                                         {"id" "b6" "component" "CheckBox" "label" "Water filter" "value" {"@path" "/d/5"}}
+                                                         {"id" "b7" "component" "CheckBox" "label" "Coffee" "value" {"@path" "/d/6"}}
+                                                         {"id" "food" "component" "Text" "text" "Food bin"}
+                                                         {"id" "b8" "component" "CheckBox" "label" "Camp stove" "value" {"@path" "/d/7"}}
+                                                         {"id" "b9" "component" "CheckBox" "label" "Pancake mix" "value" {"@path" "/d/8"}}]
+                                            :data {"d" [false false false false false false false false false]}}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:subject "Packing for the lake"}} :outcome "Put your packing on your board."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Made a packing surface."}}]}
+                      {:text "Done."}]}}
+
+  ;; The reminder under the bags, not on top.
+  "reminder-at-the-bottom"
+  {:fails #{:reminder-on-top}
+   :model {"steward" [{:tool-uses [{:name "card_add"
+                                    :input {:kind "surface" :title "Packing for Pell Lake"
+                                            :components [{"id" "root" "component" "Column" "children" ["bags" "ferry"]}
+                                                         {"id" "ferry" "component" "Text" "text" "Last ferry 6:40pm Friday."}
+                                                         {"id" "bags" "component" "Column"
+                                                          "children" {"componentId" "bag" "path" "/bags"}}
+                                                         {"id" "bag" "component" "Column" "children" ["bagName" "bagItems"]}
+                                                         {"id" "bagName" "component" "Text" "text" {"@path" "name"}}
+                                                         {"id" "bagItems" "component" "Column"
+                                                          "children" {"componentId" "item" "path" "items"}}
+                                                         {"id" "item" "component" "CheckBox"
+                                                          "label" {"@path" "text"} "value" {"@path" "done"}}]
+                                            :data {"bags" [{"name" "Blue duffel"
+                                                            "items" [{"text" "Sleeping bag" "done" false}
+                                                                     {"text" "Rain jacket" "done" false}
+                                                                     {"text" "Boots" "done" false}]}
+                                                           {"name" "Backpack"
+                                                            "items" [{"text" "Headlamp" "done" false}
+                                                                     {"text" "First-aid kit" "done" false}
+                                                                     {"text" "Water filter" "done" false}]}
+                                                           {"name" "Food bin"
+                                                            "items" [{"text" "Camp stove" "done" false}
+                                                                     {"text" "Coffee" "done" false}
+                                                                     {"text" "Pancake mix" "done" false}]}]}}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:subject "Packing for the lake"}} :outcome "Put your packing on your board."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Made a packing surface."}}]}
+                      {:text "Done."}]}}
+
+  ;; A surface relay refuses (a component its catalog does not have), and
+  ;; the steward leaves it there.
+  "refused-and-left"
+  {:fails #{:adds-a-surface :one-card :every-item-a-box :bags-are-headings :grouped-by-bag :reminder-on-top}
+   :model {"steward" [{:tool-uses [{:name "card_add"
+                                    :input {:kind "surface" :title "Packing for Pell Lake"
+                                            :components [{"id" "root" "component" "Column" "children" ["ferry" "duffel"]}
+                                                         {"id" "ferry" "component" "Text" "text" "Last ferry 6:40pm Friday."}
+                                                         {"id" "duffel" "component" "Heading" "text" "Blue duffel"}]
+                                            :data {}}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:subject "Packing for the lake"}} :outcome "Tried to put your packing on your board."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "The packing card did not go on."}}]}
+                      {:text "Done."}]}}}
+
+ :steps
+ [{:run ["memo" "steward" "-s" "Packing for the lake"
+         "-m" "We're off to the cabin at Pell Lake on Friday and I always forget something. Can you help me keep my packing straight this week? I pack by bag. The blue duffel gets the sleeping bag, rain jacket and boots. The backpack gets the headlamp, first-aid kit and water filter. The food bin gets the camp stove, coffee and pancake mix. I'd like to tick things off as they go in and see it bag by bag. And put a reminder up top that the last ferry leaves at 6:40pm, so I'm packed by 5."]}
+  {:tick 1}]
+
+ :assert
+ [[:has :wake {:role "steward"}]]
+
+ :graders
+ [{:id :adds-a-surface
+   :doc "The steward's packing is a surface on the board, active."
+   :check [:has :card {:kind "surface" :status "active" :owner "steward"}]}
+  {:id :one-card
+   :doc "One card for the packing, not several."
+   :check [:count :card {:status "active"} 1]}
+  {:id :every-item-a-box
+   :doc "Each of the nine things to pack is a box the operator can tick."
+   :check [:has :card {:status "active"
+                       :boxes [:all [:contains [:regex "(?i)sleeping bag"]]
+                               [:contains [:regex "(?i)rain jacket"]]
+                               [:contains [:regex "(?i)boots"]]
+                               [:contains [:regex "(?i)headlamp"]]
+                               [:contains [:regex "(?i)first.aid"]]
+                               [:contains [:regex "(?i)water filter"]]
+                               [:contains [:regex "(?i)stove"]]
+                               [:contains [:regex "(?i)coffee"]]
+                               [:contains [:regex "(?i)pancake"]]]}]}
+  {:id :bags-are-headings
+   :doc "Each bag is a text of its own on a surface, and no box names a bag: a bag is a heading, not a thing to tick."
+   :check [:has :card {:kind "surface" :status "active"
+                       :texts [:all [:contains [:regex "(?is)duffel"]]
+                               [:contains [:regex "(?is)backpack"]]
+                               [:contains [:regex "(?is)food bin"]]]
+                       :boxes [:not [:contains [:regex "(?i)(duffel|backpack|food bin)"]]]}]}
+  {:id :grouped-by-bag
+   :doc "Each thing is drawn under its own bag's name, with no other bag's name between them."
+   :check [:has :card {:status "active"
+                       :text [:all
+                              [:regex "(?is)duffel(?:(?!backpack|food bin).)*sleeping bag"]
+                              [:regex "(?is)duffel(?:(?!backpack|food bin).)*rain jacket"]
+                              [:regex "(?is)duffel(?:(?!backpack|food bin).)*boots"]
+                              [:regex "(?is)backpack(?:(?!duffel|food bin).)*headlamp"]
+                              [:regex "(?is)backpack(?:(?!duffel|food bin).)*first.aid"]
+                              [:regex "(?is)backpack(?:(?!duffel|food bin).)*water filter"]
+                              [:regex "(?is)food bin(?:(?!duffel|backpack).)*stove"]
+                              [:regex "(?is)food bin(?:(?!duffel|backpack).)*coffee"]
+                              [:regex "(?is)food bin(?:(?!duffel|backpack).)*pancake"]]}]}
+  {:id :reminder-on-top
+   :doc "The ferry time is on the card above its first box."
+   :check [:has :card {:status "active"
+                       :text [:regex "\\A[^\\n]*\\n(?s:(?!\\[[ x]\\]).)*6[:.]40"]}]}]}

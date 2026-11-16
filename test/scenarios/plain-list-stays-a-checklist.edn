@@ -1,0 +1,93 @@
+;; Eval case: the operator asks the steward to keep track of what is left
+;; to do before a move, a plain list of steps they will tick off over two
+;; weeks. A checklist fits it exactly, so the steward should make one and
+;; lay out no surface: a fixed kind is less to keep right (the board
+;; section of resources/AGENTS.md). The operator's words name no card
+;; kind (relay#101). All of it is made up. See relay.eval.
+{:doc "A plain list of steps becomes a checklist, not a surface."
+ :live? true
+
+ :eval {:id "plain-list-stays-a-checklist" :version 1 :tier :regression
+        :tags [:house :cards :surfaces] :trials 3}
+
+ :clock "2026-11-16T09:00"
+
+ :model
+ {"steward" [{:tool-uses [{:name "card_add"
+                           :input {:kind "checklist" :title "Before the move on the 30th"
+                                   :items ["Book the van" "Tell the landlord" "Forward the mail"
+                                           "Cancel the internet" "Return the spare keys"]}}]}
+             {:tool-uses [{:name "memo_close"
+                           :input {:memo {:memo-id {:subject "Moving on the 30th"}}
+                                   :outcome "I've put a checklist on your board with the five things left before the move."}}]}
+             {:tool-uses [{:name "journal_write"
+                           :input {:text "Put a checklist for the move on the 30th on the board: van, landlord, mail, internet, spare keys."}}]}
+             {:text "Done."}]}
+
+ :foils
+ {;; The same five steps laid out as a surface: more to keep right, and
+  ;; nothing a checklist could not show.
+  "surface-for-a-list"
+  {:fails #{:no-surface :a-checklist}
+   :model {"steward" [{:tool-uses [{:name "card_add"
+                                    :input {:kind "surface" :title "Before the move on the 30th"
+                                            :components [{"id" "root" "component" "Column"
+                                                          "children" {"componentId" "step" "path" "/steps"}}
+                                                         {"id" "step" "component" "CheckBox"
+                                                          "label" {"@path" "text"} "value" {"@path" "done"}}]
+                                            :data {"steps" [{"text" "Book the van" "done" false}
+                                                            {"text" "Tell the landlord" "done" false}
+                                                            {"text" "Forward the mail" "done" false}
+                                                            {"text" "Cancel the internet" "done" false}
+                                                            {"text" "Return the spare keys" "done" false}]}}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:subject "Moving on the 30th"}} :outcome "Put the move on your board."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Made a surface for the move."}}]}
+                      {:text "Done."}]}}
+
+  ;; A checklist, and a surface beside it.
+  "checklist-and-a-surface"
+  {:fails #{:no-surface}
+   :model {"steward" [{:tool-uses [{:name "card_add"
+                                    :input {:kind "checklist" :title "Before the move on the 30th"
+                                            :items ["Book the van" "Tell the landlord" "Forward the mail"
+                                                    "Cancel the internet" "Return the spare keys"]}}
+                                   {:name "card_add"
+                                    :input {:kind "surface" :title "Moving day"
+                                            :components [{"id" "root" "component" "Column" "children" ["when"]}
+                                                         {"id" "when" "component" "Text" "text" "Moving on the 30th."}]
+                                            :data {}}}]}
+                      {:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:subject "Moving on the 30th"}} :outcome "Put the move on your board."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Made two cards for the move."}}]}
+                      {:text "Done."}]}}
+
+  ;; A reply and no card, when the operator asked for the list to be kept.
+  "reply-only"
+  {:fails #{:a-checklist}
+   :model {"steward" [{:tool-uses [{:name "memo_close"
+                                    :input {:memo {:memo-id {:subject "Moving on the 30th"}}
+                                            :outcome "Left before the move: book the van, tell the landlord, forward the mail, cancel the internet, return the spare keys."}}]}
+                      {:tool-uses [{:name "journal_write" :input {:text "Listed the move's steps for the operator."}}]}
+                      {:text "Done."}]}}}
+
+ :steps
+ [{:run ["memo" "steward" "-s" "Moving on the 30th"
+         "-m" "I'm moving flats on the 30th. Could you keep track of what's left to do before then? I still have to book the van, tell the landlord, forward my mail, cancel the internet and return the spare keys. I'll tell you as I get them done."]}
+  {:tick 1}]
+
+ :assert
+ [[:has :wake {:role "steward"}]]
+
+ :graders
+ [{:id :a-checklist
+   :doc "The steps are on an active checklist, each as an item of its own."
+   :check [:has :card {:kind "checklist" :status "active"
+                       :boxes [:all [:contains [:regex "(?i)van"]]
+                               [:contains [:regex "(?i)landlord"]]
+                               [:contains [:regex "(?i)mail"]]
+                               [:contains [:regex "(?i)internet"]]
+                               [:contains [:regex "(?i)keys"]]]}]}
+  {:id :no-surface
+   :doc "No surface: a checklist fits, and is less to keep right."
+   :check [:none :card {:kind "surface"}]}]}

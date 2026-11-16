@@ -1,6 +1,6 @@
 {:id 101
  :title "Teach roles when and how to build a surface, with eval cases"
- :status :ready
+ :status :in-progress
  :type :feature
  :priority :p2
  :created "2026-11-14"

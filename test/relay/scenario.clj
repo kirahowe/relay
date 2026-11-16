@@ -76,6 +76,13 @@
                  held it. Refs repeated in one of them count once.
     :file        one per file in the folder a :files grant opens (below):
                  :path (relative to the folder) and :text, read at the end
+    :card        one per card on the board, archived ones included: :id
+                 :kind :owner :rev, :title (its text), :status (\"active\"
+                 or \"archived\"), :text (the text form a role reads,
+                 relay.cards/text-form), and :texts and :boxes, the
+                 strings of a surface's Texts and of its CheckBoxes'
+                 labels as relay resolved them, in the order drawn; a
+                 checklist's items are its :boxes
 
   A :wake also has :requests, :input-tokens, :output-tokens,
   :cache-read-tokens, :cache-write-tokens, :cost-usd, :models (the models
@@ -122,7 +129,9 @@
               the folder, in full."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
+            [relay.cards :as cards]
             [relay.core :as core]
+            [relay.surfaces :as surfaces]
             [relay.ready :as ready]
             [relay.refs :as refs]
             [relay.staging :as staging]
@@ -187,7 +196,7 @@
     :else (= pattern value)))
 
 (def kinds #{:memo :wake :role :routine :dead-letter :message :event :sent
-             :fact :journal :note :doc :tool-call :citation :ready :file})
+             :fact :journal :note :doc :tool-call :citation :ready :file :card})
 
 ;; --- the newer kinds, from the state and the wakes' transcripts
 
@@ -291,6 +300,32 @@
                 ref (refs-in (message-text m))]
             (assoc (refs/resolve state ref) :message (:id m)))))))
 
+(defn- surface-strings
+  "{:texts :boxes}: the strings of a surface's Texts and of its
+  CheckBoxes' labels, resolved, in the order drawn."
+  [surface]
+  (let [walk (fn walk [{:keys [type] :as node}]
+               (case type
+                 "Text" [[:texts (:text node)]]
+                 "CheckBox" [[:boxes (:label node)]]
+                 "Card" (walk (:child node))
+                 ("Row" "Column" "List") (mapcat walk (:children node))
+                 []))
+        pairs (walk (:root (surfaces/shown surface)))]
+    {:texts (vec (for [[k s] pairs :when (= k :texts)] s))
+     :boxes (vec (for [[k s] pairs :when (= k :boxes)] s))}))
+
+(defn card-items
+  "One item per card (see the namespace doc)."
+  [{:keys [state]}]
+  (vec (for [c (sort-by :id (vals (:cards state)))]
+         (merge {:id (:id c) :kind (:kind c) :owner (:owner c) :rev (:rev c)
+                 :title (get-in c [:title :text])
+                 :status (name (:status c))
+                 :text (cards/text-form c)
+                 :texts [] :boxes (mapv :text (:items c))}
+                (when (:surface c) (surface-strings (:surface c)))))))
+
 (defn items
   "The things of one kind in a world: {:state :events :sent}, and for the
   newer kinds also :transcripts (wake id to its transcript's entries),
@@ -313,6 +348,7 @@
     :citation (citation-items world)
     :ready (ready/ready state)
     :file (sort-by :path (:files world))
+    :card (card-items world)
     :event events
     :sent sent))
 

@@ -571,3 +571,21 @@
                    {:name "doc_put" :input {:path "shared/for-bookkeeper.md" :content domain}}]]
       (is (= :fail (grade :no-mail-for-anyone-else [reach])) (:name reach)))
     (is (= :fail (grade :donor-list-stays-home [{:name "memo_send" :input {:to "scout" :body donors}}])))))
+
+;; --- cases about the board's surfaces (relay#101)
+
+(deftest the-operator-asks-for-surfaces-in-their-own-words
+  ;; Kira, 2026-11-15: the user need know nothing of how surfaces work.
+  ;; So no case about them has the operator name a surface, the catalog
+  ;; or a kind of card: the role decides what to lay out.
+  (let [cases (for [f (et/eval-case-files)
+                    :let [c (runner/read-scenario f)]
+                    :when (some #{:surfaces} (get-in c [:eval :tags]))]
+                c)]
+    (is (<= 2 (count cases)))
+    (doseq [c cases
+            {:keys [run]} (:steps c)
+            :when (= "memo" (first run))]
+      (is (not (re-find #"(?i)surface|catalog|checklist|tracker|\bcards?\b|\bnote\b|component|a2ui"
+                        (str/join " " run)))
+          (str (get-in c [:eval :id]) ": " (pr-str run))))))

@@ -7,6 +7,7 @@
             [clojure.test.check :as tc]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
+            [relay.cards :as cards]
             [relay.cli :as relay]
             [relay.scenario :as scenario]
             [relay.scenario-runner :as runner]
@@ -78,6 +79,31 @@
                    4 {:id 4 :from "hub" :to "operator" :subject "B" :status :unread}}}
    :events [{:seq 1 :type "memo/sent" :data {:to "hub"}}]
    :sent [{:title "Memo for you"}]})
+
+(deftest cards-read-as-their-kind-text-and-strings
+  (let [event (fn [n data] {:seq n :at "2026-11-16T09:00:00Z" :actor "steward" :labels [] :data data})
+        board (-> {}
+                  (cards/add (event 1 {:card-kind "checklist" :title "Move"
+                                       :items [{:id 1 :text "Book the van"} {:id 2 :text "Tell the landlord"}]}))
+                  (cards/add (event 2 {:card-kind "surface" :title "Packing"
+                                       :components [{"id" "root" "component" "Column" "children" ["bag" "box"]}
+                                                    {"id" "bag" "component" "Text" "text" {"@path" "/bag"}}
+                                                    {"id" "box" "component" "CheckBox" "label" "Boots"
+                                                     "value" {"@path" "/done"}}]
+                                       :data {"bag" "Blue duffel" "done" false}}))
+                  (cards/add (event 3 {:card-kind "note" :title "Ferry" :text "6:40pm"})))
+        [checklist surface note] (scenario/items {:state {:cards board}} :card)]
+    (testing "a checklist's items are its boxes"
+      (is (= {:kind "checklist" :title "Move" :status "active" :owner "steward" :texts []
+              :boxes ["Book the van" "Tell the landlord"]}
+             (select-keys checklist [:kind :title :status :owner :texts :boxes]))))
+    (testing "a surface's strings are as relay resolved them, data read"
+      (is (= [["Blue duffel"] ["Boots"]] ((juxt :texts :boxes) surface)))
+      (is (str/includes? (:text surface) "Blue duffel")))
+    (testing "a note has neither, and its text form holds its text"
+      (is (= [[] []] ((juxt :texts :boxes) note)))
+      (is (str/includes? (:text note) "6:40pm")))
+    (is (nil? (scenario/check {:state {:cards board}} [:count :card {:status "active"} 3])))))
 
 (deftest assertions-say-what-was-missing
   (is (nil? (scenario/check world [:has :memo {:subject "A" :status :read}])))
