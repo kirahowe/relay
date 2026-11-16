@@ -1168,7 +1168,9 @@ value SurfaceComponent {
     -- puts two underscores and an item's position after the id of a
     -- component a list draws, so the two never collide.
     id: String
-    -- One of the catalog's seven.
+    -- One of the catalog's eight. A Button shows one Text and has an
+    -- action: an event, by name, or relay:setInput with the path of a
+    -- box on the same surface and true or false (relay#106).
     component: String
     -- black box: only the properties its type takes, each text, true or
     -- false, a path into the data, a formatString or @index call, or
@@ -4223,6 +4225,44 @@ rule ChangeSurface {
         -- labels, whoever sends it, and like a tick it wakes no role.
         -- Folding a recorded op never refuses: a surface another relay
         -- recorded under other limits is shown as one relay cannot draw.
+}
+
+-- A press of a Button. Kira's rule (relay#98): it tells the role that
+-- owns the card, in a memo relay writes, or it sets one box on the card.
+-- It never changes config and never counts as the operator agreeing to
+-- anything that leaves the house.
+rule PressButton {
+    when: ButtonPressed(caller, card, component, seen)
+
+    requires: caller.is_operator
+    requires: card.kind = surface and card.status = active
+    -- What is pressed is the button as drawn at the rev she saw.
+    requires: seen = card.rev
+    requires: card.surface.draws_button(component)   -- black box: relay.surfaces/button
+    let button = card.surface.button(component)
+
+    ensures:
+        if button.sets_box:
+            -- The box's input, exactly: no labels, nobody woken.
+            card.surface.data = with_box(card.surface.data, button.path, button.value)   -- black box
+        else:
+            Memo.created(
+                sender: operator,
+                recipient: card.owner,
+                subject: pressed_subject(button.label),             -- black box: relay's words
+                body: pressed_body(card, component, button.event),  -- black box: quotes the label as the role's
+                sent_at: now,
+                status: unread,
+                attempts: 0
+            )
+
+    @guidance
+        -- A press that tells the role carries the card's labels and keeps
+        -- its sources (Kira, 2026-11-17), so what the role does after it
+        -- shows where the card's text came from. Its owner must be an
+        -- active role, and a second press of the same button is refused
+        -- while the memo of the last one is unread. A role's card_op is
+        -- not offered press.
 }
 
 rule ReadCard {

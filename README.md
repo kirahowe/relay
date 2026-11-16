@@ -1194,8 +1194,8 @@ The role gives relay two things: components, a flat list in which each
 names its children, and the data they read.
 
 relay takes components from its own catalog and nothing else: Text, Row,
-Column, List, Card, Divider and CheckBox, each with only the properties
-a terminal can draw. There is no button, picture or text field.
+Column, List, Card, Divider, CheckBox and Button, each with only the
+properties a terminal can draw. There is no picture or text field yet.
 `resources/a2ui/relay_catalog.json` holds the catalog as A2UI writes
 one, and a role reads it in words with its `cards` tool. A surface that
 holds anything else is refused with what to change, and nothing is
@@ -1220,7 +1220,20 @@ which writes one path of the data (`null` removes what is there, and a
 path ending in `/-` adds to a list), and with `components`, which
 replaces them all.
 
-`input`, `data` and `components` each need `seen` and are refused
+A button does one of two things, whatever its label says (relay#98). It
+can set one box on the same card, as your tick would, and wake no one.
+Or it can tell the role that keeps the card. relay then sends that role
+a memo from you, in relay's own words: which button, on which card and
+in which item of a list, with the label quoted as the role's writing,
+never as yours. The memo carries the card's labels and keeps its
+sources, so whatever the role does next shows where the card's text
+came from. A press is an op, `press`, with the button's id and `seen`.
+Only you press, a button cannot call anything else (`openUrl`
+included), and a press never changes your settings or stands for your
+yes to anything. You cannot press the same button again until the role
+has read the last press.
+
+`input`, `data`, `components` and `press` each need `seen` and are refused
 unless it is the card's rev now. A path into a list is a position, and
 against an older rev it could name another item. The refusal does not
 say which rev the card is at, so the card has to be read again. `retitle`, `archive`
