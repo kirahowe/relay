@@ -69,18 +69,39 @@ still broken in the dashboard.
     to 140; `make check` passed.
   - Receipt: s27's check "the dashboard: no address is written as text,
     the live one included" passed in the same `bb verify`.
-- [ ] A key on a ready item or a card lists the links in it, live and
+- [x] A key on a ready item or a card lists the links in it, live and
   broken, each in full.
-- [ ] Choosing a broken link asks before it is kept, and shows relay's
+  - Receipt: relay-tui zykmxoqs ff0eed19 and kwxlsxtv 2cd0e44d, on
+    relay-tui's `integration` since 2026-11-15: `L` on a ready item or a
+    card (a surface card too) lists them; `TestTheListShowsEachLinkInFull`
+    (every width), `TestReadyLinksGolden`, `TestBoardLinksGolden`,
+    `TestASurfaceCardListsTheLinksItDraws` in internal/render.
+  - Receipt: `TestTheSelectedLinkIsOnScreenInAShortPane`: the selected
+    link stays on screen in a pane shorter than the list.
+- [x] Choosing a broken link asks before it is kept, and shows relay's
   refusal when there is one.
+  - Receipt: internal/ui/links_e2e_test.go,
+    `TestKeepingAndDroppingALinkFromTheReadyView` and
+    `TestKeepingALinkFromTheBoard`: Enter asks, a `y` too soon is refused,
+    an armed `y` sends `_relay/links/keep` with the link as shown, and
+    relay's refusal of a bracketed address is shown with its reason.
+  - Receipt: `TestAYesKeepsALongHostOnlyWhereItIsOnScreen`: a `y` keeps
+    nothing while the link's whole host and the question are not on
+    screen (Kira's rule, 2026-11-15).
+  - Receipt: `bb verify` on 2026-11-15 with relay-tui at kwxlsxtv
+    2cd0e44d: every step passes, relay 1233 of 1233, pentest 31 of 31.
 - [x] A live link in conversation text is a hyperlink too, over its
   broken text. (It read "leaves a live link whole" until 2026-11-15.)
   - Receipt: the case "a reply in a contaminated session" in
     `TestALiveLinkIsAHyperlinkWhereOutsideTextIsDrawn`, relay-tui
     zxlqkvtp 72d0b337: a bare address, one in angle brackets and a
     Markdown link each become one hyperlink to the live address.
-- [ ] docs/client-protocol.md describes the methods and what the client
+- [x] docs/client-protocol.md describes the methods and what the client
   is sent.
+  - Receipt: `_relay/links`, `/changed`, `/keep` and `/drop`, each with
+    what relay-tui does with it, in relay ttlkztor and murqutlq 8b0baf1e;
+    the `links` field beside a thing's text is relay#118's, in the same
+    file.
 - [x] Kira has seen a mock of the list and the question first.
   - Receipt: the mock at
     https://claude.ai/code/artifact/c936a717-3ec8-4754-bfc0-93ef5793c9a9
@@ -431,12 +452,20 @@ Part two, 2026-11-15:
   webtool, eventkit, catalog and fuzz pass; relay 1224 of 1225 and the
   pentest 30 of 31, the misses relay#99's as before; s27 passes.
 
-Still to do:
+- relay#130's sweep (14,631,118 strings as relay shows them) through
+  relay-tui's card drawing found one way relay-tui changed relay's
+  text: relay escapes a hidden character after it breaks links, so it
+  sends `https:\u{0080}//…` with `https:` whole, and relay-tui broke
+  that `https:`. Fixed in xyoullmx; after it, 0 strings are drawn other
+  than sent and 0 can be followed.
+- Part two landed on `integration` on 2026-11-15 with the coordinating
+  session's read: relay-tui pmuovtok, zykmxoqs, xyoullmx, kwxlsxtv;
+  relay murqutlq and this log. Every acceptance criterion is met.
 
-1. When relay#130 lands: rebase, run the "drawn as sent" property over
-   its sweep lines, and land part two after the coordinating session
-   has read it.
-2. Tick the last three criteria with receipts and move this to review.
+Left for other issues: relay-tui's half of relay#130 (draw a
+contaminated reply as relay sent it once relay#104 is in, with `gate`
+last), relay#126's `mailto:`, `tel:` and `sms:` (Kira's question in
+relay#121), and relay#127.
 - `bb verify` on 2026-11-15 with relay-tui at vywmmpxm 13c740c5, on
   relay's trunk with relay#118 in it: agentloop, relay-tui, webtool,
   eventkit and the new fuzz step pass (seed 1794749875), relay passes

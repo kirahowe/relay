@@ -67,13 +67,13 @@
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
-| [95](95-call-a-link-safe-from-the-dashboard.md) | Call a link safe from the dashboard | feature | P2 |
 | [130](130-break-an-address-that-a-character-with-no-width-is-hiding-in.md) | Break an address that a character with no width is hiding in | bug | P2 |
 
 ### Review
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
+| [95](95-call-a-link-safe-from-the-dashboard.md) | Call a link safe from the dashboard | feature | P2 |
 | [99](99-the-live-shell-test-fails-while-apple-s-container-service.md) | The live shell test fails while Apple's container service is stopped | bug | P3 |
 
 ### Blocked
