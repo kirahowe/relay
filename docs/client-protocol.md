@@ -434,6 +434,11 @@ relay was told none (relay#104). `initialize`'s `_meta` says
 - Text from a session whose labels are clean, and relay's own mirror of
   the operator's prompt, are sent as written.
 
+A client that renders a reply as Markdown may: a backslash before a
+letter is literal there, so `\u{202e}` reads as written, and a doubled
+backslash in prose reads as one, as the agent wrote it. Inside code,
+backslashes show doubled.
+
 A client that draws conversation text itself, and not through a
 terminal, turns its own link detection off for it and makes links only
 from relay's data. One that shows a plain ACP agent, or a relay without
