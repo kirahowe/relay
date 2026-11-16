@@ -144,9 +144,24 @@ three relay-tui follow-ups from the reviews of relay#95 and relay#100;
 and relay#130, an address that a character with no width hides from the
 link breaker.
 
+## The first slice
+
+From 2026-11-16 the epic follows factory's rules 6 to 9
+(`~/code/projects/factory/docs/process.md`). Its first slice is the
+epic's own example: Kira asks the steward for a new agent, the steward
+builds a form for it, Kira fills it in in relay-tui and presses its
+button, and the steward adds the role. That is relay#106 and then
+relay#107, and nothing else blocks the epic.
+
+The parts are fixed. relay#102, relay#111, relay#112, relay#113 and
+relay#114 stay related but block nothing: Kira decides the four questions
+among them together, after she has used the slice. A new issue joins the
+epic only with the architect's reason in the Log below.
+
 ## Acceptance criteria
 
-- [ ] Every part above is closed or dropped.
+- [ ] Kira can add an agent through a form the steward built, in
+  relay-tui (relay#106, relay#107).
 
 ## Log
 
@@ -218,3 +233,14 @@ link breaker.
   relay#106 are ready, relay#107 waits on relay#106, and relay#102 and
   relay#111 to relay#114 wait on Kira. Of the issues filed along the
   way, relay#124 and relay#125 are done too.
+- 2026-11-16: Kira asked why the epic was still blocked after three days.
+  53 issues had been filed since it started, 15 of them parts and about
+  19 about how links are broken, and the two parts that would let her try
+  a role-built screen (relay#106, relay#107) had not been started. She
+  gave the rules now in factory's `docs/process.md` (6 to 9) and in
+  relay's AGENTS.md. Under them I narrowed the blockers to relay#106 and
+  relay#107, the epic's first slice, and moved relay#102 and relay#111 to
+  relay#114 to related. None of them blocks the slice: the board already
+  shows a new surface (relay#111, relay#113), the form needs no data of
+  relay's own (relay#114), and putting a surface back (relay#112) can wait
+  until Kira has used it.
