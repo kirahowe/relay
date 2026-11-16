@@ -996,10 +996,11 @@
         (text/contaminated? (concat start-labels labels)))))
 
 (defn- inert-strings
-  "x with every string value in it made inert, keys left as they are."
+  "x with every string in it made inert, map keys included: a call's raw
+  input is the model's JSON, whose keys it chose."
   [x]
   (cond (string? x) (text/conversation-text x)
-        (map? x) (into {} (map (fn [[k v]] [k (inert-strings v)])) x)
+        (map? x) (into {} (map (fn [[k v]] [(inert-strings k) (inert-strings v)])) x)
         (sequential? x) (mapv inert-strings x)
         :else x))
 
@@ -1020,11 +1021,17 @@
                         (filter #(and (string? %) (not (str/blank? %)))))]
           {"type" "text" "text" (text/conversation-text (str/join " " said))})))))
 
-(defn- inert-tool-content [c]
+(defn- inert-tool-content
+  "A call's content made inert. A display's block is left: the proxy made
+  its text inert from the display already (relay.acp/with-inert-displays),
+  and doing it again would escape its escapes."
+  [c]
   (if-not (map? c)
     c
     (case (get c "type")
-      "content" (update c "content" inert-block)
+      "content" (if (contains? (get-in c ["content" "_meta"]) "relay/display")
+                  c
+                  (update c "content" inert-block))
       "diff" (cond-> c
                (string? (get c "oldText")) (update "oldText" text/conversation-text)
                (string? (get c "newText")) (update "newText" text/conversation-text))
@@ -1047,11 +1054,13 @@
                                                                        es)))))
 
 (defn- chunk-line
-  "A text chunk of `kind` holding `t`, in session `session`."
-  [session kind t]
+  "A text chunk of `kind` holding `t`, in session `session`, as part of
+  the message `message-id` (none when nil)."
+  [session kind message-id t]
   (workspace/notification-line "session/update"
                                {"sessionId" session
-                                "update" {"sessionUpdate" kind "content" {"type" "text" "text" t}}}))
+                                "update" (cond-> {"sessionUpdate" kind "content" {"type" "text" "text" t}}
+                                           message-id (assoc "messageId" message-id))}))
 
 (defn- flush-streams
   "The conversation with every stream's held text sent: `how` is
@@ -1062,7 +1071,8 @@
     (reduce (fn [[h lines] kind]
               (let [[st out] (how (get-in h [:convs role :streams kind] inert/empty-stream))
                     h (assoc-in h [:convs role :streams kind] st)]
-                [h (cond-> lines (not= "" out) (conj (chunk-line session kind out)))]))
+                [h (cond-> lines (not= "" out)
+                     (conj (chunk-line session kind (get-in h [:convs role :message-ids kind]) out)))]))
             [h []]
             (sort (keys (get-in h [:convs role :streams]))))))
 
@@ -1075,13 +1085,19 @@
         content (get u "content")]
     (if (and (streamed-kinds kind) (map? content) (= "text" (get content "type")) (string? (get content "text")))
       ;; Text of one kind ends the words the other kinds were holding.
-      (let [others (remove #{kind} (keys (get-in h [:convs role :streams])))
+      (let [id (get u "messageId")
+            ;; Text of another kind, or of another message of this kind,
+            ;; cuts the words held for those: none may run into it.
+            cut-kinds (concat (remove #{kind} (keys (get-in h [:convs role :streams])))
+                              (when (not= id (get-in h [:convs role :message-ids kind])) [kind]))
             [h before] (reduce (fn [[h lines] k]
-                                 (let [[st out] (inert/cut (get-in h [:convs role :streams k]))]
+                                 (let [[st out] (inert/cut (get-in h [:convs role :streams k] inert/empty-stream))]
                                    [(assoc-in h [:convs role :streams k] st)
                                     (cond-> lines (not= "" out)
-                                            (conj (chunk-line (get-in h [:convs role :session]) k out)))]))
-                               [h []] (sort others))
+                                            (conj (chunk-line (get-in h [:convs role :session]) k
+                                                              (get-in h [:convs role :message-ids k]) out)))]))
+                               [h []] (sort (distinct cut-kinds)))
+            h (assoc-in h [:convs role :message-ids kind] id)
             [st out] (inert/feed (get-in h [:convs role :streams kind] inert/empty-stream) (get content "text"))
             h (assoc-in h [:convs role :streams kind] st)]
         [h (cond-> before
@@ -1174,7 +1190,8 @@
       (let [h (keep-state h role msg line)]
         (if (outside? h role)
           (let [[h lines] (inert-lines h role msg)] (emit-lines h role lines))
-          (emit-lines h role [line])))
+          ;; What it held while it counted as outside goes first.
+          (emit-lines (finish-turn h role) role [line])))
       ;; The board is the hub's: a proxy has nothing to say about it.
       (str/starts-with? method "_relay/") h
       :else

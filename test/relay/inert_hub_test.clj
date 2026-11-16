@@ -123,3 +123,42 @@
 (deftest hidden-characters-are-shown-and-emoji-kept-whole
   (let [[h ws] (feed (live ["contaminated"]) (text-chunk "agent_message_chunk" "a\u202ex \ud83d\udc68\u200d\ud83d\udc69 C:\\x "))]
     (is (= "a\\u{202e}x \ud83d\udc68\u200d\ud83d\udc69 C:\\\\x " (texts "agent_message_chunk" (concat ws (ended h)))))))
+
+;; --- relay#104's first review round
+
+(deftest a-call-s-raw-input-has-its-keys-broken-too
+  ;; The model writes a call's input as JSON, keys and all.
+  (let [[_ ws] (feed (live ["contaminated"])
+                     (update-line {:sessionUpdate "tool_call" :toolCallId "c1" :title "t"
+                                   :rawInput {"https://evil.com/x?d=SECRET" "v​"}}))]
+    (is (= {"hxxps://evil[.]com/x?d=SECRET" "v\\u{200b}"} (get (first ws) "rawInput")))))
+
+(deftest held-text-goes-out-in-the-message-it-came-from
+  (let [[h ws] (feed (live ["contaminated"])
+                     (update-line {:sessionUpdate "agent_message_chunk" :messageId "a1"
+                                   :content {:type "text" :text "the answer is 42"}})
+                     (update-line {:sessionUpdate "agent_message_chunk" :messageId "a2"
+                                   :content {:type "text" :text "Next part "}}))
+        all (concat ws (ended h))
+        by-id (group-by #(get % "messageId") all)]
+    (is (= "the answer is 42" (texts "agent_message_chunk" (get by-id "a1"))))
+    (is (= "Next part " (texts "agent_message_chunk" (get by-id "a2"))))
+    (is (not (contains? by-id nil)) "every piece names its message")))
+
+(deftest a-session-that-turns-clean-sends-what-it-held-first
+  (let [[_ ws] (feed (live nil)
+                     (text-chunk "agent_message_chunk" "see https://ev")
+                     (update-line {:sessionUpdate "usage_update" :used 1 :size 2 :_meta {"agentloop/labels" []}})
+                     (text-chunk "agent_message_chunk" "il.com/x done"))]
+    (is (= ["agent_message_chunk" "agent_message_chunk" "usage_update" "agent_message_chunk"]
+           (map #(get % "sessionUpdate") ws)))
+    (is (= "see hxxps://ev" (texts "agent_message_chunk" (take 2 ws))))))
+
+(deftest a-display-block-is-not-made-inert-twice
+  ;; The proxy makes a display's text inert itself; escaping it again
+  ;; would show its escapes doubled.
+  (let [block {:type "text" :text "a\\u{200b}b" :_meta {"relay/display" {"title" "t" "body" "b"}}}
+        [_ ws] (feed (live ["contaminated"])
+                     (update-line {:sessionUpdate "tool_call_update" :toolCallId "c1"
+                                   :content [{:type "content" :content block}]}))]
+    (is (= "a\\u{200b}b" (get-in (first ws) ["content" 0 "content" "text"])))))
