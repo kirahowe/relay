@@ -101,26 +101,44 @@ matches what Kira chose for relay-tui on 2026-11-15.
 
 ## Acceptance criteria
 
-- [ ] In a contaminated session, no link outside relay's live links
+- [x] In a contaminated session, no link outside relay's live links
   reaches any client whole in conversation text, however the agent's
   chunks split it. A property test covers the splitting.
-- [ ] A Markdown image in such text reaches no client in a form it would
+  - Receipt: `relay.inert-test`: `any-split-sends-what-the-whole-text-would`
+    and `a-word-cut-by-another-update-leaves-nothing-to-follow`;
+    `relay.inert-hub-test`; the fuzz's `conv` channel, none followed.
+- [x] A Markdown image in such text reaches no client in a form it would
   fetch.
-- [ ] A live link in conversation text reaches the client as data in
+  - Receipt: `markdown-that-would-fetch-or-link-reaches-a-client-as-text`,
+    `a-block-that-is-not-text-becomes-text-that-names-it` and
+    `no-markdown-link-forms-however-the-text-is-cut`; round 3 checked
+    with pandoc.
+- [x] A live link in conversation text reaches the client as data in
   the update's `_meta`, `links` as `{"address", "shown"}` with
   `linksLeftOut`, as on a card. The text beside it is inert.
-- [ ] The replay a client gets when it attaches holds the same text the
+  - Receipt: `a-live-link-travels-beside-the-text-of-a-message-only`,
+    under the keys `relay/links` and `relay/linksLeftOut`.
+- [x] The replay a client gets when it attaches holds the same text the
   live stream did.
-- [ ] Text in a session whose labels are clean is passed on unchanged.
+  - Receipt: the same test, "the replay holds the same text".
+- [x] Text in a session whose labels are clean is passed on unchanged.
+  - Receipt: `a-clean-session-is-passed-on-as-it-came`.
 - [ ] relay-tui shows the conversation as relay sent it and breaks no
-  link a second time.
-- [ ] README, docs/client-protocol.md and spec/relay.allium say that
+  link a second time. (relay-tui's half, relay-34's once this lands.
+  Its run at yxspqonq: relay-tui's breaker changes none of relay's
+  `conv` output.)
+- [x] README, docs/client-protocol.md and spec/relay.allium say that
   relay makes conversation text safe.
-- [ ] docs/client-protocol.md tells a client that draws text itself to
+  - Receipt: wzlskyzs and the commits after it.
+- [x] docs/client-protocol.md tells a client that draws text itself to
   turn its own link detection off for conversation text and to make
   links only from relay's data.
-- [ ] A pentest case attacks it through a plain ACP client.
-- [ ] An adversarial Codex review finds nothing in scope.
+  - Receipt: the paragraphs after the notifications table.
+- [x] A pentest case attacks it through a plain ACP client.
+  - Receipt: `s5-acp-inert-reply` passes.
+- [ ] An adversarial Codex review finds nothing in scope. (Not met as
+  written: Codex is out of quota, so three fresh reviewers stood in;
+  round 3 found nothing in scope.)
 
 ## Plan
 
@@ -244,3 +262,7 @@ relay#91 and relay#95.
     broken. A property checks that no Markdown link forms however the
     text is cut. With no in-scope defect in round 3, the loop has
     converged.
+  - `bb verify --relay-tui-dir` on an export of relay-tui `integration`
+    (2cd0e44d), tip urrlvnxw: everything passes but relay#99's two
+    (Apple's container service stopped again). relay 1,254 of 1,255,
+    pentests 31 of 32, fuzz 400,000 cases, none followed.
