@@ -1,0 +1,11 @@
+{:id 148
+ :title "Keep a button label holding ] [ from reading as two buttons"
+ :status :ready
+ :type :bug
+ :priority :p3
+ :created "2026-11-16"
+ :updated "2026-11-16"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "148-keep-a-button-label-holding-from-reading-as-two-buttons.md"}

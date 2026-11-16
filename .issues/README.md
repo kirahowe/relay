@@ -68,6 +68,8 @@
 | [143](143-say-in-a-message-s-wire-form-whether-it-can-be-answered.md) | Say in a message's wire form whether it can be answered | feature | P3 |
 | [144](144-state-the-shape-of-a-message-item-s-link.md) | State the shape of a message item's link | chore | P3 |
 | [145](145-let-fakehub-play-relay-messages-and-every-card-op.md) | Let fakehub play _relay/messages and every card op | chore | P3 |
+| [147](147-teach-relay-macos-the-button-of-relay-106.md) | Teach relay-macos the Button of relay#106 | feature | P3 |
+| [148](148-keep-a-button-label-holding-from-reading-as-two-buttons.md) | Keep a button label holding ] [ from reading as two buttons | bug | P3 |
 
 ### In progress
 
