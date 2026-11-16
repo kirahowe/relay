@@ -1060,6 +1060,20 @@
                                                                           %)
                                                                        es)))))
 
+(def ^:private text-free-kinds
+  "Updates that carry no text a client draws inline in the conversation,
+  so a message runs on across them (relay#136): agentloop sends a
+  usage_update after each assistant message, and relay-macos merges a
+  message's chunks across one."
+  #{"usage_update" "current_mode_update" "session_info_update"})
+
+(defn- text-free?
+  "Whether an update may pass while a word is held: one of
+  text-free-kinds holding none of the fields inert-update breaks."
+  [u]
+  (and (text-free-kinds (get u "sessionUpdate"))
+       (not-any? #(contains? u %) ["title" "name" "content" "rawInput" "rawOutput" "entries"])))
+
 (defn- chunk-line
   "A text chunk of `kind` holding `t`, in session `session`, as part of
   the message `message-id` (none when nil)."
@@ -1109,9 +1123,13 @@
             h (assoc-in h [:convs role :streams kind] st)]
         [h (cond-> before
              (not= "" out) (conj (strict/generate (assoc-in msg ["params" "update" "content" "text"] out))))])
-      (let [[h before] (flush-streams h role inert/cut)
-            u (if (and (streamed-kinds kind) (map? content)) (update u "content" inert-block) (inert-update u))]
-        [h (conj before (strict/generate (assoc-in msg ["params" "update"] u)))]))))
+      (if (text-free? u)
+        ;; Nothing in it is drawn among the words, so the held word stays
+        ;; held and is judged whole when it ends.
+        [h [(strict/generate msg)]]
+        (let [[h before] (flush-streams h role inert/cut)
+              u (if (and (streamed-kinds kind) (map? content)) (update u "content" inert-block) (inert-update u))]
+          [h (conj before (strict/generate (assoc-in msg ["params" "update"] u)))])))))
 
 (defn- with-links
   "A line as written to a client: a message chunk's text with the live

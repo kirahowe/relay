@@ -7,7 +7,8 @@
   last space it has seen and sends only what stands before it. What it
   holds goes out when a space comes, at the end of the turn, or early,
   when another update of the conversation has to go first or the word
-  grows past `max-held`. A word sent early is a cut word: every dot and
+  grows past `max-held`. An update with no text drawn among the words
+  (relay.hub/text-free?) does not go first: the word stays held. A word sent early is a cut word: every dot and
   colon in it is broken, so neither piece, nor the two joined, holds
   anything that can be followed.
 

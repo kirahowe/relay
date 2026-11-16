@@ -419,16 +419,24 @@ relay was told none (relay#104). `initialize`'s `_meta` says
   space, the end of the turn or the end of the conversation. When
   another update of the conversation must go first, or a word runs past
   4,096 characters, the held piece goes out with every dot and colon
-  broken.
-- A message is consecutive `agent_message_chunk` updates until any
-  update of another kind. A message chunk whose text shows a live link
+  broken. An update that carries no text drawn among the words goes
+  past the held piece and leaves it whole: a `usage_update`, a
+  `current_mode_update`, and a `session_info_update` with no title.
+  agentloop sends a `usage_update` after each assistant message, so a
+  message's last word often arrives after it.
+- A message is consecutive `agent_message_chunk` updates until an
+  update of another kind, and it runs on across the updates that carry
+  no text. A message chunk whose text shows a live link
   carries `_meta` `"relay/links": [{"address", "shown"}]` and
   `"relay/linksLeftOut": n`, the same entries and limits as a card's,
   and the keys are absent when it shows none. Each `shown` occurs in
   that chunk's text, and is anchored by the rule in Live links. A
   client keeps the union for the message it is building, and may also
-  anchor a `shown` from `_relay/links` that the text holds. Thought
-  chunks, calls and plans never carry `relay/links`.
+  anchor a `shown` from `_relay/links` that the text holds.
+  `relay/linksLeftOut` counts the links left out of one chunk's text,
+  so a client reads any nonzero value in a message as "some links were
+  left out" rather than adding them up. Thought chunks, calls and plans
+  never carry `relay/links`.
 - The replay holds the same text the live stream did, and lists links
   by the set as it is when the replay is sent.
 - Text from a session whose labels are clean, and relay's own mirror of

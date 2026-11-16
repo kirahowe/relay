@@ -3,10 +3,12 @@
   hub writes to a client for an agent's session/update, when the
   session may hold outside text and when it does not."
   (:require [clojure.string :as str]
+            [clojure.walk :as walk]
             [clojure.test :refer [deftest is testing]]
             [relay.core :as core]
             [relay.core-test :as ct]
-            [relay.hub-test :as ht]))
+            [relay.hub-test :as ht]
+            [relay.text :as text]))
 
 (def fund "https://grants.example.org/fund?year=2027")
 (def fund-broken "hxxps://grants[.]example[.]org/fund?year=2027")
@@ -191,3 +193,30 @@
         content (get (first ws) "content")]
     (is (= "see hxxps://evil[.]com/x" (get-in content [0 "text"])))
     (is (= "text" (get-in content [1 "content" "type"])) "a display key on a block that is not text saves nothing")))
+
+;; --- relay#136
+
+(deftest a-text-free-update-leaves-the-held-word-whole
+  ;; agentloop sends a usage_update after an assistant message's chunks,
+  ;; so the message's last word is still held when it comes.
+  (doseq [between [{:sessionUpdate "usage_update" :used 1 :size 2 :_meta {"agentloop/labels" ["contaminated"]}}
+                   {:sessionUpdate "session_info_update" :_meta {"agentloop/labels" ["contaminated"]}}
+                   {:sessionUpdate "current_mode_update" :currentModeId "ask"}]]
+    (testing (:sessionUpdate between)
+      (let [whole "Meet at 10:30, e.g. at https://evil.com/x?d=S then"
+            [h ws] (feed (live ["contaminated"])
+                         (text-chunk "agent_message_chunk" "Meet at 10:")
+                         (update-line between)
+                         (text-chunk "agent_message_chunk" "30, e.g. at https://evil.com/x?d=S then"))
+            all (concat ws (ended h))]
+        (is (= (text/conversation-text whole) (texts "agent_message_chunk" all)))
+        (is (= (walk/stringify-keys between) (first (filter #(= (:sessionUpdate between) (get % "sessionUpdate")) all)))
+            "and the update passes as it came")))))
+
+(deftest an-update-that-carries-text-still-cuts-the-held-word
+  (let [[h ws] (feed (live ["contaminated"])
+                     (text-chunk "agent_message_chunk" "Meet at 10:")
+                     (update-line {:sessionUpdate "session_info_update" :title "a title"})
+                     (text-chunk "agent_message_chunk" "30 sharp"))
+        all (concat ws (ended h))]
+    (is (= "Meet at 10[:\\]30 sharp" (texts "agent_message_chunk" all)))))
