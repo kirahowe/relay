@@ -487,13 +487,19 @@
     (when (and (sequential? ls) (every? string? ls)) (vec ls))))
 
 (defn- keep-state
-  "Notes the session-level state an agent's message carries."
-  [h role msg line]
+  "Notes the session-level state an agent's message carries: its labels.
+  Its latest usage is noted as it was sent (emit-lines), made inert, not
+  as the agent wrote it (relay#134)."
+  [h role msg _line]
   (let [ls (labels-in msg)]
     (cond-> h
-      ls (assoc-in [:convs role :labels] ls)
-      (= "usage_update" (get-in msg ["params" "update" "sessionUpdate"]))
-      (assoc-in [:convs role :usage] line))))
+      ls (assoc-in [:convs role :labels] ls))))
+
+(defn- usage-line?
+  "Whether a line is a session/update carrying usage."
+  [line]
+  (and (str/includes? line "usage_update")
+       (= "usage_update" (get-in (acp/message line) ["params" "update" "sessionUpdate"]))))
 
 (defn- labels-line [session labels]
   (workspace/notification-line "session/update"
@@ -1175,8 +1181,10 @@
   connection attached to the conversation."
   [h role lines]
   (reduce (fn [h line]
-            (let [sent (with-links h line)]
-              (reduce #(write %1 %2 sent) (remember h role line) (attached h role))))
+            (let [sent (with-links h line)
+                  h (cond-> (remember h role line)
+                      (usage-line? line) (assoc-in [:convs role :usage] line))]
+              (reduce #(write %1 %2 sent) h (attached h role))))
           h lines))
 
 (defn- finish-turn

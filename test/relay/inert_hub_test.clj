@@ -284,6 +284,25 @@
                     :else (cons k (walk v))))
             u)))
 
+(defn- replayed
+  "The updates a second connection is sent when it loads s1."
+  [h]
+  (let [h (ht/opened h 2)
+        [h] (ht/say h 2 (ht/req 1 "initialize" {:protocolVersion 1 :clientCapabilities {}}))
+        [_ fx] (ht/say h 2 (ht/req 10 "session/load" {:sessionId "s1" :cwd "/w" :mcpServers []}))]
+    (keep #(get-in % ["params" "update"]) (ht/writes fx 2))))
+
+(deftest the-replay-s-usage-is-the-one-sent-live
+  ;; Review round 1: relay kept the usage_update as the agent wrote it,
+  ;; and a replay sent that before the rest.
+  (let [[h ws] (feed (live ["contaminated"])
+                     (update-line {:sessionUpdate "usage_update" :used 1 :size 2 :extra "https://evil.test/u"
+                                   :_meta {"agentloop/labels" ["contaminated"] "agentloop/x" "https://evil.test/m"}}))
+        r (replayed h)]
+    (is (some #(= "usage_update" (get % "sessionUpdate")) r))
+    (is (every? #(not (str/includes? % "evil.test")) (mapcat strings-outside-kept r)))
+    (is (= (first ws) (first (filter #(= "usage_update" (get % "sessionUpdate")) r))))))
+
 (defspec no-link-in-an-update-reaches-a-client-whole 200
   (let [link (gen/elements ["https://evil.test/x" "www.evil.test" "evil.test/p?d=S"])
         k (gen/elements ["title" "name" "rawInput" "rawOutput" "entries" "unknown" "words" "toolCallId" "status" "_meta" "nested"])
@@ -293,5 +312,5 @@
     (prop/for-all [kind kind fields (gen/map k v {:max-elements 5})]
       (let [u (assoc fields "sessionUpdate" kind)
             [h ws] (feed (live ["contaminated"]) (update-line u))
-            sent (concat ws (ended h))]
+            sent (concat ws (replayed h) (ended h))]
         (every? #(not (str/includes? % "evil.test")) (mapcat strings-outside-kept sent))))))

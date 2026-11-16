@@ -72,3 +72,18 @@ Related: relay#104, relay#135.
   Its oracle does not use relay's code: no string outside the kept keys
   may contain `evil.test`. On the old code it found a title sent as a
   list, which went out whole because only a string title was broken.
+- 2026-11-16, relay-ec. Review round 1, by a fresh read-only reviewer
+  agent given the threat model (Codex was out of quota until
+  2026-11-19), found one defect in scope. keep-state kept the latest
+  usage_update as the agent wrote it, and a replay sends that line
+  before the rest, so a field like `extra` holding a link reached a
+  client that reconnected. Nothing reaches it today, because agentloop's
+  usage holds only numbers, "USD" and labels. Fixed: emit-lines now
+  notes the usage line as it was sent. The property covers the replay
+  too, and `the-replay-s-usage-is-the-one-sent-live` fails without the
+  fix. The round's other checks found nothing in scope: updates and
+  params of odd shapes, kept keys checked against what agentloop puts
+  there, double escaping, and with-links. It noted that a display
+  block's whole content item passes as it is. That is out of scope:
+  only agentloop builds one, from relay's tools, and the agent is
+  trusted.
