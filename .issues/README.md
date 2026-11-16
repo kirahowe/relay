@@ -17,6 +17,7 @@
 | [113](113-decide-how-tabs-pages-and-placement-work-above-the-board.md) | Decide how tabs, pages and placement work above the board | feature | P2 |
 | [119](119-decide-whether-a-link-in-text-no-outsider-shaped-is-left-as.md) | Decide whether a link in text no outsider shaped is left as written | feature | P2 |
 | [121](121-decide-how-far-outside-text-is-broken-file-names-that-are.md) | Decide how far outside text is broken: file names that are also hosts, and schemes that are not web addresses | feature | P2 |
+| [141](141-let-a-key-act-only-on-a-target-the-frame-drew-hit-testing.md) | Let a key act only on a target the frame drew (hit-testing in relay-tui) | feature | P2 |
 | [56](56-serve-the-board-over-http-and-sse-on-the-tailnet-for-a-web.edn) | Serve the board over HTTP and SSE on the tailnet for a web client | feature | P3 |
 | [59](59-keep-large-integers-exact-in-mcp-structured-results.md) | Keep large integers exact in MCP structured results | bug | P3 |
 | [60](60-let-relay-acp-start-agentloop-with-a-relative-data-path.edn) | Let relay acp start agentloop with a relative --data path | bug | P3 |
@@ -74,7 +75,6 @@
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
 | [101](101-teach-roles-when-and-how-to-build-a-surface-with-eval-cases.md) | Teach roles when and how to build a surface, with eval cases | feature | P2 |
-| [110](110-scroll-an-open-card-that-is-taller-than-the-pane.md) | Scroll an open card that is taller than the pane | bug | P2 |
 | [127](127-do-not-panic-on-markdown-quoted-deeper-than-half-the-width.md) | Do not panic on Markdown quoted deeper than half the width | bug | P3 |
 
 ### Blocked
@@ -144,6 +144,7 @@
 | [96](96-draw-a2ui-surfaces-in-relay-tui.md) | Draw A2UI surfaces in relay-tui | feature | P2 |
 | [97](97-keep-role-built-surfaces-in-the-log-and-send-them-to-every.md) | Keep role-built surfaces in the log and send them to every client | feature | P2 |
 | [100](100-draw-surface-cards-on-relay-tui-s-board.md) | Draw surface cards on relay-tui's board | feature | P2 |
+| [110](110-scroll-an-open-card-that-is-taller-than-the-pane.md) | Scroll an open card that is taller than the pane | bug | P2 |
 | [124](124-break-a-host-that-follows-another-host-s-port-with-nothing.md) | Break a host that follows another host's port with nothing between | bug | P2 |
 | [136](136-let-a-text-free-update-pass-without-cutting-a-held-word.md) | Let a text-free update pass without cutting a held word | bug | P2 |
 | [21](21-make-agentloop-cleanroom-s-reader.md) | Make agentloop cleanroom's reader | feature | P3 |

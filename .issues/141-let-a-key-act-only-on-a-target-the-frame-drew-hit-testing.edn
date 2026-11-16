@@ -1,0 +1,11 @@
+{:id 141
+ :title "Let a key act only on a target the frame drew (hit-testing in relay-tui)"
+ :status :inbox
+ :type :feature
+ :priority :p2
+ :created "2026-11-16"
+ :updated "2026-11-16"
+ :tags #{}
+ :blocked-by #{}
+ :related #{"relay#110"}
+ :details "141-let-a-key-act-only-on-a-target-the-frame-drew-hit-testing.md"}

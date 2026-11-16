@@ -1,6 +1,6 @@
 {:id 110
  :title "Scroll an open card that is taller than the pane"
- :status :review
+ :status :done
  :type :bug
  :priority :p2
  :created "2026-11-14"
