@@ -30,3 +30,6 @@ A first draft, for whoever builds this to tighten.
 ## Plan
 
 ## Log
+- 2026-11-15: moved to ready by the coordinating session: Kira agreed
+  to it in the relay-macos session on 2026-11-14 (see Context), so it
+  is no decision of hers left open.

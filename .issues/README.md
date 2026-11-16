@@ -14,7 +14,6 @@
 | [82](82-read-the-log-s-decimals-exactly.md) | Read the log's decimals exactly | bug | P2 |
 | [91](91-decide-what-consent-means-for-acp-clients-that-do-not.md) | Decide what consent means for ACP clients that do not declare relay/review | feature | P2 |
 | [111](111-keep-a-new-surface-in-the-conversation-until-kira-pins-it.md) | Keep a new surface in the conversation until Kira pins it | feature | P2 |
-| [112](112-let-kira-put-a-surface-back-as-it-was.md) | Let Kira put a surface back as it was | feature | P2 |
 | [113](113-decide-how-tabs-pages-and-placement-work-above-the-board.md) | Decide how tabs, pages and placement work above the board | feature | P2 |
 | [119](119-decide-whether-a-link-in-text-no-outsider-shaped-is-left-as.md) | Decide whether a link in text no outsider shaped is left as written | feature | P2 |
 | [121](121-decide-how-far-outside-text-is-broken-file-names-that-are.md) | Decide how far outside text is broken: file names that are also hosts, and schemes that are not web addresses | feature | P2 |
@@ -46,13 +45,13 @@
 | [106](106-put-buttons-on-role-built-surfaces-by-kira-s-rule.md) | Put buttons on role-built surfaces by Kira's rule | feature | P2 |
 | [109](109-tell-the-operator-a-card-s-line-has-gone-even-while-a.md) | Tell the operator a card's line has gone even while a refusal is showing | bug | P2 |
 | [110](110-scroll-an-open-card-that-is-taller-than-the-pane.md) | Scroll an open card that is taller than the pane | bug | P2 |
+| [112](112-let-kira-put-a-surface-back-as-it-was.md) | Let Kira put a surface back as it was | feature | P2 |
 | [117](117-carry-a-live-link-in-a-push-as-an-action-and-check-the.md) | Check what Proton Mail on the phone follows in relay's mail | feature | P2 |
 | [126](126-break-a-link-whose-scheme-has-no-double-slash.md) | Break a link whose scheme has no double slash | bug | P2 |
 | [39](39-block-a-memo-a-role-could-not-do-instead-of-closing-it.md) | Block a memo a role could not do instead of closing it | bug | P3 |
 | [83](83-speed-up-the-slowest-remaining-test-namespaces.md) | Speed up the slowest remaining test namespaces | chore | P3 |
 | [86](86-fix-agentloop-s-flaky-testgroupleaderisasentinel.md) | Fix agentloop's flaky TestGroupLeaderIsASentinel | bug | P3 |
 | [92](92-add-an-eval-case-that-makes-the-hub-use-roles-to-route.md) | Add an eval case that makes the hub use roles to route | feature | P3 |
-| [99](99-the-live-shell-test-fails-while-apple-s-container-service.md) | The live shell test fails while Apple's container service is stopped | bug | P3 |
 | [105](105-bound-what-relay-cards-answers-when-it-includes-archived.md) | Bound what _relay/cards answers when it includes archived cards | bug | P3 |
 | [108](108-bound-the-live-links-a-client-is-sent.md) | Bound the live links a client is sent | feature | P3 |
 | [122](122-fix-the-ready-view-property-that-fails-on-seed.md) | Fix the ready-view property that fails on seed 6561552371814650667 | bug | P3 |
@@ -70,6 +69,12 @@
 | --- | --- | --- | --- |
 | [95](95-call-a-link-safe-from-the-dashboard.md) | Call a link safe from the dashboard | feature | P2 |
 | [130](130-break-an-address-that-a-character-with-no-width-is-hiding-in.md) | Break an address that a character with no width is hiding in | bug | P2 |
+
+### Review
+
+| ID | Title | Type | Priority |
+| --- | --- | --- | --- |
+| [99](99-the-live-shell-test-fails-while-apple-s-container-service.md) | The live shell test fails while Apple's container service is stopped | bug | P3 |
 
 ### Blocked
 

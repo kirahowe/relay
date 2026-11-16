@@ -18,8 +18,12 @@ Kira, so no agent did.
 
 ## Acceptance criteria
 
-- [ ] Kira starts the service (`container system start`), or says it
+- [x] Kira starts the service (`container system start`), or says it
   should stay stopped.
+  - Receipt: Kira ran `container system start` on 2026-11-15;
+    `container system status` reads `running` (client 1.7.1).
+  - Receipt: `bb test relay.shell-live-test` then: 1 test, 1 passed,
+    25 assertions, 43 s, on relay `integration` xsowxlyw.
 - [x] With the service stopped, the test says in one line that Apple's
   container service is not running, and `bb verify` names that as the
   reason. It still fails: relay's rule is to fix a failing test, never to
@@ -80,3 +84,6 @@ open and is Kira's.
 
 - 2026-11-15, from the relay#93 session, as the coordinating session
   passed it on: Kira will start Apple's container service herself.
+- 2026-11-15: Kira started the service, and the live shell test passes
+  with it running (receipt above). The path where the service runs is
+  now exercised.
