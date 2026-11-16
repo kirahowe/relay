@@ -198,7 +198,9 @@
   every dot in such a word is broken, before a digit too."
   [word]
   (boolean (or (str/includes? word "://") (str/includes? word "[:]")
-               (re-find #"(?i)(?<![a-z0-9])www\." word)
+               ;; Anywhere in the word: what a reader takes a www. host to
+               ;; start after is no more relay's to guess than a scheme.
+               (re-find #"(?i)www\." word)
                (re-find #"(?i)(?<![a-z0-9])(?:hxxps?|fxp):(?=\S)" word))))
 
 (defn- closes-a-sentence?

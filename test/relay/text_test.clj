@@ -677,3 +677,10 @@
                       ["see ://x" "see [:]//x"]]]
     (is (= broken (text/defang s)) s))
   (is (= "hxxps://x[.]com" (text/defang "hxxps://x[.]com")) "a broken scheme stays as it is"))
+
+(deftest www-anywhere-in-a-word-makes-it-an-address
+  ;; relay#104, from relay-34's run of relay-tui over the fuzz: www. run
+  ;; on from a digit left the dots before digits in its word whole.
+  (doseq [[s broken] [["a.bc:1WWW.123.c0m" "a[.]bc:1WWW[.]123[.]c0m"] ["v1.2:3www.123" "v1[.]2:3www[.]123"]
+                      ["mywww.txt" "mywww[.]txt"]]]
+    (is (= broken (text/defang s)) s)))
