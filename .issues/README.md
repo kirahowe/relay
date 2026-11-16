@@ -18,6 +18,7 @@
 | [119](119-decide-whether-a-link-in-text-no-outsider-shaped-is-left-as.md) | Decide whether a link in text no outsider shaped is left as written | feature | P2 |
 | [121](121-decide-how-far-outside-text-is-broken-file-names-that-are.md) | Decide how far outside text is broken: file names that are also hosts, and schemes that are not web addresses | feature | P2 |
 | [141](141-let-a-key-act-only-on-a-target-the-frame-drew-hit-testing.md) | Let a key act only on a target the frame drew (hit-testing in relay-tui) | feature | P2 |
+| [150](150-revise-how-relay-s-agent-sessions-work-so-a-phase-takes.md) | Revise how relay's agent sessions run a phase | chore | P2 |
 | [56](56-serve-the-board-over-http-and-sse-on-the-tailnet-for-a-web.edn) | Serve the board over HTTP and SSE on the tailnet for a web client | feature | P3 |
 | [59](59-keep-large-integers-exact-in-mcp-structured-results.md) | Keep large integers exact in MCP structured results | bug | P3 |
 | [60](60-let-relay-acp-start-agentloop-with-a-relative-data-path.edn) | Let relay acp start agentloop with a relative --data path | bug | P3 |
