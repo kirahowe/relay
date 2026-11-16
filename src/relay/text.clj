@@ -657,6 +657,26 @@
             (do (vswap! counts update kind (fnil inc 0)) (recur (inc i) prev))))))
     [(str sb) @counts]))
 
+(def ^:private emoji-glue #{0x200D 0xFE0E 0xFE0F})
+
+(defn conversation-text
+  "Outside text of a conversation as relay sends it to a client
+  (relay#104): hidden characters taken out, but for the joiner or
+  selector that holds an emoji together (as sanitize keeps them), then
+  every link broken (defang). What strip keeps that is still hidden,
+  the unassigned code points of the emoji blocks, is taken out too: no
+  client may get a hidden character raw, and escaping it would double
+  every backslash in the reply. Taking hidden characters out first means
+  one inside a host cannot hide it from defang. `s` must hold whole
+  words only: a word cut in two is judged in two halves."
+  [s]
+  (let [t (defang (first (strip (str s))))
+        sb (StringBuilder.)]
+    (doseq [cp (iterator-seq (.iterator (.codePoints ^String t)))]
+      (when-not (and (hidden? cp) (not (emoji-glue cp)) (not (#{9 10} cp)))
+        (.appendCodePoint sb (int cp))))
+    (str sb)))
+
 (def ^:private cjk #{"Han" "Hiragana" "Katakana" "Hangul"})
 
 (def ^:private latin-lookalikes
