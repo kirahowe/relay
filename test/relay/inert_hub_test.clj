@@ -284,6 +284,13 @@
                     :else (cons k (walk v))))
             u)))
 
+(deftest an-update-that-is-not-a-map-is-broken-whole
+  ;; Review round 2: a vector of pairs became a map whose kept key passed
+  ;; as it came, and a string threw.
+  (doseq [u [[["sessionUpdate" "https://evil.test/w"]] "https://evil.test/s"]]
+    (let [[_ ws] (feed (live ["contaminated"]) (update-line u))]
+      (is (= [(if (string? u) "hxxps://evil[.]test/s" [["sessionUpdate" "hxxps://evil[.]test/w"]])] ws)))))
+
 (defn- replayed
   "The updates a second connection is sent when it loads s1."
   [h]

@@ -27,16 +27,29 @@ is safe.
 
 A first draft, mine, from the relay#118 session's text.
 
-- [ ] In a session that may hold outside text, every string in a
+- [x] In a session that may hold outside text, every string in a
   `session/update` reaches clients broken, except under a short list of
   keys known to be safe. The list is in one place and the Log names
   each key on it.
-- [ ] A test sends an update with a field relay does not know, holding a
+  - Receipt: relay.hub/kept-update-keys and kept-meta-keys; the Log
+    names each key; docs/client-protocol.md lists them.
+- [x] A test sends an update with a field relay does not know, holding a
   link, and finds it broken. It fails on today's code.
-- [ ] `available_commands_update`'s descriptions are broken in such a
+  - Receipt: `relay.inert-hub-test`: `a-field-relay-does-not-know-arrives-broken`,
+    `a-text-chunk-s-other-fields-arrive-broken` and the property
+    `no-link-in-an-update-reaches-a-client-whole`, live and replayed.
+    All fail on the old inert-update.
+- [x] `available_commands_update`'s descriptions are broken in such a
   session, or the Log says why they need not be.
-- [ ] `bb verify` passes, and an adversarial Codex review finds nothing
+  - Receipt: `a-field-relay-does-not-know-arrives-broken` checks a
+    command's name, description and hint.
+- [x] `bb verify` passes, and an adversarial Codex review finds nothing
   in scope.
+  - Receipt: bb verify passes across relay.ec, relay-tui.ec,
+    agentloop.ec and webtool.ec, fuzz and pentest included. Codex was
+    out of quota, so a fresh read-only reviewer agent was given the
+    threat model: round 1 found the replay's usage line (fixed), and
+    round 2 found nothing in scope (see the Log).
 
 ## Plan
 
@@ -87,3 +100,15 @@ Related: relay#104, relay#135.
   block's whole content item passes as it is. That is out of scope:
   only agentloop builds one, from relay's tools, and the agent is
   trusted.
+- 2026-11-16, relay-ec. Review round 2, by a fresh reviewer agent:
+  nothing in scope. It checked the replay in clean and contaminated
+  sessions, a word held across a usage line, labels that change
+  mid-stream, the end of a turn and of a conversation, params next to
+  the update, and who chooses each kept key's value (agentloop alone).
+  Of its out-of-scope notes, two came from an update that is not a map:
+  a string threw, and a vector of pairs became a map whose kept key
+  passed as it came. inert-update now breaks such an update whole
+  (`an-update-that-is-not-a-map-is-broken-whole`). Two notes are left
+  as they are because only agentloop, which is trusted, could cause
+  them: a field outside params, and an agent notification other than
+  session/update, which agentloop does not send.

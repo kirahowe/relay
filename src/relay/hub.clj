@@ -1072,14 +1072,17 @@
 (defn- inert-update
   "An update made inert: every string in it broken, map keys included,
   but under kept-update-keys and kept-meta-keys. Content goes by
-  inert-tool-content or inert-block."
+  inert-tool-content or inert-block. An update that is not a map has no
+  kept keys: everything in it is broken."
   [u]
-  (into {} (map (fn [[k v]]
+  (if-not (map? u)
+    (inert-strings u)
+    (into {} (map (fn [[k v]]
                   (cond (contains? kept-update-keys k) [k v]
                         (= "_meta" k) [k (if (map? v) (keeping kept-meta-keys v) (inert-strings v))]
                         (= "content" k) [k (if (sequential? v) (mapv inert-tool-content v) (inert-block v))]
                         :else [(inert-strings k) (inert-strings v)])))
-        u))
+          u)))
 
 (defn- with-update
   "An agent's session/update with `u` as its update. The rest of its
