@@ -60,27 +60,66 @@ Mine:
 
 ## Acceptance criteria
 
-A first draft. Whoever builds this tightens it against relay#97's wire
-form.
-
-- [ ] relay's catalog takes Button. relay refuses a surface whose button
+- [x] relay's catalog takes Button. relay refuses a surface whose button
   names a function outside relay's catalog, `openUrl` included.
-- [ ] A press of an `event` button reaches the role that owns the
+  - Receipt: `relay.buttons-test/a-button-is-refused-unless-it-is-one-of-the-two`
+    (openUrl, relay:approve, relay:setConfig, formatString, @index, a
+    userMessage or context, an unbound path, a borderless variant) and
+    `a-button-a-list-draws-sets-only-its-own-items-box`; the catalog
+    file and `the-catalog-says-what-relay-checks`.
+- [x] A press of an `event` button reaches the role that owns the
   surface as a line relay wrote, naming the button and the surface, and
   starts a turn for that role.
-- [ ] That line carries the labels of the surface's text. The event's
+  - Receipt: `a-press-that-tells-the-role-is-a-memo-relay-writes` (the
+    owner is woken; the memo names the card, the rev, the item and the
+    button) and `the-operator-presses-from-the-command-line-and-a-role-cannot`.
+- [x] That line carries the labels of the surface's text. The event's
   `name`, `userMessage` and `context` reach no role as Kira's words.
-- [ ] A press of a function button changes relay's data as a card op
+  - Receipt: the same test (labels and sources kept, label and event
+    name only inside quotes, subject in relay's words, the prompt framing
+    a press as hers to have pressed and not written) and
+    `a-press-says-who-wired-the-button`. `userMessage` and `context` are
+    refused when the surface is written, so they never travel.
+- [x] A press of a function button changes relay's data as a card op
   does, starts no model turn, and every client redraws.
-- [ ] No press changes config, and none answers one of relay's review
+  - Receipt: `a-press-that-sets-a-box-is-the-operators-tick`: the press
+    is recorded as the box's own `input` event, no labels, nobody woken.
+    That event reaches every client as an input does
+    (`relay.surfaces-test/a-clients-input-reaches-relay-and-then-every-client`).
+- [x] No press changes config, and none answers one of relay's review
   screens. A test tries both.
-- [ ] relay-tui moves to a button, presses it with a key, and shows
+  - Receipt: `every-press-tells-the-owner-or-ticks-a-box-and-nothing-else`
+    (200 random surfaces: only `memo/sent` or `card/changed`, the rest of
+    the state unchanged) and s28, which compares relay.edn before and
+    after every press.
+- [x] relay-tui moves to a button, presses it with a key, and shows
   relay's refusal as relay wrote it.
-- [ ] README, resources/AGENTS.md, spec/relay.allium and
+  - Receipt: relay-tui `TestTabVisitsBoxesAndButtonsInDrawnOrder`,
+    `TestAPressSendsExactlyTheFiveFieldOpAndWaits`,
+    `TestARefusalOfAPressShowsRelaysText`, `TestHubPressesAButton`; the
+    arming tests `TestAPressIsTakenOnlyFromAnArmedLiveKey`,
+    `TestAButtonThatAResizeBroughtBackIsArmedAfresh`,
+    `TestALiveXRightAfterTheScreenAppearsDoesNotPressAHeldFocus` and the
+    property `TestPressesAreArmedWhateverTheKeys`.
+- [x] README, resources/AGENTS.md, spec/relay.allium and
   docs/client-protocol.md say what a button may do.
-- [ ] A pentest case presses a button whose label and wiring disagree.
+  - Receipt: change suwwymyx, and the contract in zpnvllvy;
+    `allium check` reports the same three errors and six warnings as
+    before, all in rules this change does not touch.
+- [x] A pentest case presses a button whose label and wiring disagree.
+  - Receipt: `s28-buttons` in `pentest/relay/pentest/scenarios/buttons.clj`.
+    It fails when the memo's labels are dropped.
 - [ ] `bb verify` passes, and an adversarial Codex review finds nothing
   in scope.
+  - `bb verify` passes: the joint run of 2026-11-17 on relay xvpsmlru, the chain's
+    tip before this record, and relay-tui sslzrtrv, with my `ae` agentloop and
+    webtool: every step PASS, relay 1,279 of 1,279, pentest 34 of 34,
+    fuzz seed 1794889217, 400,000 cases, none followed. `make check`
+    passes in relay-tui.
+  - Not met as written for the review. Codex was out of quota, so each
+    round was a fresh reviewer agent; three rounds on each side each
+    found something in scope, all fixed. Kira chose to land: relay's
+    side on 2026-11-16, relay-tui's on 2026-11-17 (the Log has both).
 
 ## Plan
 

@@ -72,7 +72,7 @@
 | [148](148-keep-a-button-label-holding-from-reading-as-two-buttons.md) | Keep a button label holding ] [ from reading as two buttons | bug | P3 |
 | [149](149-list-every-prepend-character-in-relay-tui-s-test-judge.md) | List every Prepend character in relay-tui's test judge | chore | P3 |
 
-### In progress
+### Review
 
 | ID | Title | Type | Priority |
 | --- | --- | --- | --- |
