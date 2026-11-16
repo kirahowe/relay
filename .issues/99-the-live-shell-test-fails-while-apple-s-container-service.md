@@ -77,3 +77,6 @@ Not exercised: the path where the service runs. It is stopped on this
 Mac and starting it is Kira's. In the live test that path is the old
 body, unchanged, under the new `:else`. The first criterion is still
 open and is Kira's.
+
+- 2026-11-15, from the relay#93 session, as the coordinating session
+  passed it on: Kira will start Apple's container service herself.

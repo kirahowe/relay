@@ -153,3 +153,9 @@ relay#91 and relay#95.
   are broken, or they reach a client raw.
 - 2026-11-15: Kira, through the coordinating session's question
   dialog: relay-fb (the relay#118 and relay#130 session) takes this now.
+- 2026-11-15, from the relay#93 session, as the coordinating session
+  passed it on. Kira approved this sentence for relay-macos's AGENTS.md:
+  "If the client ever makes a link in conversation text, it matches only
+  an address with no hidden character in or beside it." relay-macos has
+  no tracker of its own, so it is noted here, beside the addition about
+  a client that draws text itself.

@@ -97,13 +97,13 @@ The coordinating session's, 2026-11-14, and Kira may overrule them:
 
 ## The parts
 
-- relay#94 Keep a link live when relay can say where it came from
+- relay#94 Keep a link live when relay can say where it came from (done)
 - relay#95 Call a link safe from the dashboard
-- relay#96 Draw A2UI surfaces in relay-tui
+- relay#96 Draw A2UI surfaces in relay-tui (done)
 - relay#97 Keep role-built surfaces in the log and send them to every
-  client
-- relay#98 Decide what a button on a role-built screen may do
-- relay#100 Draw surface cards on relay-tui's board
+  client (done)
+- relay#98 Decide what a button on a role-built screen may do (done)
+- relay#100 Draw surface cards on relay-tui's board (done)
 - relay#101 Teach roles when and how to build a surface, with eval cases
 - relay#102 Decide whether checklist, tracker and note become built-in
   surfaces
@@ -114,7 +114,7 @@ The coordinating session's, 2026-11-14, and Kira may overrule them:
 - relay#113 Decide how tabs, pages and placement work above the board
 - relay#114 Let a surface show relay's own data without the role
   rewriting it
-- relay#118 Carry a live link as data beside inert text
+- relay#118 Carry a live link as data beside inert text (done)
 
 relay#111, relay#113 and relay#114 each wait on a decision of Kira's.
 relay#111 questions a decision recorded above: the coordinating session
@@ -212,3 +212,9 @@ link breaker.
   recorded it in relay#101, with its own undecided proposal of a
   designer role the steward consults, and her always-on UX agent as
   later work, since she said most users will not need it.
+- 2026-11-15: Kira closed relay#94, relay#96, relay#100 and relay#118
+  through the coordinating session's dialog, after relay#97 and
+  relay#98. Six parts are done. relay#95 is in progress, relay#101 and
+  relay#106 are ready, relay#107 waits on relay#106, and relay#102 and
+  relay#111 to relay#114 wait on Kira. Of the issues filed along the
+  way, relay#124 and relay#125 are done too.
