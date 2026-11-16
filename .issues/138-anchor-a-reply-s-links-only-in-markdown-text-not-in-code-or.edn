@@ -1,0 +1,11 @@
+{:id 138
+ :title "Anchor a reply's links only in Markdown text, not in code or tables"
+ :status :ready
+ :type :bug
+ :priority :p3
+ :created "2026-11-16"
+ :updated "2026-11-16"
+ :tags #{}
+ :blocked-by #{}
+ :related #{}
+ :details "138-anchor-a-reply-s-links-only-in-markdown-text-not-in-code-or.md"}
