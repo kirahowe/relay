@@ -1,0 +1,11 @@
+{:id 134
+ :title "Break every string in an agent's update unless its key is known safe"
+ :status :ready
+ :type :bug
+ :priority :p3
+ :created "2026-11-15"
+ :updated "2026-11-15"
+ :tags #{"security"}
+ :blocked-by #{}
+ :related #{"relay#104" "relay#135"}
+ :details "134-break-every-string-in-an-agent-s-update-unless-its-key-is.md"}

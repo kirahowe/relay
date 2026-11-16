@@ -1,0 +1,11 @@
+{:id 135
+ :title "Check what ACP clients do with a tool call location that is an address"
+ :status :ready
+ :type :chore
+ :priority :p3
+ :created "2026-11-15"
+ :updated "2026-11-15"
+ :tags #{}
+ :blocked-by #{}
+ :related #{"relay#104" "relay#134" "relay#84"}
+ :details "135-check-what-acp-clients-do-with-a-tool-call-location-that-is.md"}
