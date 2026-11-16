@@ -154,3 +154,22 @@ Needs relay#97. relay-tui's side builds on relay#100.
   approvals): "Land after three rounds", together with relay-tui's side.
   relay-32 dated it 2026-11-17; it was 23:59 on 2026-11-16 here when it
   arrived.
+- 2026-11-17, relay-tui's side, review rounds 2 and 3, fresh reviewers.
+  Round 2 found one low gap in scope: arming learned whether the button
+  was on screen only from keys, so a resize, or a button too tall to fit
+  when focused, could bring it into view without arming it afresh. Fixed
+  at the root (zvlxxvny, prxtynyk): the shell tells the core what the
+  frame shows after every update while a button has focus, and relay-tui
+  refuses Buttons relay never sends. Round 3 found two more in scope:
+  keys replayed after connecting armed a press from when they were typed
+  (also true of archive, on trunk), and a terminal just too small to draw
+  in still reported the button as shown. It also found one that fails
+  closed: after a reveal with no key, the first press was refused however
+  long the wait. All three are being fixed, with a liveness half for the
+  arming property, before landing. That makes three rounds on this side
+  that each found something, so it stops here as relay's did, and lands
+  under Kira's "Land after three rounds".
+- 2026-11-17, Kira, asked by relay-32 about relay-tui's side as a
+  question of its own after its three rounds: "Land once round 3's
+  fixes pass", meaning `make check` and a clean joint `bb verify`, with
+  no fourth round.
