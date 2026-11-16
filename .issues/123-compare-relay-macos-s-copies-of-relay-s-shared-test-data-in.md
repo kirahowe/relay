@@ -53,3 +53,9 @@ or take its directory as an argument like the other siblings.
   (internal/a2ui/relay_catalog.json, testdata/surfaces/), and the case
   table still matches relay's testdata/strict-json/cases.jsonl on
   `integration` at 53a496c5.
+- 2026-11-17, the coordinating session, from relay-macos-99: relay-macos
+  is public at https://github.com/kirahowe/relay-macos (main at
+  79a91213). The copies relay could compare are on that main:
+  `Tests/RelayCoreTests/Fixtures/strict-json/cases.jsonl`,
+  `Tests/RelayCoreTests/Fixtures/a2ui/relay_catalog.json` and
+  `Tests/RelayCoreTests/Fixtures/surfaces/`.
