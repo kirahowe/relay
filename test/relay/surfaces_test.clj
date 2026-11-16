@@ -151,9 +151,9 @@
 
 (deftest relay-refuses-what-its-catalog-does-not-have
   (testing "a component the catalog leaves out"
-    (doseq [type ["Button" "TextField" "ChoicePicker" "Image" "Video" "AudioPlayer" "Modal" "Tracker" "Surface"]]
+    (doseq [type ["TextField" "ChoicePicker" "Image" "Video" "AudioPlayer" "Modal" "Tracker" "Surface"]]
       (is (= (str "Component 6 (x): relay's catalog has no such component. It has Text, Row, Column, List, Card,"
-                  " Divider, CheckBox.")
+                  " Divider, CheckBox, Button.")
              (adding (with-component {"id" "x" "component" type "child" "note"})))
           type)))
   (testing "a property the component does not take"
@@ -702,7 +702,7 @@
         (is (= [{"text" "Bags" "done" false}] (get-in (card w) [:surface :data "items"])))
         (is (some? (refused #(cards/decide (:cards w) 1 {:op "input" :path "/items/0/done" :value true :seen 1}))))))
     (testing "the other kinds' ops are not a surface's, and a surface's are not theirs"
-      (is (= "tick is not an op on a surface. A surface's ops are archive, components, data, input, restore, retitle."
+      (is (= "tick is not an op on a surface. A surface's ops are archive, components, data, input, press, restore, retitle."
              (decide {:op "tick" :item 1})))
       (let [e (event 1 "card/added" [] (cards/added {} {:kind "checklist" :title "L" :items ["a"]}))]
         (is (str/starts-with? (message #(cards/decide (cards/add {} e) 1 {:op "input" :path "/a" :value true :seen 1}))
@@ -778,7 +778,7 @@
         (is (= {:unchanged "Card 1 already has those components." :labels []}
                (cards/decide (:cards w) 1 {:op "components" :components (:components a-list) :seen 1})))
         (is (str/includes? (message #(cards/decide (:cards w) 1 {:op "components" :seen 1
-                                                                 :components [{"id" "root" "component" "Button"}]}))
+                                                                 :components [{"id" "root" "component" "TextField"}]}))
                            "relay's catalog has no such component"))))))
 
 (def gen-key (gen/elements ["a" "b" "items" "2026-01" "x_y" "0"]))
@@ -1083,13 +1083,14 @@
       (doseq [[type c] {"Text" {"text" "t"}
                         "Row" {"children" []} "Column" {"children" []} "List" {"children" []}
                         "Card" {"child" "leaf"} "Divider" {}
-                        "CheckBox" {"label" "l" "value" false}}]
+                        "CheckBox" {"label" "l" "value" false}
+                        "Button" {"child" "leaf" "action" {"event" {"name" "go"}}}}]
         (let [w (world {:title type
                         :components (cond-> [(merge {"id" "root" "component" type} c)]
-                                      (= "Card" type) (conj {"id" "leaf" "component" "Text" "text" "t"}))})]
+                                      (#{"Card" "Button"} type) (conj {"id" "leaf" "component" "Text" "text" "t"}))})]
           (is (= type (get (first (get (surface-message (wire (card w))) "components")) "component")) type)
           (is (string? (cards/text-form (card w))) type)))
-      (is (= (set (map first surfaces/catalog)) #{"Text" "Row" "Column" "List" "Card" "Divider" "CheckBox"})
+      (is (= (set (map first surfaces/catalog)) #{"Text" "Row" "Column" "List" "Card" "Divider" "CheckBox" "Button"})
           "A component new to the catalog needs a case above."))))
 
 (def what-relay-accepts-weighs-no-more-than-it-measured

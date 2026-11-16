@@ -78,12 +78,14 @@
    ;; is a position, and against an older rev it could name another item.
    "components" {:kinds #{"surface"} :args [:components :seen]}
    "data" {:kinds #{"surface"} :args [:path :value :seen]}
-   "input" {:kinds #{"surface"} :args [:path :value :seen]}})
+   "input" {:kinds #{"surface"} :args [:path :value :seen]}
+   ;; The operator's press of a Button, by its drawn id (relay#106).
+   "press" {:kinds #{"surface"} :args [:component :seen]}})
 
 (def op-fields
   "The fields of the one flat op shape that tools, the command line and
   clients all use."
-  [:op :item :row :column :state :text :components :path :value :seen])
+  [:op :item :row :column :state :text :components :path :value :component :seen])
 
 ;; --- limits
 
@@ -319,7 +321,7 @@
   of a card changed in any way after it a refusal, so the card archived
   is the one the client showed. Ticks and cell states are last writer
   wins."
-  [cards id {:keys [op item row column state text components path value seen] :as raw}]
+  [cards id {:keys [op item row column state text components path value component seen] :as raw}]
   (let [card (get cards id)
         spec (get ops op)]
     (when-not card (refuse! :not-found (str "There is no card " id ".")))
@@ -333,7 +335,7 @@
       (when-not (integer? seen) (refuse! "seen must be a rev, a number."))
       (when (or (neg? seen) (> seen (:rev card)))
         ;; A surface's op is not told the rev the card is at: see below.
-        (refuse! (if (#{"components" "data" "input"} op)
+        (refuse! (if (#{"components" "data" "input" "press"} op)
                    "seen must be a rev you read. Read the card again for it."
                    (str "seen must be a rev you read: card " id " is at rev " (:rev card) ".")))))
     (when-not ((:kinds spec) (:kind card))
@@ -400,7 +402,7 @@
                   (if (= t (get-in card [:note :text]))
                     (unchanged (str "Card " id "'s note already says that.") (get-in card [:note :labels]))
                     (decided {:text t})))
-        ("components" "data" "input")
+        ("components" "data" "input" "press")
         (let [{:keys [surface]} card
               held (surface-labels surface)]
           (when (nil? seen) (refuse! (str op " needs seen: the card's rev when you read it.")))
@@ -437,7 +439,22 @@
                                         ;; No limit is checked: they were, on the
                                         ;; surface with this box unticked.
                                         (decided {:path path :value value})))
-                        (refuse! :not-found (str "Nothing on card " id " takes input at that path."))))))))))
+                        (refuse! :not-found (str "Nothing on card " id " takes input at that path."))))
+            ;; A press finds the button in the surface as drawn at the
+            ;; rev the operator saw, so what is pressed is what was shown.
+            ;; One that sets a box is that box's input; one that tells the
+            ;; role changes nothing on the card, and relay.core writes the
+            ;; role's memo from :press.
+            "press" (let [b (when (string? component) (surfaces/button (:root (surfaces/shown surface)) component))
+                          {:keys [event call path value]} (:action b)]
+                      (cond
+                        (nil? b) (refuse! :not-found (str "Nothing on card " id " is a button with that id."))
+                        event {:press {:component component :label (get-in b [:child :text]) :event event}}
+                        (= surfaces/set-input call)
+                        (if (= value (true? (surfaces/at (:data surface) (:parts (surfaces/path path)))))
+                          (unchanged (str "That box is already " (if value "ticked" "unticked") "."))
+                          {:op {:op "input" :path path :value value}})
+                        :else (refuse! :not-found (str "Nothing on card " id " is a button with that id."))))))))))
 
 ;; --- folding events
 

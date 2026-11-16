@@ -3,6 +3,32 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "catalogId": "urn:relay:catalog:v1",
   "components": {
+    "Button": {
+      "description": "a button the operator presses, showing its child, a Text, as one line",
+      "properties": {
+        "action": {
+          "$ref": "common_types.json#/$defs/Action"
+        },
+        "child": {
+          "$ref": "common_types.json#/$defs/Child"
+        },
+        "component": {
+          "const": "Button"
+        },
+        "variant": {
+          "enum": [
+            "primary"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "component",
+        "child",
+        "action"
+      ],
+      "type": "object"
+    },
     "Card": {
       "description": "one child in a box",
       "properties": {
@@ -137,7 +163,7 @@
       "type": "object"
     }
   },
-  "description": "The components relay takes from a role and sends to a client: layout, text and a checkbox.",
+  "description": "The components relay takes from a role and sends to a client: layout, text, a checkbox and a button.",
   "functions": {
     "formatString": {
       "description": "Fills each ${...} spot in the value with what the data model holds at that path. A spot holds one path and nothing else. \\${ is a literal ${.",
@@ -166,7 +192,7 @@
       "type": "object"
     }
   },
-  "instructions": "A surface is a card you lay out yourself. Add one with card_add: kind surface, a title, `components` and `data`.\n\n`components` is a flat list. Each has an `id`, a `component` and that component's properties, and names its\nchildren by id. One has the id root and holds the others. The card already has a frame with its title on\nit, so start from a Column and do not repeat the title. The components and what each takes:\n\n  Text: plain text, not Markdown. text (text, a path or a call); variant (body or caption, optional).\n  Row: its children side by side. children (a list of ids, or a template).\n  Column: its children one under another. children (a list of ids, or a template).\n  List: its children as a list. children (a list of ids, or a template); direction (vertical or horizontal, optional).\n  Card: one child in a box. child (the id of one component).\n  Divider: a rule. axis (horizontal or vertical, optional).\n  CheckBox: a box with a one-line label, which the operator ticks when its value is a path to true or false. label (text, a path or a call); value (true, false or a path).\n\nA text is plain text. A client may draw **bold**, a # heading line and - list lines as such, and shows\neverything else as written, so leave out Markdown links, tables and code fences.\n\n`data` is the JSON the components read. Where a property takes a path, write {\"@path\": \"/items/0/text\"}.\nA path to text, a number, true or false reads as that; a path to a list or an object reads as nothing.\nA text may also fill spots from the data: {\"@call\": \"formatString\", \"args\": {\"value\": \"${/done} of ${/total} done\"}}.\n\nTo draw one child for each item of a list in the data, give a Row, Column or List\n`children` of {\"componentId\": \"item\", \"path\": \"/items\"}. In that component a path with no leading /\nreads from the item ({\"@path\": \"text\"}), and {\"@call\": \"@index\", \"args\": {\"offset\": 1}} is the item's number.\n\nThe operator can tick and untick a CheckBox whose value is a path. The data must hold true or false there\nalready, so write false for a box that starts unticked. Nothing else on a surface can be changed by them.\nReading the card shows you what they ticked.\n\nChange a surface with card_op. `data` writes `value` at `path`: a null value removes what is there, and a\npath ending in /- adds to a list that is already there. A key that is missing on the way is made; a list is\nnot, so write [] first. `components` replaces every component. Both need `seen`, the card's rev, which the\ncard's header and every answer to a change give.\n\nLimits: 200 components, 1000 once lists are drawn, 12 deep; 200 items in a list; 8000 characters in a text and 16000 in all. The data holds at most 4000 values, 12 deep, and a path at most 16 parts. Components and data together are at most 64000 characters of JSON. Numbers are whole numbers. Keys of the data are letters, digits, underscores and hyphens, and never a - by itself. A component's id is letters and digits with single underscores between them.",
+  "instructions": "A surface is a card you lay out yourself. Add one with card_add: kind surface, a title, `components` and `data`.\n\n`components` is a flat list. Each has an `id`, a `component` and that component's properties, and names its\nchildren by id. One has the id root and holds the others. The card already has a frame with its title on\nit, so start from a Column and do not repeat the title. The components and what each takes:\n\n  Text: plain text, not Markdown. text (text, a path or a call); variant (body or caption, optional).\n  Row: its children side by side. children (a list of ids, or a template).\n  Column: its children one under another. children (a list of ids, or a template).\n  List: its children as a list. children (a list of ids, or a template); direction (vertical or horizontal, optional).\n  Card: one child in a box. child (the id of one component).\n  Divider: a rule. axis (horizontal or vertical, optional).\n  CheckBox: a box with a one-line label, which the operator ticks when its value is a path to true or false. label (text, a path or a call); value (true, false or a path).\n  Button: a button the operator presses, showing its child, a Text, as one line. child (the id of one component); action (an event or a function call; see below); variant (primary, optional).\n\nA text is plain text. A client may draw **bold**, a # heading line and - list lines as such, and shows\neverything else as written, so leave out Markdown links, tables and code fences.\n\n`data` is the JSON the components read. Where a property takes a path, write {\"@path\": \"/items/0/text\"}.\nA path to text, a number, true or false reads as that; a path to a list or an object reads as nothing.\nA text may also fill spots from the data: {\"@call\": \"formatString\", \"args\": {\"value\": \"${/done} of ${/total} done\"}}.\n\nTo draw one child for each item of a list in the data, give a Row, Column or List\n`children` of {\"componentId\": \"item\", \"path\": \"/items\"}. In that component a path with no leading /\nreads from the item ({\"@path\": \"text\"}), and {\"@call\": \"@index\", \"args\": {\"offset\": 1}} is the item's number.\n\nThe operator can tick and untick a CheckBox whose value is a path. The data must hold true or false there\nalready, so write false for a box that starts unticked. Nothing else on a surface can be changed by them.\nReading the card shows you what they ticked.\n\nA Button shows one Text, its child, and the operator presses it. Its action is one of two:\n  {\"event\": {\"name\": \"plan_route\"}} tells you. relay sends you a memo from the operator that names the\n  button, the card and, in a list, the item (its id, such as remove__2), so you can read the card and do it.\n  The event has a name and nothing else, and the memo carries the card's labels and sources.\n  {\"functionCall\": {\"@call\": \"relay:setInput\", \"args\": {\"path\": \"/items/0/done\", \"value\": true}}} sets a box\n  on this card, as the operator's tick does, and wakes no one. Its path is one a CheckBox is bound to, and\n  in a list's template it may read from the item (\"done\").\nA button never changes the operator's settings and never stands for their consent to anything.\n\nChange a surface with card_op. `data` writes `value` at `path`: a null value removes what is there, and a\npath ending in /- adds to a list that is already there. A key that is missing on the way is made; a list is\nnot, so write [] first. `components` replaces every component. Both need `seen`, the card's rev, which the\ncard's header and every answer to a change give.\n\nLimits: 200 components, 1000 once lists are drawn, 12 deep; 200 items in a list; 8000 characters in a text and 16000 in all. The data holds at most 4000 values, 12 deep, and a path at most 16 parts. Components and data together are at most 64000 characters of JSON. Numbers are whole numbers. Keys of the data are letters, digits, underscores and hyphens, and never a - by itself. A component's id is letters and digits with single underscores between them.",
   "protocolVersion": "1.0",
   "title": "relay catalog"
 }

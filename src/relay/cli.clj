@@ -460,7 +460,7 @@ id public too.")
 
 (def ^:private card-options
   "What relay card reads, and the options every command may be given."
-  #{:item :row :column :state :text :seen :title :path :value :surface :data :public})
+  #{:item :row :column :state :text :seen :title :path :value :component :surface :data :public})
 
 (defn- surface-file
   "The JSON object in the file --surface names: a surface's components
@@ -493,8 +493,8 @@ id public too.")
         unknown (sort (map name (remove card-options (keys opts))))]
     (when (seq unknown)
       (fail! (str "relay card has no option " (str/join ", " (map #(str "--" %) unknown))
-                  ". It takes --item, --row, --column, --state, --text, --seen, for a surface --path, --value"
-                  " and --surface, and, to add, --title.")))
+                  ". It takes --item, --row, --column, --state, --text, --seen, for a surface --path, --value,"
+                  " --component and --surface, and, to add, --title.")))
     (cond
       (nil? a)
       (fail! "usage: relay card <id> [<op> ...], or relay card add <kind> --title <t> ...")
@@ -524,6 +524,7 @@ id public too.")
                      (:state opts) (assoc :state (:state opts))
                      (some? (:text opts)) (assoc :text (:text opts))
                      (:path opts) (assoc :path (:path opts))
+                     (:component opts) (assoc :component (:component opts))
                      (some? (:value opts)) (assoc :value (json-or-text (:value opts)))
                      (:surface opts) (assoc :components
                                             (let [held (surface-file (:surface opts))]
@@ -535,7 +536,10 @@ id public too.")
                                               (get held "components")))
                      (:seen opts) (assoc :seen (:seen opts)))]
             (if-let [e (first (operator-card! sys :card/op (assoc op :card id)))]
-              (result 0 (cards/confirmation id (get-in e [:data :op]) (:seq e)))
+              (result 0 (if (= "memo/sent" (:type e))
+                          ;; A press that tells the card's role.
+                          (str "Told " (get-in e [:data :to]) " you pressed it.")
+                          (cards/confirmation id (get-in e [:data :op]) (:seq e))))
               (result 0 (str "That changes nothing: "
                              (:unchanged (cards/decide (:cards (inbound/current-state sys)) id op)))))))))))
 

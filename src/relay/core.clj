@@ -1087,10 +1087,10 @@
     (update-in state [:links :live] into (remove dropped (filter text/link? links)))))
 
 (defmethod evolve* "memo/sent" [state {:keys [seq at data labels public]}]
-  (let [{:keys [from to subject body routine about links]} data]
+  (let [{:keys [from to subject body routine about links press]} data]
     (-> state
         (assoc-in [:memos seq] {:id seq :from from :to to :subject subject :body body
-                                :routine routine :about about :sent-at (inst at) :status :unread
+                                :routine routine :about about :press press :sent-at (inst at) :status :unread
                                 :attempts 0 :retry-at nil :labels (union labels)
                                 :public (true? public)})
         ;; A scout's memo names the links in it that the web showed it.
@@ -1663,9 +1663,11 @@
   known."
   ([tx m] (send-memo tx m []))
   ([tx m copied] (send-memo tx m copied nil))
-  ([tx {:keys [from to subject body routine about links]} copied copied-sources]
+  ([tx {:keys [from to subject body routine about links press]} copied copied-sources]
    (let [tx (emit tx "memo/sent" (cond-> {:from from :to to :subject subject :body body}
                                    routine (assoc :routine routine)
+                                   ;; The operator's press of a button names it.
+                                   press (assoc :press press)
                                    ;; A dead letter's memo names the letter it is about.
                                    about (assoc :about about)
                                    ;; A scout's memo names the links in it
@@ -4499,13 +4501,49 @@
   (emit tx "card/added" (cards/added (:cards state) (select-keys args [:kind :title :items :rows :columns :text
                                                                          :components :data]))))
 
-(defmethod decide* :card/op [{:keys [state] :as tx} {{id :card :as args} :args}]
+(defn- pressed
+  "The memo a press of a button that tells its role sends: from the
+  operator to the card's owner, in relay's words (relay#98). It names the
+  button, the card and the event, and quotes the label as the role's
+  writing, never as the operator's. It carries the card's labels and
+  keeps its sources (Kira, 2026-11-17): what a role does after a press
+  on a card built from outside text is shown with that source, where an
+  offer she accepted in the daily note is hers."
+  [{:keys [state] :as tx} card {:keys [component label event]}]
+  (let [id (:id card)
+        owner (:owner card)
+        title (get-in card [:title :text])
+        press {:card id :component component}]
+    (when-not (and (not= operator owner) (active-role? state owner))
+      (reject! :not-found (str "Nobody keeps card " id " now, so a press would tell no one.")))
+    ;; A key held down, or pressed again while the role is still at it,
+    ;; would queue a wake for each press.
+    (when (some #(and (= press (:press %)) (= :unread (:status %))) (vals (:memos state)))
+      (reject! :conflict (str owner " has not yet taken up your last press of that button.")))
+    (with-public (dissoc tx :sources) false
+      #(send-memo % {:from operator :to owner :press press
+                     :subject (messages/clip-subject (str "Pressed: " (messages/squeeze-line label)))
+                     :body (str "The operator pressed a button on card " id " [[card:" id "]], titled:\n\n"
+                                (quote-block title) "\n\n"
+                                "The button is " component ", and you wired it to the event " event "."
+                                " Its label, which you wrote and not the operator, reads:\n\n"
+                                (quote-block label) "\n\n"
+                                "Read the card to see what the press is for. Do what the button is for, and close"
+                                " this memo with what you did.")}
+                  (card-labels card) (or (seq (:sources card)) (card-labels card))))))
+
+(defmethod decide* :card/op [{:keys [state actor] :as tx} {{id :card :as args} :args}]
   (card-keeper! tx)
+  ;; A press is the operator's: a role that pressed its own button would
+  ;; write itself a memo from her.
+  (when (and (= "press" (:op args)) (not= operator actor))
+    (reject! :forbidden "Only the operator presses a button."))
   ;; An op that changes nothing writes nothing; relay.cards says why.
-  (let [{:keys [op]} (cards/decide (:cards state) id (select-keys args cards/op-fields))]
-    (if op
-      (emit tx "card/changed" {:card id :op op})
-      tx)))
+  (let [{:keys [op press]} (cards/decide (:cards state) id (select-keys args cards/op-fields))]
+    (cond
+      op (emit tx "card/changed" {:card id :op op})
+      press (pressed tx (card state id) press)
+      :else tx)))
 
 ;; what the operator was shown
 ;;

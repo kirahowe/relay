@@ -816,7 +816,7 @@
                       " it as \"rev N\"), with an edit so that you do not overwrite a newer one. A surface's"
                       " ops need it, and each answer gives the new rev.")
     :parameters (obj {:card {:type "integer" :description "The card's number."}
-                      :op {:type "string" :enum (vec (sort (keys cards/ops)))}
+                      :op {:type "string" :enum (vec (sort (remove #{"press"} (keys cards/ops))))}
                       :item {:type "integer"} :row {:type "integer"} :column {:type "integer"}
                       :state {:type "string" :enum cards/cell-states}
                       :text text

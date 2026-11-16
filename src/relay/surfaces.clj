@@ -85,7 +85,13 @@
                :props [["axis" {:is :one-of :of ["horizontal" "vertical"]}]]}]
    ["CheckBox" {:says "a box with a one-line label, which the operator ticks when its value is a path to true or false"
                 :props [["label" {:is :text :required true}]
-                        ["value" {:is :flag :required true}]]}]])
+                        ["value" {:is :flag :required true}]]}]
+   ;; A2UI's Button, without its borderless variant: relay-tui draws that
+   ;; underlined, as it draws a link one can follow.
+   ["Button" {:says "a button the operator presses, showing its child, a Text, as one line"
+              :props [["child" {:is :child :required true}]
+                      ["action" {:is :action :required true}]
+                      ["variant" {:is :one-of :of ["primary"]}]]}]])
 
 (def ^:private by-type (into {} catalog))
 
@@ -99,6 +105,12 @@
   spots in a text with data, and @index, an item's position in the list
   that draws it."
   ["formatString" "@index"])
+
+(def set-input
+  "The one function a Button may call: it sets a box of the same surface,
+  as the operator's tick does, with no model turn (Kira, 2026-11-17,
+  relay#106)."
+  "relay:setInput")
 
 ;; --- refusals
 
@@ -399,6 +411,46 @@
       (refuse! (str w ": an input cannot be bound to /, the whole data model.")))
     (not (:absolute? p))))
 
+(def ^:private name-pattern #"[A-Za-z][A-Za-z0-9_]{0,63}")
+
+(defn- action!
+  "Checks a Button's action, and says whether it reads from a list's
+  item. An event has a name and nothing else: relay writes the role's
+  line itself (relay#98), so a userMessage or a context would never be
+  sent. A function call calls relay:setInput, with the path of a box and
+  true or false."
+  [w v]
+  (let [shape (str w ": an action is {\"event\": {\"name\": \"done\"}}, or {\"functionCall\": {\"@call\": \""
+                   set-input "\", \"args\": {\"path\": \"/items/0/done\", \"value\": true}}}.")]
+    (when-not (and (map? v) (= 1 (count v)) (#{"event" "functionCall"} (first (keys v))))
+      (refuse! shape))
+    (if-let [ev (get v "event")]
+      (do (when-not (map? ev) (refuse! shape))
+          (when (some #{"userMessage" "context"} (keys ev))
+            (refuse! (str w ": an event has a name and nothing else. relay tells the role which button was"
+                          " pressed, on which card and in which item, in words of its own, so a userMessage or a"
+                          " context would never reach it.")))
+          (when-not (and (= ["name"] (keys ev)) (string? (get ev "name"))
+                         (re-matches name-pattern (get ev "name")))
+            (refuse! (str w ": an event's name is letters, digits and underscores, starting with a letter,"
+                          " at most 64 characters.")))
+          false)
+      (let [fc (get v "functionCall")
+            call (when (map? fc) (get fc "@call"))
+            args (when (map? fc) (get fc "args"))]
+        (when-not (map? fc) (refuse! shape))
+        (when-not (= set-input call)
+          (refuse! (str w ": a button may call one function, " set-input ", which sets a box on the same card."
+                        " relay's catalog has no other, openUrl included.")))
+        (when-not (and (= #{"@call" "args"} (set (keys fc))) (map? args) (= #{"path" "value"} (set (keys args))))
+          (refuse! shape))
+        (when-not (boolean? (get args "value"))
+          (refuse! (str w ": " set-input " sets a box to true or false.")))
+        (let [p (or (reading-path (get args "path")) (refuse! (str w ": that is not a path. " path-help)))]
+          (when (and (:absolute? p) (empty? (:parts p)))
+            (refuse! (str w ": " set-input " sets a box, not /, the whole data model.")))
+          (not (:absolute? p)))))))
+
 (defn- children!
   "Checks a :children property. Returns {:ids :template? :scoped?}."
   [w v]
@@ -453,6 +505,7 @@
                                 found)
                     :child (do (when-not (id? v) (refuse! (str w ": " what " is the id of one component.")))
                                (assoc found :ids [v]))
+                    :action (update found :scoped? #(or (action! w v) %))
                     :children (let [{:keys [ids template? scoped?]} (children! w v)]
                                 (-> found (assoc :ids ids :template? template?)
                                     (update :scoped? #(or scoped? %)))))))
@@ -581,7 +634,8 @@
 
   A node is {:id :type} and what its type holds, every string final:
   Text :text, a container :children (nodes), Card :child, CheckBox
-  :label :value. A component a template draws has its id, __ and its
+  :label :value, Button :child (its Text) and :action, {:event name} or
+  {:call set-input :path :value} with the path resolved. A component a template draws has its id, __ and its
   item's position.
 
   A CheckBox bound to the data has :path, where the operator's input
@@ -601,6 +655,7 @@
         reads (volatile! max-reads)
         drawn-ids (volatile! #{})
         inputs (volatile! {})
+        sets (volatile! [])
         model (volatile! {})
         say (fn [s]
               (when (neg? (vswap! room - (characters s)))
@@ -641,6 +696,24 @@
                             (word "direction") (assoc :direction (word "direction")))
                    "Card" (assoc base :child (node (get c "child") scope (inc depth)))
                    "Divider" (cond-> base (word "axis") (assoc :axis (word "axis")))
+                   ;; The label is the one Text the button shows, drawn
+                   ;; as one line, so what the operator pressed is one
+                   ;; string relay can name to the role.
+                   "Button" (let [kid (get c "child")
+                                  _ (when-not (= "Text" (get-in by-id [kid "component"]))
+                                      (refuse! (str "The Button " id " shows one Text as its child, the words the"
+                                                    " operator presses.")))
+                                  shows (update (node kid scope (inc depth)) :text one-line)
+                                  act (get c "action")
+                                  _ (action! (str "The Button " id) act)
+                                  action (if-let [ev (get act "event")]
+                                           {:event (get ev "name")}
+                                           (let [args (get-in act ["functionCall" "args"])
+                                                 at (path-text (parts-in scope (path (get args "path"))))]
+                                             (vswap! sets conj [id at])
+                                             {:call set-input :path at :value (get args "value")}))]
+                              (cond-> (assoc base :child shows :action action)
+                                (word "variant") (assoc :variant (word "variant"))))
                    "CheckBox" (let [v (get c "value")
                                     parts (when (map? v) (parts-in scope (path (get v "@path"))))
                                     held (if parts (at data parts) v)
@@ -655,6 +728,11 @@
                                   parts (assoc :path (path-text parts))))
                    (refuse! "relay cannot draw this surface: it holds a component the catalog does not have."))))
         root (node "root" nil 1)]
+    ;; A button sets only what the operator could tick by hand.
+    (doseq [[id at] @sets]
+      (when-not (contains? @inputs at)
+        (refuse! (str "The Button " id " sets " at ", where no CheckBox is bound. " set-input
+                      " sets a box on the same surface."))))
     {:root root :inputs @inputs :model (if (map? @model) @model {})}))
 
 (defn drawn
@@ -713,10 +791,20 @@
                (case type
                  "Text" [(:text node)]
                  "CheckBox" [(:label node)]
-                 "Card" (walk (:child node))
+                 ("Card" "Button") (walk (:child node))
                  ("Row" "Column" "List") (mapcat walk (:children node))
                  []))]
     (vec (walk (:root (shown surface))))))
+
+(defn button
+  "The Button with the drawn id `id` in a drawn surface's tree, or nil."
+  [root id]
+  (let [walk (fn walk [{:keys [type] :as node}]
+               (cond
+                 (and (= "Button" type) (= id (:id node))) node
+                 (= "Card" type) (walk (:child node))
+                 (#{"Row" "Column" "List"} type) (some walk (:children node))))]
+    (walk root)))
 
 ;; --- the text form
 
@@ -737,6 +825,12 @@
       "CheckBox" [(str (if (:value node) "[x] " "[ ] ") (mark (:label node))
                        (when (:path node) (str "  " (:path node))))]
       "Card" (lines (:child node) mark)
+      ;; A role reads which id a press names, and what it does.
+      "Button" [(str "[press] " (mark (get-in node [:child :text])) "  " (:id node)
+                     (let [{:keys [event call path value]} (:action node)]
+                       (if event
+                         (str " tells you: " event)
+                         (str " " call " " path " " value))))]
       "Column" (vec (mapcat #(lines % mark) (:children node)))
       "Row" (beside (:children node))
       "List" (if (= "horizontal" (:direction node))
@@ -767,7 +861,7 @@
                (let [base {"id" (:id node) "component" type}
                      kids (case type
                             ("Row" "Column" "List") (:children node)
-                            "Card" [(:child node)]
+                            ("Card" "Button") [(:child node)]
                             nil)
                      own (case type
                            "Text" (cond-> (assoc base "text" (safe (:text node)))
@@ -776,6 +870,13 @@
                            "List" (cond-> (assoc base "children" (mapv :id kids))
                                     (:direction node) (assoc "direction" (:direction node)))
                            "Card" (assoc base "child" (:id (:child node)))
+                           "Button" (cond-> (assoc base "child" (:id (:child node))
+                                                   "action" (let [{:keys [event call path value]} (:action node)]
+                                                              (if event
+                                                                {"event" {"name" event}}
+                                                                {"functionCall" {"@call" call
+                                                                                 "args" {"path" path "value" value}}})))
+                                      (:variant node) (assoc "variant" (:variant node)))
                            "Divider" (cond-> base (:axis node) (assoc "axis" (:axis node)))
                            "CheckBox" (assoc base "label" (safe (:label node))
                                              "value" (if (:path node) {"@path" (:path node)} (:value node))))]
@@ -789,7 +890,8 @@
 ;; --- the catalog, for a role and for a client
 
 (def ^:private property-says
-  {:text "text, a path or a call"
+  {:action "an event or a function call; see below"
+   :text "text, a path or a call"
    :flag "true, false or a path"
    :child "the id of one component"
    :children "a list of ids, or a template"})
@@ -828,6 +930,16 @@
      "already, so write false for a box that starts unticked. Nothing else on a surface can be changed by them."
      "Reading the card shows you what they ticked."
      ""
+     "A Button shows one Text, its child, and the operator presses it. Its action is one of two:"
+     "  {\"event\": {\"name\": \"plan_route\"}} tells you. relay sends you a memo from the operator that names the"
+     "  button, the card and, in a list, the item (its id, such as remove__2), so you can read the card and do it."
+     "  The event has a name and nothing else, and the memo carries the card's labels and sources."
+     (str "  {\"functionCall\": {\"@call\": \"" set-input "\", \"args\": {\"path\": \"/items/0/done\", \"value\": true}}}"
+          " sets a box")
+     "  on this card, as the operator's tick does, and wakes no one. Its path is one a CheckBox is bound to, and"
+     "  in a list's template it may read from the item (\"done\")."
+     "A button never changes the operator's settings and never stands for their consent to anything."
+     ""
      "Change a surface with card_op. `data` writes `value` at `path`: a null value removes what is there, and a"
      "path ending in /- adds to a list that is already there. A key that is missing on the way is made; a list is"
      "not, so write [] first. `components` replaces every component. Both need `seen`, the card's rev, which the"
@@ -851,13 +963,14 @@
                    :flag (common "DynamicBoolean")
                    :one-of {"type" "string" "enum" of}
                    :child (common "Child")
+                   :action (common "Action")
                    :children (common "ChildList")))]
     {"$schema" "https://json-schema.org/draft/2020-12/schema"
      "$id" catalog-id
      "catalogId" catalog-id
      "protocolVersion" version
      "title" "relay catalog"
-     "description" "The components relay takes from a role and sends to a client: layout, text and a checkbox."
+     "description" "The components relay takes from a role and sends to a client: layout, text, a checkbox and a button."
      "instructions" (catalog-text)
      "components" (into {} (for [[type {:keys [says props]}] catalog]
                              [type {"type" "object"

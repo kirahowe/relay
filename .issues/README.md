@@ -43,7 +43,6 @@
 | [61](61-fork-acp-go-sdk-and-decode-with-encoding-json-v2.md) | Fork acp-go-sdk and decode with encoding/json/v2 | feature | P2 |
 | [84](84-try-relay-from-the-phone-with-agmente.md) | Try relay from the phone with Agmente | chore | P2 |
 | [103](103-keep-the-seed-when-core-test-s-any-sequence-property-fails.md) | Keep the seed when core-test's any-sequence property fails in bb verify | bug | P2 |
-| [106](106-put-buttons-on-role-built-surfaces-by-kira-s-rule.md) | Put buttons on role-built surfaces by Kira's rule | feature | P2 |
 | [109](109-tell-the-operator-a-card-s-line-has-gone-even-while-a.md) | Tell the operator a card's line has gone even while a refusal is showing | bug | P2 |
 | [112](112-let-kira-put-a-surface-back-as-it-was.md) | Let Kira put a surface back as it was | feature | P2 |
 | [117](117-carry-a-live-link-in-a-push-as-an-action-and-check-the.md) | Check what Proton Mail on the phone follows in relay's mail | feature | P2 |
@@ -72,6 +71,12 @@
 | [147](147-teach-relay-macos-the-button-of-relay-106.md) | Teach relay-macos the Button of relay#106 | feature | P3 |
 | [148](148-keep-a-button-label-holding-from-reading-as-two-buttons.md) | Keep a button label holding ] [ from reading as two buttons | bug | P3 |
 | [149](149-list-every-prepend-character-in-relay-tui-s-test-judge.md) | List every Prepend character in relay-tui's test judge | chore | P3 |
+
+### In progress
+
+| ID | Title | Type | Priority |
+| --- | --- | --- | --- |
+| [106](106-put-buttons-on-role-built-surfaces-by-kira-s-rule.md) | Put buttons on role-built surfaces by Kira's rule | feature | P2 |
 
 ### Blocked
 
