@@ -70,12 +70,7 @@
 | [145](145-let-fakehub-play-relay-messages-and-every-card-op.md) | Let fakehub play _relay/messages and every card op | chore | P3 |
 | [147](147-teach-relay-macos-the-button-of-relay-106.md) | Teach relay-macos the Button of relay#106 | feature | P3 |
 | [148](148-keep-a-button-label-holding-from-reading-as-two-buttons.md) | Keep a button label holding ] [ from reading as two buttons | bug | P3 |
-
-### Review
-
-| ID | Title | Type | Priority |
-| --- | --- | --- | --- |
-| [130](130-break-an-address-that-a-character-with-no-width-is-hiding-in.md) | Break an address that a character with no width is hiding in | bug | P2 |
+| [149](149-list-every-prepend-character-in-relay-tui-s-test-judge.md) | List every Prepend character in relay-tui's test judge | chore | P3 |
 
 ### Blocked
 
@@ -147,6 +142,7 @@
 | [101](101-teach-roles-when-and-how-to-build-a-surface-with-eval-cases.md) | Teach roles when and how to build a surface, with eval cases | feature | P2 |
 | [110](110-scroll-an-open-card-that-is-taller-than-the-pane.md) | Scroll an open card that is taller than the pane | bug | P2 |
 | [124](124-break-a-host-that-follows-another-host-s-port-with-nothing.md) | Break a host that follows another host's port with nothing between | bug | P2 |
+| [130](130-break-an-address-that-a-character-with-no-width-is-hiding-in.md) | Break an address that a character with no width is hiding in | bug | P2 |
 | [136](136-let-a-text-free-update-pass-without-cutting-a-held-word.md) | Let a text-free update pass without cutting a held word | bug | P2 |
 | [21](21-make-agentloop-cleanroom-s-reader.md) | Make agentloop cleanroom's reader | feature | P3 |
 | [22](22-show-spend-per-role-per-week-in-relay-status.md) | Show spend per role per week in relay status | feature | P3 |

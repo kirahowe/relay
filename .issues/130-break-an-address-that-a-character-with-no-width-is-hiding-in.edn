@@ -1,6 +1,6 @@
 {:id 130
  :title "Break an address that a character with no width is hiding in"
- :status :review
+ :status :done
  :type :bug
  :priority :p2
  :created "2026-11-15"

@@ -313,4 +313,4 @@ breaker is the only one.
   text is drawn as before: of relay's 200,000 conversation strings,
   197,875 exactly as sent before and after the change, no row
   followable. A Codex round was replaced by agent reviews at Kira's word.
-
+- 2026-11-16 approved: 2026-11-17: Kira, in the coordinating session: close everything in review as the epic winds down. Every criterion has its receipt; an agent review stood in for Codex by her word.
